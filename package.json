@@ -2,7 +2,9 @@
   "name": "agent-deck-electron",
   "private": true,
   "version": "0.0.1",
+  "main": "apps/desktop/main.js",
   "description": "Cross-platform Agent Deck: Node/TypeScript core + web UI on top of the pi coding agent",
+  "author": "StreetCoding Ltd",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -14,6 +16,13 @@
     ]
   },
   "scripts": {
+    "dev": "pnpm --filter @agent-deck/desktop dev",
+    "build": "pnpm build:web && pnpm build:backend",
+    "build:web": "pnpm --filter @agent-deck/web build",
+    "build:backend": "node scripts/build-backend.mjs",
+    "pack:mac": "pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.hardenedRuntime=false",
+    "release:mac": "pnpm build && electron-builder --mac dmg --arm64",
+    "validate:mac": "bash scripts/validate-macos-release.sh",
     "demo:chat": "tsx packages/testkit/demo/chat.ts",
     "typecheck": "pnpm -r --parallel typecheck",
     "test": "pnpm -r test",
@@ -25,11 +34,18 @@
   },
   "devDependencies": {
     "@eslint/js": "9.30.0",
+    "cross-env": "10.1.0",
+    "electron": "^43.0.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.12",
     "eslint": "9.30.0",
     "prettier": "3.6.2",
     "tsx": "4.20.3",
     "typescript": "5.8.3",
     "typescript-eslint": "8.35.0",
     "vitest": "3.2.4"
+  },
+  "dependencies": {
+    "node-pty": "1.1.0"
   }
 }

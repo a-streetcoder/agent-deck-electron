@@ -13,7 +13,18 @@ Use Node.js 22.19 or newer and pnpm. Install and validate from the repository ro
 - `pnpm test`
 - `pnpm test:pi`
 - `pnpm test:e2e`
-- `pnpm --filter @agent-deck/desktop dev`
+- `pnpm dev`
+- `pnpm build`
+- `pnpm pack:mac`
+
+`pnpm dev` is the normal development loop: Vite hot-reloads renderer changes,
+the server runs under `tsx watch`, and Electron restarts when its main or preload
+source changes.
+
+`pnpm pack:mac` creates an unsigned Apple Silicon application for local
+production-layout testing. Signed releases use the manually dispatched
+`.github/workflows/release-macos.yml` workflow; validate downloaded DMGs with
+`pnpm validate:mac -- /path/to/file.dmg`.
 
 Source layout:
 

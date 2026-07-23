@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:watch": "tsx watch --clear-screen=false src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:pi": "vitest run --config vitest.pi.config.ts"
