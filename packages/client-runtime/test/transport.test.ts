@@ -1,0 +1,712 @@
+import { describe, expect, it } from "vitest";
+import { Schema } from "effect";
+import { RpcServerFrame } from "@agent-deck/contracts";
+import {
+  RpcTransport,
+  type ConnectionState,
+  type TimerHandle,
+  type WebSocketLike,
+} from "../src/transport.ts";
+
+/**
+ * A fake WebSocket + a manual reconnect clock, so the state machine is exercised
+ * with zero I/O and fully deterministic timing.
+ */
+class FakeSocket implements WebSocketLike {
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly sent: string[] = [];
+  closed = false;
+
+  constructor(readonly url: string) {}
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+  }
+
+  // --- test drivers ---
+  open(): void {
+    this.onopen?.();
+  }
+  message(data: unknown): void {
+    this.onmessage?.({ data: typeof data === "string" ? data : JSON.stringify(data) });
+  }
+  drop(): void {
+    this.onclose?.();
+  }
+}
+
+interface ScheduledTimer {
+  fn: () => void;
+  ms: number;
+  handle: number;
+}
+
+class FakeClock {
+  private timers: ScheduledTimer[] = [];
+  private nextHandle = 1;
+  readonly delays: number[] = [];
+
+  setTimer = (fn: () => void, ms: number): TimerHandle => {
+    const handle = this.nextHandle++;
+    this.timers.push({ fn, ms, handle });
+    this.delays.push(ms);
+    return handle as unknown as TimerHandle;
+  };
+  clearTimer = (handle: TimerHandle): void => {
+    this.timers = this.timers.filter((t) => t.handle !== (handle as unknown as number));
+  };
+  /** Fire (and remove) all currently-scheduled timers. */
+  flush(): void {
+    const due = this.timers;
+    this.timers = [];
+    for (const t of due) t.fn();
+  }
+  get pending(): number {
+    return this.timers.length;
+  }
+}
+
+function makeHarness(overrides?: {
+  backoff?: { initialMs: number; maxMs: number; factor: number };
+}) {
+  const sockets: FakeSocket[] = [];
+  const states: ConnectionState[] = [];
+  const pushes: unknown[] = [];
+  const terminalPushes: unknown[] = [];
+  const diffPushes: unknown[] = [];
+  const scriptPushes: unknown[] = [];
+  const decodeErrors: string[] = [];
+  let connectedCount = 0;
+  const clock = new FakeClock();
+
+  const transport = new RpcTransport({
+    url: "ws://localhost/rpc",
+    webSocketCtor: class extends FakeSocket {
+      constructor(url: string) {
+        super(url);
+        sockets.push(this);
+      }
+    },
+    onState: (s) => states.push(s),
+    onConnected: () => connectedCount++,
+    onPush: (m) => pushes.push(m),
+    onTerminalPush: (m) => terminalPushes.push(m),
+    onDiffPush: (m) => diffPushes.push(m),
+    onScriptPush: (m) => scriptPushes.push(m),
+    onDecodeError: (e) => decodeErrors.push(e),
+    backoff: overrides?.backoff ?? { initialMs: 500, maxMs: 10_000, factor: 2 },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+
+  return {
+    transport,
+    sockets,
+    states,
+    pushes,
+    terminalPushes,
+    diffPushes,
+    scriptPushes,
+    decodeErrors,
+    clock,
+    connectedCount: () => connectedCount,
+  };
+}
+
+const pushFrame = (message: unknown) => JSON.stringify({ kind: "push", message });
+
+describe("RpcTransport state machine", () => {
+  it("connect → connecting → connected fires onConnected", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    expect(h.transport.getState()).toBe("connecting");
+    expect(h.sockets).toHaveLength(1);
+
+    h.sockets[0]!.open();
+    expect(h.transport.getState()).toBe("connected");
+    expect(h.connectedCount()).toBe(1);
+    expect(h.states).toEqual(["connecting", "connected"]);
+  });
+
+  it("decodes a valid push through the contract and forwards it", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const event = { type: "event", sessionId: "s1", seq: 3, event: { kind: "text_delta" } };
+    // sanity: the frame is contract-valid
+    expect(Schema.decodeUnknownEither(RpcServerFrame)({ kind: "push", message: event })._tag).toBe(
+      "Right",
+    );
+
+    h.sockets[0]!.message(pushFrame(event));
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]).toMatchObject({ type: "event", sessionId: "s1", seq: 3 });
+    expect(h.decodeErrors).toHaveLength(0);
+  });
+
+  it("rejects a malformed push at the boundary (onDecodeError, not onPush)", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    // missing seq + sessionId → fails ServerMessage `event` decode
+    h.sockets[0]!.message(pushFrame({ type: "event" }));
+    // entirely unknown frame kind
+    h.sockets[0]!.message(JSON.stringify({ kind: "nonsense" }));
+    // not even JSON
+    h.sockets[0]!.message("}{ broken");
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.decodeErrors).toHaveLength(3);
+  });
+
+  it("correlates replies: ack resolves, failure rejects", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const okPromise = h.transport.request({ type: "abort", sessionId: "s1" });
+    const errPromise = h.transport.request({ type: "abort", sessionId: "s2" });
+
+    // Two frames were sent with ids 1 and 2.
+    expect(h.sockets[0]!.sent).toHaveLength(2);
+    const ids = h.sockets[0]!.sent.map((s) => (JSON.parse(s) as { id: number }).id);
+    expect(ids).toEqual([1, 2]);
+
+    h.sockets[0]!.message(JSON.stringify({ kind: "reply", id: ids[0], ok: true }));
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "reply", id: ids[1], ok: false, error: "unknown session" }),
+    );
+
+    await expect(okPromise).resolves.toEqual([]);
+    await expect(errPromise).rejects.toThrow("unknown session");
+  });
+
+  it("hello resolves with the session list", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.hello();
+    const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
+    const sessions = [{ id: "s1", cwd: "/tmp", createdAt: "2026-01-01T00:00:00.000Z" }];
+    h.sockets[0]!.message(JSON.stringify({ kind: "hello_ok", id, sessions }));
+
+    await expect(promise).resolves.toEqual(sessions);
+  });
+
+  it("request while disconnected rejects immediately", async () => {
+    const h = makeHarness();
+    await expect(h.transport.request({ type: "abort", sessionId: "s1" })).rejects.toThrow(
+      "not connected",
+    );
+  });
+
+  it("reconnects on unexpected drop with exponential backoff, capped, reset on open", () => {
+    const h = makeHarness({ backoff: { initialMs: 500, maxMs: 2_000, factor: 2 } });
+    h.transport.connect();
+    h.sockets[0]!.open();
+    expect(h.transport.getState()).toBe("connected");
+
+    // 1st drop → reconnecting, schedules 500ms
+    h.sockets[0]!.drop();
+    expect(h.transport.getState()).toBe("reconnecting");
+    expect(h.clock.delays).toEqual([500]);
+
+    // timer fires → new socket, connecting
+    h.clock.flush();
+    expect(h.sockets).toHaveLength(2);
+    expect(h.transport.getState()).toBe("connecting");
+
+    // 2nd drop (never opened) → 1000ms
+    h.sockets[1]!.drop();
+    expect(h.clock.delays).toEqual([500, 1000]);
+    h.clock.flush();
+
+    // 3rd drop → 2000ms (cap)
+    h.sockets[2]!.drop();
+    expect(h.clock.delays).toEqual([500, 1000, 2000]);
+    h.clock.flush();
+
+    // 4th drop → still capped at 2000ms
+    h.sockets[3]!.drop();
+    expect(h.clock.delays).toEqual([500, 1000, 2000, 2000]);
+    h.clock.flush();
+
+    // a successful open resets the backoff to initial
+    h.sockets[4]!.open();
+    expect(h.transport.getState()).toBe("connected");
+    h.sockets[4]!.drop();
+    expect(h.clock.delays.at(-1)).toBe(500);
+  });
+
+  it("connect() during backoff supersedes the pending retry (no duplicate socket)", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+    // Unexpected drop → reconnecting, retry timer armed.
+    h.sockets[0]!.drop();
+    expect(h.transport.getState()).toBe("reconnecting");
+    expect(h.clock.pending).toBe(1);
+
+    // Caller-driven reconnect during the backoff window must CLEAR the armed
+    // timer: without that, the stale timer fires after this connect() and
+    // opens a second socket — orphaning ours live with a duplicate
+    // server-side subscription.
+    h.transport.connect();
+    expect(h.sockets).toHaveLength(2);
+    expect(h.clock.pending).toBe(0);
+
+    // Even flushing the clock opens nothing further.
+    h.clock.flush();
+    expect(h.sockets).toHaveLength(2);
+    h.sockets[1]!.open();
+    expect(h.transport.getState()).toBe("connected");
+  });
+
+  it("close() stops reconnect and rejects pending", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const pending = h.transport.request({ type: "abort", sessionId: "s1" });
+    h.transport.close();
+
+    expect(h.transport.getState()).toBe("closed");
+    expect(h.sockets[0]!.closed).toBe(true);
+    await expect(pending).rejects.toThrow("transport closed");
+
+    // A drop from the (now-orphaned) socket must NOT schedule a reconnect.
+    h.sockets[0]!.drop();
+    expect(h.clock.pending).toBe(0);
+    expect(h.transport.getState()).toBe("closed");
+  });
+
+  it("a drop with pending requests rejects them before reconnecting", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const pending = h.transport.request({ type: "compact", sessionId: "s1" });
+    h.sockets[0]!.drop();
+    await expect(pending).rejects.toThrow("disconnected");
+    expect(h.transport.getState()).toBe("reconnecting");
+  });
+});
+
+describe("RpcTransport terminal surface (Slice 8b)", () => {
+  it("openTerminal resolves with the terminal_open_ok payload", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.openTerminal({ sessionId: "s1", cols: 120, rows: 30 });
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({
+      type: "terminal_open",
+      sessionId: "s1",
+      cols: 120,
+      rows: 30,
+    });
+
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "terminal_open_ok",
+        id: sentFrame.id,
+        terminalId: "term-1",
+        scrollback: "hello\r\n",
+        running: true,
+      }),
+    );
+    await expect(promise).resolves.toEqual({
+      terminalId: "term-1",
+      scrollback: "hello\r\n",
+      running: true,
+    });
+  });
+
+  it("openTerminal rejects on a server failure reply", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.openTerminal({ sessionId: "nope" });
+    const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "reply", id, ok: false, error: "unknown session" }),
+    );
+    await expect(promise).rejects.toThrow("unknown session");
+  });
+
+  it("terminalRequest resolves on ack and rejects on error", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const okPromise = h.transport.terminalRequest({
+      type: "terminal_input",
+      terminalId: "term-1",
+      data: "ls\r",
+    });
+    const errPromise = h.transport.terminalRequest({
+      type: "terminal_close",
+      terminalId: "term-9",
+    });
+    const ids = h.sockets[0]!.sent.map((s) => (JSON.parse(s) as { id: number }).id);
+    h.sockets[0]!.message(JSON.stringify({ kind: "reply", id: ids[0], ok: true }));
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "reply", id: ids[1], ok: false, error: "unknown terminal" }),
+    );
+
+    await expect(okPromise).resolves.toBeUndefined();
+    await expect(errPromise).rejects.toThrow("unknown terminal");
+  });
+
+  it("terminal_push frames dispatch to onTerminalPush (not onPush)", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const output = { type: "terminal_output", terminalId: "term-1", data: "chunk" };
+    // sanity: the frame is contract-valid
+    expect(
+      Schema.decodeUnknownEither(RpcServerFrame)({ kind: "terminal_push", message: output })._tag,
+    ).toBe("Right");
+
+    h.sockets[0]!.message(JSON.stringify({ kind: "terminal_push", message: output }));
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "terminal_push",
+        message: { type: "terminal_exit", terminalId: "term-1", exitCode: 0, signal: null },
+      }),
+    );
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.terminalPushes).toEqual([
+      { type: "terminal_output", terminalId: "term-1", data: "chunk" },
+      { type: "terminal_exit", terminalId: "term-1", exitCode: 0, signal: null },
+    ]);
+    expect(h.decodeErrors).toHaveLength(0);
+  });
+});
+
+describe("RpcTransport diff surface (Slice 10)", () => {
+  it("diffFiles resolves with the diff_files_ok payload", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.diffFiles("s1");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "diff_files", sessionId: "s1" });
+
+    const files = [
+      { path: "src/app.ts", status: "M", insertions: 3, deletions: 1, binary: false },
+      { path: "logo.png", status: "?", insertions: null, deletions: null, binary: true },
+    ];
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "diff_files_ok",
+        id: sentFrame.id,
+        repo: true,
+        files,
+        truncated: false,
+      }),
+    );
+    await expect(promise).resolves.toEqual({ repo: true, files, truncated: false });
+  });
+
+  it("diffFiles rejects on a server failure reply", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.diffFiles("nope");
+    const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "reply", id, ok: false, error: "unknown session" }),
+    );
+    await expect(promise).rejects.toThrow("unknown session");
+  });
+
+  it("diffFile resolves with the diff_file_ok payload", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.diffFile("s1", "src/app.ts");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "diff_file", sessionId: "s1", path: "src/app.ts" });
+
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "diff_file_ok",
+        id: sentFrame.id,
+        path: "src/app.ts",
+        diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        truncated: false,
+        binary: false,
+      }),
+    );
+    await expect(promise).resolves.toEqual({
+      path: "src/app.ts",
+      diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      truncated: false,
+      binary: false,
+    });
+  });
+
+  it("diff_push frames dispatch to onDiffPush (not onPush)", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const message = {
+      type: "diff_changed",
+      sessionId: "s1",
+      repo: true,
+      files: [{ path: "a.txt", status: "?", insertions: 1, deletions: 0, binary: false }],
+      truncated: false,
+    };
+    // sanity: the frame is contract-valid
+    expect(Schema.decodeUnknownEither(RpcServerFrame)({ kind: "diff_push", message })._tag).toBe(
+      "Right",
+    );
+
+    h.sockets[0]!.message(JSON.stringify({ kind: "diff_push", message }));
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.diffPushes).toEqual([message]);
+    expect(h.decodeErrors).toHaveLength(0);
+  });
+});
+
+describe("RpcTransport file surface (Slice 13b)", () => {
+  it("fileList resolves with the file_list_ok payload (root omits path)", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.fileList("s1");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    // The root request carries no `path` field (undefined/"" both mean root).
+    expect(sentFrame.request).toEqual({ type: "file_list", sessionId: "s1" });
+
+    const entries = [
+      { name: "src", kind: "dir", size: null },
+      { name: "readme.md", kind: "file", size: 42 },
+    ];
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "file_list_ok",
+        id: sentFrame.id,
+        path: "",
+        entries,
+        truncated: false,
+      }),
+    );
+    await expect(promise).resolves.toEqual({ path: "", entries, truncated: false });
+  });
+
+  it("fileList sends a subdirectory path when given", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.fileList("s1", "src");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "file_list", sessionId: "s1", path: "src" });
+
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "file_list_ok",
+        id: sentFrame.id,
+        path: "src",
+        entries: [],
+        truncated: false,
+      }),
+    );
+    await expect(promise).resolves.toEqual({ path: "src", entries: [], truncated: false });
+  });
+
+  it("fileRead resolves with the file_read_ok payload (text)", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.fileRead("s1", "src/app.ts");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "file_read", sessionId: "s1", path: "src/app.ts" });
+
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "file_read_ok",
+        id: sentFrame.id,
+        path: "src/app.ts",
+        contentKind: "text",
+        content: "const x = 1;\n",
+        byteLength: 12,
+        truncated: false,
+        version: "111:12",
+      }),
+    );
+    await expect(promise).resolves.toEqual({
+      path: "src/app.ts",
+      contentKind: "text",
+      content: "const x = 1;\n",
+      byteLength: 12,
+      truncated: false,
+      version: "111:12",
+    });
+  });
+
+  it("fileRead rejects on a server failure reply", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.fileRead("s1", "../etc/passwd");
+    const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "reply",
+        id,
+        ok: false,
+        error: "path escapes the session directory",
+      }),
+    );
+    await expect(promise).rejects.toThrow("path escapes the session directory");
+  });
+});
+
+describe("RpcTransport script/preview surface (Slice 15b)", () => {
+  it("scriptsList resolves with the scripts_list_ok payload", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.scriptsList("s1");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "scripts_list", sessionId: "s1" });
+
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "scripts_list_ok",
+        id: sentFrame.id,
+        scripts: [{ name: "dev", command: "vite" }],
+      }),
+    );
+    await expect(promise).resolves.toEqual({ scripts: [{ name: "dev", command: "vite" }] });
+  });
+
+  it("startScript resolves with the script_run_ok payload (server present)", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.startScript("s1", "dev");
+    const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
+    expect(sentFrame.request).toEqual({ type: "script_start", sessionId: "s1", scriptName: "dev" });
+
+    const server = { host: "localhost", port: 5173, url: "http://localhost:5173" };
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "script_run_ok",
+        id: sentFrame.id,
+        runId: "run-1",
+        scrollback: "> vite\n",
+        running: true,
+        server,
+      }),
+    );
+    await expect(promise).resolves.toEqual({
+      runId: "run-1",
+      scrollback: "> vite\n",
+      running: true,
+      server,
+    });
+  });
+
+  it("startScript rejects on a server failure reply (a run already active)", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const promise = h.transport.startScript("s1", "dev");
+    const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "reply", id, ok: false, error: "a script is already running" }),
+    );
+    await expect(promise).rejects.toThrow("a script is already running");
+  });
+
+  it("attachScript replays scrollback + server, stopScript acks", async () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const attachPromise = h.transport.attachScript("run-1");
+    const stopPromise = h.transport.stopScript("run-1");
+    const ids = h.sockets[0]!.sent.map((s) => (JSON.parse(s) as { id: number }).id);
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "script_run_ok",
+        id: ids[0],
+        runId: "run-1",
+        scrollback: "buffered output\n",
+        running: false,
+        server: null,
+      }),
+    );
+    h.sockets[0]!.message(JSON.stringify({ kind: "reply", id: ids[1], ok: true }));
+
+    await expect(attachPromise).resolves.toEqual({
+      runId: "run-1",
+      scrollback: "buffered output\n",
+      running: false,
+      server: null,
+    });
+    await expect(stopPromise).resolves.toBeUndefined();
+  });
+
+  it("script_push frames dispatch to onScriptPush (not onPush)", () => {
+    const h = makeHarness();
+    h.transport.connect();
+    h.sockets[0]!.open();
+
+    const output = { type: "script_output", runId: "run-1", data: "listening\n" };
+    const server = {
+      type: "script_server",
+      runId: "run-1",
+      server: { host: "localhost", port: 3000, url: "http://localhost:3000" },
+    };
+    // sanity: the frames are contract-valid
+    expect(
+      Schema.decodeUnknownEither(RpcServerFrame)({ kind: "script_push", message: output })._tag,
+    ).toBe("Right");
+
+    h.sockets[0]!.message(JSON.stringify({ kind: "script_push", message: output }));
+    h.sockets[0]!.message(JSON.stringify({ kind: "script_push", message: server }));
+    h.sockets[0]!.message(
+      JSON.stringify({
+        kind: "script_push",
+        message: { type: "script_exit", runId: "run-1", exitCode: 0, signal: null },
+      }),
+    );
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.scriptPushes).toEqual([
+      output,
+      server,
+      { type: "script_exit", runId: "run-1", exitCode: 0, signal: null },
+    ]);
+    expect(h.decodeErrors).toHaveLength(0);
+  });
+});

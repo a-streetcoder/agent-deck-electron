@@ -1,0 +1,37 @@
+export {
+  MEMORY_STATUSES,
+  MEMORY_TYPES,
+  type MemoryRecord,
+  type MemorySearchHit,
+  type MemoryStatus,
+  type MemoryType,
+  type MemoryWriteInput,
+  type MemoryWriteResult,
+} from "./types.ts";
+export {
+  deleteMemory,
+  getMemory,
+  injectableIndex,
+  listMemories,
+  markStale,
+  searchMemories,
+  semanticSearchMemories,
+  setMemoryStatus,
+  writeMemory,
+  type MemoryStore,
+} from "./store.ts";
+export { centeredCosineScores, cosineSimilarity, meanCenter, type Embedder } from "./semantic.ts";
+export { createOnDeviceEmbedder, EmbedderUnavailableError } from "./embedder.ts";
+export { projectMemoryDir, projectMemoryId, standardizeProjectPath } from "./paths.ts";
+export { buildMemoryPreamble, buildRecalledMemories, type MemoryIndex } from "./preamble.ts";
+export { parseMemory, serializeMemory } from "./frontmatter.ts";
+export { scanForSecrets, type SecretScanResult } from "./secrets.ts";
+export {
+  FUZZY_MIN_LEN,
+  fuzzyMatchedTerms,
+  informativeTerms,
+  memoryTerms,
+  overlapCoefficient,
+  sharedTerms,
+  withinOneEdit,
+} from "./text.ts";

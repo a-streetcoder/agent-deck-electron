@@ -1,0 +1,588 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { startHarness, type E2eHarness } from "../helpers/env.ts";
+import { expect, selectProject, test, type Page } from "../helpers/fixtures.ts";
+
+/**
+ * Visual regression gate (docs/effect-migration-plan.md — standing gate for the
+ * substrate migration): a SMALL set of masked, deterministic screenshots of
+ * stable screens. The behavior specs can't see style breakage — a broken layout
+ * or invisible text still has a structurally-correct DOM — so these fail when
+ * rendering drifts. Every baseline is a maintenance cost: add screens only when
+ * they guard something the existing set doesn't.
+ *
+ * Baselines are platform-specific (font rendering differs per OS): Playwright
+ * suffixes each snapshot with the platform, and a platform WITHOUT committed
+ * baselines skips rather than fails, so CI legs on other OSes aren't broken by
+ * a baseline set generated here. Regenerate intentionally with:
+ *   pnpm --filter @agent-deck/e2e test:visual:update
+ */
+
+const SNAPSHOT_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "visual.spec.ts-snapshots",
+);
+const HAS_PLATFORM_BASELINES =
+  existsSync(SNAPSHOT_DIR) &&
+  readdirSync(SNAPSHOT_DIR).some((f) => f.includes(`-${process.platform}`));
+
+// `--update-snapshots` surfaces via config.updateSnapshots ("all", or "changed"
+// for the bare flag) — the CLI flag never reaches worker argv, so testInfo is
+// the only reliable signal. Without it the mode is "missing" (or "none" on CI),
+// and a platform with no committed baselines must skip, not fail.
+//
+// CI runners also skip (unless AGENT_DECK_VISUAL=1 opts in): baselines are
+// generated on a dev machine, and runner font rendering differs enough to
+// produce false diffs — CI's job is the behavioral e2e matrix; the visual gate
+// is a local pre-commit gate.
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here
+test.beforeEach(({}, testInfo) => {
+  const updating =
+    testInfo.config.updateSnapshots === "all" || testInfo.config.updateSnapshots === "changed";
+  test.skip(!!process.env.CI && process.env.AGENT_DECK_VISUAL !== "1", "visual gate is local-only");
+  test.skip(
+    !HAS_PLATFORM_BASELINES && !updating,
+    `no visual baselines for ${process.platform} — generate with test:visual:update`,
+  );
+});
+
+// A fixed viewport: baseline diffs must mean rendering changed, not the window.
+test.use({ viewport: { width: 1280, height: 800 } });
+
+const REPLY = "The visual baseline reply: stable, short, and fully deterministic.";
+
+// The diff baseline's repo project: a scratch git repo whose only change is a
+// file with FIXED content, so the tree stats and the unified patch (hashes
+// included — content-addressed) are byte-stable run to run.
+const DIFF_REPO = mkdtempSync(path.join(tmpdir(), "proj-diff-visual-"));
+const DIFF_FILE_CONTENT = "alpha one\nbeta two\ngamma three\n";
+
+// The files-panel baseline's project: a plain scratch dir with a FIXED tree so
+// the lazy listing (names + byte sizes) and the previewed file's line-numbered
+// content are byte-stable run to run.
+const FILES_PROJECT = mkdtempSync(path.join(tmpdir(), "proj-files-visual-"));
+const FILES_PREVIEW_CONTENT = 'export const answer = 42;\nexport const greeting = "hi";\n';
+
+// The preview-panel baseline's project: a scratch dir whose only script is a
+// static dev server on an EPHEMERAL loopback port. The port varies run to run,
+// so the URL bar + the iframe are MASKED; the baseline guards the browser chrome
+// (nav buttons, frame borders, panel width) once the embed has settled.
+const PREVIEW_PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-visual-"));
+
+// The worktree-merge-toolbar baseline's repo: a scratch git repo selected with
+// worktree isolation ON, so its session runs in an isolated worktree and the
+// diff panel shows the branch → source Merge toolbar (Slice 20). The worktree
+// branch name carries a random session suffix, so that span is MASKED; the
+// baseline guards the toolbar layout + the deterministic "Merge to main" button.
+const WORKTREE_REPO = mkdtempSync(path.join(tmpdir(), "proj-worktree-visual-"));
+
+let harness: E2eHarness;
+
+test.beforeAll(async () => {
+  // Deterministic terminal chrome for the drawer baseline: pin the shell (the
+  // server-side AGENT_DECK_TERMINAL_SHELL test seam) and give it a fixed
+  // prompt, so no machine cwd path ever renders inside the terminal.
+  process.env.AGENT_DECK_TERMINAL_SHELL =
+    process.platform === "win32"
+      ? (process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe")
+      : "/bin/sh";
+  process.env.PROMPT = "agent-deck$G";
+  process.env.PS1 = "agent-deck> ";
+
+  const git = (args: string[]): void => {
+    execFileSync("git", args, { cwd: DIFF_REPO, stdio: "ignore" });
+  };
+  git(["init", "-b", "main"]);
+  git(["config", "user.email", "t@example.com"]);
+  git(["config", "user.name", "Test"]);
+  writeFileSync(path.join(DIFF_REPO, "README.md"), "# scratch\n");
+  git(["add", "-A"]);
+  git(["commit", "-m", "init"]);
+
+  // The worktree-toolbar baseline's repo (same init recipe as DIFF_REPO).
+  const wtGit = (args: string[]): void => {
+    execFileSync("git", args, { cwd: WORKTREE_REPO, stdio: "ignore" });
+  };
+  wtGit(["init", "-b", "main"]);
+  wtGit(["config", "user.email", "t@example.com"]);
+  wtGit(["config", "user.name", "Test"]);
+  writeFileSync(path.join(WORKTREE_REPO, "README.md"), "# scratch\n");
+  wtGit(["add", "-A"]);
+  wtGit(["commit", "-m", "init"]);
+
+  // The files-panel project's fixed tree: one subdirectory + a previewed file.
+  mkdirSync(path.join(FILES_PROJECT, "src"));
+  writeFileSync(path.join(FILES_PROJECT, "src", "example.ts"), FILES_PREVIEW_CONTENT);
+  writeFileSync(path.join(FILES_PROJECT, "README.md"), "# fixture\n");
+
+  // The preview project's dev-server script (ephemeral port, fixed page).
+  writeFileSync(
+    path.join(PREVIEW_PROJECT, "package.json"),
+    JSON.stringify({ name: "preview-fixture", private: true, scripts: { dev: "node server.js" } }),
+  );
+  writeFileSync(
+    path.join(PREVIEW_PROJECT, "server.js"),
+    [
+      "const http = require('node:http');",
+      "const server = http.createServer((_req, res) => {",
+      "  res.writeHead(200, { 'content-type': 'text/html' });",
+      "  res.end('<!doctype html><html><body><h1>preview</h1></body></html>');",
+      "});",
+      "server.listen(0, '127.0.0.1', () => {",
+      "  process.stdout.write(`  Local:   http://localhost:${server.address().port}/\\n`);",
+      "});",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "",
+    ].join("\n"),
+  );
+
+  harness = await startHarness({
+    reply: () => REPLY,
+    chunkDelayMs: 0,
+    // Only the diff-baseline prompt drives a tool call (one real pi `write`
+    // per turn); every other visual test streams the plain text reply.
+    toolCall: (lastUser, body) => {
+      if (!lastUser.includes("write the diff baseline file")) return null;
+      const lastUserIndex = body.messages.map((m) => m.role).lastIndexOf("user");
+      const toolRanThisTurn = body.messages.slice(lastUserIndex + 1).some((m) => m.role === "tool");
+      if (toolRanThisTurn) return null;
+      return {
+        name: "write",
+        arguments: { path: path.join(DIFF_REPO, "src", "visual.txt"), content: DIFF_FILE_CONTENT },
+      };
+    },
+  });
+  for (const projectPath of [DIFF_REPO, FILES_PROJECT, PREVIEW_PROJECT, WORKTREE_REPO]) {
+    const response = await fetch(`${harness.baseUrl}/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: projectPath }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+  }
+});
+
+test.afterAll(async () => {
+  await harness.close();
+});
+
+/**
+ * Chrome that legitimately varies run-to-run — temp cwd paths, relative times,
+ * token/cost stats, per-run durations. Masked, not asserted; a locator that
+ * matches nothing masks nothing.
+ */
+const dynamicChrome = (page: Page) => [
+  page.getByTestId("session-cwd"),
+  page.getByTestId("startup-cwd"),
+  // The whole collapsed session list (titles, agent names, relative times) —
+  // masking its rows individually would also stamp boxes over the HIDDEN
+  // expanded-panel copies of those rows, which overlay the nav.
+  page.getByTestId("chat-list"),
+  page.getByTestId("context-usage"),
+  page.getByTestId("session-tokens"),
+  page.getByTestId("session-cost"),
+  page.getByTestId("run-meta"),
+];
+
+const SCREENSHOT_OPTS = { animations: "disabled" as const, maxDiffPixelRatio: 0.01 };
+
+// Screen order matters: the exchange test creates a session, which would make
+// the sidebar's sessions panel nondeterministic for any LATER full-page shot —
+// so the full-page screens run first and the session-creating one runs last.
+
+test("visual: app shell (sidebar + empty chat)", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+  await expect(page).toHaveScreenshot("app-shell.png", {
+    ...SCREENSHOT_OPTS,
+    mask: dynamicChrome(page),
+  });
+});
+
+test("visual: skills screen", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await page.getByTestId("nav-skills").click();
+  await expect(page.getByTestId("app-view-title")).toContainText("Skills");
+  await expect(page).toHaveScreenshot("skills-screen.png", {
+    ...SCREENSHOT_OPTS,
+    mask: dynamicChrome(page),
+  });
+});
+
+test("visual: session view with the terminal drawer open", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.getByTestId("terminal-toggle").click();
+  const drawer = page.getByTestId("terminal-drawer");
+  await expect(drawer).toBeVisible();
+  const rows = page.locator(".xterm-rows");
+  await expect(rows).toContainText("agent-deck>", { timeout: 15_000 });
+
+  // Wipe the shell banner (cmd prints an OS version line), then run one echo,
+  // leaving a fully deterministic screen: prompt+command, output, prompt.
+  await drawer.locator(".xterm").click();
+  await page.keyboard.type(process.platform === "win32" ? "cls" : "clear");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () => ((await rows.innerText()).match(/agent-deck>/g) ?? []).length, {
+      timeout: 15_000,
+    })
+    .toBe(1);
+  await page.keyboard.type("echo visual-baseline-echo");
+  await page.keyboard.press("Enter");
+  // Settled = the output line arrived AND the next prompt is back: the sentinel
+  // renders twice (typed + output) and a second prompt follows the first.
+  await expect
+    .poll(
+      async () => {
+        const text = await rows.innerText();
+        return (
+          (text.match(/visual-baseline-echo/g) ?? []).length >= 2 &&
+          (text.match(/agent-deck>/g) ?? []).length >= 2
+        );
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+
+  // Clip to the chat layer (the drawer's mount) like the transcript baseline;
+  // the sidebar's nondeterministic session list stays out of frame.
+  await expect(page.getByTestId("chat-layer")).toHaveScreenshot("terminal-drawer.png", {
+    ...SCREENSHOT_OPTS,
+    mask: dynamicChrome(page),
+  });
+});
+
+test("visual: transcript with a completed exchange", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.getByTestId("composer-input").fill("visual baseline prompt");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("assistant-text")).toContainText("deterministic");
+  // The context/token chips arrive async after idle (get_session_stats); wait so
+  // the composer is in its settled post-turn layout, then mask their values.
+  await expect(page.getByTestId("session-tokens")).toBeVisible({ timeout: 15_000 });
+
+  // Clip to the chat layer: the sidebar's session list (title generation, times)
+  // is nondeterministic and is covered structurally by the behavior specs.
+  await expect(page.getByTestId("chat-layer")).toHaveScreenshot("transcript-exchange.png", {
+    ...SCREENSHOT_OPTS,
+    mask: dynamicChrome(page),
+  });
+});
+
+test("visual: changed-files tree + open diff panel", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(DIFF_REPO));
+  await expect(page.getByTestId("session-cwd")).toHaveText(DIFF_REPO);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // One turn writes the fixed-content file; the boundary refresh badges it.
+  await page.getByTestId("composer-input").fill("please write the diff baseline file");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("diff-badge")).toHaveText("1", { timeout: 30_000 });
+
+  // Open the panel and the file: tree strip on top, unified patch below.
+  await page.getByTestId("diff-toggle").click();
+  await page.locator('[data-testid="diff-tree-file"][data-path="src/visual.txt"]').click();
+  await expect(page.getByTestId("diff-file-view")).toBeVisible();
+  await expect(page.getByTestId("diff-lines")).toContainText("+gamma three", { timeout: 15_000 });
+  // The composer settles its post-turn layout before the shot (like the
+  // transcript baseline).
+  await expect(page.getByTestId("session-tokens")).toBeVisible({ timeout: 15_000 });
+
+  // Clip to the chat layer. Masks on top of the standard dynamic chrome: the
+  // Write tool card's file path renders the temp repo's absolute path, and
+  // run durations vary — mask the whole tool card.
+  await expect(page.getByTestId("chat-layer")).toHaveScreenshot("diff-panel.png", {
+    ...SCREENSHOT_OPTS,
+    mask: [...dynamicChrome(page), page.locator('[data-tool="write"]')],
+  });
+});
+
+test("visual: diff panel worktree merge toolbar (Slice 20)", async ({ page }) => {
+  // Worktree isolation is a GLOBAL setting: flip it on only for this test's
+  // dedicated repo, then off in finally so the other baselines' projects keep
+  // running in their own roots (never a worktree).
+  await fetch(`${harness.baseUrl}/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ worktreeIsolation: true }),
+  });
+  try {
+    await page.goto(harness.baseUrl);
+    await selectProject(page, path.basename(WORKTREE_REPO));
+    // The session runs in its own worktree (cwd != the repo root).
+    await expect(page.getByTestId("session-cwd")).not.toHaveText(WORKTREE_REPO);
+    await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+    // The toolbar renders on a CLEAN worktree (it gates on the worktree meta +
+    // gitAutomation, not on changed files) — deterministic without a file write.
+    await page.getByTestId("diff-toggle").click();
+    await expect(page.getByTestId("diff-worktree-toolbar")).toBeVisible();
+    await expect(page.getByTestId("diff-merge")).toContainText("Merge to main");
+
+    // Screenshot just the toolbar; mask the worktree branch span (random session
+    // suffix). The "→ main" source + the "Merge to main" button are stable.
+    await expect(page.getByTestId("diff-worktree-toolbar")).toHaveScreenshot(
+      "diff-worktree-toolbar.png",
+      { ...SCREENSHOT_OPTS, mask: [page.getByTestId("diff-worktree-branch")] },
+    );
+  } finally {
+    await fetch(`${harness.baseUrl}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worktreeIsolation: false }),
+    });
+  }
+});
+
+test("visual: checkpoints rewind confirm dialog", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(DIFF_REPO));
+  await expect(page.getByTestId("session-cwd")).toHaveText(DIFF_REPO);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // One turn → one captured checkpoint whose label is the FIXED prompt text
+  // (deterministic — it is the turn's first user message).
+  await page.getByTestId("composer-input").fill("please write the diff baseline file");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
+    timeout: 60_000,
+  });
+
+  await page.getByTestId("checkpoints-toggle").click();
+  await expect
+    .poll(
+      async () => {
+        await page.getByTestId("checkpoints-refresh").click();
+        return await page.getByTestId("checkpoint-row").count();
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(1);
+
+  // Open the destructive-confirm dialog — its box is byte-deterministic (fixed
+  // warning copy + the fixed checkpoint label; the row's capture time stays
+  // behind the overlay). Screenshot the dialog box only.
+  await page
+    .locator('[data-testid="checkpoint-row"][data-turn="0"]')
+    .getByTestId("checkpoint-restore")
+    .click();
+  await expect(page.getByTestId("rollback-confirm-dialog")).toBeVisible();
+  await expect(page.getByTestId("rollback-confirm-dialog")).toHaveScreenshot(
+    "checkpoints-rollback-confirm.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: composer with pending review-comment cards", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(DIFF_REPO));
+  await expect(page.getByTestId("session-cwd")).toHaveText(DIFF_REPO);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.getByTestId("composer-input").fill("please write the diff baseline file");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("diff-badge")).toHaveText("1", { timeout: 30_000 });
+
+  await page.getByTestId("diff-toggle").click();
+  await page.locator('[data-testid="diff-tree-file"][data-path="src/visual.txt"]').click();
+  await expect(page.getByTestId("diff-file-view")).toBeVisible();
+  await expect(page.getByTestId("diff-lines")).toContainText("+alpha one", { timeout: 15_000 });
+
+  // Two deterministic comments on two added lines → two pending composer cards.
+  const alphaRow = page.locator('[data-testid="diff-line"]', { hasText: "alpha one" });
+  await alphaRow.hover();
+  await alphaRow.getByTestId("diff-comment-add").click();
+  await page.getByTestId("diff-comment-input").fill("Rename alpha to first");
+  await page.getByTestId("diff-comment-save").click();
+  await expect(page.getByTestId("pending-comment-card")).toHaveCount(1);
+
+  const gammaRow = page.locator('[data-testid="diff-line"]', { hasText: "gamma three" });
+  await gammaRow.hover();
+  await gammaRow.getByTestId("diff-comment-add").click();
+  await page.getByTestId("diff-comment-input").fill("Add a test for gamma");
+  await page.getByTestId("diff-comment-save").click();
+  await expect(page.getByTestId("pending-comment-card")).toHaveCount(2);
+
+  // The pending-cards strip is the new chrome: relative file paths + fixed
+  // bodies make it byte-stable. Screenshot just that container.
+  await expect(page.getByTestId("composer-pending-comments")).toHaveScreenshot(
+    "composer-pending-comments.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: composer with a pending preview-element context card", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(PREVIEW_PROJECT));
+  await expect(page.getByTestId("session-cwd")).toHaveText(PREVIEW_PROJECT);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // Run the dev server so the preview embeds (the element-capture form only
+  // exists in the embedded-browser state), then capture a fixed element context.
+  await page.getByTestId("preview-toggle").click();
+  await page.getByTestId("preview-run").click();
+  await expect(page.getByTestId("preview-iframe")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("preview-select-element").click();
+  await page.getByTestId("preview-element-selector").fill("button.primary");
+  await page.getByTestId("preview-element-note").fill("Make the Save button larger");
+  await page.getByTestId("preview-element-add").click();
+
+  // The card's visible content is fully deterministic (the `<button>` label +
+  // the fixed note; the ephemeral-port URL rides only the hidden title/detail
+  // fallback, never the rendered text), so the container shot needs no mask.
+  await expect(page.getByTestId("pending-element-card")).toHaveCount(1);
+  await expect(page.getByTestId("composer-pending-elements")).toHaveScreenshot(
+    "composer-pending-elements.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: composer with a file tag chip (Slice 17)", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(FILES_PROJECT));
+  await expect(page.getByTestId("session-cwd")).toHaveText(FILES_PROJECT);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // Insert a mention of the fixed project file via the @-file panel, producing a
+  // removable file tag chip. The chip shows the file basename (relative, stable),
+  // so the strip is byte-deterministic.
+  const input = page.getByTestId("composer-input");
+  await input.click();
+  await input.pressSequentially("look at @exa");
+  await expect(page.getByTestId("file-panel")).toBeVisible({ timeout: 15_000 });
+  // The @-search returns OS-native paths (a backslash separator on Windows), so
+  // click the sole listed item rather than hard-coding a separator, and assert
+  // the chip appeared (its label is the basename "example.ts" on either OS).
+  await page.locator('[data-testid^="file-panel-item-"]').first().click();
+  await expect(page.getByTestId("file-tag-chip")).toHaveCount(1);
+  await expect(page.getByTestId("file-tag-chip")).toContainText("example.ts");
+
+  await expect(page.getByTestId("file-tag-chips")).toHaveScreenshot(
+    "composer-file-tag-chips.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: command palette open with a fixed filter", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByTestId("command-palette")).toBeVisible();
+  // A query that matches ONLY static action commands (the four panel toggles),
+  // never the machine-specific sessions/projects — so the list is byte-stable.
+  await page.getByTestId("command-palette-input").fill("toggle");
+  await expect(page.getByTestId("command-palette-item").first()).toContainText("Toggle");
+
+  // Screenshot the dialog panel only (the blurred backdrop covers the sidebar's
+  // nondeterministic session list).
+  await expect(page.getByTestId("command-palette-dialog")).toHaveScreenshot(
+    "command-palette.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: keybindings editor with default bindings", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByTestId("command-palette-input").fill("keybind");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("keybindings-editor")).toBeVisible();
+  // The row list is the shipped defaults — no times, no per-run values.
+  await expect(
+    page.locator('[data-testid="keybindings-editor-row"][data-command="terminal.toggle"]'),
+  ).toBeVisible();
+
+  await expect(page.getByTestId("keybindings-editor-dialog")).toHaveScreenshot(
+    "keybindings-editor.png",
+    SCREENSHOT_OPTS,
+  );
+});
+
+test("visual: files panel with a text file previewed", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(FILES_PROJECT));
+  await expect(page.getByTestId("session-cwd")).toHaveText(FILES_PROJECT);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // Open the panel, expand the fixed subdirectory, open the fixed file: L4a is a
+  // side-by-side [tree | content] split with the file open as a tab and a
+  // syntax-highlighted, read-only CodeMirror view of its content.
+  await page.getByTestId("files-toggle").click();
+  await page.locator('[data-testid="file-tree-dir"][data-path="src"]').click();
+  await page.locator('[data-testid="file-tree-file"][data-path="src/example.ts"]').click();
+  await expect(page.getByTestId("file-preview")).toBeVisible();
+  const previewText = page.locator('[data-testid="file-preview-text"]:visible');
+  await expect(previewText).toContainText("export const answer", { timeout: 15_000 });
+  // Wait for the lazy CodeMirror chunk + TS grammar to mount so the screenshot
+  // captures the highlighted view (not the plain <pre> fallback).
+  await expect(previewText.locator(".cm-editor")).toBeVisible({ timeout: 15_000 });
+
+  // Clip to the chat layer (the panel's mount), like the diff-panel baseline;
+  // the sidebar's nondeterministic session list stays out of frame.
+  await expect(page.getByTestId("chat-layer")).toHaveScreenshot("files-panel.png", {
+    ...SCREENSHOT_OPTS,
+    mask: dynamicChrome(page),
+  });
+});
+
+test("visual: preview panel with an embedded dev server", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(PREVIEW_PROJECT));
+  await expect(page.getByTestId("session-cwd")).toHaveText(PREVIEW_PROJECT);
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  // Open the panel, run the dev script; the discovered port auto-embeds.
+  await page.getByTestId("preview-toggle").click();
+  await page.getByTestId("preview-run").click();
+  const iframe = page.getByTestId("preview-iframe");
+  await expect(iframe).toBeVisible({ timeout: 30_000 });
+  // Wait for the frame to finish loading so the reload icon isn't mid-spin and
+  // no loading overlay is on screen — then only the port-bearing URL bar +
+  // iframe body vary, and those are masked.
+  await expect(page.getByTestId("preview-loading")).toHaveCount(0, { timeout: 30_000 });
+  // Settle the composer footer BEFORE the shot: the wide preview pane narrows the
+  // chat column enough that the chip row wraps once the async model id replaces
+  // its "model" placeholder, growing the chat-layer height ~11px. Waiting for the
+  // real model id makes the captured height deterministic (else --update grabs
+  // the pre-wrap frame and compare runs, which settle post-wrap, fail).
+  await expect(page.getByTestId("model-chip-label")).not.toHaveText("model", {
+    timeout: 15_000,
+  });
+
+  // Clip to the chat layer (the panel's mount). Mask the URL input (carries the
+  // ephemeral port) and the iframe (cross-origin content is nondeterministic);
+  // the baseline guards the browser chrome + panel frame.
+  await expect(page.getByTestId("chat-layer")).toHaveScreenshot("preview-panel.png", {
+    ...SCREENSHOT_OPTS,
+    mask: [...dynamicChrome(page), page.getByTestId("preview-url-input"), iframe],
+  });
+});

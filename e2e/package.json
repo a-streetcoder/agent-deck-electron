@@ -1,0 +1,19 @@
+{
+  "name": "@agent-deck/e2e",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:pi": "playwright test",
+    "test:visual": "playwright test tests/visual.spec.ts",
+    "test:visual:update": "playwright test tests/visual.spec.ts --update-snapshots=all"
+  },
+  "devDependencies": {
+    "@agent-deck/domain": "workspace:*",
+    "@agent-deck/server": "workspace:*",
+    "@agent-deck/testkit": "workspace:*",
+    "@playwright/test": "1.53.1",
+    "@types/node": "22.15.29"
+  }
+}

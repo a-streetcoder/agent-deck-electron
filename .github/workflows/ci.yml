@@ -1,0 +1,106 @@
+name: CI
+
+# Fast static checks fail first; then the real-pi + unit matrix;
+# then the Playwright e2e (UI streaming + the Electron shell) under xvfb.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast fail-fast feedback (~30s): static checks on one OS.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+
+  # Units + real-pi integration (the pinned pi binary provides deterministic,
+  # keyless runs). Linux + Windows are the ship targets and BLOCK. macOS is
+  # ADVISORY (continue-on-error): it is not a ship target for the cross-plat
+  # port, and its runner keeps producing environment-specific real-pi/native
+  # flakes (node-pty spawn-helper perms, managed_subagent bridge-registration
+  # timing) that would otherwise mask genuine regressions on the platforms we
+  # actually ship. It still runs and reports, so portability bugs it catches
+  # (e.g. the /var→/private/var realpath test fix) stay visible.
+  test:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm --filter @agent-deck/web build
+      # Real-pi vitest integration (pi-host + server). The e2e package's
+      # Playwright suite runs in the dedicated e2e job, so exclude it here.
+      - run: pnpm -r --filter '!@agent-deck/e2e' test:pi
+
+  # Playwright e2e — the streaming UI and the Electron desktop shell. Runs on
+  # Linux (under xvfb) and Windows, since both are ship targets.
+  e2e:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # pnpm may not run Electron's postinstall on a frozen install; fetch its
+      # binary explicitly so the desktop-shell e2e can launch it. (bash is on
+      # the Windows runner too.)
+      - name: Ensure Electron binary
+        shell: bash
+        run: |
+          ELECTRON_DIR=$(node -e "console.log(require('path').dirname(require.resolve('electron/package.json', { paths: [require('path').resolve('apps/desktop')] })))")
+          node "$ELECTRON_DIR/install.js"
+      - run: pnpm --filter @agent-deck/web build
+      - name: Install Playwright browsers + system deps
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: e2e
+      - name: Run Playwright e2e — Linux (xvfb for Electron)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm exec playwright test
+        working-directory: e2e
+      - name: Run Playwright e2e — Windows
+        if: runner.os == 'Windows'
+        run: pnpm exec playwright test
+        working-directory: e2e

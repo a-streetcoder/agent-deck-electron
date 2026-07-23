@@ -1,0 +1,21 @@
+{
+  "name": "@agent-deck/testkit",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.12.1",
+    "zod": "3.25.67"
+  },
+  "devDependencies": {
+    "@agent-deck/domain": "workspace:*",
+    "@agent-deck/pi-host": "workspace:*",
+    "@types/node": "22.15.29"
+  }
+}
