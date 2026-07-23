@@ -1,0 +1,36 @@
+appId: com.streetcoding.agentdeck
+productName: Agent Deck
+artifactName: Agent-Deck-${version}-${arch}.${ext}
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - apps/desktop/main.js
+  - apps/desktop/preload.cjs
+  - apps/web/dist/**
+  - dist/server/**
+  - package.json
+
+asar: true
+asarUnpack:
+  - "**/node_modules/node-pty/build/Release/**"
+
+extraResources:
+  - from: packages/resources/builtin-agents
+    to: builtin-agents
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true
+
+dmg:
+  title: Agent Deck ${version}
+  sign: false

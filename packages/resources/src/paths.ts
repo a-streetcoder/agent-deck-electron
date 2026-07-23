@@ -52,7 +52,13 @@ export function appendSystemPromptPath(roots: ResourceRoots): string | undefined
   return undefined;
 }
 
-export const BUILTIN_AGENTS_DIR = fileURLToPath(new URL("../builtin-agents", import.meta.url));
+/**
+ * Packaged builds copy immutable built-ins outside app.asar and provide their
+ * explicit resource path. Source/test runs retain the package-relative path.
+ */
+export const BUILTIN_AGENTS_DIR =
+  process.env.AGENT_DECK_BUILTIN_AGENTS_DIR?.trim() ||
+  fileURLToPath(new URL("../builtin-agents", import.meta.url));
 
 export interface AgentCatalogDir {
   dir: string;

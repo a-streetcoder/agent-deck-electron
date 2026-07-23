@@ -50,5 +50,46 @@ pnpm test:e2e                              # full Playwright browser + Electron 
 Build the web interface and launch the Electron desktop app:
 
 ```sh
-pnpm --filter @agent-deck/desktop dev
+pnpm dev
+```
+
+The development command runs the complete hot-reload stack:
+
+- React and CSS updates are applied immediately through Vite HMR.
+- Server changes restart the watched Node process.
+- Electron main-process and preload changes restart the Electron window.
+
+Use `pnpm --filter @agent-deck/desktop dev:build` when you want the previous
+production-style flow that builds the renderer once before launching Electron.
+
+## macOS packaging
+
+Create an unsigned Apple Silicon `.app` for local production-layout testing:
+
+```sh
+pnpm pack:mac
+```
+
+The result is `release/mac-arm64/Agent Deck.app`. It contains the compiled web
+interface, a bundled backend, immutable built-in agents, and the Electron-rebuilt
+`node-pty` native module. The separately installed `pi` CLI is discovered from
+the user's environment and standard Homebrew/npm locations.
+
+The manually triggered **Release macOS** GitHub workflow builds either an arm64
+or x64 DMG, signs the application with Developer ID, notarizes both the
+application and DMG, staples their tickets, runs Gatekeeper/signature validation,
+and uploads the DMG as a workflow artifact. It requires these organization
+secrets to be granted to this repository:
+
+- `APPLE_DEVELOPER_ID_CERTIFICATE`
+- `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`
+- `APPLE_NOTARY_API_KEY`
+- `APPLE_NOTARY_KEY_ID`
+- `APPLE_NOTARY_ISSUER_ID`
+- `APPLE_TEAM_ID`
+
+Validate a downloaded release again on a Mac with:
+
+```sh
+pnpm validate:mac -- /path/to/Agent-Deck-0.0.1-arm64.dmg
 ```

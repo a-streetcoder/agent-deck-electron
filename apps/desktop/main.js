@@ -1,13 +1,9 @@
 // Electron main process for agent-deck.
 //
-// Dev-runnable shell (t3code shape): the main process owns the server's
-// lifecycle — it spawns the same Fastify+pi server the CLI runs (via `pnpm
-// dev`) on a free port, waits for /health, then loads the server-served web UI
-// same-origin so all the relative `/sessions`, `/ws`, … paths just work. When
-// the app quits, the server dies with it — no more stale-server 404s.
-//
-// This is the terminal-launched dev build. Packaged installers (bundled server,
-// GUI-safe PATH, code-signing) are a later phase.
+// The main process owns the server lifecycle. Development spawns the workspace
+// server through pnpm; a packaged app runs the compiled backend bundle through
+// Electron's embedded Node runtime. Both bind an ephemeral loopback port and
+// serve the renderer same-origin.
 
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
@@ -42,6 +38,60 @@ function pnpmCommand() {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
+/** The command and environment used by the backend owned by this Electron process. */
+function ownedServerLaunch() {
+  if (!app.isPackaged) {
+    return {
+      command: pnpmCommand(),
+      args: ["--filter", "@agent-deck/server", "dev"],
+      cwd: repoRoot,
+      env: { ...process.env, PORT: "0" },
+      shell: process.platform === "win32",
+    };
+  }
+
+  return {
+    command: process.execPath,
+    args: [path.join(app.getAppPath(), "dist", "server", "index.mjs")],
+    cwd: app.getPath("userData"),
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      PORT: "0",
+      AGENT_DECK_DATA_DIR: app.getPath("userData"),
+      AGENT_DECK_WEB_DIST: path.join(app.getAppPath(), "apps", "web", "dist"),
+      AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(process.resourcesPath, "builtin-agents"),
+    },
+    shell: false,
+  };
+}
+
+/**
+ * In hot-reload development the backend is already owned by the workspace
+ * watcher. Reuse it instead of spawning a second server. Only a loopback HTTP
+ * endpoint is accepted because the renderer treats this as its privileged
+ * control-plane origin.
+ */
+function externalServerPort() {
+  const raw = process.env.AGENT_DECK_SERVER_URL;
+  if (!raw) return null;
+
+  const url = new URL(raw);
+  if (
+    url.protocol !== "http:" ||
+    (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") ||
+    !url.port
+  ) {
+    throw new Error("AGENT_DECK_SERVER_URL must be a loopback HTTP URL with an explicit port");
+  }
+
+  const port = Number(url.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("AGENT_DECK_SERVER_URL contains an invalid port");
+  }
+  return port;
+}
+
 /**
  * Spawn the agent-deck server and resolve with the port it actually bound.
  * We pass PORT=0 so Fastify picks a free ephemeral port itself and reports it
@@ -50,15 +100,16 @@ function pnpmCommand() {
  */
 function startServer() {
   return new Promise((resolve, reject) => {
-    const child = spawn(pnpmCommand(), ["--filter", "@agent-deck/server", "dev"], {
-      cwd: repoRoot,
-      env: { ...process.env, PORT: "0" },
+    const launch = ownedServerLaunch();
+    const child = spawn(launch.command, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env,
       // Pipe (not inherit) so the child holds pipes to us, not our raw stdout fds
       // — otherwise a detached child keeps our stdout open and blocks a clean exit.
       stdio: ["ignore", "pipe", "pipe"],
       // pnpm.cmd on Windows needs a shell to resolve. On POSIX, run the server in
       // its own process group so we can kill the whole tree (pnpm → tsx → node).
-      shell: process.platform === "win32",
+      shell: launch.shell,
       detached: process.platform !== "win32",
     });
     serverProcess = child;
@@ -359,7 +410,8 @@ ipcMain.on("attention", (_event, payload) => {
 
 async function bootstrap() {
   try {
-    serverPort = await startServer();
+    const configuredPort = externalServerPort();
+    serverPort = configuredPort ?? (await startServer());
     await waitForHealth(serverPort);
   } catch (error) {
     dialog.showErrorBox("agent-deck failed to start", String(error));

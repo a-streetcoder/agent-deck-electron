@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/", "**/node_modules/", "**/coverage/"] },
+  { ignores: ["**/dist/", "**/node_modules/", "**/coverage/", "release/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -16,7 +16,7 @@ export default tseslint.config(
   },
   {
     // Electron main is ESM node code; give it the host timers it uses.
-    files: ["apps/desktop/**/*.js"],
+    files: ["apps/desktop/**/*.js", "scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         setTimeout: "readonly",

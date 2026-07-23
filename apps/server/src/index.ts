@@ -21,8 +21,11 @@ export { SessionIndex, defaultDataDir } from "./persistence.ts";
 if (isMainModule(import.meta.url, process.argv[1])) {
   const port = Number(process.env.PORT ?? 4200);
 
-  // Serve the built web app at / by default (apps/web/dist).
-  const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+  // A packaged Electron app passes an explicit resource path. Workspace runs
+  // retain the source-relative default.
+  const webDist =
+    process.env.AGENT_DECK_WEB_DIST ||
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
   const hasWebBuild = existsSync(path.join(webDist, "index.html"));
   if (!hasWebBuild) {
     console.warn(
