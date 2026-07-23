@@ -78,8 +78,7 @@ the user's environment and standard Homebrew/npm locations.
 The manually triggered **Release macOS** GitHub workflow builds either an arm64
 or x64 DMG, signs the application with Developer ID, notarizes both the
 application and DMG, staples their tickets, runs Gatekeeper/signature validation,
-and uploads the DMG as a workflow artifact. It requires these organization
-secrets to be granted to this repository:
+and uploads the DMG as a workflow artifact. It requires these secrets:
 
 - `APPLE_DEVELOPER_ID_CERTIFICATE`
 - `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`
@@ -87,6 +86,11 @@ secrets to be granted to this repository:
 - `APPLE_NOTARY_KEY_ID`
 - `APPLE_NOTARY_ISSUER_ID`
 - `APPLE_TEAM_ID`
+
+Organization-level Actions secrets are not available to private repositories on
+GitHub Free. On that plan, add the same names as repository-level secrets; on
+GitHub Team or Enterprise, the existing organization secrets can be granted to
+this repository.
 
 Validate a downloaded release again on a Mac with:
 
