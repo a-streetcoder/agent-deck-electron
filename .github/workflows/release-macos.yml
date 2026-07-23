@@ -49,7 +49,10 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
-          test -n "$APPLE_NOTARY_API_KEY" && test -n "$APPLE_API_KEY_ID" && test -n "$APPLE_API_ISSUER"
+          if [[ -z "$APPLE_NOTARY_API_KEY" || -z "$APPLE_API_KEY_ID" || -z "$APPLE_API_ISSUER" ]]; then
+            echo "Apple notarization secrets are unavailable. Private repositories on GitHub Free must use repository-level secrets or upgrade the organization plan." >&2
+            exit 1
+          fi
           NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
           echo "$APPLE_NOTARY_API_KEY" | base64 -d > "$NOTARY_KEY_PATH"
           chmod 600 "$NOTARY_KEY_PATH"
@@ -62,7 +65,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          test -n "$CSC_LINK" && test -n "$CSC_KEY_PASSWORD" && test -n "$APPLE_TEAM_ID"
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "Apple signing secrets are unavailable. Private repositories on GitHub Free must use repository-level secrets or upgrade the organization plan." >&2
+            exit 1
+          fi
 
       - name: Build, sign, and notarize application
         env:
