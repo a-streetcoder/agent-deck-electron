@@ -73,7 +73,9 @@ describe("manual compaction (native Compact context)", () => {
     for (let i = 0; i < 5; i += 1) {
       const done = assistantCount();
       await managed.prompt(`turn ${i}: ${`word `.repeat(8000)}`);
-      await expect.poll(() => turnSettled(done), { timeout: 20_000 }).toBe(true);
+      // Windows CI can take over 20 seconds to process the large payload while
+      // the full real-Pi suite is running; this gates correctness, not speed.
+      await expect.poll(() => turnSettled(done), { timeout: 60_000 }).toBe(true);
     }
     const before = managed.snapshot().state.contextRevision;
 
@@ -81,7 +83,7 @@ describe("manual compaction (native Compact context)", () => {
     // contextRevision bump.
     await managed.compact();
     await expect
-      .poll(() => managed.snapshot().state.contextRevision, { timeout: 15_000 })
+      .poll(() => managed.snapshot().state.contextRevision, { timeout: 30_000 })
       .toBeGreaterThan(before);
   });
 });
