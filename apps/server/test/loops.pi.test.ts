@@ -151,6 +151,43 @@ async function waitTerminal(id: string): Promise<LoopRun> {
 }
 
 describe("loop run engine (real pi)", () => {
+  it("records and resolves Human Approval without sending any provider request", async () => {
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "human-approval-loop",
+        structure: "humanApproval",
+        checkpointPrompt: "Review the release proposal.",
+        validationCommand: "exit 1",
+        writeTarget: "currentCheckout",
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("human-approval-loop"));
+    expect(mock.requests).toHaveLength(requestStart);
+    expect(run).toMatchObject({
+      status: "stopped",
+      stopReason: "humanInputRequired",
+      checkpointPrompt: "Review the release proposal.",
+    });
+    expect(run).not.toHaveProperty("launch");
+    expect(run.iterations[0]?.children).toEqual([]);
+    expect(run.iterations.flatMap((iteration) => iteration.artifacts)).toHaveLength(1);
+    expect(run.iterations[0]?.artifacts[0]?.filename).toBe("human-approval-checkpoint.md");
+    const resolution = await fetch(`${base}/loops/runs/${run.id}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "reject", expectedUpdatedAt: run.updatedAt }),
+    });
+    expect(resolution.ok).toBe(true);
+    const rejected = ((await resolution.json()) as { run: LoopRun }).run;
+    expect(rejected.stopReason).toBe("humanRejected");
+    expect(rejected.iterations.flatMap((iteration) => iteration.artifacts)).toHaveLength(1);
+    expect(mock.requests).toHaveLength(requestStart);
+  });
+
   it("completes after one iteration when validation passes (exit 0)", async () => {
     await putLoop("pass-loop", "exit 0", 5);
     const run = await waitTerminal(await startRun("pass-loop"));

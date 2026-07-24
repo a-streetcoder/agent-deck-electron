@@ -32,6 +32,7 @@ export const RUNNABLE_LOOP_STRUCTURES = [
   "agentPipeline",
   "parallelAgents",
   "discoveryTriage",
+  "humanApproval",
 ] as const satisfies readonly LoopStructure[];
 
 export function isRunnableLoopStructure(structure: LoopStructure): boolean {
@@ -40,11 +41,18 @@ export function isRunnableLoopStructure(structure: LoopStructure): boolean {
 
 export const LOOP_DEFAULT_CLASSIFICATION_PROMPT =
   "Classify findings by severity and summarize recommended next action.";
+export const LOOP_DEFAULT_CHECKPOINT_PROMPT = "Review the proposal before continuing.";
 
 /** Native LoopDiscoveryTriageConfig normalization, including CR-only input. */
 export function normalizeLoopClassificationPrompt(value: string | undefined): string {
   const normalized = (value ?? "").replace(/\r\n|\r|\n/g, " ").trim();
   return normalized || LOOP_DEFAULT_CLASSIFICATION_PROMPT;
+}
+
+/** Native LoopHumanApprovalConfig and LoopDefinitionStore.oneLine normalization. */
+export function normalizeLoopCheckpointPrompt(value: string | undefined): string {
+  const normalized = (value ?? "").replace(/\r\n|\r|\n/g, " ").trim();
+  return normalized || LOOP_DEFAULT_CHECKPOINT_PROMPT;
 }
 
 /** Structure-specific authoring/run validity; unsupported structures always fail closed. */
@@ -62,6 +70,7 @@ export function loopDefinitionValidationError(
     | "parallelBranches"
     | "triageAgent"
     | "classificationPrompt"
+    | "checkpointPrompt"
     | "writeTarget"
   >,
 ): string | undefined {
@@ -162,6 +171,8 @@ export interface LoopDefinition {
   /** Native flat Discovery/Triage frontmatter. */
   triageAgent?: string;
   classificationPrompt?: string;
+  /** Native flat Human Approval frontmatter. */
+  checkpointPrompt?: string;
   /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
@@ -194,6 +205,8 @@ export type LoopStopReason =
   | "validationUnavailable"
   | "agentFailed"
   | "humanInputRequired"
+  | "humanApproved"
+  | "humanRejected"
   | "userStopped"
   | "appInterrupted";
 
@@ -205,6 +218,7 @@ export type LoopRunPhase =
   | "stage"
   | "branch"
   | "triage"
+  | "checkpoint"
   | "validation"
   | "evaluator";
 
@@ -220,7 +234,7 @@ export interface LoopTimelineEvent {
 
 export interface LoopRunArtifact {
   id: string;
-  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "checkpoint" | "evaluator";
   stageIndex?: number;
   branchIndex?: number;
   agentName?: string;
@@ -312,9 +326,13 @@ export interface LoopRunLaunchOwnership {
 export interface LoopRun {
   id: string;
   loopName: string;
+  /** Snapshotted orchestration shape; absent only on legacy persisted runs. */
+  structure?: LoopStructure;
   projectId?: string;
   retryOf?: string;
   launch?: LoopRunLaunchOwnership;
+  /** Snapshot shown by a dedicated Human Approval checkpoint. */
+  checkpointPrompt?: string;
   status: LoopRunStatus;
   currentIteration: number;
   maxIterations: number;
@@ -323,6 +341,16 @@ export interface LoopRun {
   startedAt: string;
   updatedAt: string;
   endedAt?: string;
+}
+
+/** Native AppViewModel.retryLoopRun eligibility. A rejection is deliberately terminal. */
+export function canRetryLoopRun(run: Pick<LoopRun, "status" | "stopReason">): boolean {
+  return (
+    run.status === "failed" ||
+    run.status === "notAchieved" ||
+    run.stopReason === "humanInputRequired" ||
+    run.stopReason === "humanApproved"
+  );
 }
 
 /** True once a run has reached a terminal state (no longer running/stopping). */

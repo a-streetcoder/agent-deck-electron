@@ -147,6 +147,12 @@ test.beforeAll(async () => {
     maxIterations: 10,
   });
   await putLoop({
+    name: "Reject Approval",
+    structure: "humanApproval",
+    checkpointPrompt: "Reject this unsafe proposal.",
+    writeTarget: "newWorktree",
+  });
+  await putLoop({
     name: "Slow Stop",
     goal: "Keep working until stopped.",
     structure: "agentPipeline",
@@ -167,6 +173,97 @@ async function openLoops(page: Page): Promise<void> {
   await page.getByTestId("nav-loops").click();
 }
 
+test("authors, duplicates, reloads, and approves an accessible Human Approval checkpoint", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("new-loop").click();
+  await page.getByTestId("loop-name").fill("Release Approval");
+  await page.getByTestId("loop-structure").selectOption("humanApproval");
+  const prompt = page.getByTestId("loop-checkpoint-prompt");
+  await expect(prompt).toBeFocused();
+  await prompt.fill("Review release severity and owner.");
+  await page.getByTestId("loop-save").click();
+  await page.getByTestId("loop-duplicate-Release Approval").click();
+  await page.getByTestId("loop-open-Copy of Release Approval").click();
+  await expect(page.getByTestId("loop-checkpoint-prompt")).toHaveValue(
+    "Review release severity and owner.",
+  );
+  await page.getByTestId("loop-cancel").click();
+
+  await page.getByTestId("loop-run-Release Approval").click();
+  await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
+  await expect(page.getByTestId("loop-checkpoint-question")).toHaveText(
+    "Review release severity and owner.",
+  );
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
+  const approve = page.getByTestId("loop-approval-approve");
+  await page.route("**/loops/runs/*/resolve", async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "The checkpoint changed; reload before deciding." }),
+    });
+  });
+  await approve.click();
+  await expect(page.getByTestId("loop-approval-error")).toBeVisible();
+  await expect(approve).toBeFocused();
+  await page.unroute("**/loops/runs/*/resolve");
+  await approve.click();
+  const approvedResolution = page.getByTestId("loop-approval-resolution");
+  await expect(approvedResolution).toContainText("Approval recorded");
+  await expect(approvedResolution).toContainText("Retry creates a fresh linked checkpoint");
+  await expect(page.getByTestId("loop-run-retry")).toBeFocused();
+  await page.getByTestId("loop-run-retry").click();
+  await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
+  await expect(page.getByTestId("loop-run-history")).toContainText("Approval recorded");
+});
+
+test("rejects Human Approval by keyboard and preserves focus on a resolution conflict", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("loop-run-Reject Approval").click();
+  const reject = page.getByTestId("loop-approval-reject");
+  await reject.focus();
+  await page.route("**/loops/runs/*/resolve", async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "The checkpoint changed; reload before deciding." }),
+    });
+  });
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("loop-approval-error")).toHaveAttribute("role", "alert");
+  await expect(reject).toBeFocused();
+  await page.unroute("**/loops/runs/*/resolve");
+  await reject.focus();
+  await page.keyboard.press("Enter");
+  const rejectedResolution = page.getByTestId("loop-approval-resolution");
+  await expect(rejectedResolution).toContainText("Checkpoint rejected");
+  await expect(rejectedResolution).toContainText("Work was rejected and stopped");
+  await expect(rejectedResolution).not.toContainText("Retry");
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-dismiss")).toBeFocused();
+  await expect(page.getByTestId("loop-approval-approve")).toHaveCount(0);
+  const listed = (await (await page.request.get(`${harness.baseUrl}/loops/runs`)).json()) as {
+    runs: Array<{ id: string; loopName: string; updatedAt: string }>;
+  };
+  const rejected = [...listed.runs].reverse().find((run) => run.loopName === "Reject Approval")!;
+  const opposite = await page.request.post(`${harness.baseUrl}/loops/runs/${rejected.id}/resolve`, {
+    data: { decision: "approve", expectedUpdatedAt: rejected.updatedAt },
+  });
+  expect(opposite.status()).toBe(409);
+  const retryRejected = await page.request.post(
+    `${harness.baseUrl}/loops/runs/${rejected.id}/retry`,
+  );
+  expect(retryRejected.status()).toBe(409);
+  expect(await retryRejected.json()).toMatchObject({ code: "loop_retry_unavailable" });
+});
+
 test("runs a single-agent loop to completion", async ({ page }) => {
   await openLoops(page);
   await page.getByTestId("loop-run-Green Suite").click();
@@ -176,7 +273,7 @@ test("runs a single-agent loop to completion", async ({ page }) => {
   await expect(page.getByTestId("loop-run-iterations")).toContainText("✓ passed");
 });
 
-test("authors, reorders, duplicates, runs, retries, and restores an accessible Pipeline", async ({
+test("authors, reorders, duplicates, runs, and restores an accessible Pipeline", async ({
   page,
 }) => {
   await openLoops(page);
@@ -215,17 +312,14 @@ test("authors, reorders, duplicates, runs, retries, and restores an accessible P
   await expect(outputs.locator("li").nth(1)).toContainText("Stage 2: Agent A");
   await expect(outputs.locator("li").nth(2)).toContainText("Stage 3: Agent B");
   await expect(page.getByTestId("loop-run-live-status")).toHaveAttribute("role", "status");
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 
-  await page.getByTestId("loop-run-retry").click();
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
-    timeout: 30_000,
-  });
   await page.reload();
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-pipeline-stage-outputs")).toContainText("Stage 3: Agent B");
 });
 
-test("authors, normalizes, duplicates, runs, retries, and restores accessible Parallel reports", async ({
+test("authors, normalizes, duplicates, runs, and restores accessible Parallel reports", async ({
   page,
 }) => {
   await openLoops(page);
@@ -288,11 +382,8 @@ test("authors, normalizes, duplicates, runs, retries, and restores accessible Pa
     )
     .toBe(true);
   await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 
-  await page.getByTestId("loop-run-retry").click();
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
-    timeout: 30_000,
-  });
   await page.reload();
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-parallel-branch-outputs")).toContainText(
@@ -300,7 +391,7 @@ test("authors, normalizes, duplicates, runs, retries, and restores accessible Pa
   );
 });
 
-test("authors, duplicates, runs, reloads, stops, and retries accessible Discovery/Triage", async ({
+test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage", async ({
   page,
 }) => {
   await openLoops(page);
@@ -441,17 +532,11 @@ test("authors, duplicates, runs, reloads, stops, and retries accessible Discover
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "stopped", {
     timeout: 30_000,
   });
-  const retry = page.getByTestId("loop-run-retry");
-  await expect(retry).toBeFocused();
-  await retry.click();
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "running");
-  await page.getByTestId("loop-run-stop").click();
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "stopped", {
-    timeout: 30_000,
-  });
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-dismiss")).toBeFocused();
 });
 
-test("shows queued Parallel branches, announces transitions, and focuses Retry after Stop", async ({
+test("shows queued Parallel branches, announces transitions, and withholds Retry after Stop", async ({
   page,
 }) => {
   await openLoops(page);
@@ -473,9 +558,8 @@ test("shows queued Parallel branches, announces transitions, and focuses Retry a
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-panel")).toContainText("Stopped by user");
-  const retry = page.getByTestId("loop-run-retry");
-  await expect(retry).toBeEnabled();
-  await expect(retry).toBeFocused();
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-dismiss")).toBeFocused();
 });
 
 test("shows a failed Parallel branch textually and as an alert", async ({ page }) => {
@@ -492,7 +576,7 @@ test("shows a failed Parallel branch textually and as an alert", async ({ page }
   ).toContainText("unknown agent: Missing Agent");
 });
 
-test("shows ordered Maker+Checker evidence, disables launches, retries, and restores history", async ({
+test("shows ordered Maker+Checker evidence, disables launches, and restores history", async ({
   page,
 }) => {
   await openLoops(page);
@@ -515,13 +599,7 @@ test("shows ordered Maker+Checker evidence, disables launches, retries, and rest
   await expect(page.getByTestId("loop-validation-evidence")).toContainText("exit 0");
   await expect(timeline).toContainText("iteration-1-maker.md");
 
-  await page.getByTestId("loop-run-retry").focus();
-  await expect(page.getByTestId("loop-run-retry")).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
-    timeout: 30_000,
-  });
-  await expect(page.getByTestId("loop-run-history")).toContainText("Reviewed Report");
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 
   const history = page.getByTestId("loop-run-history");
   await expect(history).toContainText("Reviewed Report");
@@ -541,7 +619,7 @@ test("shows ordered Maker+Checker evidence, disables launches, retries, and rest
   await expect(page.getByTestId("loop-run-iterations")).not.toHaveAttribute("aria-live");
 });
 
-test("Stop cancels a running loop and Retry remains available", async ({ page }) => {
+test("Stop cancels a running loop and native retry eligibility is enforced", async ({ page }) => {
   await openLoops(page);
   await page.getByTestId("loop-run-Slow Stop").click();
   const stop = page.getByTestId("loop-run-stop");
@@ -559,8 +637,8 @@ test("Stop cancels a running loop and Retry remains available", async ({ page })
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-panel")).toContainText("Stopped by user");
-  await expect(page.getByTestId("loop-run-retry")).toBeEnabled();
-  await expect(page.getByTestId("loop-run-retry")).toBeFocused();
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-dismiss")).toBeFocused();
 });
 
 test("shows native-truthful human-input and recovery actions without broad live regions", async ({
@@ -642,10 +720,10 @@ test("shows native-truthful human-input and recovery actions without broad live 
   await expect(recoveryAlert).toContainText("Ensure no old agent process remains");
   const unlock = page.getByTestId("loop-recovery-acknowledge");
   await expect(unlock).toHaveAccessibleName(/unlock checkout/i);
-  await expect(page.getByTestId("loop-run-retry")).toBeDisabled();
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
   await unlock.click();
   await expect(recoveryAlert).toHaveCount(0);
-  await expect(page.getByTestId("loop-run-retry")).toBeEnabled();
+  await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 });
 
 test("surfaces a typed checkout conflict in the Loop UI", async ({ page }) => {

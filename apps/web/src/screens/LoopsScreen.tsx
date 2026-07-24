@@ -18,11 +18,14 @@ import {
   X,
 } from "lucide-react";
 import {
+  canRetryLoopRun,
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
+  LOOP_DEFAULT_CHECKPOINT_PROMPT,
   LOOP_DEFAULT_CLASSIFICATION_PROMPT,
   LOOP_DEFAULT_MAX_ITERATIONS,
   LOOP_MAX_ITERATIONS_LIMIT,
@@ -59,6 +62,8 @@ const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, stri
   validationUnavailable: "Validation unavailable",
   agentFailed: "Agent failed",
   humanInputRequired: "Human input required",
+  humanApproved: "Approval recorded",
+  humanRejected: "Human rejected",
   userStopped: "Stopped by user",
   appInterrupted: "Interrupted by application restart",
 };
@@ -68,6 +73,7 @@ const PHASE_LABEL = {
   stage: "Pipeline stage",
   branch: "Parallel branch",
   triage: "Discovery / triage",
+  checkpoint: "Human approval",
   validation: "Validation",
   evaluator: "Goal evaluator",
 } as const;
@@ -112,6 +118,7 @@ interface LoopDraft {
   parallelBranches: string[];
   triageAgent: string;
   classificationPrompt: string;
+  checkpointPrompt: string;
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
@@ -137,6 +144,7 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     parallelBranches: loop?.parallelBranches ? [...loop.parallelBranches] : [],
     triageAgent: loop?.triageAgent ?? "",
     classificationPrompt: loop?.classificationPrompt ?? LOOP_DEFAULT_CLASSIFICATION_PROMPT,
+    checkpointPrompt: loop?.checkpointPrompt ?? LOOP_DEFAULT_CHECKPOINT_PROMPT,
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
     writeTarget:
@@ -161,13 +169,20 @@ export function LoopsScreen() {
   const [activeRun, setActiveRun] = useState<LoopRun | null>(null);
   const [runPending, setRunPending] = useState(false);
   const [stopPending, setStopPending] = useState(false);
+  const [approvalPending, setApprovalPending] = useState<"approve" | "reject" | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const [acknowledgePending, setAcknowledgePending] = useState(false);
   const runIdRef = useRef<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const approveButtonRef = useRef<HTMLButtonElement>(null);
+  const rejectButtonRef = useRef<HTMLButtonElement>(null);
+  const dismissButtonRef = useRef<HTMLButtonElement>(null);
+  const checkpointPromptRef = useRef<HTMLTextAreaElement>(null);
   const triageAgentRef = useRef<HTMLInputElement>(null);
   const focusRetryAfterStopRef = useRef(false);
+  const approvalErrorFocusRef = useRef<"approve" | "reject" | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Runs we've already toasted on completion, so a terminal state toasts once.
   const toastedRef = useRef<Set<string>>(new Set());
@@ -291,6 +306,10 @@ export function LoopsScreen() {
             draft.structure === "discoveryTriage"
               ? normalizeLoopClassificationPrompt(draft.classificationPrompt)
               : undefined,
+          checkpointPrompt:
+            draft.structure === "humanApproval"
+              ? normalizeLoopCheckpointPrompt(draft.checkpointPrompt)
+              : undefined,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
           writeTarget: draft.writeTarget,
@@ -373,6 +392,31 @@ export function LoopsScreen() {
     }
   };
 
+  const resolveHumanApproval = async (decision: "approve" | "reject"): Promise<void> => {
+    if (!activeRun || approvalPending) return;
+    setApprovalPending(decision);
+    setApprovalError(null);
+    try {
+      const response = await fetch(`/loops/runs/${activeRun.id}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision, expectedUpdatedAt: activeRun.updatedAt }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const { run } = (await response.json()) as { run: LoopRun };
+      setActiveRun(run);
+      setRuns((previous) => previous.map((item) => (item.id === run.id ? run : item)));
+      requestAnimationFrame(() =>
+        (canRetryLoopRun(run) ? retryButtonRef.current : dismissButtonRef.current)?.focus(),
+      );
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : String(error));
+      approvalErrorFocusRef.current = decision;
+    } finally {
+      setApprovalPending(null);
+    }
+  };
+
   const acknowledgeRecovery = async (): Promise<void> => {
     if (!activeRun || acknowledgePending) return;
     setAcknowledgePending(true);
@@ -441,10 +485,21 @@ export function LoopsScreen() {
   }, [activeRun]);
 
   useEffect(() => {
+    if (approvalPending || !approvalErrorFocusRef.current) return;
+    const decision = approvalErrorFocusRef.current;
+    approvalErrorFocusRef.current = null;
+    requestAnimationFrame(() =>
+      (decision === "approve" ? approveButtonRef.current : rejectButtonRef.current)?.focus(),
+    );
+  }, [approvalPending]);
+
+  useEffect(() => {
     if (!activeRun || !isLoopRunTerminal(activeRun.status) || !focusRetryAfterStopRef.current)
       return;
     focusRetryAfterStopRef.current = false;
-    requestAnimationFrame(() => retryButtonRef.current?.focus());
+    requestAnimationFrame(() =>
+      (canRetryLoopRun(activeRun) ? retryButtonRef.current : dismissButtonRef.current)?.focus(),
+    );
   }, [activeRun]);
 
   const draftError = draft ? loopDefinitionValidationError(draft) : undefined;
@@ -516,21 +571,26 @@ export function LoopsScreen() {
                 </span>
                 {isLoopRunTerminal(activeRun.status) ? (
                   <>
+                    {canRetryLoopRun(activeRun) ? (
+                      <ControlButton
+                        ref={retryButtonRef}
+                        data-testid="loop-run-retry"
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                        disabled={
+                          runPending || Boolean(approvalPending) || recoveryAcknowledgementRequired
+                        }
+                        aria-describedby={
+                          recoveryAcknowledgementRequired
+                            ? "loop-checkout-recovery-notice"
+                            : undefined
+                        }
+                        onClick={() => void retryRun()}
+                      >
+                        Retry
+                      </ControlButton>
+                    ) : null}
                     <ControlButton
-                      ref={retryButtonRef}
-                      data-testid="loop-run-retry"
-                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
-                      disabled={runPending || recoveryAcknowledgementRequired}
-                      aria-describedby={
-                        recoveryAcknowledgementRequired
-                          ? "loop-checkout-recovery-notice"
-                          : undefined
-                      }
-                      onClick={() => void retryRun()}
-                    >
-                      Retry
-                    </ControlButton>
-                    <ControlButton
+                      ref={dismissButtonRef}
                       data-testid="loop-run-dismiss"
                       className="rounded p-1 text-text-muted hover:text-text-primary"
                       title="Dismiss"
@@ -583,11 +643,73 @@ export function LoopsScreen() {
                 {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
               </div>
             ) : null}
-            {activeRun.stopReason === "humanInputRequired" ? (
+            {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
+              <div
+                className="mt-2 rounded-lg border border-warning px-2 py-2 text-xs"
+                role="alert"
+                data-testid="loop-human-approval-checkpoint"
+              >
+                <strong>Approval required.</strong>
+                <p className="mt-1 break-words" data-testid="loop-checkpoint-question">
+                  {activeRun.checkpointPrompt}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <ControlButton
+                    ref={approveButtonRef}
+                    data-testid="loop-approval-approve"
+                    className="rounded-capsule border border-border-strong px-2 py-1"
+                    disabled={Boolean(approvalPending)}
+                    onClick={() => void resolveHumanApproval("approve")}
+                  >
+                    {approvalPending === "approve" ? "Approving…" : "Approve"}
+                  </ControlButton>
+                  <ControlButton
+                    ref={rejectButtonRef}
+                    data-testid="loop-approval-reject"
+                    className="rounded-capsule border border-border-strong px-2 py-1 text-danger"
+                    disabled={Boolean(approvalPending)}
+                    onClick={() => void resolveHumanApproval("reject")}
+                  >
+                    {approvalPending === "reject" ? "Rejecting…" : "Reject"}
+                  </ControlButton>
+                </div>
+                {approvalError ? (
+                  <p className="mt-2 text-danger" role="alert" data-testid="loop-approval-error">
+                    {approvalError}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-text-muted">
+                  A decision ends this checkpoint. Retry starts a new linked attempt; approval does
+                  not resume this run.
+                </p>
+              </div>
+            ) : null}
+            {activeRun.stopReason === "humanInputRequired" && !activeRun.checkpointPrompt ? (
               <div className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs" role="alert">
                 <strong>Human input required.</strong>{" "}
                 {rationale(activeRun.iterations.at(-1)?.checkerOutput) ??
                   "Review the checker report, then Retry when ready."}
+              </div>
+            ) : null}
+            {activeRun.checkpointPrompt &&
+            (activeRun.stopReason === "humanApproved" ||
+              activeRun.stopReason === "humanRejected") ? (
+              <div
+                className="mt-2 rounded-lg border border-border-strong px-2 py-2 text-xs"
+                role="status"
+                data-testid="loop-approval-resolution"
+              >
+                {activeRun.stopReason === "humanApproved" ? (
+                  <>
+                    <strong>Approval recorded.</strong> This run remains terminal. Retry creates a
+                    fresh linked checkpoint.
+                  </>
+                ) : (
+                  <>
+                    <strong>Checkpoint rejected.</strong> Work was rejected and stopped. This
+                    checkpoint is terminal and cannot continue.
+                  </>
+                )}
               </div>
             ) : null}
             {activeRun.status === "interrupted" &&
@@ -762,6 +884,7 @@ export function LoopsScreen() {
                     }}
                   >
                     {run.loopName} · {RUN_STATUS_LABEL[run.status]}
+                    {run.stopReason ? ` · ${STOP_REASON_LABEL[run.stopReason] ?? "Run ended"}` : ""}
                   </ControlButton>
                 ))}
             </div>
@@ -924,9 +1047,16 @@ export function LoopsScreen() {
                             ),
                           }
                         : {}),
+                      ...(structure === "humanApproval"
+                        ? {
+                            checkpointPrompt: normalizeLoopCheckpointPrompt(draft.checkpointPrompt),
+                          }
+                        : {}),
                     });
                     if (structure === "discoveryTriage") {
                       requestAnimationFrame(() => triageAgentRef.current?.focus());
+                    } else if (structure === "humanApproval") {
+                      requestAnimationFrame(() => checkpointPromptRef.current?.focus());
                     }
                   }}
                   aria-describedby={
@@ -1245,6 +1375,39 @@ export function LoopsScreen() {
                           ...draft,
                           classificationPrompt: LOOP_DEFAULT_CLASSIFICATION_PROMPT,
                         });
+                      }
+                    }}
+                  />
+                </label>
+              </fieldset>
+            ) : null}
+            {draft.structure === "humanApproval" ? (
+              <fieldset
+                className="space-y-3 rounded-lg border border-border-subtle p-2"
+                data-testid="loop-human-approval-config"
+                aria-describedby="loop-human-approval-help"
+              >
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Approval checkpoint
+                </legend>
+                <p id="loop-human-approval-help" className="text-detail text-text-muted">
+                  Launch records a terminal checkpoint without running an agent or validation.
+                  Approval records the decision; it does not resume this run. Retry starts a fresh
+                  linked checkpoint.
+                </p>
+                <label className="block text-xs text-text-muted">
+                  Checkpoint prompt
+                  <ControlTextArea
+                    ref={checkpointPromptRef}
+                    data-testid="loop-checkpoint-prompt"
+                    className={`${inputClass} min-h-[100px]`}
+                    value={draft.checkpointPrompt}
+                    onChange={(event) =>
+                      setDraft({ ...draft, checkpointPrompt: event.target.value })
+                    }
+                    onBlur={() => {
+                      if (!draft.checkpointPrompt.trim()) {
+                        setDraft({ ...draft, checkpointPrompt: LOOP_DEFAULT_CHECKPOINT_PROMPT });
                       }
                     }}
                   />

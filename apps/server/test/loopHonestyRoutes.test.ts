@@ -8,11 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  LOOP_PARALLEL_WRITE_TARGET_CODE,
-  LOOP_STRUCTURE_UNSUPPORTED_CODE,
-  type LoopStructure,
-} from "@agent-deck/domain";
+import { LOOP_PARALLEL_WRITE_TARGET_CODE, type LoopStructure } from "@agent-deck/domain";
 import { loopsDir, scanLoops, writeLoopFile } from "@agent-deck/resources";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,10 +26,9 @@ import {
   gitDeleteOwnedWorktreeBranch,
   strictRemoveOwnedLoopWorktree,
 } from "../src/git.ts";
+import { LoopEngine } from "../src/loopEngine.ts";
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
-
-const unsupportedStructures: LoopStructure[] = ["humanApproval"];
 
 const servers: ReturnType<typeof Fastify>[] = [];
 
@@ -62,6 +57,7 @@ function makeRoutes(
   const markSessionReconciled = vi.fn();
   const markWorktreeReconciled = vi.fn();
   const acknowledgeCheckoutRecovery = vi.fn();
+  const resolveHumanApproval = vi.fn();
   const getEngine = vi.fn();
   const broadcast = vi.fn();
   const findProject = vi.fn((_predicate?: (project: { id: string; path: string }) => boolean) => ({
@@ -73,45 +69,56 @@ function makeRoutes(
     { id: string; cwd: string; createdAt: string; projectId?: string }
   >();
   const bridgeTokens = new Map<string, string>();
-  registerLoopRoutes({
-    fastify,
-    sessions: {
-      create: createSession,
-      destroy: destroySession,
-      runSubagent,
-      announceCreated,
+  const canonicalCheckoutEffect = vi.fn(canonicalCheckoutLockKey);
+  const createWorktreeEffect = vi.fn((...args: Parameters<typeof createLoopWorktree>) =>
+    createLoopWorktree(...args),
+  );
+  registerLoopRoutes(
+    {
+      fastify,
+      sessions: {
+        create: createSession,
+        destroy: destroySession,
+        runSubagent,
+        announceCreated,
+      },
+      index: {
+        find: (
+          predicate: (meta: {
+            id: string;
+            cwd: string;
+            createdAt: string;
+            projectId?: string;
+          }) => boolean,
+        ) => [...indexRows.values()].find(predicate),
+        remove: (id: string) => indexRows.delete(id),
+      },
+      projects: { find: findProject },
+      loopEngine: {
+        start: startEngine,
+        stop: stopEngine,
+        settled: settledEngine,
+        rollbackStart: rollbackEngine,
+        recoveryCheckoutLocks,
+        pendingResourceReconciliations,
+        markSessionReconciled,
+        markWorktreeReconciled,
+        acknowledgeCheckoutRecovery,
+        resolveHumanApproval,
+        list: () => [],
+        get: getEngine,
+      },
+      bridgeTokens,
+      broadcast,
+      rootsFor,
+      enabledExtensionPaths: () => [],
+      worktreesRoot: path.join(home, "managed-worktrees"),
+    } as unknown as ServerContext,
+    {
+      canonicalCheckoutLockKey: canonicalCheckoutEffect,
+      createLoopWorktree: createWorktreeEffect,
     },
-    index: {
-      find: (
-        predicate: (meta: {
-          id: string;
-          cwd: string;
-          createdAt: string;
-          projectId?: string;
-        }) => boolean,
-      ) => [...indexRows.values()].find(predicate),
-      remove: (id: string) => indexRows.delete(id),
-    },
-    projects: { find: findProject },
-    loopEngine: {
-      start: startEngine,
-      stop: stopEngine,
-      settled: settledEngine,
-      rollbackStart: rollbackEngine,
-      recoveryCheckoutLocks,
-      pendingResourceReconciliations,
-      markSessionReconciled,
-      markWorktreeReconciled,
-      acknowledgeCheckoutRecovery,
-      list: () => [],
-      get: getEngine,
-    },
-    bridgeTokens,
-    broadcast,
-    rootsFor,
-    enabledExtensionPaths: () => [],
-    worktreesRoot: path.join(home, "managed-worktrees"),
-  } as unknown as ServerContext);
+  );
   return {
     fastify,
     createSession,
@@ -127,11 +134,14 @@ function makeRoutes(
     markSessionReconciled,
     markWorktreeReconciled,
     acknowledgeCheckoutRecovery,
+    resolveHumanApproval,
     getEngine,
     findProject,
     broadcast,
     indexRows,
     bridgeTokens,
+    canonicalCheckoutEffect,
+    createWorktreeEffect,
   };
 }
 
@@ -151,126 +161,112 @@ function writeExternalLoop(
   return filePath;
 }
 
-function expectUnsupported(response: { statusCode: number; json(): unknown }): void {
-  expect(response.statusCode).toBe(422);
-  expect(response.json()).toEqual(
-    expect.objectContaining({
-      code: LOOP_STRUCTURE_UNSUPPORTED_CODE,
-      error: expect.stringContaining("Convert this loop to Single agent first"),
-    }),
-  );
-}
-
 describe("loop route honesty gate", () => {
-  it.each(unsupportedStructures)(
-    "rejects %s writes, duplication, and runs without mutation or runtime allocation",
-    async (structure) => {
-      const home = mkdtempSync(path.join(tmpdir(), "loop-honesty-"));
-      const roots = { home };
-      const filePath = writeExternalLoop(home, `Native ${structure}`, structure);
-      const original = readFileSync(filePath, "utf8");
-      const { fastify, createSession, startEngine, broadcast } = makeRoutes(home);
-
-      const list = await fastify.inject({ method: "GET", url: "/loops" });
-      expect(list.statusCode).toBe(200);
-      expect(list.json()).toEqual({
-        loops: [expect.objectContaining({ name: `Native ${structure}`, structure })],
-      });
-
-      const create = await fastify.inject({
-        method: "PUT",
-        url: "/loops",
-        payload: { name: `New ${structure}`, structure },
-      });
-      expectUnsupported(create);
-      expect(scanLoops(roots)).toHaveLength(1);
-
-      const update = await fastify.inject({
-        method: "PUT",
-        url: "/loops",
-        payload: { name: `Native ${structure}`, description: "must not change" },
-      });
-      expectUnsupported(update);
-      expect(readFileSync(filePath, "utf8")).toBe(original);
-
-      const duplicate = await fastify.inject({
-        method: "POST",
-        url: `/loops/${encodeURIComponent(`Native ${structure}`)}/duplicate`,
-      });
-      expectUnsupported(duplicate);
-      expect(scanLoops(roots)).toHaveLength(1);
-      expect(readFileSync(filePath, "utf8")).toBe(original);
-
-      const run = await fastify.inject({
-        method: "POST",
-        url: `/loops/${encodeURIComponent(`Native ${structure}`)}/run`,
-        payload: { projectId: "project" },
-      });
-      expectUnsupported(run);
-      expect(createSession).not.toHaveBeenCalled();
-      expect(startEngine).not.toHaveBeenCalled();
-      expect(createLoopWorktree).not.toHaveBeenCalled();
-      expect(broadcast).not.toHaveBeenCalled();
-      expect(readFileSync(filePath, "utf8")).toBe(original);
-
-      const remove = await fastify.inject({
-        method: "DELETE",
-        url: "/loops",
-        payload: { name: `Native ${structure}` },
-      });
-      expect(remove.statusCode).toBe(200);
-      expect(scanLoops(roots)).toEqual([]);
-
-      // Simulate the native definition returning, then prove an explicit
-      // conversion (and only an explicit conversion) remains allowed.
-      writeFileSync(filePath, original);
-      const convert = await fastify.inject({
-        method: "PUT",
-        url: "/loops",
-        payload: {
-          name: `Native ${structure}`,
-          structure: "singleAgent",
-          description: "explicitly converted",
-        },
-      });
-      expect(convert.statusCode).toBe(200);
-      expect(scanLoops(roots)[0]).toMatchObject({
-        structure: "singleAgent",
-        description: "explicitly converted",
-      });
-    },
-  );
-
-  it("maps a structure changed between the route scan and resource write to the same 422", async () => {
-    const supportedHome = mkdtempSync(path.join(tmpdir(), "loop-route-race-supported-"));
-    const unsupportedHome = mkdtempSync(path.join(tmpdir(), "loop-route-race-unsupported-"));
-    const supportedPath = writeLoopFile(
-      { home: supportedHome },
-      { name: "Racing Loop", structure: "singleAgent", description: "supported" },
-    );
-    const unsupportedPath = writeExternalLoop(unsupportedHome, "Racing Loop", "humanApproval");
-    const supportedOriginal = readFileSync(supportedPath, "utf8");
-    const unsupportedOriginal = readFileSync(unsupportedPath, "utf8");
-    let homeReads = 0;
-    const racingRoots = {} as { home: string };
-    Object.defineProperty(racingRoots, "home", {
-      get: () => (homeReads++ === 0 ? supportedHome : unsupportedHome),
+  it("authors and launches Human Approval without executable resource allocation", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-human-route-"));
+    const {
+      fastify,
+      createSession,
+      runSubagent,
+      startEngine,
+      resolveHumanApproval,
+      getEngine,
+      broadcast,
+      canonicalCheckoutEffect,
+      createWorktreeEffect,
+    } = makeRoutes(home);
+    const providerEffect = vi.fn(async () => "must not run");
+    const validationEffect = vi.fn(async () => true);
+    const realEngine = new LoopEngine({
+      executeRole: providerEffect,
+      runValidation: validationEffect,
     });
-    const { fastify, broadcast } = makeRoutes(supportedHome, () => racingRoots);
+    startEngine.mockImplementation((loop, cwd, options) => realEngine.start(loop, cwd, options));
 
-    const update = await fastify.inject({
+    const create = await fastify.inject({
       method: "PUT",
       url: "/loops",
-      payload: { name: "Racing Loop", description: "must not change" },
+      payload: {
+        name: "Release Approval",
+        structure: "humanApproval",
+        checkpointPrompt: "Review the release proposal.",
+        writeTarget: "currentCheckout",
+      },
     });
+    expect(create.statusCode).toBe(200);
+    expect(broadcast).toHaveBeenCalled();
 
-    expectUnsupported(update);
-    expect(update.json()).toEqual(
-      expect.objectContaining({ error: expect.stringContaining("Human approval") }),
+    const duplicate = await fastify.inject({
+      method: "POST",
+      url: "/loops/Release%20Approval/duplicate",
+    });
+    expect(duplicate.statusCode).toBe(200);
+
+    const run = await fastify.inject({
+      method: "POST",
+      url: "/loops/Release%20Approval/run",
+      payload: { projectId: "project" },
+    });
+    expect(run.statusCode).toBe(201);
+    const checkpoint = run.json().run;
+    expect(run.json()).toEqual({
+      run: expect.objectContaining({
+        id: expect.any(String),
+        structure: "humanApproval",
+        status: "stopped",
+        stopReason: "humanInputRequired",
+        checkpointPrompt: "Review the release proposal.",
+      }),
+      worktree: null,
+    });
+    expect(startEngine).toHaveBeenCalledWith(
+      expect.objectContaining({ structure: "humanApproval" }),
+      home,
+      { projectId: "project", retryOf: undefined },
     );
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(readFileSync(supportedPath, "utf8")).toBe(supportedOriginal);
-    expect(readFileSync(unsupportedPath, "utf8")).toBe(unsupportedOriginal);
+    expect(startEngine.mock.calls[0]?.[2]).toEqual({
+      projectId: "project",
+      retryOf: undefined,
+    });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(runSubagent).not.toHaveBeenCalled();
+    expect(canonicalCheckoutEffect).not.toHaveBeenCalled();
+    expect(createWorktreeEffect).not.toHaveBeenCalled();
+    expect(createLoopWorktree).not.toHaveBeenCalled();
+    expect(providerEffect).not.toHaveBeenCalled();
+    expect(validationEffect).not.toHaveBeenCalled();
+
+    getEngine.mockReturnValue(checkpoint);
+    const invalidResolution = await fastify.inject({
+      method: "POST",
+      url: `/loops/runs/${checkpoint.id}/resolve`,
+      payload: { decision: "approve" },
+    });
+    expect(invalidResolution.statusCode).toBe(400);
+    resolveHumanApproval.mockReturnValue({ ...checkpoint, stopReason: "humanApproved" });
+    const resolution = await fastify.inject({
+      method: "POST",
+      url: `/loops/runs/${checkpoint.id}/resolve`,
+      payload: { decision: "approve", expectedUpdatedAt: checkpoint.updatedAt },
+    });
+    expect(resolution.statusCode).toBe(200);
+    expect(resolveHumanApproval).toHaveBeenCalledWith(
+      checkpoint.id,
+      "approve",
+      checkpoint.updatedAt,
+    );
+
+    getEngine.mockReturnValue({ ...checkpoint, stopReason: "humanRejected" });
+    const rejectedRetry = await fastify.inject({
+      method: "POST",
+      url: `/loops/runs/${checkpoint.id}/retry`,
+    });
+    expect(rejectedRetry.statusCode).toBe(409);
+    expect(rejectedRetry.json()).toMatchObject({
+      code: "loop_retry_unavailable",
+      error: expect.stringContaining("rejected"),
+    });
+    expect(startEngine).toHaveBeenCalledTimes(1);
   });
 
   it("rolls back a post-allocation parent create failure before deleting the owned Loop branch", async () => {
@@ -988,10 +984,7 @@ describe("loop route honesty gate", () => {
       url: "/loops/runs/11111111-1111-4111-8111-111111111111/retry",
     });
     expect(retry.statusCode).toBe(409);
-    expect(retry.json()).toMatchObject({
-      code: "loop_checkout_recovery_required",
-      runId: "11111111-1111-4111-8111-111111111111",
-    });
+    expect(retry.json()).toMatchObject({ code: "loop_retry_unavailable" });
     expect(createSession).not.toHaveBeenCalled();
     expect(startEngine).not.toHaveBeenCalled();
     expect(destroySession).toHaveBeenCalledTimes(2);

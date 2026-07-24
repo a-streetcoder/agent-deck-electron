@@ -7,6 +7,7 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
@@ -137,6 +138,15 @@ export class UnsupportedLoopStructureError extends Error {
   }
 }
 
+export const LOOP_HUMAN_APPROVAL_CONFLICT_CODE = "loop_human_approval_conflict";
+export class HumanApprovalConflictError extends Error {
+  readonly code = LOOP_HUMAN_APPROVAL_CONFLICT_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "HumanApprovalConflictError";
+  }
+}
+
 interface ActiveRun {
   controller: AbortController;
   cancel?: () => Promise<void>;
@@ -164,8 +174,19 @@ const persistedRunSchema = z
   .object({
     id: z.string().min(1),
     loopName: z.string(),
+    structure: z
+      .enum([
+        "singleAgent",
+        "makerChecker",
+        "agentPipeline",
+        "parallelAgents",
+        "discoveryTriage",
+        "humanApproval",
+      ])
+      .optional(),
     projectId: z.string().optional(),
     retryOf: z.string().optional(),
+    checkpointPrompt: z.string().optional(),
     launch: z
       .object({
         sessionId: z.string().min(1),
@@ -230,6 +251,7 @@ const persistedRunSchema = z
                   "stage",
                   "branch",
                   "triage",
+                  "checkpoint",
                   "validation",
                   "evaluator",
                 ]),
@@ -276,7 +298,15 @@ const persistedRunSchema = z
               z
                 .object({
                   id: z.string(),
-                  phase: z.enum(["maker", "checker", "stage", "branch", "triage", "evaluator"]),
+                  phase: z.enum([
+                    "maker",
+                    "checker",
+                    "stage",
+                    "branch",
+                    "triage",
+                    "checkpoint",
+                    "evaluator",
+                  ]),
                   filename: z.string(),
                   filePath: z.string(),
                   bytes: z.number().nonnegative(),
@@ -470,6 +500,57 @@ export class LoopEngine {
     this.persist();
   }
 
+  resolveHumanApproval(
+    id: string,
+    decision: "approve" | "reject",
+    expectedUpdatedAt: string,
+  ): LoopRun {
+    const run = this.runs.get(id);
+    if (!run || run.structure !== "humanApproval" || !run.checkpointPrompt) {
+      throw new HumanApprovalConflictError("This is not a dedicated Human Approval checkpoint.");
+    }
+    const resolvedReason = decision === "approve" ? "humanApproved" : "humanRejected";
+    if (run.stopReason === resolvedReason) return run;
+    if (run.stopReason !== "humanInputRequired" || run.status !== "stopped") {
+      throw new HumanApprovalConflictError("This checkpoint is no longer awaiting a decision.");
+    }
+    if (run.updatedAt !== expectedUpdatedAt) {
+      throw new HumanApprovalConflictError("The checkpoint changed; reload before deciding.");
+    }
+    const now = this.now();
+    const index = run.currentIteration + 1;
+    const summary =
+      decision === "approve"
+        ? "Human approval recorded. Start a new attempt for follow-up work."
+        : "Human rejected checkpoint.";
+    const iteration: LoopRunIteration = {
+      id: randomUUID(),
+      index,
+      startedAt: now,
+      endedAt: now,
+      output: summary,
+      validationPassed: null,
+      timeline: [
+        {
+          id: randomUUID(),
+          phase: "checkpoint",
+          roleName: "Human Approval",
+          note: decision === "approve" ? "Approval recorded" : "Rejected",
+          timestamp: now,
+        },
+      ],
+      children: [],
+      artifacts: [],
+    };
+    run.iterations.push(iteration);
+    run.currentIteration = index;
+    run.stopReason = resolvedReason;
+    run.endedAt = now;
+    run.updatedAt = now;
+    this.persist();
+    return run;
+  }
+
   async stop(id: string): Promise<void> {
     const run = this.runs.get(id);
     if (!run || isLoopRunTerminal(run.status)) return;
@@ -498,15 +579,68 @@ export class LoopEngine {
       throw new UnsupportedLoopStructureError(loop.structure);
     const invalid = loopDefinitionValidationError(loop);
     if (invalid) throw new Error(invalid);
+    this.evictOldRuns();
+    const now = this.now();
+    if (loop.structure === "humanApproval") {
+      const prompt = normalizeLoopCheckpointPrompt(loop.checkpointPrompt);
+      const run: LoopRun = {
+        id: randomUUID(),
+        loopName: loop.name,
+        structure: "humanApproval",
+        projectId: options.projectId,
+        retryOf: options.retryOf,
+        checkpointPrompt: prompt,
+        status: "running",
+        currentIteration: 1,
+        maxIterations: clampMaxIterations(loop.maxIterations),
+        iterations: [],
+        startedAt: now,
+        updatedAt: now,
+      };
+      const iteration: LoopRunIteration = {
+        id: randomUUID(),
+        index: 1,
+        startedAt: now,
+        endedAt: now,
+        output: "Stopped at human approval checkpoint.",
+        validationPassed: null,
+        timeline: [
+          {
+            id: randomUUID(),
+            phase: "checkpoint",
+            roleName: "Human Approval",
+            note: prompt,
+            timestamp: now,
+          },
+        ],
+        children: [],
+        artifacts: [],
+      };
+      run.iterations.push(iteration);
+      this.runs.set(run.id, run);
+      try {
+        this.writeHumanApprovalArtifact(
+          run,
+          iteration,
+          "human-approval-checkpoint.md",
+          `# Human Approval Checkpoint\n\nGoal: ${loop.goal}\n\nCheckpoint: ${prompt}\n\nStatus: Waiting for human input.`,
+        );
+        this.finalize(run, "stopped", "humanInputRequired");
+      } catch (error) {
+        this.runs.delete(run.id);
+        throw error;
+      }
+      this.settledPromises.set(run.id, Promise.resolve());
+      return run;
+    }
     const executeRole = options.executeRole ?? this.defaultExecuteRole;
     const executeAgent = options.executeAgent ?? this.defaultExecuteAgent;
     if (!executeRole && !executeAgent)
       throw new Error("no agent executor configured for this loop run");
-    this.evictOldRuns();
-    const now = this.now();
     const run: LoopRun = {
       id: randomUUID(),
       loopName: loop.name,
+      structure: loop.structure,
       projectId: options.projectId,
       retryOf: options.retryOf,
       launch: options.launch,
@@ -709,6 +843,41 @@ export class LoopEngine {
       }
       throw error;
     }
+  }
+
+  private writeHumanApprovalArtifact(
+    run: LoopRun,
+    iteration: LoopRunIteration,
+    filename: string,
+    markdown: string,
+  ): void {
+    if (!this.artifactsRoot) return;
+    const directory = path.join(this.artifactsRoot, run.id);
+    mkdirSync(directory, { recursive: true });
+    const filePath = path.join(directory, filename);
+    const temp = `${filePath}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, markdown, "utf8");
+      renameSync(temp, filePath);
+    } finally {
+      rmSync(temp, { force: true });
+    }
+    const createdAt = this.now();
+    iteration.artifacts.push({
+      id: randomUUID(),
+      phase: "checkpoint",
+      filename,
+      filePath,
+      bytes: Buffer.byteLength(markdown),
+      createdAt,
+    });
+    iteration.timeline.push({
+      id: randomUUID(),
+      phase: "checkpoint",
+      roleName: "Human Approval",
+      note: `Saved approval artifact: ${filename}`,
+      timestamp: createdAt,
+    });
   }
 
   private persistArtifact(

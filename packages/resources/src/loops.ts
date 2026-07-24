@@ -4,6 +4,7 @@ import {
   clampMaxIterations,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
   LOOP_STRUCTURES,
@@ -128,6 +129,10 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
             nativeLineFrontmatterValue(content, "classificationPrompt"),
           )
         : asString(frontmatter.classificationPrompt) || undefined,
+    checkpointPrompt:
+      asStructure(frontmatter.structure) === "humanApproval"
+        ? normalizeLoopCheckpointPrompt(nativeLineFrontmatterValue(content, "checkpointPrompt"))
+        : asString(frontmatter.checkpointPrompt) || undefined,
     maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
@@ -172,6 +177,7 @@ export interface LoopEdit {
   parallelBranches?: string[];
   triageAgent?: string;
   classificationPrompt?: string;
+  checkpointPrompt?: string;
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
@@ -196,6 +202,7 @@ const LOOP_FIELD_ORDER = [
   "parallelBranches",
   "triageAgent",
   "classificationPrompt",
+  "checkpointPrompt",
 ] as const;
 const LOOP_FIELD_KEYS = new Set<string>(LOOP_FIELD_ORDER);
 
@@ -215,7 +222,9 @@ function serializeFrontmatter(record: Record<string, unknown>): string {
     .map(([key, value]) =>
       key === "classificationPrompt"
         ? `classificationPrompt: ${normalizeLoopClassificationPrompt(asString(value))}`
-        : YAML.stringify({ [key]: value }).trimEnd(),
+        : key === "checkpointPrompt"
+          ? `checkpointPrompt: ${normalizeLoopCheckpointPrompt(asString(value))}`
+          : YAML.stringify({ [key]: value }).trimEnd(),
     )
     .join("\n");
 }
@@ -248,6 +257,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   const filePath = existingPath ?? loopFilePath(roots, edit.name);
   let frontmatter: Record<string, unknown> = { ...(edit.preservedFrontmatter ?? {}) };
   let persistedClassificationPrompt: string | undefined;
+  let persistedCheckpointPrompt: string | undefined;
   let body = "";
   if (existingPath) {
     const existingContent = readFileSync(filePath, "utf8");
@@ -257,6 +267,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
       existingContent,
       "classificationPrompt",
     );
+    persistedCheckpointPrompt = nativeLineFrontmatterValue(existingContent, "checkpointPrompt");
     body = existing.body.trim();
   }
 
@@ -283,6 +294,9 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
       edit.classificationPrompt ??
         persistedClassificationPrompt ??
         asString(frontmatter.classificationPrompt),
+    ),
+    checkpointPrompt: normalizeLoopCheckpointPrompt(
+      edit.checkpointPrompt ?? persistedCheckpointPrompt ?? asString(frontmatter.checkpointPrompt),
     ),
     writeTarget: edit.writeTarget ?? asWriteTarget(frontmatter.writeTarget),
   });
@@ -325,6 +339,14 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   } else if (edit.classificationPrompt !== undefined) {
     if (edit.classificationPrompt) frontmatter.classificationPrompt = edit.classificationPrompt;
     else delete frontmatter.classificationPrompt;
+  }
+  if (resultingStructure === "humanApproval") {
+    frontmatter.checkpointPrompt = normalizeLoopCheckpointPrompt(
+      edit.checkpointPrompt ?? persistedCheckpointPrompt ?? asString(frontmatter.checkpointPrompt),
+    );
+  } else if (edit.checkpointPrompt !== undefined) {
+    if (edit.checkpointPrompt) frontmatter.checkpointPrompt = edit.checkpointPrompt;
+    else delete frontmatter.checkpointPrompt;
   }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
@@ -402,6 +424,7 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     parallelBranches: source.parallelBranches ? [...source.parallelBranches] : undefined,
     triageAgent: source.triageAgent,
     classificationPrompt: source.classificationPrompt,
+    checkpointPrompt: source.checkpointPrompt,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,

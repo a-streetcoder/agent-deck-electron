@@ -2,11 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { cwd } from "node:process";
-import {
-  LOOP_STRUCTURE_UNSUPPORTED_CODE,
-  type LoopChildRecord,
-  type LoopDefinition,
-} from "@agent-deck/domain";
+import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
 import { LoopEngine } from "../src/loopEngine.ts";
 
@@ -34,23 +30,74 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
-  it("rejects unsupported humanApproval before allocating a run or invoking its executor", () => {
-    let calls = 0;
+  it("durably checkpoints and resolves Human Approval without any executable work", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-human-approval-"));
+    let executorCalls = 0;
+    let validationCalls = 0;
+    let tick = 0;
+    const now = (): string => `2026-01-01T00:00:0${tick++}.000Z`;
     const engine = new LoopEngine({
+      dataDir,
+      now,
       executeAgent: async () => {
-        calls += 1;
+        executorCalls += 1;
         return "must not run";
+      },
+      runValidation: async () => {
+        validationCalls += 1;
+        return true;
       },
     });
 
-    expect(() => engine.start(makeLoop({ structure: "humanApproval" }), cwd())).toThrow(
-      expect.objectContaining({
-        code: LOOP_STRUCTURE_UNSUPPORTED_CODE,
+    const run = engine.start(
+      makeLoop({
         structure: "humanApproval",
+        checkpointPrompt: 'Review severity: "high" # release',
+        writeTarget: "currentCheckout",
       }),
+      cwd(),
+      { projectId: "project-1", retryOf: "prior-run" },
     );
-    expect(calls).toBe(0);
-    expect(engine.list()).toEqual([]);
+    expect(run).toMatchObject({
+      status: "stopped",
+      stopReason: "humanInputRequired",
+      currentIteration: 1,
+      retryOf: "prior-run",
+      checkpointPrompt: 'Review severity: "high" # release',
+    });
+    expect(run).not.toHaveProperty("launch");
+    expect(run.iterations[0]?.children).toEqual([]);
+    expect(run.iterations[0]?.timeline.map((event) => event.phase)).toEqual([
+      "checkpoint",
+      "checkpoint",
+    ]);
+    expect(run.iterations[0]?.artifacts[0]?.filename).toBe("human-approval-checkpoint.md");
+    expect(readFileSync(run.iterations[0]!.artifacts[0]!.filePath, "utf8")).toContain(
+      'Review severity: "high" # release',
+    );
+    expect(executorCalls).toBe(0);
+    expect(validationCalls).toBe(0);
+
+    const restarted = new LoopEngine({ dataDir, now });
+    const restored = restarted.get(run.id)!;
+    expect(restored.stopReason).toBe("humanInputRequired");
+    const expectedUpdatedAt = restored.updatedAt;
+    expect(() =>
+      restarted.resolveHumanApproval(run.id, "approve", "2025-01-01T00:00:00.000Z"),
+    ).toThrow(expect.objectContaining({ code: "loop_human_approval_conflict" }));
+    const approved = restarted.resolveHumanApproval(run.id, "approve", expectedUpdatedAt);
+    expect(approved).toMatchObject({
+      status: "stopped",
+      stopReason: "humanApproved",
+      currentIteration: 2,
+    });
+    expect(approved.iterations[1]?.timeline[0]?.note).toBe("Approval recorded");
+    expect(approved.iterations[1]?.artifacts).toEqual([]);
+    expect(approved.iterations.flatMap((iteration) => iteration.artifacts)).toHaveLength(1);
+    expect(restarted.resolveHumanApproval(run.id, "approve", expectedUpdatedAt)).toBe(approved);
+    expect(() => restarted.resolveHumanApproval(run.id, "reject", approved.updatedAt)).toThrow(
+      expect.objectContaining({ code: "loop_human_approval_conflict" }),
+    );
   });
 
   it("runs configured Discovery/Triage with exact prompt, bounded evidence, artifacts, and lifecycle", async () => {

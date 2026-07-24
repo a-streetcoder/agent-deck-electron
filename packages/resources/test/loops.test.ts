@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  LOOP_DEFAULT_CHECKPOINT_PROMPT,
   LOOP_DEFAULT_CLASSIFICATION_PROMPT,
-  LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopStructure,
 } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
@@ -524,50 +524,53 @@ describe("loop definition store", () => {
     }
   });
 
-  it.each<LoopStructure>(["humanApproval"])(
-    "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
-    (structure) => {
-      const createRoots = { home: makeHome() };
-      expect(() =>
-        writeLoopFile(createRoots, { name: "Unsupported Create", goal: "g", structure }),
-      ).toThrow(expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }));
-      expect(existsSync(loopsDir(createRoots))).toBe(false);
+  it("round-trips, defaults, edits, and duplicates native Human Approval definitions", () => {
+    const roots = { home: makeHome() };
+    const filePath = path.join(loopsDir(roots), "native-approval.loop.md");
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    const prompt = 'Severity: "high" # release';
+    writeFileSync(
+      filePath,
+      [
+        "---",
+        "name: Native Approval",
+        "structure: humanApproval",
+        "writeTarget: currentCheckout",
+        `checkpointPrompt: ${prompt}`,
+        "zetaMetadata: preserved",
+        "---",
+      ].join("\n"),
+    );
+    expect(scanLoops(roots)[0]).toMatchObject({
+      structure: "humanApproval",
+      goal: "",
+      checkpointPrompt: prompt,
+    });
 
-      // Native/external tools may have written this structure. Public updates
-      // that inherit it and direct duplication both fail without touching it.
-      const roots = { home: makeHome() };
-      const filePath = writeExternalLoop(roots, "Native Loop", structure);
-      const original = readFileSync(filePath, "utf8");
-      expect(() =>
-        writeLoopFile(roots, { name: "Native Loop", description: "no mutation" }),
-      ).toThrow(expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }));
-      expect(() => duplicateLoop(roots, "Native Loop")).toThrow(
-        expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }),
-      );
-      expect(scanLoops(roots)).toHaveLength(1);
-      expect(readFileSync(filePath, "utf8")).toBe(original);
-      expect(existsSync(path.join(loopsDir(roots), "copy-of-native-loop.loop.md"))).toBe(false);
+    writeLoopFile(roots, { name: "Native Approval", description: "edited" });
+    const saved = readFileSync(filePath, "utf8");
+    expect(parseWithNativeLineReader(saved).checkpointPrompt).toBe(prompt);
+    expect(saved).toContain("zetaMetadata: preserved");
+    expect(saved.indexOf("checkpointPrompt:")).toBeLessThan(saved.indexOf("zetaMetadata:"));
 
-      // Explicit conversion is the sole supported write and retains unknown
-      // native metadata plus fields/body omitted by this edit.
-      expect(
-        writeLoopFile(roots, {
-          name: "Native Loop",
-          structure: "singleAgent",
-          description: "converted",
-        }),
-      ).toBe(filePath);
-      const converted = readFileSync(filePath, "utf8");
-      expect(converted).toContain("structure: singleAgent");
-      expect(converted).toContain("checkerRubric: preserve me");
-      expect(converted).toContain("maxIterations: 7");
-      expect(converted).toContain("External goal.");
-      expect(scanLoops(roots)[0]).toMatchObject({
-        structure: "singleAgent",
-        description: "converted",
-      });
-    },
-  );
+    expect(duplicateLoop(roots, "Native Approval")).toBe("Copy of Native Approval");
+    const copy = scanLoops(roots).find((loop) => loop.name === "Copy of Native Approval")!;
+    expect(copy).toMatchObject({ checkpointPrompt: prompt, goal: "" });
+    expect(parseWithNativeLineReader(readFileSync(copy.filePath, "utf8")).checkpointPrompt).toBe(
+      prompt,
+    );
+
+    const blankRoots = { home: makeHome() };
+    const blankPath = writeLoopFile(blankRoots, {
+      name: "Default Approval",
+      structure: "humanApproval",
+      checkpointPrompt: " \r\n ",
+    });
+    expect(scanLoops(blankRoots)[0]?.checkpointPrompt).toBe(LOOP_DEFAULT_CHECKPOINT_PROMPT);
+    expect(parseWithNativeLineReader(readFileSync(blankPath, "utf8")).checkpointPrompt).toBe(
+      LOOP_DEFAULT_CHECKPOINT_PROMPT,
+    );
+  });
 
   it("rejects a different name that collides on the same slug", () => {
     const home = makeHome();

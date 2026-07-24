@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import nodePath from "node:path";
 import {
+  canRetryLoopRun,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
   LOOP_PARALLEL_WRITE_TARGET_CODE,
@@ -80,7 +81,18 @@ function unsupportedStructureError(structure: LoopStructure): {
  * Loop definitions (Bank CRUD) + the loop run engine routes. Moved verbatim
  * from server.ts.
  */
-export function registerLoopRoutes(ctx: ServerContext): void {
+export interface LoopRouteTestDependencies {
+  canonicalCheckoutLockKey: typeof canonicalCheckoutLockKey;
+  createLoopWorktree: typeof createLoopWorktree;
+}
+
+export function registerLoopRoutes(
+  ctx: ServerContext,
+  routeDependencies: LoopRouteTestDependencies = {
+    canonicalCheckoutLockKey,
+    createLoopWorktree,
+  },
+): void {
   const {
     fastify,
     sessions,
@@ -171,6 +183,7 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     parallelBranches: z.array(z.string().max(200)).max(100).optional(),
     triageAgent: z.string().max(200).optional(),
     classificationPrompt: z.string().max(20_000).optional(),
+    checkpointPrompt: z.string().max(20_000).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
@@ -304,10 +317,27 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     }
     const project = projects.find((p) => p.id === body.projectId);
     if (!project) return reply.status(404).send({ error: "unknown project" });
+    // A native Human Approval run is a durable app-data checkpoint only. It
+    // never allocates a Pi session, child, validation process, checkout lock,
+    // or worktree, regardless of the saved write target.
+    if (loop.structure === "humanApproval") {
+      try {
+        const run = loopEngine.start(loop, project.path, {
+          projectId: body.projectId,
+          retryOf: body.retryOf,
+        });
+        return reply.status(201).send({ run, worktree: null });
+      } catch (error) {
+        return reply.status(500).send({
+          code: "loop_start_failed",
+          error: `The approval checkpoint couldn't be recorded safely: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    }
     let checkoutLockKey: string | undefined;
     if (loop.writeTarget === "currentCheckout") {
       try {
-        checkoutLockKey = canonicalCheckoutLockKey(project.path);
+        checkoutLockKey = routeDependencies.canonicalCheckoutLockKey(project.path);
       } catch {
         return reply.status(409).send({
           code: "loop_checkout_canonicalization_failed",
@@ -352,11 +382,11 @@ export function registerLoopRoutes(ctx: ServerContext): void {
       const target = nodePath.join(loopWorktreesRoot, `loop-${ownershipId}`);
       const branch = `agent-deck/loop-${loop.name.replace(/[^A-Za-z0-9]+/g, "-")}-${ownershipId.slice(0, 8)}`;
       try {
-        worktree = await createLoopWorktree(project.path, target, branch);
+        worktree = await routeDependencies.createLoopWorktree(project.path, target, branch);
         worktreeOwnership = {
           ownershipVersion: 1,
           ownershipId,
-          projectRoot: canonicalCheckoutLockKey(project.path),
+          projectRoot: routeDependencies.canonicalCheckoutLockKey(project.path),
           path: worktree.path,
           branch: worktree.branch,
           sourceBranch: worktree.sourceBranch,
@@ -522,6 +552,33 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     return { run };
   });
 
+  fastify.post("/loops/runs/:id/resolve", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });
+    const parsed = z
+      .object({
+        decision: z.enum(["approve", "reject"]),
+        expectedUpdatedAt: z.string().min(1),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    try {
+      return {
+        run: loopEngine.resolveHumanApproval(
+          id,
+          parsed.data.decision,
+          parsed.data.expectedUpdatedAt,
+        ),
+      };
+    } catch (error) {
+      const typed = error as { code?: string; message?: string };
+      if (typed.code === "loop_human_approval_conflict") {
+        return reply.status(409).send({ code: typed.code, error: typed.message });
+      }
+      throw error;
+    }
+  });
+
   fastify.post("/loops/runs/:id/stop", async (request, reply) => {
     const run = loopEngine.get((request.params as { id: string }).id);
     if (!run) return reply.status(404).send({ error: "unknown loop run" });
@@ -548,6 +605,15 @@ export function registerLoopRoutes(ctx: ServerContext): void {
   fastify.post("/loops/runs/:id/retry", async (request, reply) => {
     const previous = loopEngine.get((request.params as { id: string }).id);
     if (!previous) return reply.status(404).send({ error: "unknown loop run" });
+    if (!canRetryLoopRun(previous)) {
+      return reply.status(409).send({
+        code: "loop_retry_unavailable",
+        error:
+          previous.stopReason === "humanRejected"
+            ? "A rejected approval checkpoint is terminal and cannot be retried."
+            : "This Loop outcome is not eligible for retry.",
+      });
+    }
     if (!previous.projectId) {
       return reply.status(409).send({ error: "The original project is unavailable." });
     }
