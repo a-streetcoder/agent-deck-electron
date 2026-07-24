@@ -1,5 +1,6 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { GitBranch, Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
@@ -20,11 +21,32 @@ interface GitStatus {
   clean: boolean;
 }
 type ReleaseBump = "patch" | "minor" | "major";
+type ReleaseSyncCode =
+  | "ready"
+  | "not_repo"
+  | "detached"
+  | "missing_upstream"
+  | "invalid_upstream"
+  | "fetch_failed"
+  | "dirty"
+  | "ahead"
+  | "behind"
+  | "diverged";
 interface ReleasePreflight {
+  state: ReleaseSyncCode;
   branch: string | null;
+  upstream: string | null;
+  remote: string | null;
+  ahead: number | null;
+  behind: number | null;
   latestTag: string | null;
   nextVersions: Record<ReleaseBump, string>;
-  blocker: string | null;
+  blocker: { code: Exclude<ReleaseSyncCode, "ready">; message: string } | null;
+}
+
+async function apiError(response: Response): Promise<string> {
+  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  return typeof body?.error === "string" ? body.error : `Request failed (${response.status}).`;
 }
 
 export function GitScreen() {
@@ -57,6 +79,17 @@ export function GitScreen() {
   const [preflighting, setPreflighting] = useState(false);
   const [draftingNotes, setDraftingNotes] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const releaseTriggerRef = useRef<HTMLButtonElement>(null);
+  const releaseCancelRef = useRef<HTMLButtonElement>(null);
+  const bumpButtonRefs = useRef<Record<ReleaseBump, HTMLButtonElement | null>>({
+    patch: null,
+    minor: null,
+    major: null,
+  });
+  const releaseRequestRef = useRef<{ generation: number; controller: AbortController | null }>({
+    generation: 0,
+    controller: null,
+  });
 
   const load = useCallback(async (): Promise<void> => {
     if (!currentProjectId) return;
@@ -161,24 +194,88 @@ export function GitScreen() {
     }
   };
 
-  // Open the release panel and load preflight (latest tag + proposed versions).
-  const openRelease = async (): Promise<void> => {
-    if (!currentProjectId) return;
-    setReleaseOpen(true);
+  const invalidateReleasePreflight = useCallback((): void => {
+    releaseRequestRef.current.generation += 1;
+    releaseRequestRef.current.controller?.abort();
+    releaseRequestRef.current.controller = null;
+  }, []);
+
+  const loadReleasePreflight = useCallback(async (): Promise<"loaded" | "stale"> => {
+    if (!currentProjectId) return "stale";
+    invalidateReleasePreflight();
+    const generation = releaseRequestRef.current.generation;
+    const controller = new AbortController();
+    releaseRequestRef.current.controller = controller;
+    setPreflight(null);
     setPreflighting(true);
-    setError(null);
     try {
       const response = await fetch(
         `/projects/${encodeURIComponent(currentProjectId)}/release/preflight`,
+        { signal: controller.signal },
       );
-      if (!response.ok) throw new Error(await response.text());
-      const data = (await response.json()) as ReleasePreflight;
-      setPreflight(data);
-    } catch (err) {
-      setError(String(err));
-      setReleaseOpen(false);
+      if (!response.ok) throw new Error(await apiError(response));
+      const nextPreflight = (await response.json()) as ReleasePreflight;
+      if (releaseRequestRef.current.generation !== generation) return "stale";
+      setPreflight(nextPreflight);
+      return "loaded";
+    } catch (error) {
+      if (controller.signal.aborted || releaseRequestRef.current.generation !== generation) {
+        return "stale";
+      }
+      throw error;
     } finally {
+      if (releaseRequestRef.current.generation === generation) {
+        releaseRequestRef.current.controller = null;
+        setPreflighting(false);
+      }
+    }
+  }, [currentProjectId, invalidateReleasePreflight]);
+
+  useEffect(() => {
+    setReleaseOpen(false);
+    setPreflight(null);
+    setPreflighting(false);
+    return () => invalidateReleasePreflight();
+  }, [currentProjectId, invalidateReleasePreflight]);
+
+  useEffect(() => {
+    if (releaseOpen) releaseCancelRef.current?.focus();
+  }, [releaseOpen]);
+
+  useEffect(() => {
+    if (
+      releaseOpen &&
+      !preflighting &&
+      preflight &&
+      document.activeElement === releaseCancelRef.current
+    ) {
+      bumpButtonRefs.current[bump]?.focus();
+    }
+  }, [bump, preflight, preflighting, releaseOpen]);
+
+  const closeRelease = (restoreTriggerFocus: boolean): void => {
+    invalidateReleasePreflight();
+    // The trigger is conditionally rendered in place of the panel. Commit that
+    // transition synchronously so focus targets the newly mounted button, rather
+    // than an effect racing later releasing/toast renders.
+    flushSync(() => {
+      setReleaseOpen(false);
+      setPreflight(null);
       setPreflighting(false);
+    });
+    if (restoreTriggerFocus) releaseTriggerRef.current?.focus();
+  };
+
+  // Open the release panel and load the fetched upstream synchronization state.
+  const openRelease = async (): Promise<void> => {
+    if (!currentProjectId) return;
+    setReleaseOpen(true);
+    setError(null);
+    try {
+      await loadReleasePreflight();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      releaseCancelRef.current?.focus();
     }
   };
 
@@ -217,15 +314,23 @@ export function GitScreen() {
         body: JSON.stringify({ tag, notes: notes.trim() || undefined }),
       });
       if (!response.ok) {
-        if (response.status === 409) throw new Error(`${tag} already exists.`);
-        throw new Error(await response.text());
+        const message = await apiError(response);
+        // The POST performs a fresh synchronization check. Reflect that newest
+        // state in the still-open panel after every rejected release attempt.
+        try {
+          await loadReleasePreflight();
+        } catch {
+          // Preserve the more specific POST failure and leave focus on a usable
+          // panel control rather than a now-disabled confirmation button.
+          releaseCancelRef.current?.focus();
+        }
+        throw new Error(message);
       }
       pushToast({ kind: "success", message: `Released ${tag}` });
-      setReleaseOpen(false);
-      setPreflight(null);
+      closeRelease(true);
       setNotes("");
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setReleasing(false);
     }
@@ -265,6 +370,7 @@ export function GitScreen() {
           ) : null}
           {gitActions === true && status?.repo && !releaseOpen ? (
             <ControlButton
+              ref={releaseTriggerRef}
               data-testid="git-release"
               className="ml-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={preflighting}
@@ -279,44 +385,88 @@ export function GitScreen() {
         {releaseOpen ? (
           <div
             data-testid="git-release-panel"
+            aria-busy={preflighting}
             className="mb-3 mt-2 flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface px-3.5 py-3"
           >
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs text-text-secondary">
-                {preflight?.latestTag ? (
+                {preflighting ? (
+                  "Checking release history…"
+                ) : preflight?.latestTag ? (
                   <>
                     Latest release{" "}
                     <span className="font-mono text-text-primary">{preflight.latestTag}</span>
                   </>
-                ) : (
+                ) : preflight ? (
                   "No releases yet — this will be the first."
+                ) : (
+                  "Release synchronization unavailable."
                 )}
               </div>
               <ControlButton
+                ref={releaseCancelRef}
                 data-testid="git-release-close"
                 className="text-xs text-text-muted hover:text-text-primary"
-                onClick={() => setReleaseOpen(false)}
+                onClick={() => closeRelease(true)}
               >
                 Cancel
               </ControlButton>
             </div>
 
-            {preflight?.blocker ? (
+            {preflighting ? (
               <div
-                data-testid="git-release-blocker"
+                data-testid="git-release-sync-loading"
+                role="status"
+                aria-live="polite"
                 className="rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
               >
-                {preflight.blocker}
+                Checking branch and remote synchronization…
+              </div>
+            ) : preflight ? (
+              <div
+                data-testid="git-release-sync"
+                role="status"
+                aria-live="polite"
+                className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
+              >
+                {preflight.branch ? (
+                  <>
+                    <span className="font-mono text-text-primary">{preflight.branch}</span>
+                    {preflight.upstream ? (
+                      <>
+                        {" "}
+                        tracks{" "}
+                        <span className="font-mono text-text-primary">{preflight.upstream}</span>
+                        {preflight.remote ? ` on ${preflight.remote}` : ""}.{" "}
+                        {preflight.ahead ?? "–"} ahead, {preflight.behind ?? "–"} behind.
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  "No attached release branch."
+                )}
               </div>
             ) : null}
 
-            <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Version bump">
+            {preflight?.blocker ? (
+              <div
+                data-testid="git-release-blocker"
+                role="alert"
+                className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
+              >
+                {preflight.blocker.message}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Version bump">
               {(["patch", "minor", "major"] as const).map((kind) => (
                 <ControlButton
                   key={kind}
+                  ref={(element) => {
+                    bumpButtonRefs.current[kind] = element;
+                  }}
                   data-testid={`git-release-version-${kind}`}
-                  role="radio"
-                  aria-checked={bump === kind}
+                  aria-pressed={bump === kind}
                   className={`flex-1 rounded-md border px-2.5 py-1.5 text-left text-xs ${
                     bump === kind
                       ? "border-accent text-text-primary"
@@ -333,7 +483,14 @@ export function GitScreen() {
             </div>
 
             <div className="flex flex-col gap-2">
+              <label
+                htmlFor="git-release-notes"
+                className="text-xs font-medium text-text-secondary"
+              >
+                Release notes
+              </label>
               <ControlTextArea
+                id="git-release-notes"
                 data-testid="git-release-notes"
                 className="min-h-[112px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
                 placeholder="Release notes (optional — Generate drafts them from your commits)"
@@ -344,7 +501,7 @@ export function GitScreen() {
                 <ControlButton
                   data-testid="git-release-generate"
                   className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                  disabled={draftingNotes || releasing || !preflight}
+                  disabled={draftingNotes || releasing || preflighting || !preflight}
                   onClick={() => void draftNotes()}
                   title="Draft release notes from commits since the last tag"
                 >
@@ -358,7 +515,7 @@ export function GitScreen() {
                       "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                     color: "var(--color-accent-foreground)",
                   }}
-                  disabled={releasing || !preflight || Boolean(preflight?.blocker)}
+                  disabled={releasing || preflighting || preflight?.state !== "ready"}
                   onClick={() => void release()}
                 >
                   {releasing ? "Releasing…" : `Release ${preflight?.nextVersions[bump] ?? ""}`}

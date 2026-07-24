@@ -2,14 +2,15 @@ import { z } from "zod";
 import {
   gitCommitAll,
   gitCommitSubjects,
+  gitCreateAndPushReleaseTag,
   gitErrorText,
-  gitFetchTags,
   gitLatestVersionTag,
+  gitLocalTagExists,
   gitPush,
+  gitReleaseSynchronization,
+  gitRemoteTagExists,
   gitStatus,
   gitStatusAndDiff,
-  gitTagAndPush,
-  gitTagExists,
   nextReleaseVersions,
 } from "../git.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
@@ -141,31 +142,27 @@ export function registerGitRoutes(ctx: ServerContext): void {
     }
   });
 
-  // Release (native ReleaseService, generalized to any repo): tag a version + push
-  // it, with AI-drafted release notes. Preflight fetches tags, proposes the next
-  // patch/minor/major, and blocks a dirty working tree (a release tags a clean
-  // commit).
+  // Release (native ReleaseService, generalized to any repo): fail closed unless
+  // the checked-out branch is clean and exactly synchronized with its configured
+  // remote upstream. The same helper runs again in POST immediately before tag
+  // mutation, so a panel-open preflight is never treated as authorization.
   fastify.get("/projects/:id/release/preflight", async (request, reply) => {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
-    let status: Awaited<ReturnType<typeof gitStatus>>;
     try {
-      status = await gitStatus(project.path);
+      const synchronization = await gitReleaseSynchronization(project.path);
+      const latestTag = await gitLatestVersionTag(project.path);
+      return {
+        ...synchronization,
+        latestTag,
+        nextVersions: nextReleaseVersions(latestTag),
+      };
     } catch (error) {
-      return reply.status(400).send({ error: String(error) });
+      return reply.status(500).send({
+        code: "preflight_failed",
+        error: `Release preflight failed: ${gitErrorText(error)}`,
+      });
     }
-    if (!status.repo)
-      return reply.status(400).send({ error: "This project isn't a git repository." });
-    await gitFetchTags(project.path);
-    const latestTag = await gitLatestVersionTag(project.path);
-    return {
-      branch: status.branch,
-      latestTag,
-      nextVersions: nextReleaseVersions(latestTag),
-      blocker: status.clean
-        ? null
-        : "Commit or stash your changes first — a release tags a clean commit.",
-    };
   });
 
   fastify.post("/projects/:id/release/notes", async (request, reply) => {
@@ -221,29 +218,92 @@ export function registerGitRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { tag, notes } = parsed.data;
-    // Re-check the tree server-side — the UI's preflight is captured at panel-open
-    // and can go stale (or be bypassed), and a release must tag a clean commit.
-    let status: Awaited<ReturnType<typeof gitStatus>>;
+    let synchronization: Awaited<ReturnType<typeof gitReleaseSynchronization>>;
     try {
-      status = await gitStatus(project.path);
+      synchronization = await gitReleaseSynchronization(project.path);
     } catch (error) {
-      return reply.status(400).send({ error: gitErrorText(error) });
+      return reply.status(500).send({ code: "preflight_failed", error: gitErrorText(error) });
     }
-    if (!status.repo)
-      return reply.status(400).send({ error: "This project isn't a git repository." });
-    if (!status.clean) {
-      return reply
-        .status(409)
-        .send({ error: "Commit or stash your changes first — a release tags a clean commit." });
+    if (synchronization.state !== "ready") {
+      const status =
+        synchronization.state === "not_repo"
+          ? 400
+          : synchronization.state === "fetch_failed"
+            ? 502
+            : 409;
+      return reply.status(status).send({
+        code: synchronization.state,
+        error: synchronization.blocker?.message ?? "Release synchronization failed.",
+        synchronization,
+      });
     }
-    if (await gitTagExists(project.path, tag)) {
-      return reply.status(409).send({ error: `Tag ${tag} already exists.` });
+    const { remote, remoteRef, headSha } = synchronization;
+    if (!remote || !remoteRef || !headSha) {
+      return reply.status(500).send({
+        code: "preflight_failed",
+        error: "Release synchronization did not produce a remote and commit.",
+      });
+    }
+
+    // Check the remote first: the synchronization fetch may also have created a
+    // local copy of a remote-only tag, but that remains a remote conflict.
+    try {
+      if (await gitRemoteTagExists(project.path, remote, tag)) {
+        return reply.status(409).send({
+          code: "remote_tag_exists",
+          error: `Tag ${tag} already exists on ${remote}. Choose another version or inspect the remote tag.`,
+        });
+      }
+    } catch (error) {
+      return reply.status(502).send({
+        code: "remote_tag_lookup_failed",
+        error: `Couldn't check tag ${tag} on ${remote}: ${gitErrorText(error)}`,
+      });
     }
     try {
-      await gitTagAndPush(project.path, tag, notes ?? tag);
+      if (await gitLocalTagExists(project.path, tag)) {
+        return reply.status(409).send({
+          code: "local_tag_exists",
+          error: `Local tag ${tag} already exists. Choose another version or inspect the local tag.`,
+        });
+      }
     } catch (error) {
-      return reply.status(502).send({ error: gitErrorText(error) });
+      return reply.status(500).send({
+        code: "local_tag_lookup_failed",
+        error: `Couldn't check local tag ${tag}: ${gitErrorText(error)}`,
+      });
     }
-    return { ok: true, tag };
+
+    let result: Awaited<ReturnType<typeof gitCreateAndPushReleaseTag>>;
+    try {
+      result = await gitCreateAndPushReleaseTag(
+        project.path,
+        tag,
+        notes ?? tag,
+        headSha,
+        remote,
+        remoteRef,
+      );
+    } catch (error) {
+      return reply.status(500).send({
+        code: "tag_creation_failed",
+        error: `Couldn't create local tag ${tag}: ${gitErrorText(error)}`,
+      });
+    }
+    if (!result.ok) {
+      if (result.failure.code === "stale_local") {
+        return reply.status(409).send({
+          code: result.failure.code,
+          error: result.failure.message,
+        });
+      }
+      return reply.status(502).send({
+        code: result.failure.code,
+        error: result.failure.message,
+        localRollback: result.failure.localRollback,
+        remoteTag: result.failure.remoteTag,
+      });
+    }
+    return { ok: true, tag, headSha, remote };
   });
 }

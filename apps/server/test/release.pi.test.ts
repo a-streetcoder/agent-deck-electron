@@ -52,7 +52,7 @@ beforeAll(async () => {
   git(work, ["commit", "-m", "add login screen"]);
   git(work, ["tag", "v1.0.0"]);
   git(work, ["remote", "add", "origin", origin]);
-  git(work, ["push", "origin", "main"]);
+  git(work, ["push", "-u", "origin", "main"]);
   git(work, ["push", "origin", "v1.0.0"]);
   writeFileSync(path.join(work, "feature.ts"), "export const x = 1;\n");
   git(work, ["add", "-A"]);
@@ -87,13 +87,59 @@ describe("release", () => {
 
     // Preflight: latest tag + the next patch/minor/major, clean tree.
     const pre = (await (await fetch(`${base}/release/preflight`)).json()) as {
+      state: string;
+      branch: string;
+      upstream: string;
+      remote: string;
+      ahead: number;
+      behind: number;
       latestTag: string;
       nextVersions: { patch: string; minor: string; major: string };
-      blocker: string | null;
+      blocker: { code: string; message: string } | null;
     };
+    expect(pre).toMatchObject({
+      state: "ready",
+      branch: "main",
+      upstream: "origin/main",
+      remote: "origin",
+      ahead: 0,
+      behind: 0,
+      blocker: null,
+    });
     expect(pre.latestTag).toBe("v1.0.0");
     expect(pre.nextVersions).toEqual({ patch: "v1.0.1", minor: "v1.1.0", major: "v2.0.0" });
-    expect(pre.blocker).toBeNull();
+
+    // A remote branch advance after GET must be caught by POST's fresh fetch,
+    // without creating the requested tag locally or remotely.
+    const peer = mkdtempSync(path.join(tmpdir(), "rel-peer-"));
+    execFileSync("git", ["clone", "--branch", "main", origin, peer]);
+    git(peer, ["config", "user.email", "peer@example.com"]);
+    git(peer, ["config", "user.name", "Peer"]);
+    writeFileSync(path.join(peer, "remote-change.ts"), "export const remote = true;\n");
+    git(peer, ["add", "-A"]);
+    git(peer, ["commit", "-m", "add remote change"]);
+    git(peer, ["push", "origin", "main"]);
+    const staleRelease = await fetch(`${base}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tag: "v1.1.0", notes: "x" }),
+    });
+    expect(staleRelease.status).toBe(409);
+    expect(await staleRelease.json()).toMatchObject({ code: "behind" });
+    expect(git(work, ["tag", "-l", "v1.1.0"]).trim()).toBe("");
+    expect(git(origin, ["tag", "-l", "v1.1.0"]).trim()).toBe("");
+    git(work, ["merge", "--ff-only", "origin/main"]);
+
+    // A local-only tag has its own conflict code.
+    git(work, ["tag", "v1.0.1"]);
+    const localConflict = await fetch(`${base}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tag: "v1.0.1", notes: "x" }),
+    });
+    expect(localConflict.status).toBe(409);
+    expect(await localConflict.json()).toMatchObject({ code: "local_tag_exists" });
+    git(work, ["tag", "-d", "v1.0.1"]);
 
     // AI notes drafted from the commit subjects since v1.0.0.
     const notesRes = (await (
@@ -112,8 +158,13 @@ describe("release", () => {
       body: JSON.stringify({ tag: "v1.1.0", notes: notesRes.notes }),
     });
     expect(rel.status).toBe(200);
-    // The tag reached the (bare) origin.
-    expect(git(origin, ["tag", "-l"])).toContain("v1.1.0");
+    // The immutable annotated object reached the bare remote with the validated
+    // commit, requested tag name, and generated message embedded.
+    expect(git(origin, ["cat-file", "-t", "refs/tags/v1.1.0"]).trim()).toBe("tag");
+    const remoteTagObject = git(origin, ["cat-file", "-p", "refs/tags/v1.1.0"]);
+    expect(remoteTagObject).toContain(`object ${git(work, ["rev-parse", "HEAD"]).trim()}`);
+    expect(remoteTagObject).toContain("tag v1.1.0");
+    expect(remoteTagObject).toContain("### ✨ New features");
 
     // Re-releasing the same tag is refused.
     const dupe = await fetch(`${base}/release`, {
@@ -122,6 +173,7 @@ describe("release", () => {
       body: JSON.stringify({ tag: "v1.1.0", notes: "x" }),
     });
     expect(dupe.status).toBe(409);
+    expect(await dupe.json()).toMatchObject({ code: "remote_tag_exists" });
 
     // A dirty tree is refused server-side even if the UI would have allowed it.
     writeFileSync(path.join(work, "uncommitted.txt"), "wip\n");

@@ -388,7 +388,7 @@ export function App() {
           </header>
           {error ? (
             <div
-              className="bg-danger-subtle px-6 py-2 text-sm text-danger"
+              className="max-w-full break-words bg-danger-subtle px-6 py-2 text-sm text-danger [overflow-wrap:anywhere]"
               data-testid="error-banner"
               role="alert"
               aria-live="assertive"

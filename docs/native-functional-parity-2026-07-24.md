@@ -40,7 +40,7 @@ Electron has a real and broad cross-platform product. Core Pi sessions stream in
 It is **not at full native functional parity**.
 
 - **Five P0 gaps, safely gated:** saved Maker+Checker, Agent Pipeline, Parallel Agents, Discovery/Triage, and Human Approval definitions remain readable, editable only through an explicit conversion, and deletable, but cannot be created, duplicated, or run. New definitions offer only Single agent. Their engines are still missing; the gate prevents silent single-agent misexecution but does not resolve LOOP-01..05.
-- **P1 safety risks:** resource writes can follow symlinks; **legacy copy-mode** skill updates can overwrite locally edited non-`SKILL.md` files; collection-root checks are only lexical; release preflight lacks remote synchronization checks. New `collection-v1` imports and requested project-session worktree isolation now fail closed when their safety boundary cannot be established.
+- **P1 safety risks:** resource writes can follow symlinks; **legacy copy-mode** skill updates can overwrite locally edited non-`SKILL.md` files; collection-root checks are only lexical. New `collection-v1` imports, requested project-session worktree isolation, and release synchronization now fail closed when their safety boundary cannot be established.
 - **P1 workflow gaps:** running-turn steering is unavailable in the renderer; transcript attachment fidelity is incomplete; per-message fork/rerun is absent; durable child/Loop records and reviewable Loop worktrees are absent.
 - **Distribution is only partly cross-platform:** the macOS DMG and bundled Pi are real. App updates, independent Pi updates, and Windows/Linux release/sign/update pipelines remain absent.
 
@@ -358,6 +358,7 @@ Each row is one distinct user behavior or safety difference. “Plain English”
 
 ## Worktrees, Git, merge, and release
 
+<!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                           | Plain English                                                                      | Why it matters                                                                 | Evidence                                                                |
 | ------ | -------- | --------- | ------------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | GIT-02 | **P2**   | Partial   | Branch uniqueness/fallback reporting | Electron generates a short unique branch suffix but hides fallback/failure detail. | Users cannot tell whether isolation really succeeded or why it did not.        | **E:** session worktree route/helpers. **N:** worktree service.         |
@@ -368,7 +369,6 @@ Each row is one distinct user behavior or safety difference. “Plain English”
 | GIT-07 | **P2**   | Partial   | Keep-after-merge policy              | Electron effectively keeps the worktree without a full user policy control.        | Users cannot choose cleanup behavior.                                          | **E:** merge route/settings. **N:** app settings/worktree service.      |
 | GIT-08 | **P2**   | Missing   | Automatic cleanup policy             | Old worktrees/branches lack native-equivalent managed cleanup.                     | Disk and branch clutter grows.                                                 | Same as GIT-07.                                                         |
 | GIT-09 | **P1**   | Missing   | Unsafe removal-path guard            | Worktree removal lacks a dedicated allowlisted-root safety check.                  | A bad persisted path could target the wrong checkout.                          | **E:** git worktree removal helper/routes. **N:** worktree service.     |
-| GIT-10 | **P1**   | Unsafe    | Release remote ahead/behind gate     | Release verifies a clean tree but not whether local and remote have diverged.      | Electron can tag from stale code or push an unsafe release.                    | **E:** `routes/git.ts`, `git.ts`. **N:** `ReleaseService.swift`, tests. |
 
 ## Projects, preview, terminal, files, diffs, palette, and checkpoints
 
@@ -449,7 +449,7 @@ A platform-specific implementation difference is not a gap unless the portable u
 
 1. **Loop honesty gate.** Hide or reject the five unsupported structures immediately. Server-side validation must prevent silent fallback even if old UI or saved files send those values.
 2. **Write and sync safety.** Reject symlinks in every existing path component for resource, Loop, and SkillRepositories collection mutations. Realpath-validate persisted collection roots before scanning/watching/deleting. Keep collection-v1’s clean-tree fail-closed update rule. Replace legacy copied-import `SKILL.md` hashes with per-file manifests and explicit per-file conflict choices.
-3. **Isolation and release safety.** Fail closed when requested worktree creation fails. Add typed merge preflights/outcomes, safe removal roots, retention policy, and remote ahead/behind release gates.
+3. **Isolation safety.** Fail closed when requested worktree creation fails. Add typed merge preflights/outcomes, safe removal roots, and retention policy.
 4. **Durable orchestration substrate.** Define durable child, run, session, artifact, approval, continuation, and worktree records. Loops and direct subagents should share this ownership model.
 5. **Implement real Loop structures.** Add versioned configs, then Maker+Checker, Pipeline, Parallel, Triage, and Human Approval. Add artifacts, review/apply/discard, controls, restart recovery, cancellation, and rich validation.
 6. **Session input and transcript fidelity.** Add steering/queue UI, per-session drafts, versioned attachments, sent-image/file/folder/paste history, then per-message fork/rerun/edit and provenance.

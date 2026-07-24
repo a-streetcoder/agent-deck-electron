@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
@@ -51,6 +51,40 @@ async function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): P
     maxBuffer: 8_000_000,
   });
   return stdout;
+}
+
+/** Run Git without a shell while supplying plumbing input on stdin. */
+async function runGitInput(cwd: string, args: string[], input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(gitBin(), args, {
+      cwd,
+      env: process.env,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 15_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout);
+      else
+        reject(Object.assign(new Error(`git exited with code ${String(code)}`), { code, stderr }));
+    });
+    child.stdin.end(input);
+  });
 }
 
 /** Parse `git status --porcelain=v1 --branch` output into a structured status. */
@@ -593,13 +627,164 @@ export function nextReleaseVersions(latestTag: string | null): {
   };
 }
 
-/** Fetch tags from the remote (best-effort; no remote / offline is not fatal). */
-export async function gitFetchTags(cwd: string): Promise<void> {
+export type ReleaseSyncCode =
+  | "ready"
+  | "not_repo"
+  | "detached"
+  | "missing_upstream"
+  | "invalid_upstream"
+  | "fetch_failed"
+  | "dirty"
+  | "ahead"
+  | "behind"
+  | "diverged";
+
+export interface ReleaseSyncBlocker {
+  code: Exclude<ReleaseSyncCode, "ready">;
+  message: string;
+}
+
+/** A fail-closed snapshot proving which clean, synchronized commit may be released. */
+export interface ReleaseSynchronization {
+  state: ReleaseSyncCode;
+  branch: string | null;
+  upstream: string | null;
+  remote: string | null;
+  remoteRef: string | null;
+  ahead: number | null;
+  behind: number | null;
+  headSha: string | null;
+  blocker: ReleaseSyncBlocker | null;
+}
+
+function blockedReleaseSync(
+  code: Exclude<ReleaseSyncCode, "ready">,
+  message: string,
+  details: Partial<Omit<ReleaseSynchronization, "state" | "blocker">> = {},
+): ReleaseSynchronization {
+  return {
+    state: code,
+    branch: null,
+    upstream: null,
+    remote: null,
+    remoteRef: null,
+    ahead: null,
+    behind: null,
+    headSha: null,
+    ...details,
+    blocker: { code, message },
+  };
+}
+
+/**
+ * Fetch and compare the checked-out branch with its configured non-local
+ * upstream. Classification uses command results and plumbing output only; Git's
+ * localized diagnostics are retained solely as actionable fetch details.
+ */
+export async function gitReleaseSynchronization(cwd: string): Promise<ReleaseSynchronization> {
   try {
-    await runGit(cwd, ["fetch", "--tags", "--quiet"]);
+    if ((await runGit(cwd, ["rev-parse", "--is-inside-work-tree"])).trim() !== "true") {
+      return blockedReleaseSync("not_repo", "This project isn't a git repository.");
+    }
   } catch {
-    // No remote / offline — release preflight still works off local tags.
+    return blockedReleaseSync("not_repo", "This project isn't a git repository.");
   }
+
+  let branch: string;
+  try {
+    branch = (await runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim();
+  } catch {
+    return blockedReleaseSync("detached", "Check out a branch before creating a release.");
+  }
+
+  const metadata = (
+    await runGit(cwd, [
+      "for-each-ref",
+      "--format=%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)",
+      `refs/heads/${branch}`,
+    ])
+  ).trim();
+  const [upstream = "", remote = "", remoteRef = ""] = metadata.split("\0");
+  if (!upstream) {
+    return blockedReleaseSync(
+      "missing_upstream",
+      `Branch ${branch} has no upstream. Configure and push its upstream before releasing.`,
+      { branch },
+    );
+  }
+  if (!remote || remote === "." || !remoteRef.startsWith("refs/heads/")) {
+    return blockedReleaseSync(
+      "invalid_upstream",
+      `Branch ${branch} must track a branch on a configured remote, not a local branch.`,
+      { branch, upstream, remote: remote || null, remoteRef: remoteRef || null },
+    );
+  }
+
+  try {
+    await execFileAsync(gitBin(), ["fetch", "--quiet", "--tags", remote, remoteRef], {
+      cwd,
+      timeout: 30_000,
+      maxBuffer: 8_000_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+  } catch (error) {
+    return blockedReleaseSync(
+      "fetch_failed",
+      `Couldn't fetch ${upstream} and tags from ${remote}: ${gitErrorText(error)}`,
+      { branch, upstream, remote, remoteRef },
+    );
+  }
+
+  const status = await gitStatus(cwd);
+  let ahead: number;
+  let behind: number;
+  try {
+    const counts = (
+      await runGit(cwd, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+    )
+      .trim()
+      .split(/\s+/);
+    ahead = Number.parseInt(counts[0] ?? "", 10);
+    behind = Number.parseInt(counts[1] ?? "", 10);
+    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) throw new Error("invalid counts");
+  } catch {
+    return blockedReleaseSync(
+      "invalid_upstream",
+      `The configured upstream ${upstream} could not be compared. Repair the branch tracking configuration before releasing.`,
+      { branch, upstream, remote, remoteRef },
+    );
+  }
+  const details = { branch, upstream, remote, remoteRef, ahead, behind };
+  if (!status.clean) {
+    return blockedReleaseSync(
+      "dirty",
+      "Commit or stash your changes first — a release tags a clean commit.",
+      details,
+    );
+  }
+  if (ahead > 0 && behind > 0) {
+    return blockedReleaseSync(
+      "diverged",
+      `Local ${branch} and ${upstream} have diverged (${ahead} ahead, ${behind} behind). Reconcile and push the branch before releasing.`,
+      details,
+    );
+  }
+  if (ahead > 0) {
+    return blockedReleaseSync(
+      "ahead",
+      `Local ${branch} is ${ahead} commit${ahead === 1 ? "" : "s"} ahead of ${upstream}. Push the branch before releasing.`,
+      details,
+    );
+  }
+  if (behind > 0) {
+    return blockedReleaseSync(
+      "behind",
+      `Local ${branch} is ${behind} commit${behind === 1 ? "" : "s"} behind ${upstream}. Pull or fast-forward before releasing.`,
+      details,
+    );
+  }
+  const headSha = (await runGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+  return { state: "ready", ...details, headSha, blocker: null };
 }
 
 /** The newest `vX.Y.Z` version tag (native latestVersionTag), or null if none. */
@@ -620,17 +805,143 @@ export async function gitLatestVersionTag(cwd: string): Promise<string | null> {
   }
 }
 
-/** Whether a tag exists locally OR on the remote (so a release can't clobber). */
-export async function gitTagExists(cwd: string, tag: string): Promise<boolean> {
+function commandExitCode(error: unknown): number | string | undefined {
+  return (error as { code?: number | string }).code;
+}
+
+/** Exact local tag lookup. Exit 1 is Git's documented "not found" result. */
+export async function gitLocalTagExists(cwd: string, tag: string): Promise<boolean> {
   try {
-    await runGit(cwd, ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`]);
+    await runGit(cwd, ["show-ref", "--verify", "--quiet", `refs/tags/${tag}`]);
     return true;
-  } catch {
-    try {
-      return (await runGit(cwd, ["ls-remote", "--tags", "origin", tag])).trim().length > 0;
-    } catch {
-      return false; // no remote reachable — the local check already said no
-    }
+  } catch (error) {
+    if (commandExitCode(error) === 1) return false;
+    throw error;
+  }
+}
+
+/** Exact remote tag lookup. A successful empty response means absent; transport failures throw. */
+export async function gitRemoteTagExists(
+  cwd: string,
+  remote: string,
+  tag: string,
+): Promise<boolean> {
+  const output = await execFileAsync(
+    gitBin(),
+    ["ls-remote", "--tags", remote, `refs/tags/${tag}`],
+    {
+      cwd,
+      timeout: 30_000,
+      maxBuffer: 8_000_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    },
+  );
+  return output.stdout.trim().length > 0;
+}
+
+export interface ReleasePushFailure {
+  code: "push_failed";
+  message: string;
+  localRollback: "deleted" | "failed";
+  remoteTag: "absent" | "present" | "unknown";
+}
+
+export interface ReleaseStaleLocalFailure {
+  code: "stale_local";
+  message: string;
+}
+
+export interface ReleaseTagTestHooks {
+  /** Tests only: runs after the tag object exists but before local ref mutation. */
+  beforeLocalRefCreate?: () => Promise<void> | void;
+  /** Tests only: runs after owned local ref creation but before the atomic push. */
+  beforePush?: (createdTagObject: string) => Promise<void> | void;
+}
+
+/**
+ * Build and locally own an annotated tag, then atomically publish a no-op branch
+ * update plus the explicit tag object under exact branch/tag leases. A server
+ * without atomic-push support fails closed without publishing either ref.
+ */
+export async function gitCreateAndPushReleaseTag(
+  cwd: string,
+  tag: string,
+  message: string,
+  headSha: string,
+  remote: string,
+  remoteRef: string,
+  hooks: ReleaseTagTestHooks = {},
+): Promise<{ ok: true } | { ok: false; failure: ReleasePushFailure | ReleaseStaleLocalFailure }> {
+  const tagger = (await runGit(cwd, ["var", "GIT_COMMITTER_IDENT"])).trim();
+  const tagBody = `object ${headSha}\ntype commit\ntag ${tag}\ntagger ${tagger}\n\n${message || tag}\n`;
+  // mktag writes the immutable annotated object without publishing a ref.
+  const createdTagObject = (await runGitInput(cwd, ["mktag"], tagBody)).trim();
+
+  await hooks.beforeLocalRefCreate?.();
+  // This is deliberately adjacent to the guarded ref mutation: no stale UI or
+  // earlier synchronization may authorize a moved HEAD or dirty worktree.
+  const currentHead = (await runGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+  const dirty = (await runGit(cwd, ["status", "--porcelain=v1"])).trim().length > 0;
+  if (currentHead !== headSha || dirty) {
+    return {
+      ok: false,
+      failure: {
+        code: "stale_local",
+        message:
+          currentHead !== headSha
+            ? "The local branch changed during release preparation. Run preflight again before releasing."
+            : "The working tree changed during release preparation. Commit or stash changes, then run preflight again.",
+      },
+    };
+  }
+
+  const objectFormat = (await runGit(cwd, ["rev-parse", "--show-object-format"])).trim();
+  const zeroObject = "0".repeat(objectFormat === "sha256" ? 64 : 40);
+  await runGit(cwd, ["update-ref", `refs/tags/${tag}`, createdTagObject, zeroObject]);
+  await hooks.beforePush?.(createdTagObject);
+
+  try {
+    await runGit(cwd, [
+      "push",
+      "--atomic",
+      `--force-with-lease=${remoteRef}:${headSha}`,
+      `--force-with-lease=refs/tags/${tag}:`,
+      remote,
+      `${headSha}:${remoteRef}`,
+      `${createdTagObject}:refs/tags/${tag}`,
+    ]);
+    return { ok: true };
+  } catch (error) {
+    const localRollback = await runGit(cwd, [
+      "update-ref",
+      "-d",
+      `refs/tags/${tag}`,
+      createdTagObject,
+    ])
+      .then(() => "deleted" as const)
+      .catch(() => "failed" as const);
+    const remoteTag = await gitRemoteTagExists(cwd, remote, tag)
+      .then((present) => (present ? ("present" as const) : ("absent" as const)))
+      .catch(() => "unknown" as const);
+    const rollbackMessage =
+      localRollback === "deleted"
+        ? "The local tag created by this attempt was deleted."
+        : "Local tag cleanup failed; the local tag may remain and needs inspection.";
+    const outcomeMessage =
+      remoteTag === "absent"
+        ? "The remote tag is confirmed absent."
+        : remoteTag === "present"
+          ? "The remote tag is present; inspect it before deciding whether another release action is safe."
+          : "The remote tag outcome is unknown; inspect the remote before retrying.";
+    return {
+      ok: false,
+      failure: {
+        code: "push_failed",
+        localRollback,
+        remoteTag,
+        message: `Atomic release push of ${tag} to ${remote} failed: ${gitErrorText(error)} ${rollbackMessage} ${outcomeMessage}`,
+      },
+    };
   }
 }
 
@@ -642,23 +953,6 @@ export async function gitCommitSubjects(cwd: string, range: string): Promise<str
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-/**
- * Create an annotated tag with `--cleanup=verbatim` (native createAnnotatedTag) so
- * the message's markdown `#`/`###` lines survive git's default comment-stripping,
- * then push it. Throws the git stderr on failure.
- */
-export async function gitTagAndPush(cwd: string, tag: string, message: string): Promise<void> {
-  await runGit(cwd, ["tag", "-a", "--cleanup=verbatim", tag, "-m", message || tag]);
-  try {
-    await runGit(cwd, ["push", "origin", tag]);
-  } catch (error) {
-    // Release is tag+push as one unit — if the push fails, roll back the local tag
-    // so a retry isn't trapped by our own gitTagExists (409) check. Best-effort.
-    await runGit(cwd, ["tag", "-d", tag]).catch(() => {});
-    throw new Error(`Release failed — couldn't push ${tag}: ${gitErrorText(error)}`);
-  }
 }
 
 /** The git stderr from a failed execFile, else the error message — for surfacing. */
