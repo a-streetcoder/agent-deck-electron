@@ -10,7 +10,7 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, screen, shell } from "electron";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
@@ -202,8 +202,10 @@ function waitForHealth(port, timeoutMs = 20_000) {
 }
 
 function createWindow(port) {
+  const { width: workAreaWidth } = screen.getPrimaryDisplay().workAreaSize;
+  const initialWidth = Math.max(940, Math.round(workAreaWidth * 0.6));
   mainWindow = new BrowserWindow({
-    width: 1280,
+    width: initialWidth,
     height: 860,
     minWidth: 940,
     minHeight: 600,
