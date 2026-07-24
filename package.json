@@ -11,6 +11,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @agent-deck/desktop dev",
+    "dev:onboarding-empty": "node scripts/dev-onboarding-empty.mjs",
     "build": "pnpm build:web && pnpm build:backend",
     "build:web": "pnpm --filter @agent-deck/web build",
     "build:backend": "node scripts/build-backend.mjs",

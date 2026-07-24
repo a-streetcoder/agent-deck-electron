@@ -92,8 +92,11 @@ function wasDismissed(): boolean {
  * (set via devtools in the desktop app, where the URL is fixed).
  */
 const FORCE_KEY = "agentdeck-onboarding-force";
+const EMPTY_SETUP_PREVIEW =
+  import.meta.env.DEV && import.meta.env.VITE_AGENT_DECK_ONBOARDING_PREVIEW === "empty";
 function onboardingForced(): boolean {
   try {
+    if (EMPTY_SETUP_PREVIEW) return true;
     if (new URLSearchParams(window.location.search).has("onboarding")) return true;
     return localStorage.getItem(FORCE_KEY) === "1";
   } catch {
@@ -110,6 +113,27 @@ interface HealthCheck {
   detail: string;
   fixCommand?: string;
 }
+
+const EMPTY_SETUP_CHECKS: HealthCheck[] = [
+  {
+    id: "pi-binary",
+    label: "Pi",
+    status: "error",
+    detail: "Pi needs to be installed",
+    fixCommand: "npm install -g @earendil-works/pi-coding-agent",
+  },
+  { id: "node", label: "Built-in runtime", status: "error", detail: "Runtime unavailable" },
+  { id: "bash", label: "Shell tools", status: "error", detail: "Shell tools unavailable" },
+  { id: "git", label: "Git", status: "warn", detail: "Git is not installed" },
+  { id: "github", label: "GitHub", status: "warn", detail: "GitHub is not connected" },
+  {
+    id: "auth",
+    label: "AI model connection",
+    status: "warn",
+    detail: "Connect an AI model provider to run coding sessions",
+  },
+  { id: "settings", label: "Pi settings", status: "ok", detail: "Fresh defaults" },
+];
 
 /** The onboarding-preferences slice of AppSettings (native OnboardingPreferences). */
 interface Prefs {
@@ -253,6 +277,15 @@ export function OnboardingOverlay() {
   useEffect(() => {
     const req = ++checksReq.current;
     setChecksLoading(true);
+    if (EMPTY_SETUP_PREVIEW) {
+      const timer = window.setTimeout(() => {
+        if (req === checksReq.current) {
+          setChecks(EMPTY_SETUP_CHECKS);
+          setChecksLoading(false);
+        }
+      }, 1_200);
+      return () => window.clearTimeout(timer);
+    }
     void fetch("/runtime/doctor")
       .then((response) => response.json())
       .then((data: { report: { checks: HealthCheck[] } }) => {
@@ -299,6 +332,15 @@ export function OnboardingOverlay() {
   const runChecks = (): void => {
     const req = ++checksReq.current;
     setChecksLoading(true);
+    if (EMPTY_SETUP_PREVIEW) {
+      window.setTimeout(() => {
+        if (req === checksReq.current) {
+          setChecks(EMPTY_SETUP_CHECKS);
+          setChecksLoading(false);
+        }
+      }, 1_200);
+      return;
+    }
     void fetch("/runtime/doctor")
       .then((response) => response.json())
       .then((data: { report: { checks: HealthCheck[] } }) => {
