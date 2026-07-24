@@ -208,32 +208,25 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
     void binSource;
   }
 
-  // Node.js runtime: pi is an npm-installed Node CLI (spawned via cross-spawn),
-  // so it can't run without Node on PATH — and it requires a minimum version
-  // (package.json engines). A "pi binary found" check alone would look healthy
-  // while pi fails to launch, so Node is a first-class preflight.
-  const nodeVersion = await probeVersion("node");
+  // Pi runs under Agent Deck's own backend runtime. In packaged Electron builds
+  // this is Electron's embedded Node, so a separate system `node` is not needed.
+  const nodeVersion = process.version;
   const nodeParsed = parseNodeVersion(nodeVersion);
-  if (!nodeVersion) {
+  if (nodeParsed && !meetsMinNode(nodeParsed)) {
     checks.push({
       id: "node",
       label: "Node.js runtime",
       status: "error",
-      detail: `node not on PATH — pi is a Node CLI and needs Node.js ≥ ${MIN_NODE_VERSION} (install from nodejs.org)`,
-    });
-  } else if (nodeParsed && !meetsMinNode(nodeParsed)) {
-    checks.push({
-      id: "node",
-      label: "Node.js runtime",
-      status: "error",
-      detail: `${nodeVersion} — pi requires Node.js ≥ ${MIN_NODE_VERSION}; upgrade Node`,
+      detail: `${nodeVersion} — Agent Deck requires Node.js ≥ ${MIN_NODE_VERSION}; update Agent Deck`,
     });
   } else {
     checks.push({
       id: "node",
       label: "Node.js runtime",
       status: "ok",
-      detail: nodeParsed ? `${nodeVersion} (≥ ${MIN_NODE_VERSION})` : nodeVersion,
+      detail: nodeParsed
+        ? `${nodeVersion} embedded with Agent Deck (≥ ${MIN_NODE_VERSION})`
+        : `${nodeVersion} embedded with Agent Deck`,
     });
   }
 

@@ -201,6 +201,24 @@ export function OnboardingOverlay() {
   // of order (last click must win on the server, not last-to-arrive).
   const patchChain = useRef<Promise<unknown>>(Promise.resolve());
 
+  // First-run setup is proactive: start the doctor as soon as onboarding mounts
+  // instead of making the user advance through the tour before checks begin.
+  useEffect(() => {
+    const req = ++checksReq.current;
+    setChecksLoading(true);
+    void fetch("/runtime/doctor")
+      .then((response) => response.json())
+      .then((data: { report: { checks: HealthCheck[] } }) => {
+        if (req === checksReq.current) setChecks(data.report.checks);
+      })
+      .catch(() => {
+        if (req === checksReq.current) setChecks([]);
+      })
+      .finally(() => {
+        if (req === checksReq.current) setChecksLoading(false);
+      });
+  }, []);
+
   // A close during this session always wins (even when forced via ?onboarding,
   // where the URL param would otherwise keep re-showing it).
   if (dismissed) return null;
@@ -307,17 +325,15 @@ export function OnboardingOverlay() {
   const isLastTourPage = page === PAGES.length - 1;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+    <section
+      className="absolute inset-0 z-20 overflow-y-auto bg-surface"
       data-testid="onboarding"
-      role="dialog"
-      aria-modal="true"
       aria-label="Welcome to Agent Deck"
     >
-      <div className="flex max-h-[86vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col bg-surface-elevated">
         {phase === "tour" ? (
           <>
-            <div className="relative aspect-[4/3] w-full shrink-0 bg-surface-subtle">
+            <div className="relative h-[min(52vh,520px)] w-full shrink-0 bg-surface-subtle">
               <img
                 key={tourPage.image}
                 data-testid="onboarding-image"
@@ -337,7 +353,7 @@ export function OnboardingOverlay() {
             <div className="flex flex-col gap-3 px-5 py-4">
               <h2
                 data-testid="onboarding-title"
-                className="text-base font-semibold text-text-primary"
+                className="text-xl font-semibold text-text-primary"
                 style={{ fontStretch: "expanded" }}
               >
                 {tourPage.title}
@@ -384,6 +400,45 @@ export function OnboardingOverlay() {
                     Continue <ArrowRight size={13} aria-hidden />
                   </button>
                 )}
+              </div>
+            </div>
+            <div
+              className="border-t border-border-subtle px-5 py-4"
+              data-testid="onboarding-setup-summary"
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                    <Stethoscope size={15} /> Automatic setup check
+                  </div>
+                  <p className="mt-1 text-xs text-text-muted">
+                    Agent Deck uses its embedded runtime and pinned Pi. Connect optional services
+                    below.
+                  </p>
+                </div>
+                <button
+                  className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  onClick={() => goto("setup")}
+                >
+                  View details
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {checksLoading && checks.length === 0 ? (
+                  <div className="text-xs text-text-muted">Checking your setup…</div>
+                ) : null}
+                {checks.slice(0, 6).map((check) => {
+                  const { Icon, color } = STATUS_META[check.status];
+                  return (
+                    <div
+                      key={check.id}
+                      className="flex min-w-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
+                    >
+                      <Icon size={14} style={{ color }} className="shrink-0" />
+                      <span className="truncate text-xs text-text-secondary">{check.label}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </>
@@ -632,7 +687,7 @@ export function OnboardingOverlay() {
           </div>
         ) : null}
       </div>
-    </div>
+    </section>
   );
 }
 

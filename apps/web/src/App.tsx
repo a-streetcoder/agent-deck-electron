@@ -381,7 +381,6 @@ export function App() {
               </div>
             </div>
           </header>
-          <OnboardingOverlay />
           {error ? (
             <div
               className="px-6 py-2 text-sm"
@@ -393,6 +392,7 @@ export function App() {
           ) : null}
 
           <main className="relative min-h-0 flex-1">
+            <OnboardingOverlay />
             {/* Chat layer: always mounted. */}
             <div
               className="absolute inset-0"

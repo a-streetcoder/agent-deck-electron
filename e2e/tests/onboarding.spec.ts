@@ -27,6 +27,8 @@ test("walks the tour, runs the setup check, and finishes from the final step", a
   await page.goto(harness.baseUrl);
   const overlay = page.getByTestId("onboarding");
   await expect(overlay).toBeVisible();
+  await expect(overlay).not.toHaveAttribute("role", "dialog");
+  await expect(page.getByTestId("onboarding-setup-summary")).toBeVisible();
 
   // Tour: the native illustration + title, advancing through the pages.
   await expect(page.getByTestId("onboarding-image")).toBeVisible();
