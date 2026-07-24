@@ -30,6 +30,7 @@ export const RUNNABLE_LOOP_STRUCTURES = [
   "singleAgent",
   "makerChecker",
   "agentPipeline",
+  "parallelAgents",
 ] as const satisfies readonly LoopStructure[];
 
 export function isRunnableLoopStructure(structure: LoopStructure): boolean {
@@ -48,6 +49,8 @@ export function loopDefinitionValidationError(
     | "checkerName"
     | "checkerRubric"
     | "pipelineStages"
+    | "parallelBranches"
+    | "writeTarget"
   >,
 ): string | undefined {
   if (!isRunnableLoopStructure(loop.structure)) return "This Loop structure is unavailable.";
@@ -65,10 +68,32 @@ export function loopDefinitionValidationError(
       return "Pipeline stage agent names cannot be blank.";
     }
   }
+  if (loop.structure === "parallelAgents") {
+    if (!loop.goal.trim()) return "A goal is required.";
+    if (!normalizeParallelBranches(loop.parallelBranches).length) {
+      return "At least one parallel branch agent is required.";
+    }
+    if (loop.writeTarget !== "artifactMarkdown") {
+      return "Parallel agents are report-only and require the Artifact (markdown) write target.";
+    }
+  }
   return undefined;
 }
 
+/** Native LoopParallelConfig normalization: trim, drop blanks, preserve first occurrence. */
+export function normalizeParallelBranches(branches: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  return (branches ?? [])
+    .map((branch) => branch.trim())
+    .filter((branch) => {
+      if (!branch || seen.has(branch)) return false;
+      seen.add(branch);
+      return true;
+    });
+}
+
 export const LOOP_STRUCTURE_UNSUPPORTED_CODE = "loop_structure_unsupported";
+export const LOOP_PARALLEL_WRITE_TARGET_CODE = "loop_parallel_write_target_unsafe";
 
 export const LOOP_STRUCTURE_LABEL: Record<LoopStructure, string> = {
   singleAgent: "Single agent",
@@ -116,6 +141,8 @@ export interface LoopDefinition {
   checkerRubric?: string;
   /** Native flat Pipeline frontmatter. Order and repeated agent names are significant. */
   pipelineStages?: string[];
+  /** Native flat Parallel frontmatter. Blanks are dropped and first duplicate wins. */
+  parallelBranches?: string[];
   /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
@@ -153,7 +180,7 @@ export type LoopStopReason =
 
 export type LoopCheckerDecision = "APPROVE" | "CONTINUE" | "REJECT" | "ASK_HUMAN" | "FAIL";
 export type LoopGoalDecision = "SUCCESS" | "CONTINUE" | "FAIL";
-export type LoopRunPhase = "maker" | "checker" | "stage" | "validation" | "evaluator";
+export type LoopRunPhase = "maker" | "checker" | "stage" | "branch" | "validation" | "evaluator";
 
 export interface LoopTimelineEvent {
   id: string;
@@ -162,12 +189,14 @@ export interface LoopTimelineEvent {
   note: string;
   timestamp: string;
   stageIndex?: number;
+  branchIndex?: number;
 }
 
 export interface LoopRunArtifact {
   id: string;
-  phase: "maker" | "checker" | "stage" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
   stageIndex?: number;
+  branchIndex?: number;
   agentName?: string;
   filename: string;
   filePath: string;
@@ -175,12 +204,18 @@ export interface LoopRunArtifact {
   createdAt: string;
 }
 
+export type LoopChildStatus = "queued" | "running" | "completed" | "failed" | "stopped";
+
 export interface LoopChildRecord {
   id: string;
-  phase: "maker" | "checker" | "stage" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
   stageIndex?: number;
+  branchIndex?: number;
   agentName?: string;
-  startedAt: string;
+  /** Present for pre-created Parallel children before they begin execution. */
+  status?: LoopChildStatus;
+  queuedAt?: string;
+  startedAt?: string;
   endedAt?: string;
   output?: string;
   error?: string;
@@ -191,6 +226,14 @@ export interface LoopPipelineStageOutput {
   stageIndex: number;
   agentName: string;
   output: string;
+}
+
+export interface LoopParallelBranchOutput {
+  id: string;
+  branchIndex: number;
+  agentName: string;
+  output?: string;
+  error?: string;
 }
 
 export interface LoopRunIteration {
@@ -205,6 +248,7 @@ export interface LoopRunIteration {
   evaluatorOutput?: string;
   goalDecision?: LoopGoalDecision;
   pipelineStageOutputs?: LoopPipelineStageOutput[];
+  parallelBranchOutputs?: LoopParallelBranchOutput[];
   validationPassed: boolean | null;
   validationEvidence?: string;
   timeline: LoopTimelineEvent[];

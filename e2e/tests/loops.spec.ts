@@ -58,6 +58,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
     "Single agent",
     "Maker / checker",
     "Agent pipeline",
+    "Parallel agents",
   ]);
   await page.getByTestId("loop-max-iterations").fill("6");
   await page.getByTestId("loop-validation").fill("pnpm test");

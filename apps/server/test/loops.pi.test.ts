@@ -49,6 +49,10 @@ beforeAll(async () => {
     path.join(agentsDir, "Agent B.md"),
     "---\nname: Agent B\ntools: read, grep, bash, edit, write\n---\nRun stage B.\n",
   );
+  writeFileSync(
+    path.join(agentsDir, "Agent C.md"),
+    "---\nname: Agent C\ntools: read, grep, bash, edit, write\n---\nRun independent report C.\n",
+  );
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -62,6 +66,10 @@ beforeAll(async () => {
       }
       if (message.includes("exact first non-empty line must be SUCCESS")) {
         return "SUCCESS\nEvaluator streamed independent ordered evidence of completion.";
+      }
+      if (message.includes("Parallel branch:")) {
+        const agent = message.match(/Assigned agent: (Agent [ABC])/)?.[1] ?? "Parallel agent";
+        return `${agent} streamed multiple distinct independent report evidence delta words.`;
       }
       if (message.includes("Pipeline stage: 1")) {
         return "Stage A streamed multiple ordered handoff delta words.";
@@ -290,6 +298,144 @@ describe("loop run engine (real pi)", () => {
       "iteration-1-stage-1.md",
       "iteration-1-stage-2.md",
       "iteration-1-stage-3.md",
+      "iteration-1-evaluator.md",
+    ]);
+    expect(
+      run.iterations[0]!.artifacts.every(
+        (artifact) =>
+          !artifact.filePath.startsWith(project + path.sep) && existsSync(artifact.filePath),
+      ),
+    ).toBe(true);
+  });
+
+  it("streams overlapping real Pi Parallel branches with max two and ordered aggregation", async () => {
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "parallel-loop",
+        goal: "Investigate three independent reports.",
+        structure: "parallelAgents",
+        parallelBranches: ["Agent A", "Agent B", "Agent C"],
+        validationCommand: "exit 0",
+        writeTarget: "artifactMarkdown",
+        maxIterations: 2,
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const runId = await startRun("parallel-loop");
+    const launched = await getRun(runId);
+    expect(launched.iterations[0]!.children.map((child) => child.status)).toEqual([
+      "running",
+      "running",
+      "queued",
+    ]);
+    const parentId = launched.launch!.sessionId;
+    let overlappingCellIds: string[] = [];
+    await expect
+      .poll(
+        () => {
+          const parent = server.sessions.get(parentId);
+          const cells =
+            parent?.snapshot().state.cells.filter((cell) => cell.kind === "subagent") ?? [];
+          overlappingCellIds = cells
+            .filter((cell) => cell.status === "running")
+            .map((cell) => cell.id);
+          return overlappingCellIds.length;
+        },
+        { timeout: 10_000, interval: 10 },
+      )
+      .toBe(2);
+    expect(new Set(overlappingCellIds).size).toBe(2);
+
+    const run = await waitTerminal(runId);
+    expect(run.status).toBe("completed");
+    expect(run.iterations[0]!.parallelBranchOutputs?.map((branch) => branch.agentName)).toEqual([
+      "Agent A",
+      "Agent B",
+      "Agent C",
+    ]);
+    expect(run.iterations[0]!.children.map((child) => child.phase)).toEqual([
+      "branch",
+      "branch",
+      "branch",
+      "evaluator",
+    ]);
+    expect(run.iterations[0]!.children.map((child) => child.status)).toEqual([
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+    ]);
+    expect(new Set(run.iterations[0]!.children.map((child) => child.id)).size).toBe(4);
+
+    const branchRequests = mock.requests
+      .slice(requestStart)
+      .map((request, offset) => ({
+        absoluteIndex: requestStart + offset,
+        request,
+        prompt: JSON.stringify(request.messages.at(-1)?.content),
+      }))
+      .filter(({ prompt }) => prompt.includes("Parallel branch:"));
+    expect(branchRequests).toHaveLength(3);
+    const [first, second, third] = branchRequests;
+    const firstDonePosition = mock.events.findIndex(
+      (event) =>
+        event.kind === "done" &&
+        (event.requestIndex === first!.absoluteIndex ||
+          event.requestIndex === second!.absoluteIndex),
+    );
+    const thirdRequestPosition = mock.events.findIndex(
+      (event) => event.kind === "request" && event.requestIndex === third!.absoluteIndex,
+    );
+    expect(firstDonePosition).toBeGreaterThanOrEqual(0);
+    expect(thirdRequestPosition).toBeGreaterThan(firstDonePosition);
+    for (const branch of branchRequests) {
+      expect(
+        mock.events.filter(
+          (event) => event.requestIndex === branch.absoluteIndex && event.kind === "delta",
+        ).length,
+      ).toBeGreaterThan(4);
+      const tools = (Array.isArray(branch.request.tools) ? branch.request.tools : []).flatMap(
+        (tool) => {
+          const fn =
+            tool && typeof tool === "object"
+              ? (tool as { function?: { name?: unknown } }).function
+              : undefined;
+          return typeof fn?.name === "string" ? [fn.name] : [];
+        },
+      );
+      expect(tools).toEqual(["read", "grep"]);
+    }
+    const beforeFirstDone = mock.events.slice(0, firstDonePosition);
+    expect(
+      new Set(
+        beforeFirstDone
+          .filter(
+            (event) =>
+              event.kind === "delta" &&
+              (event.requestIndex === first!.absoluteIndex ||
+                event.requestIndex === second!.absoluteIndex),
+          )
+          .map((event) => event.requestIndex),
+      ).size,
+    ).toBe(2);
+
+    const evaluator = mock.requests
+      .slice(requestStart)
+      .find((request) =>
+        JSON.stringify(request.messages.at(-1)?.content).includes(
+          "Parallel branch reports in configured order",
+        ),
+      );
+    const evaluatorPrompt = JSON.stringify(evaluator?.messages.at(-1)?.content);
+    expect(evaluatorPrompt).toMatch(/- Agent A:.*- Agent B:.*- Agent C:/s);
+    expect(Array.isArray(evaluator?.tools) ? evaluator.tools : []).toEqual([]);
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
+      "iteration-1-branch-1.md",
+      "iteration-1-branch-2.md",
+      "iteration-1-branch-3.md",
       "iteration-1-evaluator.md",
     ]);
     expect(

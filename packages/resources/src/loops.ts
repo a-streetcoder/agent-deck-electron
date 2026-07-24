@@ -4,6 +4,7 @@ import {
   clampMaxIterations,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeParallelBranches,
   LOOP_STRUCTURES,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   LOOP_WRITE_TARGETS,
@@ -37,6 +38,12 @@ function asPipelineStages(value: unknown): string[] | undefined {
   // Read the short-lived Electron array encoding without rewriting until edit.
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
+    : undefined;
+}
+function asParallelBranches(value: unknown): string[] | undefined {
+  if (typeof value === "string") return normalizeParallelBranches(value.split("|"));
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? normalizeParallelBranches(value)
     : undefined;
 }
 function asStructure(value: unknown): LoopStructure {
@@ -74,6 +81,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     checkerName: asString(frontmatter.checkerName) || undefined,
     checkerRubric: asString(frontmatter.checkerRubric) || undefined,
     pipelineStages: asPipelineStages(frontmatter.pipelineStages),
+    parallelBranches: asParallelBranches(frontmatter.parallelBranches),
     maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
@@ -115,6 +123,7 @@ export interface LoopEdit {
   checkerName?: string;
   checkerRubric?: string;
   pipelineStages?: string[];
+  parallelBranches?: string[];
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
@@ -136,6 +145,7 @@ const LOOP_FIELD_ORDER = [
   "checkerName",
   "checkerRubric",
   "pipelineStages",
+  "parallelBranches",
 ] as const;
 const LOOP_FIELD_KEYS = new Set<string>(LOOP_FIELD_ORDER);
 
@@ -205,6 +215,8 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     checkerName: edit.checkerName ?? asString(frontmatter.checkerName),
     checkerRubric: edit.checkerRubric ?? asString(frontmatter.checkerRubric),
     pipelineStages: edit.pipelineStages ?? asPipelineStages(frontmatter.pipelineStages),
+    parallelBranches: edit.parallelBranches ?? asParallelBranches(frontmatter.parallelBranches),
+    writeTarget: edit.writeTarget ?? asWriteTarget(frontmatter.writeTarget),
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
 
@@ -228,6 +240,9 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   }
   if (edit.pipelineStages !== undefined) {
     frontmatter.pipelineStages = edit.pipelineStages.join(" | ");
+  }
+  if (edit.parallelBranches !== undefined) {
+    frontmatter.parallelBranches = normalizeParallelBranches(edit.parallelBranches).join(" | ");
   }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
@@ -302,6 +317,7 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     checkerName: source.checkerName,
     checkerRubric: source.checkerRubric,
     pipelineStages: source.pipelineStages ? [...source.pipelineStages] : undefined,
+    parallelBranches: source.parallelBranches ? [...source.parallelBranches] : undefined,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,

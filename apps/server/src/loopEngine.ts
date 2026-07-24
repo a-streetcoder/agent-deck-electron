@@ -7,6 +7,7 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeParallelBranches,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopChildRecord,
   type LoopCheckerDecision,
@@ -95,8 +96,9 @@ export type ExecuteLoopRole = (request: {
   loop: LoopDefinition;
   prompt: string;
   agentName?: string;
-  phase: "maker" | "checker" | "stage" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
   stageIndex?: number;
+  branchIndex?: number;
   cwd: string;
   projectId?: string;
   signal: AbortSignal;
@@ -221,7 +223,7 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "stage", "validation", "evaluator"]),
+                phase: z.enum(["maker", "checker", "stage", "branch", "validation", "evaluator"]),
                 roleName: z.string(),
                 note: z.string(),
                 timestamp: z.string(),
@@ -232,8 +234,10 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "stage", "evaluator"]),
-                startedAt: z.string(),
+                phase: z.enum(["maker", "checker", "stage", "branch", "evaluator"]),
+                status: z.enum(["queued", "running", "completed", "failed", "stopped"]).optional(),
+                queuedAt: z.string().optional(),
+                startedAt: z.string().optional(),
               })
               .passthrough(),
           ),
@@ -247,12 +251,23 @@ const persistedRunSchema = z
               }),
             )
             .optional(),
+          parallelBranchOutputs: z
+            .array(
+              z.object({
+                id: z.string().min(1),
+                branchIndex: z.number().int().nonnegative(),
+                agentName: z.string().min(1),
+                output: z.string().optional(),
+                error: z.string().optional(),
+              }),
+            )
+            .optional(),
           artifacts: z
             .array(
               z
                 .object({
                   id: z.string(),
-                  phase: z.enum(["maker", "checker", "stage", "evaluator"]),
+                  phase: z.enum(["maker", "checker", "stage", "branch", "evaluator"]),
                   filename: z.string(),
                   filePath: z.string(),
                   bytes: z.number().nonnegative(),
@@ -326,6 +341,14 @@ export class LoopEngine {
           run.stopReason = "appInterrupted";
           run.endedAt = this.now();
           run.updatedAt = run.endedAt;
+          for (const iteration of run.iterations) {
+            for (const child of iteration.children) {
+              if (child.status === "queued" || child.status === "running") {
+                child.status = "stopped";
+                child.endedAt ??= run.endedAt;
+              }
+            }
+          }
         }
         this.runs.set(run.id, run);
       }
@@ -523,7 +546,7 @@ export class LoopEngine {
     run: LoopRun,
     iteration: LoopRunIteration,
     loop: LoopDefinition,
-    phase: "maker" | "checker" | "stage" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "branch" | "evaluator",
     prompt: string,
     agentName: string | undefined,
     cwd: string,
@@ -532,45 +555,143 @@ export class LoopEngine {
     executeRole: ExecuteLoopRole | undefined,
     executeAgent: ExecuteAgent | undefined,
     stageIndex?: number,
+    branchIndex?: number,
   ): Promise<string> {
+    const startedAt = this.now();
     const child: LoopChildRecord = {
       id: randomUUID(),
       phase,
       stageIndex,
+      branchIndex,
       agentName,
-      startedAt: this.now(),
+      status: "running",
+      startedAt,
     };
     iteration.children.push(child);
     iteration.timeline.push({
       id: randomUUID(),
       phase,
       roleName: agentName ?? "Goal evaluator",
-      note: phase === "stage" ? `stage ${(stageIndex ?? 0) + 1} started` : `${phase} started`,
-      timestamp: child.startedAt,
+      note:
+        phase === "stage"
+          ? `stage ${(stageIndex ?? 0) + 1} started`
+          : phase === "branch"
+            ? `branch ${(branchIndex ?? 0) + 1} started`
+            : `${phase} started`,
+      timestamp: startedAt,
       stageIndex,
+      branchIndex,
     });
     this.changed(run);
     try {
       const output = executeRole
-        ? await executeRole({ loop, prompt, agentName, phase, stageIndex, cwd, projectId, signal })
+        ? await executeRole({
+            loop,
+            prompt,
+            agentName,
+            phase,
+            stageIndex,
+            branchIndex,
+            cwd,
+            projectId,
+            signal,
+          })
         : await executeAgent!({ ...loop, goal: prompt, agentName }, cwd, projectId);
       if (signal.aborted || isLoopRunTerminal(run.status)) return output;
       child.output = output;
+      child.status = "completed";
       child.endedAt = this.now();
       iteration.timeline.push({
         id: randomUUID(),
         phase,
         roleName: agentName ?? "Goal evaluator",
-        note: phase === "stage" ? `stage ${(stageIndex ?? 0) + 1} completed` : `${phase} completed`,
+        note:
+          phase === "stage"
+            ? `stage ${(stageIndex ?? 0) + 1} completed`
+            : phase === "branch"
+              ? `branch ${(branchIndex ?? 0) + 1} completed`
+              : `${phase} completed`,
         timestamp: child.endedAt,
         stageIndex,
+        branchIndex,
       });
       this.changed(run);
       return output;
     } catch (error) {
       child.error = error instanceof Error ? error.message : String(error);
+      child.status = signal.aborted ? "stopped" : "failed";
       child.endedAt = this.now();
       if (!signal.aborted) this.changed(run);
+      throw error;
+    }
+  }
+
+  private async parallelBranchRole(
+    run: LoopRun,
+    iteration: LoopRunIteration,
+    loop: LoopDefinition,
+    child: LoopChildRecord,
+    prompt: string,
+    cwd: string,
+    projectId: string | undefined,
+    signal: AbortSignal,
+    executeRole: ExecuteLoopRole | undefined,
+    executeAgent: ExecuteAgent | undefined,
+  ): Promise<string> {
+    child.status = "running";
+    child.startedAt = this.now();
+    iteration.timeline.push({
+      id: randomUUID(),
+      phase: "branch",
+      roleName: child.agentName!,
+      note: `branch ${(child.branchIndex ?? 0) + 1} started`,
+      timestamp: child.startedAt,
+      branchIndex: child.branchIndex,
+    });
+    this.changed(run);
+    try {
+      const output = executeRole
+        ? await executeRole({
+            loop,
+            prompt,
+            agentName: child.agentName,
+            phase: "branch",
+            branchIndex: child.branchIndex,
+            cwd,
+            projectId,
+            signal,
+          })
+        : await executeAgent!(
+            { ...loop, goal: prompt, agentName: child.agentName },
+            cwd,
+            projectId,
+          );
+      child.endedAt = this.now();
+      if (signal.aborted || isLoopRunTerminal(run.status)) {
+        child.status = "stopped";
+        return output;
+      }
+      child.output = output;
+      child.status = "completed";
+      iteration.timeline.push({
+        id: randomUUID(),
+        phase: "branch",
+        roleName: child.agentName!,
+        note: `branch ${(child.branchIndex ?? 0) + 1} completed`,
+        timestamp: child.endedAt,
+        branchIndex: child.branchIndex,
+      });
+      this.changed(run);
+      return output;
+    } catch (error) {
+      child.endedAt = this.now();
+      if (signal.aborted || isLoopRunTerminal(run.status)) {
+        child.status = "stopped";
+      } else {
+        child.status = "failed";
+        child.error = error instanceof Error ? error.message : String(error);
+        this.changed(run);
+      }
       throw error;
     }
   }
@@ -578,10 +699,11 @@ export class LoopEngine {
   private persistArtifact(
     run: LoopRun,
     iteration: LoopRunIteration,
-    phase: "maker" | "checker" | "stage" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "branch" | "evaluator",
     output: string,
     stageIndex?: number,
     agentName?: string,
+    branchIndex?: number,
   ): void {
     if (!this.artifactsRoot || isLoopRunTerminal(run.status)) return;
     const directory = path.join(this.artifactsRoot, run.id);
@@ -589,7 +711,9 @@ export class LoopEngine {
     const filename =
       phase === "stage"
         ? `iteration-${iteration.index}-stage-${(stageIndex ?? 0) + 1}.md`
-        : `iteration-${iteration.index}-${phase}.md`;
+        : phase === "branch"
+          ? `iteration-${iteration.index}-branch-${(branchIndex ?? 0) + 1}.md`
+          : `iteration-${iteration.index}-${phase}.md`;
     const filePath = path.join(directory, filename);
     const temp = `${filePath}.${randomUUID()}.tmp`;
     try {
@@ -602,6 +726,7 @@ export class LoopEngine {
       id: randomUUID(),
       phase,
       stageIndex,
+      branchIndex,
       agentName,
       filename,
       filePath,
@@ -616,6 +741,7 @@ export class LoopEngine {
       note: `Saved report artifact: ${filename}`,
       timestamp: artifact.createdAt,
       stageIndex,
+      branchIndex,
     });
     this.changed(run);
   }
@@ -683,6 +809,169 @@ export class LoopEngine {
       run.iterations.push(iteration);
       this.changed(run);
       try {
+        if (loop.structure === "parallelAgents") {
+          const branches = normalizeParallelBranches(loop.parallelBranches);
+          const branchChildren = branches.map<LoopChildRecord>((agentName, branchIndex) => ({
+            id: randomUUID(),
+            phase: "branch",
+            branchIndex,
+            agentName,
+            status: "queued",
+            queuedAt: this.now(),
+          }));
+          iteration.children.push(...branchChildren);
+          this.changed(run);
+          const results: Array<{
+            id: string;
+            branchIndex: number;
+            agentName: string;
+            output?: string;
+            error?: string;
+          }> = new Array(branches.length);
+          let nextBranchIndex = 0;
+          const worker = async (): Promise<void> => {
+            while (!signal.aborted) {
+              const branchIndex = nextBranchIndex;
+              if (branchIndex >= branches.length) return;
+              nextBranchIndex += 1;
+              const agentName = branches[branchIndex]!;
+              const prompt = [
+                "Agent Deck controls this loop iteration. Complete only this assigned step.",
+                `Goal: ${loop.goal}`,
+                `Iteration: ${index}`,
+                "You are working as one explicitly selected agent in a report-only parallel investigation.",
+                `Parallel branch: ${branchIndex + 1} of ${branches.length}`,
+                `Assigned agent: ${agentName}`,
+                "Work independently. Do not edit project files or coordinate with sibling agents. End with a concise Markdown summary of findings, evidence, risks, and recommended next action.",
+                feedback
+                  ? `Prior-iteration evaluator and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              try {
+                const child = branchChildren[branchIndex]!;
+                const output = await this.parallelBranchRole(
+                  run,
+                  iteration,
+                  loop,
+                  child,
+                  prompt,
+                  cwd,
+                  run.projectId,
+                  signal,
+                  executeRole,
+                  executeAgent,
+                );
+                if (!signal.aborted) {
+                  results[branchIndex] = {
+                    id: child.id,
+                    branchIndex,
+                    agentName,
+                    output,
+                  };
+                }
+              } catch (error) {
+                if (!signal.aborted) {
+                  results[branchIndex] = {
+                    id: branchChildren[branchIndex]!.id,
+                    branchIndex,
+                    agentName,
+                    error: error instanceof Error ? error.message : String(error),
+                  };
+                }
+              }
+            }
+          };
+          await Promise.all(
+            Array.from({ length: Math.min(2, branches.length) }, async () => await worker()),
+          );
+          if (signal.aborted || run.status === "stopping") {
+            const stoppedAt = this.now();
+            for (const child of branchChildren) {
+              if (child.status === "queued") {
+                child.status = "stopped";
+                child.endedAt = stoppedAt;
+              }
+            }
+          }
+          if (this.stopped(run, signal)) return;
+
+          // Native waits for every configured branch and renders its graph
+          // summary in configured order, regardless of completion order. A
+          // partial failure still proceeds through validation/evaluation, then
+          // fails the run after that evidence is recorded.
+          iteration.parallelBranchOutputs = results;
+          const aggregate = results
+            .map((branch) => `- ${branch.agentName}: ${branch.output ?? branch.error ?? "failed"}`)
+            .join("\n");
+          iteration.output = aggregate;
+          this.changed(run);
+          for (const branch of results) {
+            this.persistArtifact(
+              run,
+              iteration,
+              "branch",
+              branch.output ?? `# ${branch.agentName}\n\nError: ${branch.error ?? "failed"}`,
+              undefined,
+              branch.agentName,
+              branch.branchIndex,
+            );
+          }
+
+          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          if (loop.validationCommand) {
+            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
+          }
+          if (this.stopped(run, signal)) return;
+          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+          iteration.validationEvidence = validation.evidence;
+
+          const evaluatorPrompt = [
+            `Goal: ${loop.goal}`,
+            `Iteration: ${index}`,
+            "Evaluate the completed report-only parallel investigation; do not edit project files.",
+            `Parallel branch reports in configured order:\n${boundedPipelineEvidence(aggregate)}`,
+            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
+          ].join("\n\n");
+          iteration.evaluatorOutput = await this.role(
+            run,
+            iteration,
+            loop,
+            "evaluator",
+            evaluatorPrompt,
+            undefined,
+            cwd,
+            run.projectId,
+            signal,
+            executeRole,
+            executeAgent,
+          );
+          if (this.stopped(run, signal)) return;
+          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
+          const goalDecision = exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS);
+          if (goalDecision) iteration.goalDecision = goalDecision;
+          iteration.endedAt = this.now();
+          this.changed(run);
+          if (results.some((branch) => branch.error)) {
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (!goalDecision || goalDecision === "FAIL") {
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (goalDecision === "SUCCESS" && validation.passed) {
+            this.finalize(run, "completed", "success");
+            return;
+          }
+          feedback = boundedPipelineEvidence(
+            [iteration.evaluatorOutput, validation.evidence].join("\n\n"),
+          );
+          continue;
+        }
+
         if (loop.structure === "agentPipeline") {
           const stageOutputs = (iteration.pipelineStageOutputs ??= []);
           const stages = loop.pipelineStages!;

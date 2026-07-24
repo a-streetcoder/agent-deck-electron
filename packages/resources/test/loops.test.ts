@@ -256,7 +256,106 @@ describe("loop definition store", () => {
     ).toThrow("cannot be blank");
   });
 
-  it.each<LoopStructure>(["parallelAgents", "discoveryTriage", "humanApproval"])(
+  it("normalizes, canonically serializes, edits, and duplicates native Parallel branches", () => {
+    const roots = { home: makeHome() };
+    const dir = loopsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "native-parallel.loop.md");
+    writeFileSync(
+      filePath,
+      [
+        "---",
+        "unknownZulu: last",
+        "parallelBranches: Agent A |  | Agent B | Agent A |   | Agent C | Agent B",
+        "name: Native Parallel",
+        "source: user",
+        "maxIterations: 4",
+        "structure: parallelAgents",
+        "description: Independent reports",
+        "unknownAlpha: first",
+        "writeTarget: artifactMarkdown",
+        "validationCommand: exit 0",
+        "---",
+        "",
+        "Investigate independently.",
+        "",
+      ].join("\n"),
+    );
+    expect(scanLoops(roots)[0]).toMatchObject({
+      structure: "parallelAgents",
+      parallelBranches: ["Agent A", "Agent B", "Agent C"],
+    });
+
+    writeLoopFile(roots, {
+      name: "Native Parallel",
+      parallelBranches: [" Agent B ", "", "Agent B", "Agent A", "  ", "Agent C", "Agent A"],
+    });
+    const expected = [
+      "---",
+      "name: Native Parallel",
+      "description: Independent reports",
+      "source: user",
+      "structure: parallelAgents",
+      "writeTarget: artifactMarkdown",
+      "maxIterations: 4",
+      "validationCommand: exit 0",
+      "parallelBranches: Agent B | Agent A | Agent C",
+      "unknownAlpha: first",
+      "unknownZulu: last",
+      "---",
+      "",
+      "Investigate independently.",
+      "",
+    ].join("\n");
+    expect(readFileSync(filePath, "utf8")).toBe(expected);
+
+    expect(duplicateLoop(roots, "Native Parallel")).toBe("Copy of Native Parallel");
+    const copy = scanLoops(roots).find((loop) => loop.name === "Copy of Native Parallel")!;
+    expect(copy.parallelBranches).toEqual(["Agent B", "Agent A", "Agent C"]);
+    expect(readFileSync(copy.filePath, "utf8")).toBe(
+      expected.replace("name: Native Parallel", "name: Copy of Native Parallel"),
+    );
+  });
+
+  it("rejects invalid or unsafe Parallel definitions without mutation", () => {
+    const roots = { home: makeHome() };
+    expect(() =>
+      writeLoopFile(roots, {
+        name: "Blank Parallel",
+        goal: "Investigate",
+        structure: "parallelAgents",
+        parallelBranches: ["", "   "],
+        writeTarget: "artifactMarkdown",
+      }),
+    ).toThrow("At least one parallel branch agent");
+    expect(() =>
+      writeLoopFile(roots, {
+        name: "Unsafe Parallel",
+        goal: "Investigate",
+        structure: "parallelAgents",
+        parallelBranches: ["Agent A"],
+        writeTarget: "currentCheckout",
+      }),
+    ).toThrow("report-only");
+    expect(existsSync(loopsDir(roots))).toBe(false);
+
+    const filePath = writeExternalLoop(roots, "Persisted Unsafe", "parallelAgents");
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace(
+        "maxIterations: 7",
+        "writeTarget: newWorktree\nparallelBranches: Agent A | Agent B\nmaxIterations: 7",
+      ),
+    );
+    const original = readFileSync(filePath, "utf8");
+    expect(() => writeLoopFile(roots, { name: "Persisted Unsafe", description: "no" })).toThrow(
+      "report-only",
+    );
+    expect(() => duplicateLoop(roots, "Persisted Unsafe")).toThrow("report-only");
+    expect(readFileSync(filePath, "utf8")).toBe(original);
+  });
+
+  it.each<LoopStructure>(["discoveryTriage", "humanApproval"])(
     "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
     (structure) => {
       const createRoots = { home: makeHome() };

@@ -21,6 +21,7 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeParallelBranches,
   LOOP_DEFAULT_MAX_ITERATIONS,
   LOOP_MAX_ITERATIONS_LIMIT,
   LOOP_STRUCTURE_LABEL,
@@ -63,9 +64,30 @@ const PHASE_LABEL = {
   maker: "Maker",
   checker: "Checker",
   stage: "Pipeline stage",
+  branch: "Parallel branch",
   validation: "Validation",
   evaluator: "Goal evaluator",
 } as const;
+const childStatus = (child: LoopRun["iterations"][number]["children"][number]): string =>
+  child.status ?? (child.error ? "failed" : child.endedAt ? "completed" : "running");
+const childStatusLabel = (child: LoopRun["iterations"][number]["children"][number]): string => {
+  const status = childStatus(child);
+  return `${status[0]!.toUpperCase()}${status.slice(1)}`;
+};
+
+const parallelStatusAnnouncement = (run: LoopRun): string | undefined => {
+  const branches = run.iterations
+    .at(-1)
+    ?.children.filter((child) => child.phase === "branch")
+    .sort((a, b) => (a.branchIndex ?? 0) - (b.branchIndex ?? 0));
+  if (!branches?.length) return undefined;
+  const visible = branches
+    .slice(0, 4)
+    .map((child) => `Branch ${(child.branchIndex ?? 0) + 1} ${childStatus(child)}`);
+  if (branches.length > visible.length) visible.push(`${branches.length - visible.length} more`);
+  return `Parallel status: ${visible.join("; ")}.`;
+};
+
 const rationale = (value?: string): string | undefined => {
   const text = value?.split(/\r?\n/).slice(1).join("\n").trim();
   return text || undefined;
@@ -84,6 +106,7 @@ interface LoopDraft {
   checkerName: string;
   checkerRubric: string;
   pipelineStages: string[];
+  parallelBranches: string[];
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
@@ -106,9 +129,13 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     checkerName: loop?.checkerName ?? "",
     checkerRubric: loop?.checkerRubric ?? "",
     pipelineStages: loop?.pipelineStages ? [...loop.pipelineStages] : [],
+    parallelBranches: loop?.parallelBranches ? [...loop.parallelBranches] : [],
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
-    writeTarget: loop?.writeTarget ?? "artifactMarkdown",
+    writeTarget:
+      loop?.structure === "parallelAgents"
+        ? "artifactMarkdown"
+        : (loop?.writeTarget ?? "artifactMarkdown"),
   };
 }
 
@@ -246,6 +273,10 @@ export function LoopsScreen() {
           pipelineStages:
             draft.structure === "agentPipeline"
               ? draft.pipelineStages.map((stage) => stage.trim())
+              : undefined,
+          parallelBranches:
+            draft.structure === "parallelAgents"
+              ? normalizeParallelBranches(draft.parallelBranches)
               : undefined,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
@@ -408,6 +439,7 @@ export function LoopsScreen() {
     runs.some((run) => run.status === "running" || run.status === "stopping") ||
     activeRun?.status === "running" ||
     activeRun?.status === "stopping";
+  const parallelAnnouncement = activeRun ? parallelStatusAnnouncement(activeRun) : undefined;
   const recoveryAcknowledgementRequired = Boolean(
     activeRun?.status === "interrupted" &&
       activeRun.launch?.writeTarget === "currentCheckout" &&
@@ -416,8 +448,11 @@ export function LoopsScreen() {
   );
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="loops-screen">
-      <div className="mx-auto max-w-3xl">
+    <div
+      className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5"
+      data-testid="loops-screen"
+    >
+      <div className="mx-auto min-w-0 max-w-3xl">
         <div className="flex items-center justify-between pb-1">
           <div className="flex items-center gap-2">
             <Repeat size={16} className="text-text-secondary" aria-hidden />
@@ -448,17 +483,17 @@ export function LoopsScreen() {
 
         {activeRun ? (
           <div
-            className="mb-3 rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
+            className="mb-3 min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
             data-testid="loop-run-panel"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
               <div
-                className="text-sm font-medium text-text-primary"
+                className="min-w-0 max-w-full break-all text-sm font-medium text-text-primary"
                 style={{ fontStretch: "expanded" }}
               >
                 {activeRun.loopName}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex max-w-full flex-wrap items-center gap-2">
                 <span
                   data-testid="loop-run-status"
                   data-status={activeRun.status}
@@ -519,6 +554,17 @@ export function LoopsScreen() {
               {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration} /{" "}
               {activeRun.maxIterations}
             </div>
+            {parallelAnnouncement ? (
+              <div
+                className="text-detail text-text-muted"
+                data-testid="loop-parallel-live-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {parallelAnnouncement}
+              </div>
+            ) : null}
             {activeRun.stopReason ? (
               <div className="text-detail text-text-muted">
                 {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
@@ -562,7 +608,7 @@ export function LoopsScreen() {
                 {activeRun.iterations.map((iteration) => (
                   <li
                     key={iteration.id}
-                    className="rounded-lg border border-border-subtle p-2 text-detail"
+                    className="min-w-0 overflow-hidden break-words rounded-lg border border-border-subtle p-2 text-detail"
                   >
                     <div className="font-medium text-text-primary">
                       Iteration {iteration.index} · Validation{" "}
@@ -572,7 +618,7 @@ export function LoopsScreen() {
                           ? "✗ failed"
                           : "not run"}
                     </div>
-                    <ol className="mt-1 space-y-1">
+                    <ol className="mt-1 min-w-0 max-w-full space-y-1 break-words">
                       {iteration.timeline.map((event) => (
                         <li key={event.id} data-phase={event.phase} className="text-text-secondary">
                           <span className="font-medium">{PHASE_LABEL[event.phase]}:</span>{" "}
@@ -587,6 +633,38 @@ export function LoopsScreen() {
                           ? ` — ${rationale(iteration.checkerOutput)}`
                           : ""}
                       </div>
+                    ) : null}
+                    {iteration.children.some((child) => child.phase === "branch") ? (
+                      <ol
+                        className="mt-1 min-w-0 space-y-1 overflow-hidden break-words"
+                        data-testid="loop-parallel-branch-statuses"
+                        aria-label="Parallel branch statuses"
+                      >
+                        {iteration.children
+                          .filter((child) => child.phase === "branch")
+                          .sort((a, b) => (a.branchIndex ?? 0) - (b.branchIndex ?? 0))
+                          .map((child) => (
+                            <li key={child.id} data-branch-index={child.branchIndex}>
+                              Branch {(child.branchIndex ?? 0) + 1}: {child.agentName} —{" "}
+                              <span>{childStatusLabel(child)}</span>
+                              {child.output ? ` — ${child.output}` : ""}
+                              {child.error ? ` — ${child.error}` : ""}
+                            </li>
+                          ))}
+                      </ol>
+                    ) : null}
+                    {iteration.parallelBranchOutputs?.length ? (
+                      <ol
+                        className="mt-1 min-w-0 max-w-full break-all"
+                        data-testid="loop-parallel-branch-outputs"
+                      >
+                        {iteration.parallelBranchOutputs.map((branch) => (
+                          <li key={branch.id} data-branch-index={branch.branchIndex}>
+                            Configured branch {branch.branchIndex + 1}: {branch.agentName} —{" "}
+                            {branch.output ?? `Failed: ${branch.error ?? "unknown error"}`}
+                          </li>
+                        ))}
+                      </ol>
                     ) : null}
                     {iteration.pipelineStageOutputs?.length ? (
                       <ol className="mt-1" data-testid="loop-pipeline-stage-outputs">
@@ -619,8 +697,10 @@ export function LoopsScreen() {
                     {iteration.children
                       .filter((child) => child.error)
                       .map((child) => (
-                        <div key={child.id} role="alert" className="text-danger">
-                          {PHASE_LABEL[child.phase]} error: {child.error}
+                        <div key={child.id} role="alert" className="break-words text-danger">
+                          {child.phase === "branch"
+                            ? `Parallel branch ${child.agentName ?? (child.branchIndex ?? 0) + 1} failed: ${child.error}`
+                            : `${PHASE_LABEL[child.phase]} error: ${child.error}`}
                         </div>
                       ))}
                   </li>
@@ -636,7 +716,7 @@ export function LoopsScreen() {
             <div className="flex flex-wrap gap-1">
               {[...runs]
                 .reverse()
-                .slice(0, 8)
+                .slice(0, 12)
                 .map((run) => (
                   <ControlButton
                     key={run.id}
@@ -689,8 +769,9 @@ export function LoopsScreen() {
                       data-testid={`loop-unavailable-${loop.name}`}
                       className="mt-1 text-detail text-text-secondary"
                     >
-                      This structure is unavailable. Convert it to Single agent before saving or
-                      running.
+                      {loop.structure === "parallelAgents"
+                        ? "Parallel agents are report-only. Edit this definition to use Artifact (markdown) before saving or running."
+                        : "This structure is unavailable. Convert it to Single agent before saving or running."}
                     </div>
                   ) : null}
                 </ControlButton>
@@ -797,9 +878,16 @@ export function LoopsScreen() {
                   data-testid="loop-structure"
                   className={inputClass}
                   value={draft.structure}
-                  onChange={(e) =>
-                    setDraft({ ...draft, structure: e.target.value as LoopDraft["structure"] })
-                  }
+                  onChange={(e) => {
+                    const structure = e.target.value as LoopDraft["structure"];
+                    setDraft({
+                      ...draft,
+                      structure,
+                      ...(structure === "parallelAgents"
+                        ? { writeTarget: "artifactMarkdown" as const }
+                        : {}),
+                    });
+                  }}
                   aria-describedby={
                     isRunnableLoopStructure(draft.structure)
                       ? undefined
@@ -972,6 +1060,109 @@ export function LoopsScreen() {
                 </ControlButton>
               </fieldset>
             ) : null}
+            {draft.structure === "parallelAgents" ? (
+              <fieldset
+                className="space-y-2 rounded-lg border border-border-subtle p-2"
+                data-testid="loop-parallel-config"
+                aria-describedby="loop-parallel-help loop-parallel-safety"
+              >
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Parallel branch agents
+                </legend>
+                <p id="loop-parallel-help" className="text-detail text-text-muted">
+                  Branches investigate independently with at most two running concurrently. Blank
+                  entries are removed and duplicate names keep their first position.
+                </p>
+                <p id="loop-parallel-safety" className="text-detail text-text-secondary">
+                  Safety: Parallel agents are report-only, receive read-only tools, and always save
+                  reports to Loop-owned app data—not the project checkout or a worktree.
+                </p>
+                {draft.parallelBranches.map((branch, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-1"
+                    data-testid={`loop-parallel-branch-${index}`}
+                  >
+                    <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
+                    <ControlInput
+                      className={inputClass}
+                      data-testid={`loop-parallel-branch-agent-${index}`}
+                      aria-label={`Parallel branch ${index + 1} agent`}
+                      list="loop-agent-choices"
+                      disabled={saving}
+                      value={branch}
+                      onChange={(event) => {
+                        const parallelBranches = [...draft.parallelBranches];
+                        parallelBranches[index] = event.target.value;
+                        setDraft({ ...draft, parallelBranches });
+                      }}
+                    />
+                    <ControlButton
+                      type="button"
+                      title="Move branch up"
+                      aria-label={`Move parallel branch ${index + 1} up`}
+                      disabled={saving || index === 0}
+                      onClick={() => {
+                        const parallelBranches = [...draft.parallelBranches];
+                        [parallelBranches[index - 1], parallelBranches[index]] = [
+                          parallelBranches[index]!,
+                          parallelBranches[index - 1]!,
+                        ];
+                        setDraft({ ...draft, parallelBranches });
+                      }}
+                    >
+                      <ArrowUp size={13} aria-hidden />
+                    </ControlButton>
+                    <ControlButton
+                      type="button"
+                      title="Move branch down"
+                      aria-label={`Move parallel branch ${index + 1} down`}
+                      disabled={saving || index === draft.parallelBranches.length - 1}
+                      onClick={() => {
+                        const parallelBranches = [...draft.parallelBranches];
+                        [parallelBranches[index], parallelBranches[index + 1]] = [
+                          parallelBranches[index + 1]!,
+                          parallelBranches[index]!,
+                        ];
+                        setDraft({ ...draft, parallelBranches });
+                      }}
+                    >
+                      <ArrowDown size={13} aria-hidden />
+                    </ControlButton>
+                    <ControlButton
+                      type="button"
+                      title="Remove branch"
+                      aria-label={`Remove parallel branch ${index + 1}`}
+                      disabled={saving}
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          parallelBranches: draft.parallelBranches.filter(
+                            (_branch, branchIndex) => branchIndex !== index,
+                          ),
+                        })
+                      }
+                    >
+                      <X size={13} aria-hidden />
+                    </ControlButton>
+                  </div>
+                ))}
+                <ControlButton
+                  type="button"
+                  data-testid="loop-parallel-add-branch"
+                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                  disabled={saving}
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      parallelBranches: [...draft.parallelBranches, ""],
+                    })
+                  }
+                >
+                  <Plus size={12} aria-hidden /> Add branch
+                </ControlButton>
+              </fieldset>
+            ) : null}
             <datalist id="loop-agent-choices">
               {agents.map((agent) => (
                 <option key={`${agent.scope}-${agent.name}`} value={agent.name} />
@@ -995,8 +1186,13 @@ export function LoopsScreen() {
               <label className="text-xs text-text-muted">
                 Write target
                 <ControlSelect
+                  data-testid="loop-write-target"
                   className={inputClass}
                   value={draft.writeTarget}
+                  disabled={saving || draft.structure === "parallelAgents"}
+                  aria-describedby={
+                    draft.structure === "parallelAgents" ? "loop-parallel-safety" : undefined
+                  }
                   onChange={(e) =>
                     setDraft({ ...draft, writeTarget: e.target.value as LoopDraft["writeTarget"] })
                   }

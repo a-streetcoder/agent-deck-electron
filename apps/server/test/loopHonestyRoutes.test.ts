@@ -8,7 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { LOOP_STRUCTURE_UNSUPPORTED_CODE, type LoopStructure } from "@agent-deck/domain";
+import {
+  LOOP_PARALLEL_WRITE_TARGET_CODE,
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopStructure,
+} from "@agent-deck/domain";
 import { loopsDir, scanLoops, writeLoopFile } from "@agent-deck/resources";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,11 +33,7 @@ import {
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
-const unsupportedStructures: LoopStructure[] = [
-  "parallelAgents",
-  "discoveryTriage",
-  "humanApproval",
-];
+const unsupportedStructures: LoopStructure[] = ["discoveryTriage", "humanApproval"];
 
 const servers: ReturnType<typeof Fastify>[] = [];
 
@@ -445,6 +445,95 @@ describe("loop route honesty gate", () => {
     expect(duplicate.statusCode).toBe(422);
     expect(duplicate.json()).toMatchObject({ code: "loop_definition_invalid" });
     expect(readFileSync(filePath, "utf8")).toBe(original);
+  });
+
+  it("rejects unsafe persisted Parallel targets before project/session/Pi/worktree allocation", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-parallel-unsafe-"));
+    const filePath = writeExternalLoop(home, "Unsafe Parallel", "parallelAgents");
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace(
+        "externalMetadata: preserve",
+        "parallelBranches: A | B\nexternalMetadata: preserve",
+      ),
+    );
+    const original = readFileSync(filePath, "utf8");
+    const { fastify, findProject, createSession, startEngine } = makeRoutes(home);
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/loops/Unsafe%20Parallel/run",
+      payload: { projectId: "project" },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: LOOP_PARALLEL_WRITE_TARGET_CODE });
+    expect(findProject).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(createLoopWorktree).not.toHaveBeenCalled();
+    expect(readFileSync(filePath, "utf8")).toBe(original);
+  });
+
+  it("launches safe Parallel branches report-only without a checkout lock or worktree", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-parallel-policy-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Safe Parallel",
+        structure: "parallelAgents",
+        goal: "Investigate independently.",
+        parallelBranches: ["A", "B"],
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine, runSubagent } = makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: {
+        id: "parallel-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    startEngine.mockImplementation((_loop, _cwd, options) => ({
+      id: "parallel-run",
+      loopName: "Safe Parallel",
+      projectId: "project",
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      launch: options.launch,
+      options,
+    }));
+    runSubagent.mockResolvedValue("report");
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/loops/Safe%20Parallel/run",
+      payload: { projectId: "project" },
+    });
+    expect(response.statusCode).toBe(201);
+    const options = startEngine.mock.calls[0]![2];
+    expect(options.launch).toEqual({
+      sessionId: "parallel-parent",
+      writeTarget: "artifactMarkdown",
+      checkoutLockKey: undefined,
+    });
+    await options.executeRole({ prompt: "branch", agentName: "A", phase: "branch" });
+    await options.executeRole({ prompt: "evaluate", phase: "evaluator" });
+    expect(runSubagent).toHaveBeenNthCalledWith(1, "parallel-parent", "branch", "A", "readOnly");
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      2,
+      "parallel-parent",
+      "evaluate",
+      undefined,
+      "none",
+    );
+    expect(createLoopWorktree).not.toHaveBeenCalled();
   });
 
   it("applies Pipeline stage tool policy by write target and evaluator no-tools policy", async () => {

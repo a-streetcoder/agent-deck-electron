@@ -22,6 +22,9 @@ test.beforeAll(async () => {
   harness = await startHarness({
     chunkDelayMs: 35,
     reply: (message) => {
+      if (message.includes("Parallel branch:")) {
+        return "Parallel branch produced detailed independent streamed report evidence.";
+      }
       if (message.includes("Pipeline stage:")) {
         return "Pipeline stage produced a detailed ordered streamed handoff report.";
       }
@@ -52,6 +55,10 @@ test.beforeAll(async () => {
     path.join(agentsDir, "Agent B.md"),
     "---\nname: Agent B\ntools: read, bash, edit\n---\nRun B.\n",
   );
+  writeFileSync(
+    path.join(agentsDir, "Agent C.md"),
+    "---\nname: Agent C\ntools: read, bash, edit\n---\nRun C.\n",
+  );
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -76,6 +83,24 @@ test.beforeAll(async () => {
     validationCommand: "exit 0",
     writeTarget: "artifactMarkdown",
     maxIterations: 2,
+  });
+  await putLoop({
+    name: "Failing Parallel",
+    goal: "Surface a branch failure.",
+    structure: "parallelAgents",
+    parallelBranches: ["Missing Agent", "Agent A"],
+    validationCommand: "exit 0",
+    writeTarget: "artifactMarkdown",
+    maxIterations: 1,
+  });
+  await putLoop({
+    name: "Slow Parallel Stop",
+    goal: "Keep independent reports running until stopped.",
+    structure: "parallelAgents",
+    parallelBranches: ["Agent A", "Agent B", "Agent C"],
+    validationCommand: "exit 1",
+    writeTarget: "artifactMarkdown",
+    maxIterations: 10,
   });
   await putLoop({
     name: "Slow Stop",
@@ -156,6 +181,122 @@ test("authors, reorders, duplicates, runs, retries, and restores an accessible P
   await expect(page.getByTestId("loop-pipeline-stage-outputs")).toContainText("Stage 3: Agent B");
 });
 
+test("authors, normalizes, duplicates, runs, retries, and restores accessible Parallel reports", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("new-loop").click();
+  await page.getByTestId("loop-name").fill("Authored Parallel");
+  await page.getByTestId("loop-goal").fill("Compare independent evidence.");
+  await page.getByTestId("loop-structure").selectOption("parallelAgents");
+  const config = page.getByTestId("loop-parallel-config");
+  await expect(config).toContainText("at most two running concurrently");
+  await expect(config).toContainText("report-only");
+  await expect(page.getByTestId("loop-write-target")).toBeDisabled();
+  await expect(page.getByTestId("loop-write-target")).toHaveValue("artifactMarkdown");
+
+  await page.getByTestId("loop-parallel-add-branch").click();
+  await page.getByTestId("loop-parallel-add-branch").click();
+  await page.getByTestId("loop-parallel-add-branch").click();
+  await page.getByTestId("loop-parallel-branch-agent-0").fill("Agent A");
+  await page.getByTestId("loop-parallel-branch-agent-1").fill("Agent B");
+  await page.getByTestId("loop-parallel-branch-agent-2").fill("Agent A");
+  await page.getByRole("button", { name: "Move parallel branch 2 up" }).click();
+  await expect(page.getByTestId("loop-parallel-branch-agent-0")).toHaveValue("Agent B");
+  await expect(page.getByTestId("loop-parallel-branch-agent-1")).toHaveValue("Agent A");
+  await page.getByTestId("loop-validation").fill("exit 0");
+  await page.getByTestId("loop-save").click();
+
+  await page.getByTestId("loop-open-Authored Parallel").click();
+  await expect(page.getByTestId("loop-parallel-branch-agent-0")).toHaveValue("Agent B");
+  await expect(page.getByTestId("loop-parallel-branch-agent-1")).toHaveValue("Agent A");
+  await expect(page.getByTestId("loop-parallel-branch-agent-2")).toHaveCount(0);
+  await page.getByTestId("loop-cancel").click();
+  await page.getByTestId("loop-duplicate-Authored Parallel").click();
+  await expect(page.locator('[data-loop-name="Copy of Authored Parallel"]')).toBeVisible();
+
+  await page.getByTestId("loop-run-Authored Parallel").click();
+  const statuses = page.getByTestId("loop-parallel-branch-statuses");
+  await expect(statuses).toContainText("Branch 1: Agent B");
+  await expect(statuses).toContainText("Branch 2: Agent A");
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const outputs = page.getByTestId("loop-parallel-branch-outputs");
+  await expect(outputs.locator("li")).toHaveCount(2);
+  await expect(outputs.locator("li").nth(0)).toContainText("Configured branch 1: Agent B");
+  await expect(outputs.locator("li").nth(1)).toContainText("Configured branch 2: Agent A");
+  await expect(page.getByTestId("loop-run-iterations")).toContainText("iteration-1-branch-1.md");
+  await expect(page.getByTestId("loop-run-live-status")).toHaveAttribute("role", "status");
+  const branchLive = page.getByTestId("loop-parallel-live-status");
+  await expect(branchLive).toHaveAttribute("role", "status");
+  await expect(branchLive).toHaveAttribute("aria-live", "polite");
+  await expect(branchLive).toHaveAttribute("aria-atomic", "true");
+  await expect(branchLive).toContainText("Parallel status:");
+  await expect(branchLive.getByRole("button")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 500, height: 600 });
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("loop-run-panel")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.getByTestId("loop-run-retry").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  await page.reload();
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-parallel-branch-outputs")).toContainText(
+    "Configured branch 2: Agent A",
+  );
+});
+
+test("shows queued Parallel branches, announces transitions, and focuses Retry after Stop", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("loop-run-Slow Parallel Stop").click();
+  const statuses = page.getByTestId("loop-parallel-branch-statuses").first();
+  await expect(statuses.locator('[data-branch-index="0"]')).toContainText("Running");
+  await expect(statuses.locator('[data-branch-index="1"]')).toContainText("Running");
+  const third = statuses.locator('[data-branch-index="2"]');
+  await expect(third).toContainText("Queued");
+  const branchLive = page.getByTestId("loop-parallel-live-status");
+  await expect(branchLive).toHaveText(/Branch 1 running.*Branch 2 running.*Branch 3 queued/);
+  await expect(third).toContainText(/Running|Completed/, { timeout: 15_000 });
+  await expect(branchLive).not.toContainText("Branch 3 queued");
+
+  const stop = page.getByTestId("loop-run-stop");
+  await stop.focus();
+  await stop.click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "stopped", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("loop-run-panel")).toContainText("Stopped by user");
+  const retry = page.getByTestId("loop-run-retry");
+  await expect(retry).toBeEnabled();
+  await expect(retry).toBeFocused();
+});
+
+test("shows a failed Parallel branch textually and as an alert", async ({ page }) => {
+  await openLoops(page);
+  await page.getByTestId("loop-run-Failing Parallel").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "failed", {
+    timeout: 30_000,
+  });
+  const statuses = page.getByTestId("loop-parallel-branch-statuses");
+  await expect(statuses.locator('[data-branch-index="0"]')).toContainText("Missing Agent — Failed");
+  await expect(statuses.locator('[data-branch-index="1"]')).toContainText("Agent A — Completed");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Parallel branch Missing Agent failed" }),
+  ).toContainText("unknown agent: Missing Agent");
+});
+
 test("shows ordered Maker+Checker evidence, disables launches, retries, and restores history", async ({
   page,
 }) => {
@@ -188,9 +329,9 @@ test("shows ordered Maker+Checker evidence, disables launches, retries, and rest
   await expect(page.getByTestId("loop-run-history")).toContainText("Reviewed Report");
 
   const history = page.getByTestId("loop-run-history");
-  await expect(history).toContainText("Green Suite");
-  await history.locator('[data-loop-name="Green Suite"]').click();
-  await expect(page.getByTestId("loop-run-panel")).toContainText("Green Suite");
+  await expect(history).toContainText("Reviewed Report");
+  await history.locator('[data-loop-name="Reviewed Report"]').last().click();
+  await expect(page.getByTestId("loop-run-panel")).toContainText("Reviewed Report");
   await expect(page.getByTestId("loop-validation-evidence")).toContainText("exit 0");
   await history.locator('[data-loop-name="Reviewed Report"]').first().click();
   await expect(page.getByTestId("loop-checker-decision")).toContainText("Checker found concrete");

@@ -4,6 +4,7 @@ import nodePath from "node:path";
 import {
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  LOOP_PARALLEL_WRITE_TARGET_CODE,
   LOOP_STRUCTURE_LABEL,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopStructure,
@@ -166,6 +167,7 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     checkerName: z.string().max(200).optional(),
     checkerRubric: z.string().max(20_000).optional(),
     pipelineStages: z.array(z.string().max(200)).max(100).optional(),
+    parallelBranches: z.array(z.string().max(200)).max(100).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
@@ -254,6 +256,15 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     // definitions are readable but never silently run as single-agent loops.
     if (!isRunnableLoopStructure(loop.structure)) {
       return reply.status(422).send(unsupportedStructureError(loop.structure));
+    }
+    // Persisted native Parallel definitions are readable, but an unsafe target
+    // is rejected before request parsing, project lookup, lock/worktree setup,
+    // session creation, or Pi allocation.
+    if (loop.structure === "parallelAgents" && loop.writeTarget !== "artifactMarkdown") {
+      return reply.status(422).send({
+        code: LOOP_PARALLEL_WRITE_TARGET_CODE,
+        error: "Parallel agents are report-only and require the Artifact (markdown) write target.",
+      });
     }
     const parsed = z
       .object({

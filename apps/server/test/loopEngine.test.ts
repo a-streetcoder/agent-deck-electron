@@ -4,6 +4,7 @@ import path from "node:path";
 import { cwd } from "node:process";
 import {
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopChildRecord,
   type LoopDefinition,
   type LoopStructure,
 } from "@agent-deck/domain";
@@ -34,7 +35,7 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
-  it.each<LoopStructure>(["parallelAgents", "discoveryTriage", "humanApproval"])(
+  it.each<LoopStructure>(["discoveryTriage", "humanApproval"])(
     "rejects unsupported %s before allocating a run or invoking its executor",
     (structure) => {
       let calls = 0;
@@ -52,6 +53,251 @@ describe("loop engine (single-agent)", () => {
       expect(engine.list()).toEqual([]);
     },
   );
+
+  it("rejects unsafe or empty Parallel definitions before allocating a run", () => {
+    let calls = 0;
+    const engine = new LoopEngine({
+      executeRole: async () => {
+        calls += 1;
+        return "must not run";
+      },
+    });
+    expect(() =>
+      engine.start(
+        makeLoop({
+          structure: "parallelAgents",
+          parallelBranches: ["A"],
+          writeTarget: "currentCheckout",
+        }),
+        cwd(),
+      ),
+    ).toThrow("report-only");
+    expect(() =>
+      engine.start(
+        makeLoop({
+          structure: "parallelAgents",
+          parallelBranches: ["", "  "],
+          writeTarget: "artifactMarkdown",
+        }),
+        cwd(),
+      ),
+    ).toThrow("At least one parallel branch agent");
+    expect(engine.list()).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  it("persists every Parallel child as stable ordered queued/running records before execution", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-parallel-queue-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const entered: number[] = [];
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase, branchIndex }) => {
+        if (phase === "evaluator") return "SUCCESS\nDone";
+        entered.push(branchIndex!);
+        await gate;
+        return `report-${branchIndex}`;
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B", "C"],
+        writeTarget: "artifactMarkdown",
+      }),
+      cwd(),
+    );
+    await expect.poll(() => entered).toEqual([0, 1]);
+    const children = run.iterations[0]!.children.filter((child) => child.phase === "branch");
+    expect(children).toHaveLength(3);
+    expect(children.map((child) => child.agentName)).toEqual(["A", "B", "C"]);
+    expect(children.map((child) => child.branchIndex)).toEqual([0, 1, 2]);
+    expect(children.map((child) => child.status)).toEqual(["running", "running", "queued"]);
+    expect(children[2]).toMatchObject({ queuedAt: expect.any(String) });
+    expect(children[2]!.startedAt).toBeUndefined();
+    const ids = children.map((child) => child.id);
+    const persisted = JSON.parse(readFileSync(path.join(dataDir, "loop-runs.json"), "utf8"))[0]
+      .iterations[0].children;
+    expect(persisted.map((child: LoopChildRecord) => child.status)).toEqual([
+      "running",
+      "running",
+      "queued",
+    ]);
+
+    release();
+    await engine.settled(run.id);
+    expect(children.map((child) => child.id)).toEqual(ids);
+    expect(children.map((child) => child.status)).toEqual(["completed", "completed", "completed"]);
+    expect(run.iterations[0]!.parallelBranchOutputs?.map((branch) => branch.id)).toEqual(ids);
+  });
+
+  it("overlaps Parallel branches with a hard maximum of two and aggregates in configured order", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-parallel-data-"));
+    const project = mkdtempSync(path.join(tmpdir(), "loop-parallel-project-"));
+    let active = 0;
+    let maxActive = 0;
+    const starts: number[] = [];
+    let evaluatorPrompt = "";
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase, branchIndex, prompt }) => {
+        if (phase === "evaluator") {
+          evaluatorPrompt = prompt;
+          return "SUCCESS\nAll reports complete";
+        }
+        const index = branchIndex!;
+        starts.push(index);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, index % 2 === 0 ? 30 : 5));
+        active -= 1;
+        return `report-${index}`;
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B", "C", "D", "E"],
+        writeTarget: "artifactMarkdown",
+        validationCommand: "",
+      }),
+      project,
+    );
+    await engine.settled(run.id);
+
+    expect(run).toMatchObject({ status: "completed", stopReason: "success" });
+    expect(maxActive).toBe(2);
+    expect(starts).toEqual([0, 1, 2, 3, 4]);
+    const iteration = run.iterations[0]!;
+    expect(iteration.parallelBranchOutputs?.map((branch) => branch.agentName)).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+    ]);
+    expect(iteration.output.split("\n")).toEqual([
+      "- A: report-0",
+      "- B: report-1",
+      "- C: report-2",
+      "- D: report-3",
+      "- E: report-4",
+    ]);
+    expect(evaluatorPrompt.indexOf("- A: report-0")).toBeLessThan(
+      evaluatorPrompt.indexOf("- B: report-1"),
+    );
+    expect(new Set(iteration.children.map((child) => child.id)).size).toBe(6);
+    expect(
+      iteration.children
+        .filter((child) => child.phase === "branch")
+        .map((child) => child.branchIndex),
+    ).toEqual([0, 1, 2, 3, 4]);
+    expect(iteration.artifacts.map((artifact) => artifact.filename)).toEqual([
+      "iteration-1-branch-1.md",
+      "iteration-1-branch-2.md",
+      "iteration-1-branch-3.md",
+      "iteration-1-branch-4.md",
+      "iteration-1-branch-5.md",
+      "iteration-1-evaluator.md",
+    ]);
+    expect(
+      iteration.artifacts.every(
+        (artifact) =>
+          !artifact.filePath.startsWith(project + path.sep) &&
+          artifact.filePath.startsWith(path.join(dataDir, "loop-artifacts") + path.sep),
+      ),
+    ).toBe(true);
+    expect(
+      new LoopEngine({ dataDir })
+        .get(run.id)
+        ?.iterations[0]?.parallelBranchOutputs?.map((branch) => branch.agentName),
+    ).toEqual(["A", "B", "C", "D", "E"]);
+  });
+
+  it("matches native partial failure: settles every Parallel branch, evaluates evidence, then fails", async () => {
+    const calls: string[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, agentName }) => {
+        calls.push(`${phase}:${agentName ?? ""}`);
+        if (phase === "branch" && agentName === "B") throw new Error("B failed");
+        if (phase === "evaluator") return "SUCCESS\nOther evidence is useful";
+        return `${agentName} report`;
+      },
+      runValidation: async () => {
+        calls.push("validation:");
+        return { passed: true, evidence: "validation green" };
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B", "C"],
+        writeTarget: "artifactMarkdown",
+        validationCommand: "test",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+
+    expect(calls).toEqual(["branch:A", "branch:B", "branch:C", "validation:", "evaluator:"]);
+    expect(run).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+    expect(run.iterations[0]).toMatchObject({
+      validationPassed: true,
+      goalDecision: "SUCCESS",
+      parallelBranchOutputs: [
+        { branchIndex: 0, agentName: "A", output: "A report" },
+        { branchIndex: 1, agentName: "B", error: "B failed" },
+        { branchIndex: 2, agentName: "C", output: "C report" },
+      ],
+    });
+  });
+
+  it("cancels all active Parallel branches, awaits cleanup, and prevents post-terminal mutation", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-parallel-stop-"));
+    const started: number[] = [];
+    let cancelCalls = 0;
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase, branchIndex, signal }) => {
+        if (phase === "evaluator") return "SUCCESS";
+        started.push(branchIndex!);
+        return await new Promise<string>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        });
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B", "C"],
+        writeTarget: "artifactMarkdown",
+      }),
+      cwd(),
+      { cancel: async () => void (cancelCalls += 1) },
+    );
+    await expect.poll(() => started).toEqual([0, 1]);
+    await engine.stop(run.id);
+    expect(run).toMatchObject({ status: "stopped", stopReason: "userStopped" });
+    expect(started).toEqual([0, 1]);
+    expect(cancelCalls).toBe(1);
+    expect(run.iterations[0]!.children.map((child) => child.status)).toEqual([
+      "stopped",
+      "stopped",
+      "stopped",
+    ]);
+    expect(run.iterations[0]!.children[2]!.startedAt).toBeUndefined();
+    expect(run.iterations[0]!.children[2]!.endedAt).toBeDefined();
+    expect(run.iterations[0]!.artifacts).toEqual([]);
+    expect(
+      JSON.parse(
+        readFileSync(path.join(dataDir, "loop-runs.json"), "utf8"),
+      )[0].iterations[0].children.map((child: LoopChildRecord) => child.status),
+    ).toEqual(["stopped", "stopped", "stopped"]);
+    const terminal = JSON.stringify(run);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(JSON.stringify(run)).toBe(terminal);
+  });
 
   it("runs Pipeline A → A → B in exact order with distinct identities and bounded handoffs", async () => {
     const calls: Array<{ phase: string; agentName?: string; prompt: string }> = [];
@@ -623,6 +869,7 @@ describe("loop engine (single-agent)", () => {
       status: "interrupted",
       stopReason: "appInterrupted",
       launch: { sessionId: "loop-parent", checkoutLockKey: "/canonical/project" },
+      iterations: [{ children: [{ status: "stopped", endedAt: expect.any(String) }] }],
     });
     expect(recoveredEngine.recoveryCheckoutLocks()).toEqual(
       new Map([["/canonical/project", active.id]]),
