@@ -284,14 +284,14 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
   const authFile = path.join(home, ".pi", "agent", "auth.json");
   checks.push({
     id: "auth",
-    label: "Provider credentials",
+    label: "AI model connection",
     status: signedInProviders.length > 0 ? "ok" : "warn",
     detail:
       signedInProviders.length > 0
-        ? `${signedInProviders.length} provider(s): ${signedInProviders.join(", ")}`
+        ? `${signedInProviders.length} connected: ${signedInProviders.join(", ")}`
         : existsSync(authFile)
-          ? "auth.json present but no providers"
-          : "no auth.json — sign in with pi first",
+          ? "Provider sign-in file exists, but no AI model provider is connected"
+          : "Connect an AI model provider to run coding sessions",
     // A provider API key is the simplest fix (native Doctor "Add …_API_KEY").
     // The placeholder avoids shell metacharacters so it's safe to paste as-is.
     fixCommand: signedInProviders.length > 0 ? undefined : "export ANTHROPIC_API_KEY=YOUR_KEY_HERE",

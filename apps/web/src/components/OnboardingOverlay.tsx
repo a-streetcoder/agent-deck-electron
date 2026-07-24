@@ -127,6 +127,53 @@ interface CatalogModel {
 }
 
 // Native SetupCheckStatus mapping: ok → Ready, warn → Optional, error → Missing.
+const SUMMARY_CHECK_IDS = ["pi-version", "node", "auth", "github"] as const;
+
+function summaryCheckLabel(id: string): string {
+  switch (id) {
+    case "pi-version":
+      return "Pi";
+    case "node":
+      return "Built-in runtime";
+    case "auth":
+      return "AI models";
+    case "github":
+      return "GitHub";
+    default:
+      return id;
+  }
+}
+
+function summaryCheckDetail(check: HealthCheck): string {
+  if (check.id === "pi-version") return `Version ${check.detail}`;
+  if (check.id === "node") {
+    const version = check.detail.match(/v?\d+\.\d+\.\d+/)?.[0];
+    return version ? `Included • ${version}` : "Included with Agent Deck";
+  }
+  if (check.id === "auth" && check.status === "ok") {
+    const count = check.detail.match(/^\d+/)?.[0];
+    return count ? `${count} AI services connected` : "Connected";
+  }
+  if (check.id === "github" && check.status === "ok") return "Connected";
+  return check.status === "ok" ? "Ready" : check.detail;
+}
+
+function friendlyCheckDetail(check: HealthCheck): string {
+  if (check.status !== "ok") return check.detail;
+  if (check.id === "pi-binary") return "Installed and ready";
+  if (check.id === "pi-version") return `Version ${check.detail}`;
+  if (check.id === "node") return summaryCheckDetail(check);
+  if (check.id === "bash") return "Available";
+  if (check.id === "git") {
+    const version = check.detail.match(/\d+\.\d+(?:\.\d+)?/)?.[0];
+    return version ? `Version ${version}` : "Available";
+  }
+  if (check.id === "github") return "Connected";
+  if (check.id === "auth") return summaryCheckDetail(check);
+  if (check.id === "settings") return "Configuration looks good";
+  return "Ready";
+}
+
 const STATUS_META = {
   ok: { label: "Ready", Icon: CheckCircle2, color: "var(--color-success)" },
   warn: { label: "Optional", Icon: TriangleAlert, color: "var(--color-warning)" },
@@ -324,6 +371,23 @@ export function OnboardingOverlay() {
   const projectMissing = projects.length === 0;
   const requiredSetupIds = ["pi-binary", "pi-version", "node", "bash", "auth"];
   const setupReady = requiredSetupIds.every((id) => checkById(id)?.status === "ok");
+  const nextSetupCheck = requiredSetupIds
+    .map((id) => checkById(id))
+    .find((check) => check?.status !== "ok");
+  const setupActionLabel = setupReady
+    ? "Get Started"
+    : nextSetupCheck?.id === "auth"
+      ? "Connect an AI model"
+      : "Finish setup";
+  const performSetupAction = (): void => {
+    if (setupReady) {
+      finishTo(projectMissing ? "projects" : "chat");
+    } else if (nextSetupCheck?.id === "auth") {
+      setPhase("provider");
+    } else {
+      setPhase("setup");
+    }
+  };
   const finalCta: { label: string; view: AppView; Icon: typeof Rocket } = piMissing
     ? { label: "Review Setup", view: "doctor", Icon: Stethoscope }
     : providerMissing
@@ -416,8 +480,8 @@ export function OnboardingOverlay() {
                   </div>
                   <p className="mt-1 text-xs text-text-muted">
                     {setupReady
-                      ? "The required runtime and a model provider are ready. Optional integrations can be configured later."
-                      : "Agent Deck is verifying the runtime and provider connection required to start."}
+                      ? "Everything needed to start is ready."
+                      : "One quick setup step still needs your attention."}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -429,20 +493,13 @@ export function OnboardingOverlay() {
                         : "bg-[color-mix(in_srgb,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]",
                     )}
                   >
-                    {requiredSetupIds.filter((id) => checkById(id)?.status === "ok").length}/
-                    {requiredSetupIds.length} required ready
+                    {setupReady ? "Ready to start" : "Action needed"}
                   </span>
-                  <button
-                    className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
-                    onClick={() => goto("setup")}
-                  >
-                    View details
-                  </button>
                 </div>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {checksLoading && checks.length === 0
-                  ? Array.from({ length: 6 }, (_, index) => (
+                  ? Array.from({ length: 4 }, (_, index) => (
                       <div
                         key={index}
                         className="flex animate-pulse items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
@@ -452,25 +509,37 @@ export function OnboardingOverlay() {
                       </div>
                     ))
                   : null}
-                {checks.map((check) => {
-                  const { Icon, color } = STATUS_META[check.status];
-                  return (
-                    <div
-                      key={check.id}
-                      className="flex min-w-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
-                    >
-                      <Icon size={14} style={{ color }} className="shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
-                        {check.label}
-                      </span>
-                      {requiredSetupIds.includes(check.id) ? (
-                        <span className="text-[9px] uppercase tracking-wide text-text-muted">
-                          Required
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                {checks
+                  .filter((check) =>
+                    SUMMARY_CHECK_IDS.includes(check.id as (typeof SUMMARY_CHECK_IDS)[number]),
+                  )
+                  .map((check) => {
+                    const { label, Icon, color } = STATUS_META[check.status];
+                    return (
+                      <div
+                        key={check.id}
+                        className="flex min-w-0 items-start gap-2.5 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                      >
+                        <Icon size={14} style={{ color }} className="mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium text-text-primary">
+                              {summaryCheckLabel(check.id)}
+                            </span>
+                            <span className="text-[9px] uppercase tracking-wide" style={{ color }}>
+                              {label}
+                            </span>
+                          </div>
+                          <div
+                            className="mt-0.5 truncate text-[10px] text-text-muted"
+                            title={check.detail}
+                          >
+                            {summaryCheckDetail(check)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
             <div className="mt-auto flex w-full items-center justify-end border-t border-border-subtle px-8 py-4">
@@ -481,11 +550,16 @@ export function OnboardingOverlay() {
                   "disabled:cursor-not-allowed disabled:opacity-40",
                 )}
                 style={primaryButtonStyle}
-                disabled={!setupReady || checksLoading}
-                title={setupReady ? "Open Agent Deck" : "Complete the required setup first"}
-                onClick={() => finishTo(projectMissing ? "projects" : "chat")}
+                disabled={checksLoading}
+                title={setupReady ? "Open Agent Deck" : setupActionLabel}
+                onClick={performSetupAction}
               >
-                <Rocket size={13} aria-hidden /> {checksLoading ? "Checking…" : "Get Started"}
+                {nextSetupCheck?.id === "auth" ? (
+                  <ShieldCheck size={13} aria-hidden />
+                ) : (
+                  <Rocket size={13} aria-hidden />
+                )}
+                {checksLoading ? "Checking…" : setupActionLabel}
               </button>
             </div>
           </>
@@ -503,7 +577,7 @@ export function OnboardingOverlay() {
                   className="text-base font-semibold text-text-primary"
                   style={{ fontStretch: "expanded" }}
                 >
-                  Setup Check
+                  Finish setup
                 </h2>
               </div>
               <button
@@ -516,65 +590,53 @@ export function OnboardingOverlay() {
                 {checksLoading ? "Checking…" : "Re-check"}
               </button>
             </div>
-            <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-4 py-3">
-              <p className="text-xs leading-relaxed text-text-muted">
-                Required checks unlock Agent Deck. Git, GitHub, and custom settings are optional and
-                can be completed later.
-              </p>
-              <span
-                className={cn(
-                  "shrink-0 rounded-capsule px-3 py-1 text-xs font-medium",
-                  setupReady
-                    ? "bg-[color-mix(in_srgb,var(--color-success)_14%,transparent)] text-[var(--color-success)]"
-                    : "bg-[color-mix(in_srgb,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]",
-                )}
-              >
-                {setupReady ? "Ready to continue" : "Setup required"}
-              </span>
-            </div>
+            <p className="mb-4 text-sm text-text-secondary">
+              Complete the item below, then ask Agent Deck to check again.
+            </p>
             <div className="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-y-auto pb-3 md:grid-cols-2">
               {checks.length === 0 && checksLoading ? (
                 <div className="py-6 text-center text-sm text-text-muted">Checking your setup…</div>
               ) : null}
-              {checks.map((check) => {
-                const { label, Icon, color } = STATUS_META[check.status];
-                const isProvider = check.id === "auth";
-                return (
-                  <div
-                    key={check.id}
-                    className="flex items-start gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-3"
-                    data-testid="onboarding-check"
-                    data-check-id={check.id}
-                    data-check-status={check.status}
-                  >
-                    <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-text-primary">{check.label}</span>
-                        <span className="text-[9px] uppercase tracking-wide text-text-muted">
-                          {requiredSetupIds.includes(check.id) ? "Required" : "Optional"}
-                        </span>
-                        <span className="text-[10px] uppercase tracking-wide" style={{ color }}>
-                          {label}
-                        </span>
+              {checks
+                .filter((check) => requiredSetupIds.includes(check.id) && check.status !== "ok")
+                .map((check) => {
+                  const { label, Icon, color } = STATUS_META[check.status];
+                  const isProvider = check.id === "auth";
+                  return (
+                    <div
+                      key={check.id}
+                      className="flex items-start gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-3"
+                      data-testid="onboarding-check"
+                      data-check-id={check.id}
+                      data-check-status={check.status}
+                    >
+                      <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-text-primary">
+                            {check.label}
+                          </span>
+                          <span className="text-[10px] uppercase tracking-wide" style={{ color }}>
+                            {label}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 break-words text-[11px] leading-relaxed text-text-muted">
+                          {friendlyCheckDetail(check)}
+                        </div>
+                        {isProvider && check.status !== "ok" ? (
+                          <button
+                            data-testid="onboarding-connect-provider"
+                            className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
+                            onClick={() => setPhase("provider")}
+                          >
+                            Connect an AI model
+                          </button>
+                        ) : null}
                       </div>
-                      <div className="mt-0.5 break-words text-[11px] leading-relaxed text-text-muted">
-                        {check.detail}
-                      </div>
-                      {isProvider && check.status !== "ok" ? (
-                        <button
-                          data-testid="onboarding-connect-provider"
-                          className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
-                          onClick={() => setPhase("provider")}
-                        >
-                          Connect a provider
-                        </button>
-                      ) : null}
+                      {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
                     </div>
-                    {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
             <div className="flex items-center justify-between border-t border-border-subtle py-3">
               <button
@@ -591,10 +653,11 @@ export function OnboardingOverlay() {
                   "disabled:cursor-not-allowed disabled:opacity-40",
                 )}
                 style={primaryButtonStyle}
-                disabled={!setupReady || checksLoading}
-                onClick={() => goto("preferences")}
+                disabled={checksLoading}
+                onClick={setupReady ? performSetupAction : runChecks}
               >
-                Continue <ArrowRight size={13} aria-hidden />
+                {checksLoading ? "Checking…" : setupReady ? "Get Started" : "Check again"}
+                <ArrowRight size={13} aria-hidden />
               </button>
             </div>
           </div>
@@ -606,14 +669,14 @@ export function OnboardingOverlay() {
               <button
                 className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => {
-                  setPhase("setup");
+                  setPhase("tour");
                   runChecks();
                 }}
               >
                 <ArrowLeft size={13} /> Back to setup
               </button>
               <span className="text-xs text-text-muted">
-                Connect a provider, then return to re-check setup.
+                Connect an AI model provider, then return to re-check setup.
               </span>
             </div>
             <ProvidersScreen />

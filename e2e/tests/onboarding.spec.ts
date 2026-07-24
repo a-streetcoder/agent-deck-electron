@@ -44,25 +44,15 @@ test("walks the tour, runs setup, and gates entry until required setup is ready"
   await expect(page.getByTestId("onboarding-title")).toHaveText("Work in a Coding Chat");
   await expect(page.getByTestId("onboarding-skip")).toHaveCount(0);
 
-  // Entry is a setup gate, not a carousel progression button. This hermetic
-  // environment has no provider credential, so it remains disabled.
-  const getStarted = page.getByTestId("onboarding-get-started");
-  await expect(getStarted).toBeDisabled({ timeout: 20_000 });
-  await page.getByRole("button", { name: "View details" }).click();
+  // Entry is a setup action, not a carousel progression button. This hermetic
+  // environment has no provider connection, so the CTA opens that setup flow.
+  const setupAction = page.getByTestId("onboarding-get-started");
+  await expect(setupAction).toHaveText(/Connect an AI model/, { timeout: 20_000 });
+  await setupAction.click();
 
-  // Setup Check: the doctor probe renders real checks, including the pi runtime.
-  await expect(page.getByTestId("onboarding-setup")).toBeVisible();
-  const piCheck = page.locator('[data-check-id="pi-binary"]');
-  await expect(piCheck).toBeVisible();
-  // pi is installed in the e2e environment, so it reads Ready. The doctor
-  // probes real subprocesses and can take 4-10s under full-suite load — same
-  // headroom precedent as the doctor unit tests.
-  await expect(piCheck).toHaveAttribute("data-check-status", "ok", { timeout: 20_000 });
-
-  // Missing provider auth blocks progression and offers the integrated
-  // connection flow instead of revealing the main application.
-  await expect(page.getByTestId("onboarding-setup-continue")).toBeDisabled();
-  await expect(page.getByTestId("onboarding-connect-provider")).toBeVisible();
+  // The missing item opens its dedicated in-onboarding action page instead of
+  // exposing diagnostics or revealing the main application.
+  await expect(page.getByTestId("onboarding-provider")).toBeVisible();
   await expect(overlay).toBeVisible();
 });
 
