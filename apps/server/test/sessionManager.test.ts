@@ -18,6 +18,7 @@ import {
 } from "../src/services/pushBus.ts";
 import {
   makeManagedSessionRuntime,
+  resolveChildTools,
   SessionManagerService,
   type ManagedSessionRuntime,
   type SpawnSessionParams,
@@ -121,6 +122,44 @@ const waitUntil = (pred: () => boolean, ms = 5_000): Effect.Effect<void> =>
     while (!pred() && Date.now() < deadline) yield* Effect.sleep("25 millis");
     if (!pred()) yield* Effect.die(new Error("waitUntil: condition not met in time"));
   });
+
+describe("child tool capability policy", () => {
+  const dangerous = [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "bash",
+    "edit",
+    "write",
+    "managed_subagent",
+    "set_session_plan",
+  ];
+
+  it("keeps default behavior while enforcing report-only and no-tool children", () => {
+    expect(resolveChildTools(dangerous, undefined, true)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "edit",
+      "write",
+      "contact_supervisor",
+    ]);
+    expect(resolveChildTools(dangerous, "configured", false)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "edit",
+      "write",
+    ]);
+    expect(resolveChildTools(dangerous, "readOnly", false)).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolveChildTools(dangerous, "none", false)).toEqual([]);
+  });
+});
 
 describe("SessionManager Effect service (services/sessionManager.ts)", () => {
   it("ingestion fiber folds pi stdout into ordered domain events on the bus", async () => {

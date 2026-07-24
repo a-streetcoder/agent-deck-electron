@@ -5,10 +5,11 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, Play, Plus, Repeat, Square, Trash2 } from "lucide-react";
+import { Copy, Play, Plus, Repeat, ShieldCheck, Square, Trash2 } from "lucide-react";
 import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
+  loopDefinitionValidationError,
   LOOP_DEFAULT_MAX_ITERATIONS,
   LOOP_MAX_ITERATIONS_LIMIT,
   LOOP_STRUCTURE_LABEL,
@@ -20,6 +21,7 @@ import {
 } from "@agent-deck/domain";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
+import { useAgents } from "../state/useAgents.ts";
 
 /**
  * Loop Bank (native LoopBankScreen): the library of saved loop definitions —
@@ -33,6 +35,28 @@ const RUN_STATUS_LABEL: Record<LoopRun["status"], string> = {
   completed: "Completed",
   failed: "Failed",
   stopped: "Stopped",
+  notAchieved: "Not achieved",
+  interrupted: "Interrupted",
+};
+const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, string>> = {
+  success: "Success",
+  maxIterationsReached: "Maximum iterations reached",
+  validationFailedAfterFinalIteration: "Validation failed after final iteration",
+  validationUnavailable: "Validation unavailable",
+  agentFailed: "Agent failed",
+  humanInputRequired: "Human input required",
+  userStopped: "Stopped by user",
+  appInterrupted: "Interrupted by application restart",
+};
+const PHASE_LABEL = {
+  maker: "Maker",
+  checker: "Checker",
+  validation: "Validation",
+  evaluator: "Goal evaluator",
+} as const;
+const rationale = (value?: string): string | undefined => {
+  const text = value?.split(/\r?\n/).slice(1).join("\n").trim();
+  return text || undefined;
 };
 const inputClass =
   "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
@@ -44,6 +68,9 @@ interface LoopDraft {
   goal: string;
   structure: LoopDefinition["structure"];
   agentName: string;
+  makerName: string;
+  checkerName: string;
+  checkerRubric: string;
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
@@ -62,6 +89,9 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     goal: loop?.goal ?? "",
     structure: loop?.structure ?? "singleAgent",
     agentName: loop?.agentName ?? "",
+    makerName: loop?.makerName ?? loop?.agentName ?? "",
+    checkerName: loop?.checkerName ?? "",
+    checkerRubric: loop?.checkerRubric ?? "",
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
     writeTarget: loop?.writeTarget ?? "artifactMarkdown",
@@ -73,14 +103,22 @@ export function LoopsScreen() {
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
+  const agents = useAgents().filter((agent) => !agent.shadowed && !agent.disabled);
   const [loops, setLoops] = useState<LoopDefinition[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState<LoopDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [runs, setRuns] = useState<LoopRun[]>([]);
   const [activeRun, setActiveRun] = useState<LoopRun | null>(null);
+  const [runPending, setRunPending] = useState(false);
+  const [stopPending, setStopPending] = useState(false);
+  const [acknowledgePending, setAcknowledgePending] = useState(false);
   const runIdRef = useRef<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const stopButtonRef = useRef<HTMLButtonElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const focusRetryAfterStopRef = useRef(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Runs we've already toasted on completion, so a terminal state toasts once.
   const toastedRef = useRef<Set<string>>(new Set());
@@ -91,6 +129,24 @@ export function LoopsScreen() {
       if (!response.ok) throw new Error(await responseError(response));
       const data = (await response.json()) as { loops: LoopDefinition[] };
       setLoops(data.loops);
+      const runsResponse = await fetch("/loops/runs");
+      if (runsResponse.ok) {
+        const runData = (await runsResponse.json()) as { runs: LoopRun[] };
+        setRuns(runData.runs);
+        if (runIdRef.current) {
+          const tracked = runData.runs.find((run) => run.id === runIdRef.current);
+          if (tracked) setActiveRun(tracked);
+        } else {
+          const latestActive = [...runData.runs]
+            .reverse()
+            .find((run) => !isLoopRunTerminal(run.status));
+          const latest = latestActive ?? runData.runs.at(-1);
+          if (latest) {
+            runIdRef.current = latest.id;
+            setActiveRun(latest);
+          }
+        }
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -168,7 +224,11 @@ export function LoopsScreen() {
           description: draft.description,
           goal: draft.goal,
           structure: draft.structure,
-          agentName: draft.agentName.trim(),
+          agentName: draft.structure === "singleAgent" ? draft.agentName.trim() : undefined,
+          makerName: draft.structure === "makerChecker" ? draft.makerName.trim() : undefined,
+          checkerName: draft.structure === "makerChecker" ? draft.checkerName.trim() : undefined,
+          checkerRubric:
+            draft.structure === "makerChecker" ? draft.checkerRubric.trim() : undefined,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
           writeTarget: draft.writeTarget,
@@ -213,8 +273,9 @@ export function LoopsScreen() {
   };
 
   const startRun = async (loop: LoopDefinition): Promise<void> => {
-    if (!currentProjectId) return;
+    if (!currentProjectId || runPending) return;
     setError(null);
+    setRunPending(true);
     try {
       const response = await fetch(`/loops/${encodeURIComponent(loop.name)}/run`, {
         method: "POST",
@@ -225,15 +286,62 @@ export function LoopsScreen() {
       const { run } = (await response.json()) as { run: LoopRun };
       runIdRef.current = run.id;
       setActiveRun(run);
+      setRuns((previous) => [...previous, run]);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setRunPending(false);
     }
   };
 
   const stopRun = async (): Promise<void> => {
     const id = runIdRef.current;
-    if (!id) return;
-    await fetch(`/loops/runs/${id}/stop`, { method: "POST" }).catch(() => {});
+    if (!id || stopPending) return;
+    focusRetryAfterStopRef.current = true;
+    setStopPending(true);
+    try {
+      const response = await fetch(`/loops/runs/${id}/stop`, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response));
+    } catch (error) {
+      focusRetryAfterStopRef.current = false;
+      setError(String(error));
+      requestAnimationFrame(() => stopButtonRef.current?.focus());
+    } finally {
+      setStopPending(false);
+    }
+  };
+
+  const acknowledgeRecovery = async (): Promise<void> => {
+    if (!activeRun || acknowledgePending) return;
+    setAcknowledgePending(true);
+    try {
+      const response = await fetch(`/loops/runs/${activeRun.id}/acknowledge`, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response));
+      const { run } = (await response.json()) as { run: LoopRun };
+      setActiveRun(run);
+      setRuns((previous) => previous.map((item) => (item.id === run.id ? run : item)));
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setAcknowledgePending(false);
+    }
+  };
+
+  const retryRun = async (): Promise<void> => {
+    if (!activeRun || runPending) return;
+    setRunPending(true);
+    try {
+      const response = await fetch(`/loops/runs/${activeRun.id}/retry`, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response));
+      const { run } = (await response.json()) as { run: LoopRun };
+      runIdRef.current = run.id;
+      setActiveRun(run);
+      setRuns((previous) => [...previous, run]);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setRunPending(false);
+    }
   };
 
   // Poll the active run until it reaches a terminal state.
@@ -252,6 +360,7 @@ export function LoopsScreen() {
             setActiveRun((prev) =>
               prev && prev.id === run.id && isLoopRunTerminal(prev.status) ? prev : run,
             );
+            setRuns((previous) => previous.map((item) => (item.id === run.id ? run : item)));
             // Toast once when a run reaches a terminal state.
             if (isLoopRunTerminal(run.status) && !toastedRef.current.has(run.id)) {
               toastedRef.current.add(run.id);
@@ -268,6 +377,25 @@ export function LoopsScreen() {
     }, 500);
     return () => clearInterval(timer);
   }, [activeRun]);
+
+  useEffect(() => {
+    if (!activeRun || !isLoopRunTerminal(activeRun.status) || !focusRetryAfterStopRef.current)
+      return;
+    focusRetryAfterStopRef.current = false;
+    requestAnimationFrame(() => retryButtonRef.current?.focus());
+  }, [activeRun]);
+
+  const draftError = draft ? loopDefinitionValidationError(draft) : undefined;
+  const anyRunActive =
+    runs.some((run) => run.status === "running" || run.status === "stopping") ||
+    activeRun?.status === "running" ||
+    activeRun?.status === "stopping";
+  const recoveryAcknowledgementRequired = Boolean(
+    activeRun?.status === "interrupted" &&
+      activeRun.launch?.writeTarget === "currentCheckout" &&
+      activeRun.launch.checkoutLockKey &&
+      !activeRun.launch.checkoutAcknowledgedAt,
+  );
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="loops-screen">
@@ -321,64 +449,191 @@ export function LoopsScreen() {
                   {RUN_STATUS_LABEL[activeRun.status]}
                 </span>
                 {isLoopRunTerminal(activeRun.status) ? (
-                  <ControlButton
-                    data-testid="loop-run-dismiss"
-                    className="rounded p-1 text-text-muted hover:text-text-primary"
-                    title="Dismiss"
-                    onClick={() => {
-                      runIdRef.current = null;
-                      setActiveRun(null);
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </ControlButton>
+                  <>
+                    <ControlButton
+                      ref={retryButtonRef}
+                      data-testid="loop-run-retry"
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                      disabled={runPending || recoveryAcknowledgementRequired}
+                      aria-describedby={
+                        recoveryAcknowledgementRequired
+                          ? "loop-checkout-recovery-notice"
+                          : undefined
+                      }
+                      onClick={() => void retryRun()}
+                    >
+                      Retry
+                    </ControlButton>
+                    <ControlButton
+                      data-testid="loop-run-dismiss"
+                      className="rounded p-1 text-text-muted hover:text-text-primary"
+                      title="Dismiss"
+                      aria-label="Dismiss run"
+                      onClick={() => {
+                        runIdRef.current = null;
+                        setActiveRun(null);
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </ControlButton>
+                  </>
                 ) : (
                   <ControlButton
+                    ref={stopButtonRef}
                     data-testid="loop-run-stop"
                     className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-danger"
+                    aria-disabled={stopPending}
+                    data-pending={stopPending ? "true" : "false"}
                     onClick={() => void stopRun()}
                   >
-                    <Square size={11} /> Stop
+                    <Square size={11} /> {stopPending ? "Stopping…" : "Stop"}
                   </ControlButton>
                 )}
               </div>
             </div>
-            <div className="mt-1 text-detail text-text-muted">
-              Iteration {activeRun.currentIteration} / {activeRun.maxIterations}
-              {activeRun.stopReason ? ` · ${activeRun.stopReason}` : ""}
+            <div
+              className="mt-1 text-detail text-text-muted"
+              data-testid="loop-run-live-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration} /{" "}
+              {activeRun.maxIterations}
             </div>
-            {activeRun.iterations.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-1" data-testid="loop-run-iterations">
-                {activeRun.iterations.map((it) => (
-                  <span
-                    key={it.index}
-                    className="rounded-capsule border px-1.5 py-0.5 text-micro"
-                    style={{
-                      borderColor:
-                        it.validationPassed === true
-                          ? "var(--color-success)"
-                          : it.validationPassed === false
-                            ? "var(--color-warning)"
-                            : "var(--color-border-strong)",
-                      color:
-                        it.validationPassed === true
-                          ? "var(--color-success)"
-                          : "var(--color-text-secondary)",
-                    }}
-                  >
-                    #{it.index}{" "}
-                    {it.validationPassed === true ? "✓" : it.validationPassed === false ? "✗" : "·"}
-                  </span>
-                ))}
+            {activeRun.stopReason ? (
+              <div className="text-detail text-text-muted">
+                {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
               </div>
             ) : null}
+            {activeRun.stopReason === "humanInputRequired" ? (
+              <div className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs" role="alert">
+                <strong>Human input required.</strong>{" "}
+                {rationale(activeRun.iterations.at(-1)?.checkerOutput) ??
+                  "Review the checker report, then Retry when ready."}
+              </div>
+            ) : null}
+            {activeRun.status === "interrupted" &&
+            activeRun.launch?.writeTarget === "currentCheckout" &&
+            activeRun.launch.checkoutLockKey &&
+            !activeRun.launch.checkoutAcknowledgedAt ? (
+              <div
+                id="loop-checkout-recovery-notice"
+                className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
+                role="alert"
+              >
+                <strong>Checkout locked after interruption.</strong> Ensure no old agent process
+                remains before unlocking this project checkout.
+                <ControlButton
+                  className="ml-2 rounded-capsule border border-border-strong px-2 py-0.5"
+                  data-testid="loop-recovery-acknowledge"
+                  disabled={acknowledgePending}
+                  onClick={() => void acknowledgeRecovery()}
+                >
+                  <ShieldCheck size={11} aria-hidden />
+                  {acknowledgePending ? "Unlocking…" : "I checked — unlock checkout"}
+                </ControlButton>
+              </div>
+            ) : null}
+            {activeRun.iterations.length > 0 ? (
+              <ol
+                className="mt-2 space-y-2"
+                data-testid="loop-run-iterations"
+                aria-label="Run timeline"
+              >
+                {activeRun.iterations.map((iteration) => (
+                  <li
+                    key={iteration.id}
+                    className="rounded-lg border border-border-subtle p-2 text-detail"
+                  >
+                    <div className="font-medium text-text-primary">
+                      Iteration {iteration.index} · Validation{" "}
+                      {iteration.validationPassed === true
+                        ? "✓ passed"
+                        : iteration.validationPassed === false
+                          ? "✗ failed"
+                          : "not run"}
+                    </div>
+                    <ol className="mt-1 space-y-1">
+                      {iteration.timeline.map((event) => (
+                        <li key={event.id} data-phase={event.phase} className="text-text-secondary">
+                          <span className="font-medium">{PHASE_LABEL[event.phase]}:</span>{" "}
+                          {event.note}
+                        </li>
+                      ))}
+                    </ol>
+                    {iteration.checkerDecision ? (
+                      <div data-testid="loop-checker-decision">
+                        Checker decision: {iteration.checkerDecision}
+                        {rationale(iteration.checkerOutput)
+                          ? ` — ${rationale(iteration.checkerOutput)}`
+                          : ""}
+                      </div>
+                    ) : null}
+                    {iteration.goalDecision ? (
+                      <div data-testid="loop-evaluator-decision">
+                        Goal evaluator: {iteration.goalDecision}
+                        {rationale(iteration.evaluatorOutput)
+                          ? ` — ${rationale(iteration.evaluatorOutput)}`
+                          : ""}
+                      </div>
+                    ) : null}
+                    {iteration.validationEvidence ? (
+                      <div data-testid="loop-validation-evidence">
+                        Validation evidence: {iteration.validationEvidence}
+                      </div>
+                    ) : null}
+                    {iteration.artifacts?.length ? (
+                      <div>
+                        Report artifacts:{" "}
+                        {iteration.artifacts.map((artifact) => artifact.filename).join(", ")}
+                      </div>
+                    ) : null}
+                    {iteration.children
+                      .filter((child) => child.error)
+                      .map((child) => (
+                        <div key={child.id} role="alert" className="text-danger">
+                          {PHASE_LABEL[child.phase]} error: {child.error}
+                        </div>
+                      ))}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </div>
+        ) : null}
+
+        {runs.length > 1 ? (
+          <div className="mb-3" data-testid="loop-run-history">
+            <h3 className="mb-1 text-xs font-medium text-text-secondary">Recent runs</h3>
+            <div className="flex flex-wrap gap-1">
+              {[...runs]
+                .reverse()
+                .slice(0, 8)
+                .map((run) => (
+                  <ControlButton
+                    key={run.id}
+                    data-loop-name={run.loopName}
+                    data-run-id={run.id}
+                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                    disabled={Boolean(anyRunActive) && run.id !== activeRun?.id}
+                    aria-pressed={run.id === activeRun?.id}
+                    onClick={() => {
+                      runIdRef.current = run.id;
+                      setActiveRun(run);
+                    }}
+                  >
+                    {run.loopName} · {RUN_STATUS_LABEL[run.status]}
+                  </ControlButton>
+                ))}
+            </div>
           </div>
         ) : null}
 
         <div className="space-y-1.5" data-testid="loop-list">
           {!loaded ? <SkeletonRows count={3} /> : null}
           {loops.map((loop, index) => {
-            const runnable = isRunnableLoopStructure(loop.structure);
+            const runnable = !loopDefinitionValidationError(loop);
             const unavailableId = `loop-structure-unavailable-${index}`;
             return (
               <div
@@ -423,7 +678,7 @@ export function LoopsScreen() {
                         : "Open a project to run"
                   }
                   aria-describedby={!runnable ? unavailableId : undefined}
-                  disabled={!runnable || !currentProjectId}
+                  disabled={!runnable || !currentProjectId || runPending || Boolean(anyRunActive)}
                   onClick={() => void startRun(loop)}
                 >
                   <Play size={12} /> Run
@@ -545,16 +800,60 @@ export function LoopsScreen() {
                   </span>
                 ) : null}
               </label>
-              <label className="text-xs text-text-muted">
-                Agent
-                <ControlInput
-                  className={inputClass}
-                  placeholder="agent name"
-                  value={draft.agentName}
-                  onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
-                />
-              </label>
+              {draft.structure === "singleAgent" ? (
+                <label className="text-xs text-text-muted">
+                  Agent
+                  <ControlInput
+                    data-testid="loop-agent"
+                    className={inputClass}
+                    list="loop-agent-choices"
+                    placeholder="agent name"
+                    value={draft.agentName}
+                    onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
+                  />
+                </label>
+              ) : null}
             </div>
+            {draft.structure === "makerChecker" ? (
+              <div className="space-y-3" data-testid="loop-maker-checker-config">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-xs text-text-muted">
+                    Maker agent
+                    <ControlInput
+                      data-testid="loop-maker"
+                      className={inputClass}
+                      list="loop-agent-choices"
+                      value={draft.makerName}
+                      onChange={(e) => setDraft({ ...draft, makerName: e.target.value })}
+                    />
+                  </label>
+                  <label className="text-xs text-text-muted">
+                    Checker agent
+                    <ControlInput
+                      data-testid="loop-checker"
+                      className={inputClass}
+                      list="loop-agent-choices"
+                      value={draft.checkerName}
+                      onChange={(e) => setDraft({ ...draft, checkerName: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <label className="block text-xs text-text-muted">
+                  Checker rubric
+                  <ControlTextArea
+                    data-testid="loop-checker-rubric"
+                    className={`${inputClass} min-h-[80px]`}
+                    value={draft.checkerRubric}
+                    onChange={(e) => setDraft({ ...draft, checkerRubric: e.target.value })}
+                  />
+                </label>
+              </div>
+            ) : null}
+            <datalist id="loop-agent-choices">
+              {agents.map((agent) => (
+                <option key={`${agent.scope}-${agent.name}`} value={agent.name} />
+              ))}
+            </datalist>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-text-muted">
                 Max iterations
@@ -585,6 +884,12 @@ export function LoopsScreen() {
                     </option>
                   ))}
                 </ControlSelect>
+                {draft.writeTarget === "artifactMarkdown" ? (
+                  <span className="mt-1 block text-detail">
+                    Report-only: agents cannot modify the project. Reports are saved in Loop-owned
+                    app data.
+                  </span>
+                ) : null}
               </label>
             </div>
             <label className="block text-xs text-text-muted">
@@ -597,6 +902,16 @@ export function LoopsScreen() {
                 onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
               />
             </label>
+            {draftError && !saveError ? (
+              <div
+                id="loop-draft-error"
+                role="alert"
+                aria-live="polite"
+                className="text-xs text-warning"
+              >
+                {draftError}
+              </div>
+            ) : null}
             {saveError ? (
               <div
                 data-testid="loop-save-error"
@@ -623,11 +938,13 @@ export function LoopsScreen() {
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                   color: "var(--color-accent-foreground)",
                 }}
-                disabled={saving || !draft.name.trim() || !isRunnableLoopStructure(draft.structure)}
+                disabled={saving || Boolean(draftError)}
                 aria-describedby={
                   !isRunnableLoopStructure(draft.structure)
                     ? "loop-editor-structure-unavailable"
-                    : undefined
+                    : draftError
+                      ? "loop-draft-error"
+                      : undefined
                 }
                 onClick={() => void save()}
               >

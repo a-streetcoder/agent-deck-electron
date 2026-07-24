@@ -143,13 +143,35 @@ describe("loop definition store", () => {
     expect(() => duplicateLoop(roots, "Ghost")).toThrow("loop_not_found");
   });
 
-  it.each<LoopStructure>([
-    "makerChecker",
-    "agentPipeline",
-    "parallelAgents",
-    "discoveryTriage",
-    "humanApproval",
-  ])(
+  it("round-trips native-flat Maker+Checker fields and unknown metadata in a non-slug file", () => {
+    const roots = { home: makeHome() };
+    const dir = loopsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "native-review.loop.md");
+    writeFileSync(
+      filePath,
+      "---\nname: Review Loop\nstructure: makerChecker\nmakerName: Maker\ncheckerName: Checker\ncheckerRubric: Verify tests and evidence\nnativeOnly: keep\n---\n\nShip safely.\n",
+    );
+    expect(scanLoops(roots)[0]).toMatchObject({
+      makerName: "Maker",
+      checkerName: "Checker",
+      checkerRubric: "Verify tests and evidence",
+    });
+    writeLoopFile(roots, { name: "Review Loop", checkerRubric: "Require green tests" });
+    const raw = readFileSync(filePath, "utf8");
+    expect(raw).toContain("checkerRubric: Require green tests");
+    expect(raw).toContain("nativeOnly: keep");
+    expect(existsSync(path.join(dir, "review-loop.loop.md"))).toBe(false);
+    expect(duplicateLoop(roots, "Review Loop")).toBe("Copy of Review Loop");
+    expect(scanLoops(roots).find((loop) => loop.name === "Copy of Review Loop")).toMatchObject({
+      structure: "makerChecker",
+      makerName: "Maker",
+      checkerName: "Checker",
+      checkerRubric: "Require green tests",
+    });
+  });
+
+  it.each<LoopStructure>(["agentPipeline", "parallelAgents", "discoveryTriage", "humanApproval"])(
     "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
     (structure) => {
       const createRoots = { home: makeHome() };

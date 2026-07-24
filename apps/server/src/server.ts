@@ -442,7 +442,10 @@ async function initServer(
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
-  const loopEngine = new LoopEngine();
+  const loopEngine = new LoopEngine({
+    dataDir: options.dataDir ?? defaultDataDir(),
+    warn: (message, error) => fastify.log.warn({ err: error }, message),
+  });
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager();
   const projects = new ProjectIndex(options.dataDir);

@@ -22,13 +22,18 @@ import {
   runOneShotHelper,
   SessionManagerService,
   type ChildBridgeFactory,
+  type ChildToolPolicy,
   type ManagedSessionRuntime,
   type RunHelperOptions,
   type SpawnSessionParams,
 } from "./services/sessionManager.ts";
 
 export type { AgentSessionPlan, LaunchPlan };
-export type { ChildBridgeFactory, AgentResolver } from "./services/sessionManager.ts";
+export type {
+  ChildBridgeFactory,
+  ChildToolPolicy,
+  AgentResolver,
+} from "./services/sessionManager.ts";
 
 /**
  * SessionManager — the synchronous class facade over the Slice 5 Effect service
@@ -161,8 +166,15 @@ export class ManagedSession {
     return Effect.runSync(this.rt.plan);
   }
 
-  async runChildAgent(task: string, agentName?: string): Promise<string> {
-    return await runPromiseUnwrapped(this.runtime, this.rt.runChildAgent(task, agentName));
+  async runChildAgent(
+    task: string,
+    agentName?: string,
+    toolPolicy?: ChildToolPolicy,
+  ): Promise<string> {
+    return await runPromiseUnwrapped(
+      this.runtime,
+      this.rt.runChildAgent(task, agentName, toolPolicy),
+    );
   }
 
   async seedFromHistory(): Promise<void> {
@@ -619,10 +631,15 @@ export class SessionManager {
    * (inheriting the parent's provider/model/env) and return its final text.
    * Throws if the parent session is unknown.
    */
-  async runSubagent(parentSessionId: string, task: string, agentName?: string): Promise<string> {
+  async runSubagent(
+    parentSessionId: string,
+    task: string,
+    agentName?: string,
+    toolPolicy?: ChildToolPolicy,
+  ): Promise<string> {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
-    return await parent.runChildAgent(task, agentName);
+    return await parent.runChildAgent(task, agentName, toolPolicy);
   }
 
   /**

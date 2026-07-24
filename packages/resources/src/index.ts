@@ -95,6 +95,7 @@ export {
   writeLoopFile,
   deleteLoopFile,
   duplicateLoop,
+  LoopDefinitionInvalidError,
   LoopStructureNotRunnableError,
   type LoopEdit,
 } from "./loops.ts";

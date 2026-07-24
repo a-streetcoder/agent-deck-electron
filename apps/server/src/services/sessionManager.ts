@@ -233,7 +233,11 @@ export interface ManagedSessionRuntime {
   readonly rename: (title: string) => Effect.Effect<void>;
 
   /** Run a native subagent; returns its final assistant text. */
-  readonly runChildAgent: (task: string, agentName?: string) => Effect.Effect<string, Error>;
+  readonly runChildAgent: (
+    task: string,
+    agentName?: string,
+    toolPolicy?: ChildToolPolicy,
+  ) => Effect.Effect<string, Error>;
 
   /** Subscribe to process exit; fires immediately if already exited. */
   readonly onExit: (listener: (exit: PiProcessExit) => void) => () => void;
@@ -272,6 +276,26 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
   "contact_supervisor",
   "ask_user",
 ]);
+
+/** Purpose-built child capability restriction. Omitted preserves legacy behavior. */
+export type ChildToolPolicy = "configured" | "readOnly" | "none";
+const CHILD_READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+/** Pure capability boundary, exported for focused policy tests. */
+export function resolveChildTools(
+  configured: readonly string[] | undefined,
+  toolPolicy: ChildToolPolicy | undefined,
+  includeSupervisorBridge: boolean,
+): string[] {
+  const allowed = configured?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
+  const tools =
+    toolPolicy === "none"
+      ? []
+      : toolPolicy === "readOnly"
+        ? (allowed ?? []).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
+        : (allowed ?? []);
+  return includeSupervisorBridge ? [...tools, "contact_supervisor"] : tools;
+}
 
 function normalizeTitle(raw: string): string {
   const firstLine =
@@ -639,8 +663,17 @@ export const makeManagedSessionRuntime = (
           onMetaChange(meta);
         }),
 
-      runChildAgent: (task, agentName) =>
-        runChildAgent({ piHost, helperContext, meta, params, emit, task, agentName }),
+      runChildAgent: (task, agentName, toolPolicy) =>
+        runChildAgent({
+          piHost,
+          helperContext,
+          meta,
+          params,
+          emit,
+          task,
+          agentName,
+          toolPolicy,
+        }),
 
       onExit: (listener) => {
         if (currentExit) {
@@ -725,6 +758,7 @@ interface RunChildArgs {
   readonly emit: (event: DomainEvent) => void;
   readonly task: string;
   readonly agentName?: string;
+  readonly toolPolicy?: ChildToolPolicy;
 }
 
 /**
@@ -735,7 +769,7 @@ interface RunChildArgs {
  * cell id and the bus stamps interleaved deltas in arrival order.
  */
 const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
-  const { piHost, helperContext, meta, params, emit, task, agentName } = args;
+  const { piHost, helperContext, meta, params, emit, task, agentName, toolPolicy } = args;
   return Effect.gen(function* () {
     const resolved = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
     if (agentName && !resolved) {
@@ -744,10 +778,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
     const persona = resolved ? `\n\n# Agent: ${agentName}\n${resolved.body}` : "";
     const cellId = `subagent-${randomUUID()}`;
     const childSessionId = randomUUID();
-    const childBridge = params.childBridgeFactory?.(childSessionId, {
-      parentSessionId: meta.id,
-      cellId,
-    });
+    // Constrained report-only children never receive a bridge extension: even
+    // contact_supervisor mutates parent state and is outside their capability.
+    const childBridge =
+      toolPolicy === undefined
+        ? params.childBridgeFactory?.(childSessionId, {
+            parentSessionId: meta.id,
+            cellId,
+          })
+        : undefined;
 
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -767,15 +806,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
         const promptFile = join(promptDir, "system.md");
         writeFileSync(promptFile, `${SUBAGENT_SYSTEM_PROMPT}${persona}\n\nTask:\n${task}`);
 
-        const agentTools = resolved?.tools?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
-        const childTools =
-          agentTools && agentTools.length > 0
-            ? childBridge
-              ? [...agentTools, "contact_supervisor"]
-              : agentTools
-            : childBridge
-              ? ["contact_supervisor"]
-              : [];
+        const childTools = resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
 
         const child = yield* piHost.spawn({
           binPath: resolvePiBinary().path,

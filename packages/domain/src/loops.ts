@@ -1,9 +1,9 @@
 /**
  * Loop definitions (native LoopModels.swift LoopDefinition + LoopDefinitionStore):
  * a saved template that repeats an agent run up to `maxIterations` until a
- * validation command succeeds. This is the DEFINITION model + Bank library; the
- * run engine (LoopRun / iterations / worktrees / validation execution) is a
- * later slice. Persisted one-file-per-loop under ~/.pi/agent/loops as `.loop.md`
+ * validation command succeeds. This is the shared definition/run contract used
+ * by the Bank and server coordinator. Persisted definitions are one-file-per-loop
+ * under ~/.pi/agent/loops as `.loop.md`
  * (frontmatter + the goal as the markdown body), mirroring the agent catalog.
  */
 
@@ -26,10 +26,31 @@ export const LOOP_STRUCTURES: LoopStructure[] = [
 ];
 
 /** Structures with an implemented execution engine in this application. */
-export const RUNNABLE_LOOP_STRUCTURES = ["singleAgent"] as const satisfies readonly LoopStructure[];
+export const RUNNABLE_LOOP_STRUCTURES = [
+  "singleAgent",
+  "makerChecker",
+] as const satisfies readonly LoopStructure[];
 
 export function isRunnableLoopStructure(structure: LoopStructure): boolean {
   return (RUNNABLE_LOOP_STRUCTURES as readonly LoopStructure[]).includes(structure);
+}
+
+/** Structure-specific authoring/run validity; unsupported structures always fail closed. */
+export function loopDefinitionValidationError(
+  loop: Pick<
+    LoopDefinition,
+    "name" | "goal" | "structure" | "agentName" | "makerName" | "checkerName" | "checkerRubric"
+  >,
+): string | undefined {
+  if (!isRunnableLoopStructure(loop.structure)) return "This Loop structure is unavailable.";
+  if (!loop.name.trim()) return "A name is required.";
+  if (loop.structure === "makerChecker") {
+    if (!loop.goal.trim()) return "A goal is required.";
+    if (!(loop.makerName ?? loop.agentName ?? "").trim()) return "A maker agent is required.";
+    if (!(loop.checkerName ?? "").trim()) return "A checker agent is required.";
+    if (!(loop.checkerRubric ?? "").trim()) return "A checker rubric is required.";
+  }
+  return undefined;
 }
 
 export const LOOP_STRUCTURE_UNSUPPORTED_CODE = "loop_structure_unsupported";
@@ -72,8 +93,12 @@ export interface LoopDefinition {
   /** The goal / prompt template (stored as the markdown body). */
   goal: string;
   structure: LoopStructure;
-  /** The primary agent this loop drives (native single-agent = makerName). */
+  /** The primary agent this loop drives (legacy Electron key). */
   agentName?: string;
+  /** Native flat Maker+Checker frontmatter. */
+  makerName?: string;
+  checkerName?: string;
+  checkerRubric?: string;
   /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
@@ -89,40 +114,123 @@ export function clampMaxIterations(value: number): number {
   return Math.min(LOOP_MAX_ITERATIONS_LIMIT, Math.max(1, Math.floor(value)));
 }
 
-/** A live/finished loop run (native LoopRun, minimal single-agent form). */
-export type LoopRunStatus = "running" | "stopping" | "completed" | "failed" | "stopped";
+/** A durable live/finished loop run. */
+export type LoopRunStatus =
+  | "running"
+  | "stopping"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "notAchieved"
+  | "interrupted";
 
-/** Why a run ended (native LoopStopReason, the subset the single-agent engine hits). */
 export type LoopStopReason =
   | "success"
+  | "maxIterationsReached"
   | "validationFailedAfterFinalIteration"
   | "validationUnavailable"
   | "agentFailed"
-  | "userStopped";
+  | "humanInputRequired"
+  | "userStopped"
+  | "appInterrupted";
+
+export type LoopCheckerDecision = "APPROVE" | "CONTINUE" | "REJECT" | "ASK_HUMAN" | "FAIL";
+export type LoopGoalDecision = "SUCCESS" | "CONTINUE" | "FAIL";
+export type LoopRunPhase = "maker" | "checker" | "validation" | "evaluator";
+
+export interface LoopTimelineEvent {
+  id: string;
+  phase: LoopRunPhase;
+  roleName: string;
+  note: string;
+  timestamp: string;
+}
+
+export interface LoopRunArtifact {
+  id: string;
+  phase: "maker" | "checker" | "evaluator";
+  filename: string;
+  filePath: string;
+  bytes: number;
+  createdAt: string;
+}
+
+export interface LoopChildRecord {
+  id: string;
+  phase: "maker" | "checker" | "evaluator";
+  agentName?: string;
+  startedAt: string;
+  endedAt?: string;
+  output?: string;
+  error?: string;
+}
 
 export interface LoopRunIteration {
+  id: string;
   index: number;
-  /** The agent's output for this iteration. */
+  startedAt: string;
+  endedAt?: string;
+  /** Maker output (legacy name retained for clients). */
   output: string;
-  /** Whether the validation command passed (exit 0); null when not run. */
+  checkerOutput?: string;
+  checkerDecision?: LoopCheckerDecision;
+  evaluatorOutput?: string;
+  goalDecision?: LoopGoalDecision;
   validationPassed: boolean | null;
+  validationEvidence?: string;
+  timeline: LoopTimelineEvent[];
+  children: LoopChildRecord[];
+  artifacts: LoopRunArtifact[];
+}
+
+export interface LoopOwnedWorktree {
+  ownershipVersion: 1;
+  /** Unpredictable generated child id; target basename must be `loop-${ownershipId}`. */
+  ownershipId: string;
+  projectRoot: string;
+  path: string;
+  branch: string;
+  sourceBranch: string;
+  /** Persisted proof that Agent Deck created this exact worktree/branch pair. */
+  branchOwned: true;
+}
+
+export interface LoopRunLaunchOwnership {
+  /** Transient Loop parent session. Never exposed as a reopenable conversation. */
+  sessionId: string;
+  writeTarget: LoopWriteTarget;
+  /** Canonical, platform-normalized key for destructive current-checkout locking. */
+  checkoutLockKey?: string;
+  worktree?: LoopOwnedWorktree;
+  sessionReconciledAt?: string;
+  worktreeReconciledAt?: string;
+  /** Explicit user acknowledgement that an interrupted checkout is safe to unlock. */
+  checkoutAcknowledgedAt?: string;
 }
 
 export interface LoopRun {
   id: string;
   loopName: string;
   projectId?: string;
+  retryOf?: string;
+  launch?: LoopRunLaunchOwnership;
   status: LoopRunStatus;
-  /** 0 before the first iteration starts. */
   currentIteration: number;
   maxIterations: number;
   iterations: LoopRunIteration[];
   stopReason?: LoopStopReason;
   startedAt: string;
+  updatedAt: string;
   endedAt?: string;
 }
 
 /** True once a run has reached a terminal state (no longer running/stopping). */
 export function isLoopRunTerminal(status: LoopRunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "stopped";
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "stopped" ||
+    status === "notAchieved" ||
+    status === "interrupted"
+  );
 }

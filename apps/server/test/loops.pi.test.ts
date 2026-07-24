@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -31,7 +31,33 @@ const project = mkdtempSync(path.join(tmpdir(), "pi-loops-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
 
 beforeAll(async () => {
-  mock = await startMockProvider({ reply: () => "Worked on the goal." });
+  const agentsDir = path.join(tmpHome, ".pi", "agent", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    path.join(agentsDir, "Maker.md"),
+    "---\nname: Maker\ntools: read, grep, bash, edit, write\n---\nMake the requested change.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Checker.md"),
+    "---\nname: Checker\ntools: read, grep, bash, edit, write\n---\nReview only.\n",
+  );
+  process.env.AGENT_DECK_PI_ENV = JSON.stringify({
+    HOME: tmpHome,
+    USERPROFILE: tmpHome,
+    PI_SKIP_VERSION_CHECK: "1",
+  });
+  mock = await startMockProvider({
+    chunkDelayMs: 15,
+    reply: (message) => {
+      if (message.includes("exact first non-empty line must be APPROVE")) {
+        return "APPROVE\nChecker streamed concrete ordered evidence before approving.";
+      }
+      if (message.includes("exact first non-empty line must be SUCCESS")) {
+        return "SUCCESS\nEvaluator streamed independent ordered evidence of completion.";
+      }
+      return "Maker streamed several ordered implementation delta words.";
+    },
+  });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
   server = await startServer({ dataDir });
   base = `http://127.0.0.1:${server.port}`;
@@ -49,6 +75,7 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  delete process.env.AGENT_DECK_PI_ENV;
 });
 
 async function putLoop(
@@ -104,6 +131,66 @@ describe("loop run engine (real pi)", () => {
     expect(run.iterations[0]).toMatchObject({ index: 1, validationPassed: true });
     // The agent actually ran (a real pi subagent produced output).
     expect(run.iterations[0]!.output.length).toBeGreaterThan(0);
+  });
+
+  it("streams real Pi maker, checker, and evaluator sequentially before finalization", async () => {
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "maker-checker-loop",
+        goal: "Deliver reviewed work.",
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "Require concrete evidence.",
+        validationCommand: "exit 0",
+        maxIterations: 2,
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("maker-checker-loop"));
+    expect(run.status).toBe("completed");
+    expect(run.iterations[0]).toMatchObject({
+      checkerDecision: "APPROVE",
+      goalDecision: "SUCCESS",
+      validationPassed: true,
+    });
+    const phases = run.iterations[0]!.timeline.map((event) => event.phase);
+    expect(phases.indexOf("maker")).toBeLessThan(phases.indexOf("checker"));
+    expect(phases.indexOf("checker")).toBeLessThan(phases.indexOf("validation"));
+    expect(phases.indexOf("validation")).toBeLessThan(phases.indexOf("evaluator"));
+    const prompts = mock.requests
+      .slice(requestStart)
+      .map((request) => request.messages.at(-1)?.content);
+    expect(JSON.stringify(prompts)).toMatch(
+      /maker.*exact first non-empty line must be APPROVE.*exact first non-empty line must be SUCCESS/is,
+    );
+    expect(
+      run.iterations[0]!.children.every((child) => (child.output?.split(" ").length ?? 0) > 3),
+    ).toBe(true);
+    const roleRequests = mock.requests.slice(requestStart);
+    const toolsFor = (needle: string): string[] => {
+      const request = roleRequests.find((item) =>
+        JSON.stringify(item.messages.at(-1)?.content).includes(needle),
+      );
+      const tools = Array.isArray(request?.tools) ? request.tools : [];
+      return tools.flatMap((tool) => {
+        if (!tool || typeof tool !== "object") return [];
+        const fn = (tool as { function?: { name?: unknown } }).function;
+        return typeof fn?.name === "string" ? [fn.name] : [];
+      });
+    };
+    expect(toolsFor("You are the maker")).toEqual(["read", "grep"]);
+    expect(toolsFor("Review only")).toEqual(["read", "grep"]);
+    expect(toolsFor("Evaluate only")).toEqual([]);
+    const artifacts = run.iterations[0]!.artifacts;
+    expect(artifacts.map((artifact) => artifact.phase)).toEqual(["maker", "checker", "evaluator"]);
+    for (const artifact of artifacts) {
+      expect(artifact.filePath.startsWith(project + path.sep)).toBe(false);
+      expect(existsSync(artifact.filePath)).toBe(true);
+    }
   });
 
   it("runs every iteration then fails when validation never passes (exit 1)", async () => {
@@ -164,13 +251,18 @@ describe("loop run engine (real pi)", () => {
       worktree: { path: string; branch: string; sourceBranch: string } | null;
     };
     expect(worktree).toBeTruthy();
+    expect(
+      worktree!.path.startsWith(
+        realpathSync.native(path.join(dataDir, "session-worktrees", "loop")) + path.sep,
+      ),
+    ).toBe(true);
     expect(worktree!.branch).toMatch(/^agent-deck\/loop-/);
     expect(worktree!.sourceBranch).toBe("main");
 
     const final = await waitTerminal(run.id);
     expect(final.status).toBe("completed");
 
-    // The branch is kept (committed work survives) and the worktree dir is gone.
+    // The owned branch is retained, while transient session/worktree resources are removed.
     const branches = execFileSync("git", ["branch", "--list"], {
       cwd: gitProject,
       encoding: "utf8",

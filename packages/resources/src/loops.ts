@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   clampMaxIterations,
   isRunnableLoopStructure,
+  loopDefinitionValidationError,
   LOOP_STRUCTURES,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   LOOP_WRITE_TARGETS,
@@ -18,7 +19,7 @@ import { piAgentHome, type ResourceRoots } from "./paths.ts";
  * Loop-definition persistence (native LoopDefinitionStore): one file per loop
  * under ~/.pi/agent/loops as `<slug>.loop.md` — frontmatter for the config, the
  * markdown body for the goal — mirroring the agent catalog. This is the Bank
- * CRUD; the run engine is a later slice. Unknown frontmatter round-trips so a
+ * CRUD; runtime records live under server app data. Unknown frontmatter round-trips so a
  * native `.loop.md` (which carries more fields) survives an edit here.
  */
 
@@ -61,7 +62,10 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     description: asString(frontmatter.description) ?? "",
     goal: body.trim(),
     structure: asStructure(frontmatter.structure),
-    agentName: asString(frontmatter.agentName) || undefined,
+    agentName: asString(frontmatter.agentName) || asString(frontmatter.makerName) || undefined,
+    makerName: asString(frontmatter.makerName) || asString(frontmatter.agentName) || undefined,
+    checkerName: asString(frontmatter.checkerName) || undefined,
+    checkerRubric: asString(frontmatter.checkerRubric) || undefined,
     maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
@@ -97,6 +101,9 @@ export interface LoopEdit {
   goal?: string;
   structure?: LoopStructure;
   agentName?: string;
+  makerName?: string;
+  checkerName?: string;
+  checkerRubric?: string;
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
@@ -107,6 +114,9 @@ const LOOP_FIELD_ORDER = [
   "description",
   "structure",
   "agentName",
+  "makerName",
+  "checkerName",
+  "checkerRubric",
   "maxIterations",
   "validationCommand",
   "writeTarget",
@@ -165,6 +175,16 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   if (!isRunnableLoopStructure(resultingStructure)) {
     throw new LoopStructureNotRunnableError(resultingStructure);
   }
+  const validationError = loopDefinitionValidationError({
+    name: edit.name,
+    goal: edit.goal ?? body,
+    structure: resultingStructure,
+    agentName: edit.agentName ?? asString(frontmatter.agentName),
+    makerName: edit.makerName ?? asString(frontmatter.makerName) ?? asString(frontmatter.agentName),
+    checkerName: edit.checkerName ?? asString(frontmatter.checkerName),
+    checkerRubric: edit.checkerRubric ?? asString(frontmatter.checkerRubric),
+  });
+  if (validationError) throw new LoopDefinitionInvalidError(validationError);
 
   if (!existingPath && existsSync(filePath)) {
     // The slug is occupied by a loop with a different name — refuse to clobber.
@@ -177,6 +197,12 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   if (edit.agentName !== undefined) {
     if (edit.agentName) frontmatter.agentName = edit.agentName;
     else delete frontmatter.agentName;
+  }
+  for (const key of ["makerName", "checkerName", "checkerRubric"] as const) {
+    if (edit[key] !== undefined) {
+      if (edit[key]) frontmatter[key] = edit[key];
+      else delete frontmatter[key];
+    }
   }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
@@ -197,6 +223,15 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
 export function deleteLoopFile(roots: ResourceRoots, name: string): void {
   const filePath = loopPathByName(roots, name) ?? loopFilePath(roots, name);
   rmSync(filePath, { force: true });
+}
+
+export class LoopDefinitionInvalidError extends Error {
+  readonly code = "loop_definition_invalid";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "LoopDefinitionInvalidError";
+  }
 }
 
 export class LoopStructureNotRunnableError extends Error {
@@ -236,6 +271,9 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     goal: source.goal,
     structure: source.structure,
     agentName: source.agentName,
+    makerName: source.makerName,
+    checkerName: source.checkerName,
+    checkerRubric: source.checkerRubric,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,

@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LOOP_STRUCTURE_UNSUPPORTED_CODE, type LoopStructure } from "@agent-deck/domain";
@@ -8,21 +15,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 
 vi.mock("../src/git.ts", () => ({
-  createSessionWorktree: vi.fn(),
+  createLoopWorktree: vi.fn(),
   gitWorktreeRemove: vi.fn(),
+  strictRemoveOwnedLoopWorktree: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
 }));
 
 import {
-  createSessionWorktree,
+  createLoopWorktree,
   gitDeleteOwnedWorktreeBranch,
-  gitWorktreeRemove,
+  strictRemoveOwnedLoopWorktree,
 } from "../src/git.ts";
-import { registerLoopRoutes } from "../src/routes/loops.ts";
+import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
 const unsupportedStructures: LoopStructure[] = [
-  "makerChecker",
   "agentPipeline",
   "parallelAgents",
   "discoveryTriage",
@@ -36,7 +43,11 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-function makeRoutes(home: string, rootsFor: () => { home: string } = () => ({ home })) {
+function makeRoutes(
+  home: string,
+  rootsFor: () => { home: string } = () => ({ home }),
+  recovery: { locks?: Map<string, string>; runs?: unknown[] } = {},
+) {
   const fastify = Fastify();
   servers.push(fastify);
   const createSession = vi.fn();
@@ -45,7 +56,18 @@ function makeRoutes(home: string, rootsFor: () => { home: string } = () => ({ ho
   const startEngine = vi.fn();
   const stopEngine = vi.fn();
   const settledEngine = vi.fn();
+  const rollbackEngine = vi.fn();
+  const recoveryCheckoutLocks = vi.fn(() => recovery.locks ?? new Map<string, string>());
+  const pendingResourceReconciliations = vi.fn(() => recovery.runs ?? []);
+  const markSessionReconciled = vi.fn();
+  const markWorktreeReconciled = vi.fn();
+  const acknowledgeCheckoutRecovery = vi.fn();
+  const getEngine = vi.fn();
   const broadcast = vi.fn();
+  const findProject = vi.fn((_predicate?: (project: { id: string; path: string }) => boolean) => ({
+    id: "project",
+    path: home,
+  }));
   const indexRows = new Map<
     string,
     { id: string; cwd: string; createdAt: string; projectId?: string }
@@ -69,12 +91,25 @@ function makeRoutes(home: string, rootsFor: () => { home: string } = () => ({ ho
       ) => [...indexRows.values()].find(predicate),
       remove: (id: string) => indexRows.delete(id),
     },
-    projects: { find: () => ({ id: "project", path: home }) },
-    loopEngine: { start: startEngine, stop: stopEngine, settled: settledEngine },
+    projects: { find: findProject },
+    loopEngine: {
+      start: startEngine,
+      stop: stopEngine,
+      settled: settledEngine,
+      rollbackStart: rollbackEngine,
+      recoveryCheckoutLocks,
+      pendingResourceReconciliations,
+      markSessionReconciled,
+      markWorktreeReconciled,
+      acknowledgeCheckoutRecovery,
+      list: () => [],
+      get: getEngine,
+    },
     bridgeTokens,
     broadcast,
     rootsFor,
     enabledExtensionPaths: () => [],
+    worktreesRoot: path.join(home, "managed-worktrees"),
   } as unknown as ServerContext);
   return {
     fastify,
@@ -84,6 +119,14 @@ function makeRoutes(home: string, rootsFor: () => { home: string } = () => ({ ho
     startEngine,
     stopEngine,
     settledEngine,
+    rollbackEngine,
+    recoveryCheckoutLocks,
+    pendingResourceReconciliations,
+    markSessionReconciled,
+    markWorktreeReconciled,
+    acknowledgeCheckoutRecovery,
+    getEngine,
+    findProject,
     broadcast,
     indexRows,
     bridgeTokens,
@@ -164,7 +207,7 @@ describe("loop route honesty gate", () => {
       expectUnsupported(run);
       expect(createSession).not.toHaveBeenCalled();
       expect(startEngine).not.toHaveBeenCalled();
-      expect(createSessionWorktree).not.toHaveBeenCalled();
+      expect(createLoopWorktree).not.toHaveBeenCalled();
       expect(broadcast).not.toHaveBeenCalled();
       expect(readFileSync(filePath, "utf8")).toBe(original);
 
@@ -242,13 +285,13 @@ describe("loop route honesty gate", () => {
     const { fastify, createSession, startEngine, broadcast, bridgeTokens, indexRows } =
       makeRoutes(home);
     const order: string[] = [];
-    vi.mocked(createSessionWorktree).mockResolvedValue({
-      path: path.join(home, "worktree"),
-      branch: "agent-deck/loop-Rollback-abc123",
+    vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => ({
+      path: target,
+      branch,
       sourceBranch: "main",
       branchOwned: true,
-    });
-    vi.mocked(gitWorktreeRemove).mockImplementation(async () => {
+    }));
+    vi.mocked(strictRemoveOwnedLoopWorktree).mockImplementation(async () => {
       order.push("worktree");
     });
     vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
@@ -279,6 +322,13 @@ describe("loop route honesty gate", () => {
       }),
     );
     expect(order).toEqual(["pi", "worktree", "branch"]);
+    const generatedTarget = vi.mocked(createLoopWorktree).mock.calls[0]![1];
+    expect(path.dirname(generatedTarget)).toBe(
+      path.join(realpathSync(path.join(home, "managed-worktrees")), "loop"),
+    );
+    expect(path.basename(generatedTarget)).toMatch(
+      /^loop-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     expect(startEngine).not.toHaveBeenCalled();
     expect(bridgeTokens.size).toBe(0);
     expect(indexRows.size).toBe(0);
@@ -304,6 +354,7 @@ describe("loop route honesty gate", () => {
       startEngine,
       stopEngine,
       settledEngine,
+      rollbackEngine,
     } = makeRoutes(home);
     const order: string[] = [];
     let resolveSettled!: () => void;
@@ -321,12 +372,12 @@ describe("loop route honesty gate", () => {
         projectId: "project",
       },
     };
-    vi.mocked(createSessionWorktree).mockResolvedValue({
-      path: parent.meta.cwd,
-      branch: "agent-deck/loop-Announce-Rollback-abc123",
+    vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => ({
+      path: target,
+      branch,
       sourceBranch: "main",
       branchOwned: true,
-    });
+    }));
     createSession.mockReturnValue(parent);
     startEngine.mockReturnValue({ id: "run-in-flight" });
     announceCreated.mockImplementation(() => {
@@ -336,10 +387,13 @@ describe("loop route honesty gate", () => {
       order.push("stop");
     });
     settledEngine.mockReturnValue(settled);
+    rollbackEngine.mockImplementation(() => {
+      order.push("rollback");
+    });
     destroySession.mockImplementation(async () => {
       order.push("destroy");
     });
-    vi.mocked(gitWorktreeRemove).mockImplementation(async () => {
+    vi.mocked(strictRemoveOwnedLoopWorktree).mockImplementation(async () => {
       order.push("worktree");
     });
     vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
@@ -357,12 +411,276 @@ describe("loop route honesty gate", () => {
     const response = await responsePromise;
 
     expect(response.statusCode).toBe(500);
-    expect(order).toEqual(["stop", "settled", "destroy", "worktree", "branch"]);
+    expect(order).toEqual(["stop", "settled", "rollback", "destroy", "worktree", "branch"]);
     expect(stopEngine).toHaveBeenCalledOnce();
     expect(settledEngine).toHaveBeenCalledOnce();
+    expect(rollbackEngine).toHaveBeenCalledWith("run-in-flight");
     expect(destroySession).toHaveBeenCalledOnce();
-    expect(gitWorktreeRemove).toHaveBeenCalledOnce();
+    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
     expect(gitDeleteOwnedWorktreeBranch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects concurrent current-checkout runs before a second Pi allocation and releases after cleanup", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-checkout-lock-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Checkout Loop",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        validationCommand: "test",
+        writeTarget: "currentCheckout",
+      },
+    );
+    const {
+      fastify,
+      createSession,
+      destroySession,
+      announceCreated,
+      startEngine,
+      settledEngine,
+      indexRows,
+      findProject,
+      broadcast,
+    } = makeRoutes(home);
+    const aliasRoot = mkdtempSync(path.join(tmpdir(), "loop-checkout-alias-"));
+    const alias = path.join(aliasRoot, "project-link");
+    symlinkSync(home, alias, process.platform === "win32" ? "junction" : "dir");
+    findProject.mockImplementation(
+      (predicate?: (project: { id: string; path: string }) => boolean) =>
+        [
+          { id: "project", path: home },
+          { id: "project-alias", path: alias },
+        ].find(predicate ?? (() => true))!,
+    );
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const parent = {
+      meta: {
+        id: "loop-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    };
+    createSession.mockReturnValue(parent);
+    destroySession.mockResolvedValue(undefined);
+    announceCreated.mockImplementation(() => indexRows.set(parent.meta.id, parent.meta));
+    startEngine.mockReturnValue({
+      id: "run-1",
+      loopName: "Checkout Loop",
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    settledEngine.mockReturnValue(settled);
+
+    const first = await fastify.inject({
+      method: "POST",
+      url: "/loops/Checkout%20Loop/run",
+      payload: { projectId: "project" },
+    });
+    expect(first.statusCode).toBe(201);
+    const second = await fastify.inject({
+      method: "POST",
+      url: "/loops/Checkout%20Loop/run",
+      payload: { projectId: "project-alias" },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ code: "loop_checkout_busy" });
+    // POSIX symlink and Windows directory-junction aliases canonicalize to the
+    // same native checkout identity before any second session/Pi allocation.
+    expect(createSession).toHaveBeenCalledOnce();
+    expect(startEngine).toHaveBeenCalledOnce();
+
+    settle();
+    await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
+    expect(indexRows.has(parent.meta.id)).toBe(false);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "session_removed",
+      sessionId: parent.meta.id,
+    });
+    const afterCleanup = await fastify.inject({
+      method: "POST",
+      url: "/loops/Checkout%20Loop/run",
+      payload: { projectId: "project" },
+    });
+    expect(afterCleanup.statusCode).toBe(201);
+    expect(createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when checkout canonicalization cannot be established", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-checkout-missing-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Missing Checkout",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        validationCommand: "test",
+        writeTarget: "currentCheckout",
+      },
+    );
+    const { fastify, createSession, startEngine, findProject } = makeRoutes(home);
+    findProject.mockReturnValue({ id: "project", path: path.join(home, "does-not-exist") });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/loops/Missing%20Checkout/run",
+      payload: { projectId: "project" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "loop_checkout_canonicalization_failed" });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+  });
+
+  it("reconciles only proven recovery resources once and keeps checkout retries locked", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-recovery-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Recovery Loop",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        validationCommand: "test",
+        writeTarget: "currentCheckout",
+      },
+    );
+    const lockKey = canonicalCheckoutLockKey(home);
+    const interrupted = {
+      id: "11111111-1111-4111-8111-111111111111",
+      loopName: "Recovery Loop",
+      projectId: "project",
+      status: "interrupted",
+      launch: {
+        sessionId: "stale-parent",
+        writeTarget: "currentCheckout",
+        checkoutLockKey: lockKey,
+      },
+    };
+    const ownedWorktree = {
+      id: "owned-worktree-run",
+      projectId: "project",
+      status: "interrupted",
+      launch: {
+        sessionId: "owned-parent",
+        writeTarget: "newWorktree",
+        sessionReconciledAt: "already-clean",
+        worktree: {
+          projectRoot: home,
+          path: path.join(home, "owned-worktree"),
+          branch: "agent-deck/loop-owned",
+          sourceBranch: "main",
+          branchOwned: true,
+        },
+      },
+    };
+    const unsettledWorktree = {
+      id: "unsettled-worktree-run",
+      status: "interrupted",
+      launch: {
+        sessionId: "unsettled-parent",
+        writeTarget: "newWorktree",
+        worktree: {
+          projectRoot: home,
+          path: path.join(home, "unsettled-worktree"),
+          branch: "agent-deck/loop-unsettled",
+          sourceBranch: "main",
+          branchOwned: true,
+        },
+      },
+    };
+    const unownedWorktree = {
+      id: "unowned-worktree-run",
+      status: "interrupted",
+      launch: {
+        sessionId: "unowned-parent",
+        writeTarget: "newWorktree",
+        sessionReconciledAt: "already-clean",
+        worktree: {
+          projectRoot: home,
+          path: path.join(home, "unowned-worktree"),
+          branch: "user-branch",
+          sourceBranch: "main",
+          branchOwned: false,
+        },
+      },
+    };
+    const {
+      fastify,
+      createSession,
+      startEngine,
+      destroySession,
+      getEngine,
+      acknowledgeCheckoutRecovery,
+      markSessionReconciled,
+      markWorktreeReconciled,
+      indexRows,
+      bridgeTokens,
+    } = makeRoutes(home, undefined, {
+      locks: new Map([[lockKey, interrupted.id]]),
+      runs: [interrupted, ownedWorktree, unsettledWorktree, unownedWorktree],
+    });
+    indexRows.set("stale-parent", {
+      id: "stale-parent",
+      cwd: home,
+      createdAt: "before-restart",
+      projectId: "project",
+    });
+    bridgeTokens.set("stale-parent", "stale-token");
+    destroySession.mockImplementation(async (id: string) => {
+      if (id === "unsettled-parent") throw new Error("process has not settled");
+    });
+    getEngine.mockReturnValue(interrupted);
+
+    const retry = await fastify.inject({
+      method: "POST",
+      url: "/loops/runs/11111111-1111-4111-8111-111111111111/retry",
+    });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({
+      code: "loop_checkout_recovery_required",
+      runId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(destroySession).toHaveBeenCalledTimes(2);
+    expect(destroySession).toHaveBeenCalledWith("stale-parent");
+    expect(destroySession).toHaveBeenCalledWith("unsettled-parent");
+    expect(indexRows.has("stale-parent")).toBe(false);
+    expect(bridgeTokens.has("stale-parent")).toBe(false);
+    expect(markSessionReconciled).toHaveBeenCalledOnce();
+    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
+    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registeredProjectRoot: home,
+        worktree: ownedWorktree.launch.worktree,
+      }),
+    );
+    expect(markWorktreeReconciled).toHaveBeenCalledOnce();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+
+    const acknowledged = {
+      ...interrupted,
+      launch: { ...interrupted.launch, checkoutAcknowledgedAt: new Date().toISOString() },
+    };
+    acknowledgeCheckoutRecovery.mockReturnValue(acknowledged);
+    const acknowledge = await fastify.inject({
+      method: "POST",
+      url: "/loops/runs/11111111-1111-4111-8111-111111111111/acknowledge",
+    });
+    expect(acknowledge.statusCode).toBe(200);
+
+    // Fastify onReady recovery is not repeated for later requests.
+    expect(destroySession).toHaveBeenCalledTimes(2);
+    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
   });
 
   it("keeps supported single-agent creation and duplication working", async () => {
