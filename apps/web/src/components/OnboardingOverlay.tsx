@@ -344,15 +344,23 @@ export function OnboardingOverlay() {
         {phase === "tour" ? (
           <>
             <div className="relative h-[48%] min-h-80 w-full shrink-0 bg-surface-subtle">
-              <img
-                key={tourPage.image}
-                data-testid="onboarding-image"
-                src={tourPage.image}
-                alt=""
-                className="h-full w-full object-cover"
-              />
+              {PAGES.map((slide, index) => (
+                <img
+                  key={slide.image}
+                  data-testid={index === page ? "onboarding-image" : undefined}
+                  src={slide.image}
+                  alt=""
+                  className={cn(
+                    "absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ease-in-out motion-reduce:transition-none",
+                    index === page ? "opacity-100" : "opacity-0",
+                  )}
+                />
+              ))}
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
-              <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white">
+              <div
+                key={tourPage.image}
+                className="onboarding-slide-copy absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white"
+              >
                 <h2
                   data-testid="onboarding-title"
                   className="text-2xl font-semibold"
@@ -364,15 +372,6 @@ export function OnboardingOverlay() {
                   {tourPage.description}
                 </p>
                 <div className="flex items-center gap-2 pt-1" aria-label="Carousel controls">
-                  <button
-                    className="rounded-full bg-black/35 p-1 text-white/80 hover:text-white"
-                    aria-label="Previous welcome slide"
-                    onClick={() =>
-                      setPage((current) => (current - 1 + PAGES.length) % PAGES.length)
-                    }
-                  >
-                    <ArrowLeft size={14} />
-                  </button>
                   {PAGES.map((p, i) => (
                     <button
                       key={p.image}

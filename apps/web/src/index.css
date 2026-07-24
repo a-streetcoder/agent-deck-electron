@@ -127,6 +127,27 @@ body {
   animation: detail-enter 340ms cubic-bezier(0.3, 1.04, 0.4, 1);
 }
 
+@keyframes onboarding-slide-copy-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.onboarding-slide-copy {
+  animation: onboarding-slide-copy-in 600ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-slide-copy {
+    animation: none;
+  }
+}
+
 /* In the Electron shell, drag regions (the title bars) must never swallow
    clicks on interactive controls — mark them no-drag everywhere. Inert in a
    plain browser, where -webkit-app-region has no effect. */
