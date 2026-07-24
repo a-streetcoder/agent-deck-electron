@@ -141,13 +141,13 @@ export function ProviderLoginSheet({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8"
+      className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="flex max-h-[85vh] w-[460px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
+        className="app-modal-panel flex max-h-[85vh] w-[460px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
         data-testid="provider-login-sheet"
         role="dialog"
         aria-modal="true"

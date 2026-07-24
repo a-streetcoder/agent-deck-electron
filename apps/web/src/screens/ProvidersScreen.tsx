@@ -98,8 +98,8 @@ export function ProvidersScreen({
       </div>
 
       {methodProvider ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8">
-          <div className="w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated">
+        <div className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8">
+          <div className="app-modal-panel w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated">
             <h3 className="text-sm font-semibold text-text-primary">
               Connect {methodProvider.name}
             </h3>
