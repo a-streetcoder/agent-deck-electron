@@ -1,0 +1,10 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createLoopCatalogFile, deleteLoopCatalogFile, scanLoopCatalog } from "../src/index.ts";
+const home = mkdtempSync(path.join(tmpdir(), "loop-native-smoke-"));
+createLoopCatalogFile(home, "smoke.loop.md", "smoke");
+if (scanLoopCatalog(home)[0]?.content !== "smoke") throw new Error("native Loop scan failed");
+deleteLoopCatalogFile(home, "smoke.loop.md");
+if (scanLoopCatalog(home).length !== 0) throw new Error("native Loop delete failed");
+console.log(`Native Loop addon smoke passed (${process.platform}-${process.arch})`);

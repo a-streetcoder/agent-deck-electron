@@ -87,6 +87,7 @@ export {
   type LoginStatus,
   type ProviderLoginFn,
 } from "./providerLogin.ts";
+export { LoopCatalogCapabilityError } from "@agent-deck/loop-catalog-native";
 export {
   loopsDir,
   loopSlug,

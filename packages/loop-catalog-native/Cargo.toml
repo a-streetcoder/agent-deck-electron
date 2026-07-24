@@ -1,0 +1,21 @@
+[package]
+name = "loop-catalog-native"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "=3.11.0", default-features = false, features = ["napi8", "dyn-symbols"] }
+napi-derive = "=3.6.0"
+cap-std = "=4.0.2"
+cap-fs-ext = "=4.0.2"
+
+[build-dependencies]
+napi-build = "=2.3.2"
+
+[dev-dependencies]
+tempfile = "3.23.0"

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -73,6 +74,13 @@ test.beforeAll(async () => {
     path.join(agentsDir, "Broken Triage.md"),
     "---\nname: Broken Triage\ntools: read\n---\nExercise runtime failure.\n",
   );
+  execFileSync("git", ["init", "-b", "main"], { cwd: project });
+  execFileSync("git", ["config", "user.email", "e2e@example.com"], { cwd: project });
+  execFileSync("git", ["config", "user.name", "E2E"], { cwd: project });
+  writeFileSync(path.join(project, "README.md"), "# Loop E2E\n");
+  execFileSync("git", ["add", "README.md"], { cwd: project });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: project });
+
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -86,6 +94,13 @@ test.beforeAll(async () => {
     goal: "Make it pass.",
     validationCommand: "exit 0",
     maxIterations: 3,
+  });
+  await putLoop({
+    name: "Retained Worktree",
+    goal: "Produce retained review evidence.",
+    validationCommand: "exit 0",
+    writeTarget: "newWorktree",
+    maxIterations: 1,
   });
   await putLoop({
     name: "Reviewed Report",
@@ -271,6 +286,25 @@ test("runs a single-agent loop to completion", async ({ page }) => {
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-iterations")).toContainText("✓ passed");
+});
+
+test("retains and restores registered worktree evidence in the run panel", async ({ page }) => {
+  await openLoops(page);
+  await page.getByTestId("loop-run-Retained Worktree").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const retained = page.getByTestId("loop-retained-worktree");
+  await expect(retained).toContainText("Review worktree retained.");
+  await expect(retained).toContainText("session-worktrees");
+  await expect(retained).toContainText("Branch: agent-deck/loop-");
+
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-retained-worktree")).toContainText(
+    "Review worktree retained.",
+  );
 });
 
 test("authors, reorders, duplicates, runs, and restores an accessible Pipeline", async ({

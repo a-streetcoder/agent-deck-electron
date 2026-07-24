@@ -1,0 +1,226 @@
+import { spawn, spawnSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+const packageRoot = path.resolve(process.argv[2] ?? "");
+const expectedPlatform = process.argv[3] ?? process.platform;
+const expectedArch = process.argv[4] ?? process.arch;
+if (!process.argv[2] || !existsSync(packageRoot)) {
+  throw new Error(
+    "usage: node scripts/smoke-packaged-loop-catalog.mjs <packaged-app-or-directory> [platform] [arch]",
+  );
+}
+
+function findNamed(root, basename) {
+  const matches = [];
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(candidate);
+      else if (entry.isFile() && entry.name === basename) matches.push(candidate);
+    }
+  }
+  visit(root);
+  return matches;
+}
+
+const asars = findNamed(packageRoot, "app.asar");
+if (asars.length !== 1) throw new Error(`expected one packaged app.asar, found ${asars.length}`);
+const asarPath = asars[0];
+const resourcesPath = path.dirname(asarPath);
+const addonName = `loop-catalog-native.${expectedPlatform}-${expectedArch}.node`;
+const addonPath = path.join(resourcesPath, "loop-catalog-native", addonName);
+if (!existsSync(addonPath)) throw new Error(`packaged addon is missing: ${addonPath}`);
+const packagedAddons = readdirSync(path.dirname(addonPath)).filter((entry) =>
+  entry.endsWith(".node"),
+);
+if (packagedAddons.length !== 1 || packagedAddons[0] !== addonName) {
+  throw new Error(`expected only ${addonName}, found ${packagedAddons.join(", ")}`);
+}
+
+function packagedExecutable() {
+  if (expectedPlatform === "darwin") {
+    const contents = path.dirname(resourcesPath);
+    const candidates = readdirSync(path.join(contents, "MacOS")).map((entry) =>
+      path.join(contents, "MacOS", entry),
+    );
+    const executable = candidates.find((candidate) => statSync(candidate).isFile());
+    if (executable) return executable;
+  } else {
+    const appDirectory = path.dirname(resourcesPath);
+    const preferred =
+      expectedPlatform === "win32"
+        ? ["Agent Deck.exe", "agent-deck-electron.exe"]
+        : ["agent-deck-electron", "Agent Deck"];
+    for (const name of preferred) {
+      const candidate = path.join(appDirectory, name);
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    }
+    if (expectedPlatform === "linux") {
+      for (const entry of readdirSync(appDirectory)) {
+        const candidate = path.join(appDirectory, entry);
+        if (!statSync(candidate).isFile()) continue;
+        try {
+          accessSync(candidate, constants.X_OK);
+          if (!entry.includes("sandbox") && !entry.endsWith(".so")) return candidate;
+        } catch {
+          // Keep looking for the packaged application executable.
+        }
+      }
+    }
+  }
+  throw new Error(`could not locate packaged Electron executable for ${expectedPlatform}`);
+}
+
+const executable = packagedExecutable();
+const baseEnvironment = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
+const marker = "AGENT_DECK_PACKAGED_RUNTIME=";
+const preflight = spawnSync(
+  executable,
+  [
+    "-e",
+    `const binding=require(process.argv[1]); if(typeof binding.scanLoopCatalog!=="function") throw new Error("addon API mismatch"); console.log(${JSON.stringify(
+      marker,
+    )}+JSON.stringify({platform:process.platform,arch:process.arch,electron:process.versions.electron,addon:process.argv[1]}));`,
+    addonPath,
+  ],
+  { env: baseEnvironment, encoding: "utf8" },
+);
+if (preflight.status !== 0) {
+  throw new Error(
+    `packaged Electron addon preflight failed:\n${preflight.stdout}${preflight.stderr}`,
+  );
+}
+const runtimeLine = preflight.stdout.split(/\r?\n/).find((line) => line.startsWith(marker));
+if (!runtimeLine) throw new Error(`packaged runtime marker missing: ${preflight.stdout}`);
+const runtime = JSON.parse(runtimeLine.slice(marker.length));
+if (
+  runtime.platform !== expectedPlatform ||
+  runtime.arch !== expectedArch ||
+  typeof runtime.electron !== "string" ||
+  path.resolve(runtime.addon) !== path.resolve(addonPath)
+) {
+  throw new Error(`packaged runtime mismatch: ${JSON.stringify(runtime)}`);
+}
+
+const sandbox = mkdtempSync(path.join(tmpdir(), "agent-deck-packaged-electron-loop-"));
+const child = spawn(executable, [path.join(asarPath, "dist", "server", "index.mjs")], {
+  cwd: sandbox,
+  env: {
+    ...baseEnvironment,
+    HOME: sandbox,
+    USERPROFILE: sandbox,
+    PORT: "0",
+    AGENT_DECK_TEST: "1",
+    AGENT_DECK_DATA_DIR: path.join(sandbox, "data"),
+    AGENT_DECK_WEB_DIST: path.join(asarPath, "apps", "web", "dist"),
+    AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(resourcesPath, "builtin-agents"),
+    AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: addonPath,
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let output = "";
+child.stdout.setEncoding("utf8");
+child.stderr.setEncoding("utf8");
+child.stdout.on("data", (chunk) => (output += chunk));
+child.stderr.on("data", (chunk) => (output += chunk));
+const deadline = Date.now() + 30_000;
+let base;
+while (Date.now() < deadline) {
+  const match = output.match(/agent-deck listening on (http:\/\/127\.0\.0\.1:\d+)/);
+  if (match) {
+    base = match[1];
+    break;
+  }
+  if (child.exitCode !== null) throw new Error(`packaged Electron server exited:\n${output}`);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+if (!base) throw new Error(`packaged Electron server did not become ready:\n${output}`);
+
+async function jsonRequest(method, route, body, expectedStatus = 200) {
+  const response = await fetch(`${base}${route}`, {
+    method,
+    ...(body
+      ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+      : {}),
+  });
+  const text = await response.text();
+  if (response.status !== expectedStatus) {
+    throw new Error(`${method} ${route} failed: ${response.status} ${text}`);
+  }
+  return text ? JSON.parse(text) : undefined;
+}
+
+try {
+  const initial = await jsonRequest("GET", "/loops");
+  if (initial.loops.length !== 0) throw new Error("initial catalog was not empty");
+
+  await jsonRequest("PUT", "/loops", {
+    name: "Packaged Native Smoke",
+    goal: "safe",
+    structure: "singleAgent",
+  });
+  let listed = await jsonRequest("GET", "/loops");
+  if (listed.loops[0]?.goal !== "safe") throw new Error("create/read failed");
+
+  await jsonRequest("PUT", "/loops", {
+    name: "Packaged Native Smoke",
+    description: "updated",
+    goal: "safer",
+    structure: "singleAgent",
+  });
+  listed = await jsonRequest("GET", "/loops");
+  if (listed.loops[0]?.description !== "updated" || listed.loops[0]?.goal !== "safer") {
+    throw new Error("update/read failed");
+  }
+
+  const duplicate = await jsonRequest(
+    "POST",
+    `/loops/${encodeURIComponent("Packaged Native Smoke")}/duplicate`,
+  );
+  if (duplicate.name !== "Copy of Packaged Native Smoke") throw new Error("duplicate failed");
+  listed = await jsonRequest("GET", "/loops");
+  if (listed.loops.length !== 2) throw new Error("duplicate read failed");
+
+  await jsonRequest("DELETE", "/loops", { name: "Packaged Native Smoke" });
+  await jsonRequest("DELETE", "/loops", { name: "Copy of Packaged Native Smoke" });
+  listed = await jsonRequest("GET", "/loops");
+  if (listed.loops.length !== 0) throw new Error("delete failed");
+
+  const catalogRoot = path.join(sandbox, ".pi");
+  const retainedCatalog = path.join(sandbox, ".pi-retained");
+  renameSync(catalogRoot, retainedCatalog);
+  const victim = path.join(sandbox, "victim");
+  mkdirSync(victim);
+  const sentinel = path.join(victim, "sentinel");
+  writeFileSync(sentinel, "sentinel-safe");
+  symlinkSync(victim, catalogRoot, expectedPlatform === "win32" ? "junction" : "dir");
+  const refused = await jsonRequest("GET", "/loops", undefined, 409);
+  if (refused.code !== "loop_catalog_capability_error") {
+    throw new Error(`unexpected containment refusal: ${JSON.stringify(refused)}`);
+  }
+  if (readFileSync(sentinel, "utf8") !== "sentinel-safe") throw new Error("victim was modified");
+
+  console.log(
+    `Packaged Electron Loop HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
+  );
+} finally {
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolve) => child.once("exit", resolve)),
+    new Promise((resolve) => setTimeout(resolve, 5_000)),
+  ]);
+}

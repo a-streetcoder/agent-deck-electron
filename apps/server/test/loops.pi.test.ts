@@ -636,12 +636,18 @@ describe("loop run engine (real pi)", () => {
     const final = await waitTerminal(run.id);
     expect(final.status).toBe("completed");
 
-    // The owned branch is retained, while transient session/worktree resources are removed.
+    // The registered worktree and branch are retained as durable review evidence.
     const branches = execFileSync("git", ["branch", "--list"], {
       cwd: gitProject,
       encoding: "utf8",
     });
     expect(branches).toContain(worktree!.branch);
-    await expect.poll(() => existsSync(worktree!.path), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => existsSync(worktree!.path), { timeout: 15_000 }).toBe(true);
+    const registered = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: gitProject,
+      encoding: "utf8",
+    });
+    expect(registered).toContain(`worktree ${worktree!.path}`);
+    expect(registered).toContain(`branch refs/heads/${worktree!.branch}`);
   });
 });

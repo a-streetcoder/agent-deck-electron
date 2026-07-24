@@ -204,7 +204,6 @@ const persistedRunSchema = z
           })
           .optional(),
         sessionReconciledAt: z.string().optional(),
-        worktreeReconciledAt: z.string().optional(),
         checkoutAcknowledgedAt: z.string().optional(),
       })
       .superRefine((launch, context) => {
@@ -436,14 +435,9 @@ export class LoopEngine {
     return this.settledPromises.get(id) ?? Promise.resolve();
   }
 
-  /** Runs whose proven Loop-owned launch resources still require reconciliation. */
+  /** Runs whose transient parent session still requires reconciliation. */
   pendingResourceReconciliations(): LoopRun[] {
-    return this.list().filter(
-      (run) =>
-        run.launch &&
-        (!run.launch.sessionReconciledAt ||
-          (run.launch.worktree?.branchOwned === true && !run.launch.worktreeReconciledAt)),
-    );
+    return this.list().filter((run) => run.launch && !run.launch.sessionReconciledAt);
   }
 
   /** Interrupted destructive checkouts stay locked until explicit acknowledgement. */
@@ -466,13 +460,6 @@ export class LoopEngine {
     const launch = this.runs.get(id)?.launch;
     if (!launch || launch.sessionReconciledAt) return;
     launch.sessionReconciledAt = this.now();
-    this.persist();
-  }
-
-  markWorktreeReconciled(id: string): void {
-    const launch = this.runs.get(id)?.launch;
-    if (!launch || launch.worktreeReconciledAt) return;
-    launch.worktreeReconciledAt = this.now();
     this.persist();
   }
 

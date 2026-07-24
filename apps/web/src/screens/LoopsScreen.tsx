@@ -643,6 +643,20 @@ export function LoopsScreen() {
                 {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
               </div>
             ) : null}
+            {activeRun.launch?.worktree ? (
+              <div
+                className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-xs text-text-muted"
+                data-testid="loop-retained-worktree"
+              >
+                <strong className="text-text-secondary">
+                  {isLoopRunTerminal(activeRun.status)
+                    ? "Review worktree retained."
+                    : "Review worktree allocated."}
+                </strong>{" "}
+                <span className="break-all">{activeRun.launch.worktree.path}</span>
+                <span className="block break-all">Branch: {activeRun.launch.worktree.branch}</span>
+              </div>
+            ) : null}
             {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
               <div
                 className="mt-2 rounded-lg border border-warning px-2 py-2 text-xs"

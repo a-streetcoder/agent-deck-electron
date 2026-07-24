@@ -9,3 +9,6 @@ playwright-report/
 test-results/
 .env
 .env.local
+.cargo-local/
+.rustup-local/
+.node22-local/

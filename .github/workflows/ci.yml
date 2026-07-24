@@ -31,6 +31,79 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
 
+  native-security:
+    name: Native Loop security (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            platform: linux
+            arch: x64
+            package: pnpm exec electron-builder --linux dir --x64 --publish never
+          - name: windows-x64
+            os: windows-latest
+            platform: win32
+            arch: x64
+            package: pnpm exec electron-builder --win dir --x64 --publish never
+          - name: macos-arm64
+            os: macos-latest
+            platform: darwin
+            arch: arm64
+            package: pnpm exec electron-builder --mac dir --arm64 --publish never -c.mac.notarize=false -c.mac.hardenedRuntime=false
+          - name: macos-x64
+            os: macos-15-intel
+            platform: darwin
+            arch: x64
+            package: pnpm exec electron-builder --mac dir --x64 --publish never -c.mac.notarize=false -c.mac.hardenedRuntime=false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          shared-key: loop-catalog-native-${{ matrix.name }}
+      - run: pnpm install --frozen-lockfile
+      - name: Rust formatting, lint, and security tests
+        shell: bash
+        run: |
+          cargo fmt --manifest-path packages/loop-catalog-native/Cargo.toml -- --check
+          cargo clippy --manifest-path packages/loop-catalog-native/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path packages/loop-catalog-native/Cargo.toml --locked
+      - run: pnpm build:native
+      - run: pnpm --filter @agent-deck/resources test
+      - name: Focused Loop retention and engine tests
+        shell: bash
+        run: |
+          pnpm --filter @agent-deck/server exec vitest run \
+            test/loopHonestyRoutes.test.ts \
+            test/loopEngine.test.ts
+          pnpm --filter @agent-deck/server exec vitest run \
+            test/git.test.ts \
+            -t "session worktree branch ownership"
+      - run: pnpm build
+      - name: Package Electron and run packaged HTTP CRUD containment smoke
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          ${{ matrix.package }}
+          node scripts/smoke-packaged-loop-catalog.mjs release "${{ matrix.platform }}" "${{ matrix.arch }}"
+
   # Units + real-pi integration (the pinned pi binary provides deterministic,
   # keyless runs). Linux + Windows are the ship targets and BLOCK. macOS is
   # ADVISORY (continue-on-error): it is not a ship target for the cross-plat
@@ -58,6 +131,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          shared-key: loop-catalog-native-tests-${{ runner.os }}
+      - run: pnpm build:native
       - run: pnpm test
       - run: pnpm --filter @agent-deck/web build
       # Real-pi vitest integration (pi-host + server). The e2e package's
@@ -84,6 +167,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          shared-key: loop-catalog-native-e2e-${{ runner.os }}
+      - run: pnpm build:native
       # pnpm may not run Electron's postinstall on a frozen install; fetch its
       # binary explicitly so the desktop-shell e2e can launch it. (bash is on
       # the Windows runner too.)

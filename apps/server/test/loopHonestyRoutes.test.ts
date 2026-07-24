@@ -17,15 +17,10 @@ import type { ServerContext } from "../src/context.ts";
 vi.mock("../src/git.ts", () => ({
   createLoopWorktree: vi.fn(),
   gitWorktreeRemove: vi.fn(),
-  strictRemoveOwnedLoopWorktree: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
 }));
 
-import {
-  createLoopWorktree,
-  gitDeleteOwnedWorktreeBranch,
-  strictRemoveOwnedLoopWorktree,
-} from "../src/git.ts";
+import { createLoopWorktree, gitDeleteOwnedWorktreeBranch, gitWorktreeRemove } from "../src/git.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
@@ -55,7 +50,6 @@ function makeRoutes(
   const recoveryCheckoutLocks = vi.fn(() => recovery.locks ?? new Map<string, string>());
   const pendingResourceReconciliations = vi.fn(() => recovery.runs ?? []);
   const markSessionReconciled = vi.fn();
-  const markWorktreeReconciled = vi.fn();
   const acknowledgeCheckoutRecovery = vi.fn();
   const resolveHumanApproval = vi.fn();
   const getEngine = vi.fn();
@@ -102,7 +96,6 @@ function makeRoutes(
         recoveryCheckoutLocks,
         pendingResourceReconciliations,
         markSessionReconciled,
-        markWorktreeReconciled,
         acknowledgeCheckoutRecovery,
         resolveHumanApproval,
         list: () => [],
@@ -132,7 +125,6 @@ function makeRoutes(
     recoveryCheckoutLocks,
     pendingResourceReconciliations,
     markSessionReconciled,
-    markWorktreeReconciled,
     acknowledgeCheckoutRecovery,
     resolveHumanApproval,
     getEngine,
@@ -162,6 +154,27 @@ function writeExternalLoop(
 }
 
 describe("loop route honesty gate", () => {
+  it.runIf(process.platform !== "win32")(
+    "sanitizes native Loop catalog capability refusals",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "loop-route-capability-"));
+      const victim = path.join(home, "victim");
+      mkdirSync(victim);
+      writeFileSync(path.join(victim, "sentinel"), "safe");
+      symlinkSync(victim, path.join(home, ".pi"));
+      const { fastify } = makeRoutes(home);
+
+      const response = await fastify.inject({ method: "GET", url: "/loops" });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        code: "loop_catalog_capability_error",
+        error: "The native Loop catalog safety boundary refused this filesystem operation.",
+      });
+      expect(response.body).not.toContain(home);
+      expect(readFileSync(path.join(victim, "sentinel"), "utf8")).toBe("safe");
+    },
+  );
+
   it("authors and launches Human Approval without executable resource allocation", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-human-route-"));
     const {
@@ -269,7 +282,7 @@ describe("loop route honesty gate", () => {
     expect(startEngine).toHaveBeenCalledTimes(1);
   });
 
-  it("rolls back a post-allocation parent create failure before deleting the owned Loop branch", async () => {
+  it("retains a registered worktree and branch when parent creation fails", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-start-rollback-"));
     writeLoopFile(
       { home },
@@ -289,12 +302,6 @@ describe("loop route honesty gate", () => {
       sourceBranch: "main",
       branchOwned: true,
     }));
-    vi.mocked(strictRemoveOwnedLoopWorktree).mockImplementation(async () => {
-      order.push("worktree");
-    });
-    vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
-      order.push("branch");
-    });
     createSession.mockImplementation(() => {
       bridgeTokens.set("failed-parent", "secret");
       throw new SessionCreationError(
@@ -319,8 +326,11 @@ describe("loop route honesty gate", () => {
         error: expect.stringContaining("Pi startup failed"),
       }),
     );
-    expect(order).toEqual(["pi", "worktree", "branch"]);
+    expect(order).toEqual(["pi"]);
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     const generatedTarget = vi.mocked(createLoopWorktree).mock.calls[0]![1];
+    expect(response.json().error).toContain(generatedTarget);
     expect(path.dirname(generatedTarget)).toBe(
       path.join(realpathSync(path.join(home, "managed-worktrees")), "loop"),
     );
@@ -391,12 +401,6 @@ describe("loop route honesty gate", () => {
     destroySession.mockImplementation(async () => {
       order.push("destroy");
     });
-    vi.mocked(strictRemoveOwnedLoopWorktree).mockImplementation(async () => {
-      order.push("worktree");
-    });
-    vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
-      order.push("branch");
-    });
 
     const responsePromise = fastify.inject({
       method: "POST",
@@ -409,13 +413,65 @@ describe("loop route honesty gate", () => {
     const response = await responsePromise;
 
     expect(response.statusCode).toBe(500);
-    expect(order).toEqual(["stop", "settled", "rollback", "destroy", "worktree", "branch"]);
+    expect(response.json().error).toContain(vi.mocked(createLoopWorktree).mock.calls[0]![1]);
+    expect(order).toEqual(["stop", "settled", "rollback", "destroy"]);
     expect(stopEngine).toHaveBeenCalledOnce();
     expect(settledEngine).toHaveBeenCalledOnce();
     expect(rollbackEngine).toHaveBeenCalledWith("run-in-flight");
     expect(destroySession).toHaveBeenCalledOnce();
-    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
-    expect(gitDeleteOwnedWorktreeBranch).toHaveBeenCalledOnce();
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+  });
+
+  it("retains registered worktree evidence after normal terminal settlement", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-terminal-retain-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Retained Review Loop",
+        structure: "singleAgent",
+        goal: "Produce review evidence.",
+        writeTarget: "newWorktree",
+      },
+    );
+    const { fastify, createSession, destroySession, startEngine, settledEngine } = makeRoutes(home);
+    let worktree!: Awaited<ReturnType<typeof createLoopWorktree>>;
+    vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => {
+      worktree = { path: target, branch, sourceBranch: "main", branchOwned: true };
+      return worktree;
+    });
+    createSession.mockReturnValue({
+      meta: {
+        id: "retained-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    });
+    let settle!: () => void;
+    settledEngine.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)));
+    startEngine.mockImplementation((_loop, _cwd, options) => ({
+      id: "retained-run",
+      status: "completed",
+      launch: options.launch,
+    }));
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/loops/Retained%20Review%20Loop/run",
+      payload: { projectId: "project" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().run.launch.worktree).toMatchObject({
+      path: worktree.path,
+      branch: worktree.branch,
+      branchOwned: true,
+    });
+
+    settle();
+    await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
   it("rejects invalid Discovery/Triage configuration before runtime allocation", async () => {
@@ -880,7 +936,7 @@ describe("loop route honesty gate", () => {
     expect(startEngine).not.toHaveBeenCalled();
   });
 
-  it("reconciles only proven recovery resources once and keeps checkout retries locked", async () => {
+  it("reconciles only parent sessions, retains worktrees, and keeps checkout retries locked", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-recovery-"));
     writeLoopFile(
       { home },
@@ -960,7 +1016,6 @@ describe("loop route honesty gate", () => {
       getEngine,
       acknowledgeCheckoutRecovery,
       markSessionReconciled,
-      markWorktreeReconciled,
       indexRows,
       bridgeTokens,
     } = makeRoutes(home, undefined, {
@@ -993,14 +1048,7 @@ describe("loop route honesty gate", () => {
     expect(indexRows.has("stale-parent")).toBe(false);
     expect(bridgeTokens.has("stale-parent")).toBe(false);
     expect(markSessionReconciled).toHaveBeenCalledOnce();
-    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
-    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registeredProjectRoot: home,
-        worktree: ownedWorktree.launch.worktree,
-      }),
-    );
-    expect(markWorktreeReconciled).toHaveBeenCalledOnce();
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
 
     const acknowledged = {
@@ -1014,9 +1062,11 @@ describe("loop route honesty gate", () => {
     });
     expect(acknowledge.statusCode).toBe(200);
 
-    // Fastify onReady recovery is not repeated for later requests.
+    // Fastify onReady recovery is not repeated for later requests, and retained
+    // worktree evidence is never touched by recovery.
     expect(destroySession).toHaveBeenCalledTimes(2);
-    expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
   it("keeps supported single-agent creation and duplication working", async () => {

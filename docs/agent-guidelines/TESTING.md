@@ -1,13 +1,16 @@
 # Testing guidance
 
-Choose the narrowest relevant checks while developing, then run the repo-level checks affected by the change.
+Choose the narrowest relevant checks while developing, then run the repo-level checks affected by the change. Build the required native Loop safety addon first; tests deliberately fail closed when its platform binary is absent or mismatched.
 
 ```sh
+pnpm build:native
 pnpm typecheck
 pnpm lint
 pnpm format:check
 pnpm test
 ```
+
+Native Loop catalog changes also require `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, and `cargo test --locked` in `packages/loop-catalog-native`, plus the blocking Linux, Windows, macOS arm64, and macOS x64 CI matrix. Each matrix runner must package Electron and use that packaged executable in Node mode for the full Loop HTTP CRUD and containment smoke.
 
 Additional suites:
 

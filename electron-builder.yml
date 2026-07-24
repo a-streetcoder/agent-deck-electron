@@ -18,6 +18,10 @@ asarUnpack:
   - "**/node_modules/node-pty/build/Release/**"
 
 extraResources:
+  - from: packages/loop-catalog-native/native
+    to: loop-catalog-native
+    filter:
+      - "*.node"
   - from: packages/resources/builtin-agents
     to: builtin-agents
   - from: build/pi-runtime/node_modules

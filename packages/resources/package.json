@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@agent-deck/domain": "workspace:*",
+    "@agent-deck/loop-catalog-native": "workspace:*",
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "0.82.0",
     "chokidar": "4.0.3",

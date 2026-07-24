@@ -7,6 +7,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = path.join(root, "dist", "server");
 
 await rm(outputDirectory, { recursive: true, force: true });
+// Keep the TypeScript native-catalog loader in this backend bundle. The
+// architecture-specific `.node` binary is intentionally external to app.asar,
+// shipped by electron-builder as an extraResource, and selected at runtime.
 await build({
   absWorkingDir: root,
   entryPoints: ["apps/server/src/index.ts"],
@@ -23,8 +26,8 @@ await build({
     js: 'import { createRequire as __agentDeckCreateRequire } from "node:module"; const require = __agentDeckCreateRequire(import.meta.url);',
   },
   external: [
-    // Native code is rebuilt for Electron and unpacked from app.asar by
-    // electron-builder. The server loads it lazily with createRequire().
+    // node-pty is rebuilt for Electron and unpacked from app.asar by
+    // electron-builder. Runtime CommonJS loading is preserved.
     "node-pty",
     // Semantic memory is intentionally optional and runtime-installed.
     "@huggingface/transformers",

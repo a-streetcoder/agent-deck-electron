@@ -2,7 +2,7 @@
 
 App artwork has one canonical source at `build/icon-source.png`. After changing it, run `pnpm generate:icons` on macOS to regenerate the native macOS, Windows, and Linux formats.
 
-Packaged apps include the pinned Pi dependency tree and launch it with Electron's embedded Node runtime; users must not need a separate Node/npm/Pi installation. Validate this whenever packaging changes.
+Packaged apps include the pinned Pi dependency tree and the architecture-matched native Loop catalog safety addon, and launch them with Electron's embedded Node runtime; users must not need a separate Node/npm/Pi/Rust installation. Validate the addon's exact architecture and nested code signature whenever packaging changes, then run the packaged Electron executable in Node mode through the full Loop HTTP CRUD and containment smoke.
 
 Local macOS production-layout validation uses an unsigned Apple Silicon app:
 

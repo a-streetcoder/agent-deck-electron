@@ -127,6 +127,11 @@ function ownedServerLaunch() {
       AGENT_DECK_PI_PATH: bundledPiLauncher(),
       AGENT_DECK_WEB_DIST: path.join(app.getAppPath(), "apps", "web", "dist"),
       AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(process.resourcesPath, "builtin-agents"),
+      AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: path.join(
+        process.resourcesPath,
+        "loop-catalog-native",
+        `loop-catalog-native.${process.platform}-${process.arch}.node`,
+      ),
     },
     shell: false,
   };

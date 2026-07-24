@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   clampMaxIterations,
@@ -14,6 +13,13 @@ import {
   type LoopStructure,
   type LoopWriteTarget,
 } from "@agent-deck/domain";
+import {
+  createLoopCatalogFile,
+  deleteLoopCatalogFile,
+  LoopCatalogCapabilityError,
+  replaceLoopCatalogFile,
+  scanLoopCatalog,
+} from "@agent-deck/loop-catalog-native";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import YAML from "yaml";
 import { piAgentHome, type ResourceRoots } from "./paths.ts";
@@ -141,25 +147,32 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
   };
 }
 
-export function scanLoops(roots: ResourceRoots): LoopDefinition[] {
-  const dir = loopsDir(roots);
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return []; // no loops dir yet
-  }
-  const loops: LoopDefinition[] = [];
-  for (const entry of entries) {
-    if (!entry.toLowerCase().endsWith(LOOP_SUFFIX)) continue;
-    const filePath = path.join(dir, entry);
+interface LoopCatalogRecord {
+  basename: string;
+  content: string;
+  loop: LoopDefinition;
+}
+
+function scanLoopRecords(roots: ResourceRoots): LoopCatalogRecord[] {
+  const directory = loopsDir(roots);
+  const records: LoopCatalogRecord[] = [];
+  for (const entry of scanLoopCatalog(roots.home)) {
     try {
-      loops.push(parseLoopFile(filePath, readFileSync(filePath, "utf8")));
+      records.push({
+        basename: entry.basename,
+        content: entry.content,
+        // Compatibility metadata only. Native operations never consume this path.
+        loop: parseLoopFile(path.join(directory, entry.basename), entry.content),
+      });
     } catch {
-      // Skip a malformed file.
+      // A syntactically malformed definition is invisible, matching native scan.
     }
   }
-  return loops.sort((a, b) => a.name.localeCompare(b.name));
+  return records.sort((left, right) => left.loop.name.localeCompare(right.loop.name));
+}
+
+export function scanLoops(roots: ResourceRoots): LoopDefinition[] {
+  return scanLoopRecords(roots).map((record) => record.loop);
 }
 
 export interface LoopEdit {
@@ -229,19 +242,12 @@ function serializeFrontmatter(record: Record<string, unknown>): string {
     .join("\n");
 }
 
-function loopFilePath(roots: ResourceRoots, name: string): string {
-  const dir = loopsDir(roots);
-  const filePath = path.join(dir, `${loopSlug(name)}${LOOP_SUFFIX}`);
-  // Defense-in-depth: the resolved file must stay inside the loops dir.
-  if (!path.resolve(filePath).startsWith(path.resolve(dir) + path.sep)) {
-    throw new Error("refusing to write outside the loops catalog");
-  }
-  return filePath;
+function loopBasename(name: string): string {
+  return `${loopSlug(name)}${LOOP_SUFFIX}`;
 }
 
-/** The on-disk file of the loop whose name matches, regardless of its filename. */
-function loopPathByName(roots: ResourceRoots, name: string): string | undefined {
-  return scanLoops(roots).find((loop) => loop.name === name)?.filePath;
+function compatibilityFilePath(roots: ResourceRoots, basename: string): string {
+  return path.join(loopsDir(roots), basename);
 }
 
 /**
@@ -252,23 +258,23 @@ function loopPathByName(roots: ResourceRoots, name: string): string | undefined 
  * Unknown frontmatter round-trips.
  */
 export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
-  const dir = loopsDir(roots);
-  const existingPath = loopPathByName(roots, edit.name);
-  const filePath = existingPath ?? loopFilePath(roots, edit.name);
+  const records = scanLoopRecords(roots);
+  const existing = records.find((record) => record.loop.name === edit.name);
+  const basename = existing?.basename ?? loopBasename(edit.name);
+  const filePath = compatibilityFilePath(roots, basename);
   let frontmatter: Record<string, unknown> = { ...(edit.preservedFrontmatter ?? {}) };
   let persistedClassificationPrompt: string | undefined;
   let persistedCheckpointPrompt: string | undefined;
   let body = "";
-  if (existingPath) {
-    const existingContent = readFileSync(filePath, "utf8");
-    const existing = parseLoopDocument(existingContent);
-    frontmatter = { ...existing.frontmatter };
+  if (existing) {
+    const document = parseLoopDocument(existing.content);
+    frontmatter = { ...document.frontmatter };
     persistedClassificationPrompt = nativeLineFrontmatterValue(
-      existingContent,
+      existing.content,
       "classificationPrompt",
     );
-    persistedCheckpointPrompt = nativeLineFrontmatterValue(existingContent, "checkpointPrompt");
-    body = existing.body.trim();
+    persistedCheckpointPrompt = nativeLineFrontmatterValue(existing.content, "checkpointPrompt");
+    body = document.body.trim();
   }
 
   // Public writes are an authoritative capability boundary too. Existing
@@ -302,8 +308,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
 
-  if (!existingPath && existsSync(filePath)) {
-    // The slug is occupied by a loop with a different name — refuse to clobber.
+  if (!existing && records.some((record) => record.basename === basename)) {
     throw new Error("loop_slug_conflict");
   }
 
@@ -358,15 +363,27 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   if (edit.writeTarget !== undefined) frontmatter.writeTarget = edit.writeTarget;
   if (edit.goal !== undefined) body = edit.goal.trim();
 
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
+  const content = `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`;
+  try {
+    if (existing) replaceLoopCatalogFile(roots.home, basename, content);
+    else createLoopCatalogFile(roots.home, basename, content);
+  } catch (error) {
+    if (
+      error instanceof LoopCatalogCapabilityError &&
+      error.code === "LOOP_CATALOG_ALREADY_EXISTS"
+    ) {
+      throw new Error("loop_slug_conflict");
+    }
+    throw error;
+  }
   return filePath;
 }
 
-/** Delete a loop by name (its actual file, not the re-derived slug). No-op if absent. */
+/** Delete by catalog identity. Display file paths are never used as authority. */
 export function deleteLoopFile(roots: ResourceRoots, name: string): void {
-  const filePath = loopPathByName(roots, name) ?? loopFilePath(roots, name);
-  rmSync(filePath, { force: true });
+  const existing = scanLoopRecords(roots).find((record) => record.loop.name === name);
+  if (!existing) return;
+  deleteLoopCatalogFile(roots.home, existing.basename);
 }
 
 export class LoopDefinitionInvalidError extends Error {
@@ -394,9 +411,11 @@ export class LoopStructureNotRunnableError extends Error {
  * LoopStructureNotRunnableError when no engine exists for its structure.
  */
 export function duplicateLoop(roots: ResourceRoots, name: string): string {
-  const loops = scanLoops(roots);
-  const source = loops.find((loop) => loop.name === name);
-  if (!source) throw new Error("loop_not_found");
+  const records = scanLoopRecords(roots);
+  const sourceRecord = records.find((record) => record.loop.name === name);
+  if (!sourceRecord) throw new Error("loop_not_found");
+  const source = sourceRecord.loop;
+  const loops = records.map((record) => record.loop);
   // This resource boundary is authoritative too: direct callers and a source
   // changed between a route's check and this scan must never copy an
   // unsupported structure. Check before deriving a destination name or writing.
@@ -409,7 +428,7 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
   let copyName = `Copy of ${name}`;
   for (let n = 2; existingSlugs.has(loopSlug(copyName)); n += 1)
     copyName = `Copy of ${name} (${n})`;
-  const sourceDocument = parseLoopDocument(readFileSync(source.filePath, "utf8"));
+  const sourceDocument = parseLoopDocument(sourceRecord.content);
   writeLoopFile(roots, {
     name: copyName,
     preservedFrontmatter: { ...sourceDocument.frontmatter },

@@ -3,6 +3,8 @@ pnpm-lock.yaml
 **/*.ttf
 **/*.svg
 **/coverage/
+packages/loop-catalog-native/target/
+packages/loop-catalog-native/native/
 apps/web/public/fonts/
 # Byte-exact on-disk data-dir fixtures: these mirror what the app writes via
 # JSON.stringify(x, null, 2) (no trailing newline), so the persistence

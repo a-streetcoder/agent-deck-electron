@@ -13,20 +13,16 @@ import {
 import {
   deleteLoopFile,
   duplicateLoop,
+  LoopCatalogCapabilityError,
   LoopDefinitionInvalidError,
   LoopStructureNotRunnableError,
   scanAgents,
   scanLoops,
   writeLoopFile,
 } from "@agent-deck/resources";
+import type { FastifyReply } from "fastify";
 import { z } from "zod";
-import {
-  createLoopWorktree,
-  gitDeleteOwnedWorktreeBranch,
-  strictRemoveOwnedLoopWorktree,
-  type GitWorktree,
-  type OwnedLoopWorktreeProof,
-} from "../git.ts";
+import { createLoopWorktree, type GitWorktree, type OwnedLoopWorktreeProof } from "../git.ts";
 import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
@@ -65,6 +61,14 @@ export function ensurePrivateLoopWorktreesRoot(worktreesRoot: string): string {
     throw new Error("Loop worktree root could not be canonicalized safely");
   }
   return canonical;
+}
+
+function catalogCapabilityRefusal(error: unknown, reply: FastifyReply): FastifyReply | undefined {
+  if (!(error instanceof LoopCatalogCapabilityError)) return undefined;
+  return reply.status(409).send({
+    code: "loop_catalog_capability_error",
+    error: "The native Loop catalog safety boundary refused this filesystem operation.",
+  });
 }
 
 function unsupportedStructureError(structure: LoopStructure): {
@@ -113,48 +117,20 @@ export function registerLoopRoutes(
     checkoutLocks.set(key, { owner: runId, kind: "recovery" });
   }
 
-  // Reconcile only resources whose exact Loop ownership was durably recorded.
-  // A live resumable parent is destroyed/settled before its index/token record
-  // is removed; owned worktree branches are deliberately retained.
+  // Reconcile only transient parent sessions whose exact ownership was durably
+  // recorded. Registered Loop worktrees and branches are review evidence and
+  // are never removed automatically, including during startup recovery.
   fastify.addHook("onReady", async () => {
     for (const run of loopEngine.pendingResourceReconciliations()) {
       const launch = run.launch;
-      if (!launch) continue;
-      if (!launch.sessionReconciledAt) {
-        try {
-          await sessions.destroy(launch.sessionId);
-          index.remove(launch.sessionId);
-          bridgeTokens.delete(launch.sessionId);
-          loopEngine.markSessionReconciled(run.id);
-        } catch (error) {
-          fastify.log.warn(
-            { err: error, runId: run.id },
-            "failed to reconcile Loop parent session",
-          );
-        }
-      }
-      if (
-        launch.sessionReconciledAt &&
-        launch.worktree?.branchOwned === true &&
-        !launch.worktreeReconciledAt
-      ) {
-        try {
-          const project = run.projectId
-            ? projects.find((item) => item.id === run.projectId)
-            : undefined;
-          if (!project) throw new Error("Loop worktree project is no longer registered");
-          await strictRemoveOwnedLoopWorktree({
-            managedRoot: loopWorktreesRoot,
-            registeredProjectRoot: project.path,
-            worktree: launch.worktree,
-          });
-          loopEngine.markWorktreeReconciled(run.id);
-        } catch (error) {
-          fastify.log.warn(
-            { err: error, runId: run.id },
-            "failed to reconcile owned Loop worktree",
-          );
-        }
+      if (!launch || launch.sessionReconciledAt) continue;
+      try {
+        await sessions.destroy(launch.sessionId);
+        index.remove(launch.sessionId);
+        bridgeTokens.delete(launch.sessionId);
+        loopEngine.markSessionReconciled(run.id);
+      } catch (error) {
+        fastify.log.warn({ err: error, runId: run.id }, "failed to reconcile Loop parent session");
       }
     }
   });
@@ -189,13 +165,30 @@ export function registerLoopRoutes(
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
   });
 
-  fastify.get("/loops", async () => ({ loops: scanLoops(rootsFor()) }));
+  fastify.get("/loops", async (_request, reply) => {
+    try {
+      return { loops: scanLoops(rootsFor()) };
+    } catch (error) {
+      return (
+        catalogCapabilityRefusal(error, reply) ??
+        reply.status(500).send({ error: "Loop catalog scan failed." })
+      );
+    }
+  });
 
   fastify.put("/loops", async (request, reply) => {
     const parsed = loopEditBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const roots = rootsFor();
-    const existing = scanLoops(roots).find((loop) => loop.name === parsed.data.name);
+    let existing;
+    try {
+      existing = scanLoops(roots).find((loop) => loop.name === parsed.data.name);
+    } catch (error) {
+      return (
+        catalogCapabilityRefusal(error, reply) ??
+        reply.status(500).send({ error: "Loop catalog scan failed." })
+      );
+    }
     const resultingStructure = parsed.data.structure ?? existing?.structure ?? "singleAgent";
     if (!isRunnableLoopStructure(resultingStructure)) {
       return reply.status(422).send(unsupportedStructureError(resultingStructure));
@@ -203,6 +196,8 @@ export function registerLoopRoutes(
     try {
       writeLoopFile(roots, parsed.data);
     } catch (error) {
+      const refused = catalogCapabilityRefusal(error, reply);
+      if (refused) return refused;
       const message = error instanceof Error ? error.message : String(error);
       if (message === "loop_slug_conflict") {
         return reply
@@ -226,7 +221,14 @@ export function registerLoopRoutes(
   fastify.delete("/loops", async (request, reply) => {
     const parsed = z.object({ name: z.string().min(1) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    deleteLoopFile(rootsFor(), parsed.data.name);
+    try {
+      deleteLoopFile(rootsFor(), parsed.data.name);
+    } catch (error) {
+      return (
+        catalogCapabilityRefusal(error, reply) ??
+        reply.status(500).send({ error: "Loop catalog delete failed." })
+      );
+    }
     broadcast({ type: "resources_changed" });
     return { ok: true };
   });
@@ -234,7 +236,15 @@ export function registerLoopRoutes(
   fastify.post("/loops/:name/duplicate", async (request, reply) => {
     const name = (request.params as { name: string }).name;
     const roots = rootsFor();
-    const source = scanLoops(roots).find((loop) => loop.name === name);
+    let source;
+    try {
+      source = scanLoops(roots).find((loop) => loop.name === name);
+    } catch (error) {
+      return (
+        catalogCapabilityRefusal(error, reply) ??
+        reply.status(500).send({ error: "Loop catalog scan failed." })
+      );
+    }
     if (!source) return reply.status(404).send({ error: `unknown loop: ${name}` });
     if (!isRunnableLoopStructure(source.structure)) {
       return reply.status(422).send(unsupportedStructureError(source.structure));
@@ -244,6 +254,8 @@ export function registerLoopRoutes(
       broadcast({ type: "resources_changed" });
       return { name: copyName };
     } catch (error) {
+      const refused = catalogCapabilityRefusal(error, reply);
+      if (refused) return refused;
       const message = error instanceof Error ? error.message : String(error);
       if (message === "loop_not_found") {
         return reply.status(404).send({ error: `unknown loop: ${name}` });
@@ -265,7 +277,15 @@ export function registerLoopRoutes(
   // roles receive phase-specific capabilities; durable truth lives in run state.
   fastify.post("/loops/:name/run", async (request, reply) => {
     const name = (request.params as { name: string }).name;
-    const loop = scanLoops(rootsFor()).find((l) => l.name === name);
+    let loop;
+    try {
+      loop = scanLoops(rootsFor()).find((candidate) => candidate.name === name);
+    } catch (error) {
+      return (
+        catalogCapabilityRefusal(error, reply) ??
+        reply.status(500).send({ error: "Loop catalog scan failed." })
+      );
+    }
     if (!loop) return reply.status(404).send({ error: `unknown loop: ${name}` });
     // This must precede request parsing, project lookup, worktree creation,
     // session/Pi allocation, and LoopEngine.start: unsupported persisted/native
@@ -372,8 +392,8 @@ export function registerLoopRoutes(
     };
     // writeTarget "newWorktree": run the loop in an isolated git worktree on a
     // fresh branch off the current one (native PiAgentSessionWorktreeService), so
-    // the agent's work never touches the main checkout. The branch is kept after
-    // the run; only the worktree directory is removed.
+    // the agent's work never touches the main checkout. Once registered, both the
+    // worktree and branch are retained as durable review evidence.
     let cwd = project.path;
     let worktree: GitWorktree | null = null;
     let worktreeOwnership: OwnedLoopWorktreeProof | null = null;
@@ -481,62 +501,29 @@ export function registerLoopRoutes(
           broadcast({ type: "session_removed", sessionId: owned.id });
         }
       }
-      if (worktree && worktreeOwnership) {
-        let removed = false;
-        try {
-          await strictRemoveOwnedLoopWorktree({
-            managedRoot: loopWorktreesRoot,
-            registeredProjectRoot: project.path,
-            worktree: worktreeOwnership,
-          });
-          removed = true;
-        } catch (cleanupError) {
-          fastify.log.warn(
-            { err: cleanupError },
-            "refused or failed strict Loop worktree cleanup after startup",
-          );
-        }
-        if (removed) {
-          await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
-            fastify.log.warn(
-              { err: cleanupError, branch: worktree?.branch },
-              "failed to remove generated Loop branch after startup",
-            );
-          });
-        }
-      }
+      // Once Git has registered a Loop worktree, retain both it and its branch
+      // even if later startup fails. They may contain review evidence, and no
+      // recursive/path-based cleanup is safe against same-user rename races.
       releaseCheckoutLock();
+      const retainedReview = worktreeOwnership
+        ? ` Registered review worktree retained at ${worktreeOwnership.path} on branch ${worktreeOwnership.branch}.`
+        : "";
       return reply.status(500).send({
         code: "loop_start_failed",
-        error: `The Loop couldn't be started safely. Transient cleanup was attempted; fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
+        error: `The Loop couldn't be started safely.${retainedReview} Fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    // The durable run timeline is authoritative. The parent Pi/session and
-    // temporary worktree are implementation resources and are removed after all
-    // children settle; only the generated branch is retained.
+    // Reconcile only the transient parent after settlement. A registered Loop
+    // worktree and branch remain durable review evidence at launch.worktree.
     void loopEngine.settled(run.id).finally(async () => {
       try {
-        try {
-          await sessions.destroy(parent.meta.id);
-          const removed = index.remove(parent.meta.id);
-          if (removed) broadcast({ type: "session_removed", sessionId: parent.meta.id });
-          bridgeTokens.delete(parent.meta.id);
-          loopEngine.markSessionReconciled(run.id);
-        } catch (cleanupError) {
-          fastify.log.warn({ err: cleanupError }, "failed to reconcile settled Loop parent");
-        }
-        if (worktreeOwnership && run.launch?.sessionReconciledAt) {
-          try {
-            await strictRemoveOwnedLoopWorktree({
-              managedRoot: loopWorktreesRoot,
-              registeredProjectRoot: project.path,
-              worktree: worktreeOwnership,
-            });
-            loopEngine.markWorktreeReconciled(run.id);
-          } catch (cleanupError) {
-            fastify.log.warn({ err: cleanupError }, "failed to remove settled Loop worktree");
-          }
-        }
+        await sessions.destroy(parent.meta.id);
+        const removed = index.remove(parent.meta.id);
+        if (removed) broadcast({ type: "session_removed", sessionId: parent.meta.id });
+        bridgeTokens.delete(parent.meta.id);
+        loopEngine.markSessionReconciled(run.id);
+      } catch (cleanupError) {
+        fastify.log.warn({ err: cleanupError }, "failed to reconcile settled Loop parent");
       } finally {
         releaseCheckoutLock();
       }

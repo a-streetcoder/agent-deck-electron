@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -49,6 +56,20 @@ function writeExternalLoop(
 }
 
 describe("loop definition store", () => {
+  it("keeps direct Node filesystem authority out of Loop catalog persistence", () => {
+    const source = readFileSync(new URL("../src/loops.ts", import.meta.url), "utf8");
+    expect(source.match(/from ["']node:fs(?:\/promises)?["']/g) ?? []).toEqual([]);
+    expect(
+      source.match(
+        /\b(?:readFile|readFileSync|writeFile|writeFileSync|rename|renameSync|unlink|unlinkSync|rm|rmSync)\b/g,
+      ) ?? [],
+    ).toEqual([]);
+    expect(source).toContain("scanLoopCatalog");
+    expect(source).toContain("createLoopCatalogFile");
+    expect(source).toContain("replaceLoopCatalogFile");
+    expect(source).toContain("deleteLoopCatalogFile");
+  });
+
   it("creates, round-trips, updates, and deletes a loop", () => {
     const home = makeHome();
     const roots = { home };
@@ -571,6 +592,33 @@ describe("loop definition store", () => {
       LOOP_DEFAULT_CHECKPOINT_PROMPT,
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed on catalog and final symlinks without touching outside sentinels",
+    () => {
+      const home = makeHome();
+      const victim = path.join(home, "victim");
+      mkdirSync(victim);
+      const sentinel = path.join(victim, "sentinel");
+      writeFileSync(sentinel, "safe");
+      symlinkSync(victim, path.join(home, ".pi"));
+      expect(() => writeLoopFile({ home }, { name: "Unsafe", goal: "bad" })).toThrow(
+        expect.objectContaining({ code: "LOOP_CATALOG_UNSAFE_COMPONENT" }),
+      );
+      expect(readFileSync(sentinel, "utf8")).toBe("safe");
+
+      const secondHome = makeHome();
+      const directory = loopsDir({ home: secondHome });
+      mkdirSync(directory, { recursive: true });
+      symlinkSync(sentinel, path.join(directory, "unsafe.loop.md"));
+      expect(scanLoops({ home: secondHome })).toEqual([]);
+      expect(() => writeLoopFile({ home: secondHome }, { name: "Unsafe", goal: "bad" })).toThrow(
+        "loop_slug_conflict",
+      );
+      deleteLoopFile({ home: secondHome }, "Unsafe");
+      expect(readFileSync(sentinel, "utf8")).toBe("safe");
+    },
+  );
 
   it("rejects a different name that collides on the same slug", () => {
     const home = makeHome();

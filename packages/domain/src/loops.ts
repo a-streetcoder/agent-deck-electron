@@ -318,7 +318,6 @@ export interface LoopRunLaunchOwnership {
   checkoutLockKey?: string;
   worktree?: LoopOwnedWorktree;
   sessionReconciledAt?: string;
-  worktreeReconciledAt?: string;
   /** Explicit user acknowledgement that an interrupted checkout is safe to unlock. */
   checkoutAcknowledgedAt?: string;
 }

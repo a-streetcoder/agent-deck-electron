@@ -1,0 +1,32 @@
+{
+  "name": "@agent-deck/loop-catalog-native",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "napi": {
+    "binaryName": "loop-catalog-native",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc",
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin"
+    ]
+  },
+  "scripts": {
+    "prebuild": "node scripts/clean-native.mjs",
+    "build": "napi build --release --platform --output-dir native && node scripts/verify-native.mjs",
+    "build:debug": "napi build --platform --output-dir native",
+    "smoke": "node --import tsx test/smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "cargo test --locked && vitest run"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.7.4",
+    "@types/node": "22.15.29",
+    "tsx": "4.20.3",
+    "vitest": "3.2.4"
+  }
+}
