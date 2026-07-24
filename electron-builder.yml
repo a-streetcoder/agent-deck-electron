@@ -33,4 +33,4 @@ mac:
 
 dmg:
   title: Agent Deck ${version}
-  sign: false
+  sign: true
