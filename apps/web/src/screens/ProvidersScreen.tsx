@@ -62,8 +62,8 @@ export function ProvidersScreen({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="providers-screen">
-      <div className="mx-auto max-w-3xl">
+    <div className="min-h-0 flex-1 overflow-hidden px-6 py-5" data-testid="providers-screen">
+      <div className="mx-auto flex h-full max-w-3xl flex-col">
         <div className="flex items-center gap-2 pb-1">
           <ShieldCheck size={16} className="text-text-secondary" aria-hidden />
           <h2 className="text-base font-semibold text-text-primary">Connect an AI provider</h2>
@@ -82,12 +82,18 @@ export function ProvidersScreen({
           />
         </label>
 
-        {!loaded ? <SkeletonRows count={5} /> : null}
-        <ProviderGroup title="Subscriptions" providers={subscriptions} onSelect={selectProvider} />
-        <ProviderGroup title="API key" providers={apiKeyOnly} onSelect={selectProvider} />
-        {loaded && visible.length === 0 ? (
-          <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
-        ) : null}
+        <div className="min-h-0 flex-1 overflow-y-auto pr-3" data-testid="provider-scroll-area">
+          {!loaded ? <SkeletonRows count={5} /> : null}
+          <ProviderGroup
+            title="Subscriptions"
+            providers={subscriptions}
+            onSelect={selectProvider}
+          />
+          <ProviderGroup title="API key" providers={apiKeyOnly} onSelect={selectProvider} />
+          {loaded && visible.length === 0 ? (
+            <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
+          ) : null}
+        </div>
       </div>
 
       {methodProvider ? (

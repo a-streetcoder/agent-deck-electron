@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-empty-onboarding-"));
+const isolatedHome = path.join(dataDir, "home");
+mkdirSync(isolatedHome, { recursive: true });
 const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 console.log("Launching an isolated empty-setup onboarding preview.");
@@ -17,6 +19,9 @@ const child = spawn(command, ["dev"], {
   env: {
     ...process.env,
     AGENT_DECK_DATA_DIR: dataDir,
+    AGENT_DECK_PI_ENV: JSON.stringify({ HOME: isolatedHome }),
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
     VITE_AGENT_DECK_ONBOARDING_PREVIEW: "empty",
   },
 });
