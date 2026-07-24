@@ -9,12 +9,6 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "node-pty"
-    ]
-  },
   "scripts": {
     "dev": "pnpm --filter @agent-deck/desktop dev",
     "build": "pnpm build:web && pnpm build:backend",

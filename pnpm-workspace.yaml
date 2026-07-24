@@ -2,3 +2,10 @@ packages:
   - packages/*
   - apps/*
   - e2e
+
+# Install locked dependencies immediately; do not apply pnpm's release-age delay.
+minimumReleaseAge: 0
+
+onlyBuiltDependencies:
+  - electron
+  - node-pty
