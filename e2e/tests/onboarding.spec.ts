@@ -23,7 +23,9 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("walks the tour, runs the setup check, and finishes from the final step", async ({ page }) => {
+test("walks the tour, runs setup, and gates entry until required setup is ready", async ({
+  page,
+}) => {
   await page.goto(harness.baseUrl);
   const overlay = page.getByTestId("onboarding");
   await expect(overlay).toBeVisible();
@@ -38,15 +40,15 @@ test("walks the tour, runs the setup check, and finishes from the final step", a
   // Tour: the native illustration + title, advancing through the pages.
   await expect(page.getByTestId("onboarding-image")).toBeVisible();
   await expect(page.getByTestId("onboarding-title")).toHaveText("Command Pi from Agent Deck");
-  await page.getByTestId("onboarding-next").click();
+  await page.getByRole("button", { name: "Next welcome slide" }).click();
   await expect(page.getByTestId("onboarding-title")).toHaveText("Work in a Coding Chat");
-  for (let i = 0; i < 4; i += 1) await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-title")).toHaveText("Connect the Wider Workflow");
+  await expect(page.getByTestId("onboarding-skip")).toHaveCount(0);
 
-  // The last tour page's CTA is "Check Setup" (not a project add), which opens
-  // the functional Setup Check step.
-  await expect(page.getByTestId("onboarding-next")).toHaveCount(0);
-  await page.getByTestId("onboarding-check-setup").click();
+  // Entry is a setup gate, not a carousel progression button. This hermetic
+  // environment has no provider credential, so it remains disabled.
+  const getStarted = page.getByTestId("onboarding-get-started");
+  await expect(getStarted).toBeDisabled({ timeout: 20_000 });
+  await page.getByRole("button", { name: "View details" }).click();
 
   // Setup Check: the doctor probe renders real checks, including the pi runtime.
   await expect(page.getByTestId("onboarding-setup")).toBeVisible();
@@ -74,26 +76,25 @@ test("walks the tour, runs the setup check, and finishes from the final step", a
     })
     .toBe(false);
 
-  // Continue to the Final step, which surfaces a smart-routed primary action.
+  // Continue to the Final step. It cannot bypass the required setup gate.
   await page.getByTestId("onboarding-preferences-continue").click();
   await expect(page.getByTestId("onboarding-final")).toBeVisible();
   const finish = page.getByTestId("onboarding-finish");
   await expect(finish).toBeVisible();
-  // The routing target is one of the known views (varies with the environment's
-  // provider/project state); finishing dismisses the overlay.
+  // The routing target is one of the known views, but missing provider auth
+  // keeps the action disabled and onboarding visible.
   const target = await finish.getAttribute("data-target");
   expect(["chat", "doctor", "providers", "projects"]).toContain(target);
-  await finish.click();
-  await expect(overlay).toBeHidden();
+  await expect(finish).toBeDisabled();
+  await expect(overlay).toBeVisible();
 });
 
-test("Skip dismisses the welcome and it stays dismissed across reloads", async ({ page }) => {
+test("the welcome carousel advances automatically", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("onboarding-skip").click();
-  await expect(page.getByTestId("onboarding")).toBeHidden();
-  await page.reload();
-  await expect(page.getByTestId("onboarding")).toBeHidden();
+  await expect(page.getByTestId("onboarding-title")).toHaveText("Command Pi from Agent Deck");
+  await expect(page.getByTestId("onboarding-title")).toHaveText("Work in a Coding Chat", {
+    timeout: 7_000,
+  });
 });
 
 test("the welcome auto-hides once a project exists", async ({ page }) => {

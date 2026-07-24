@@ -13,10 +13,10 @@ import {
   Stethoscope,
   TriangleAlert,
   XCircle,
-  X,
 } from "lucide-react";
 import { THINKING_LEVELS } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { ProvidersScreen } from "../screens/ProvidersScreen.tsx";
 import { useAppStore, type AppView } from "../state/store.ts";
 
 /**
@@ -101,7 +101,7 @@ function onboardingForced(): boolean {
   }
 }
 
-type Phase = "tour" | "setup" | "preferences" | "final";
+type Phase = "tour" | "setup" | "provider" | "preferences" | "final";
 
 interface HealthCheck {
   id: string;
@@ -219,6 +219,15 @@ export function OnboardingOverlay() {
       });
   }, []);
 
+  // The tour advances on its own, while direct controls remain on the artwork.
+  useEffect(() => {
+    if (phase !== "tour") return;
+    const timer = window.setInterval(() => {
+      setPage((current) => (current + 1) % PAGES.length);
+    }, 6_000);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
   // A close during this session always wins (even when forced via ?onboarding,
   // where the URL param would otherwise keep re-showing it).
   if (dismissed) return null;
@@ -313,6 +322,8 @@ export function OnboardingOverlay() {
     checkById("pi-binary")?.status === "error" || checkById("node")?.status === "error";
   const providerMissing = (checkById("auth")?.status ?? "warn") !== "ok";
   const projectMissing = projects.length === 0;
+  const requiredSetupIds = ["pi-binary", "pi-version", "node", "bash", "auth"];
+  const setupReady = requiredSetupIds.every((id) => checkById(id)?.status === "ok");
   const finalCta: { label: string; view: AppView; Icon: typeof Rocket } = piMissing
     ? { label: "Review Setup", view: "doctor", Icon: Stethoscope }
     : providerMissing
@@ -322,7 +333,6 @@ export function OnboardingOverlay() {
         : { label: "Start Coding", view: "chat", Icon: Rocket };
 
   const tourPage = PAGES[page]!;
-  const isLastTourPage = page === PAGES.length - 1;
 
   return (
     <section
@@ -330,10 +340,10 @@ export function OnboardingOverlay() {
       data-testid="onboarding"
       aria-label="Welcome to Agent Deck"
     >
-      <div className="flex min-h-full w-full flex-col bg-surface-elevated">
+      <div className="flex h-full w-full flex-col bg-surface-elevated">
         {phase === "tour" ? (
           <>
-            <div className="relative h-[min(44vh,440px)] w-full shrink-0 bg-surface-subtle">
+            <div className="relative h-[48%] min-h-80 w-full shrink-0 bg-surface-subtle">
               <img
                 key={tourPage.image}
                 data-testid="onboarding-image"
@@ -353,26 +363,37 @@ export function OnboardingOverlay() {
                 <p className="max-w-3xl text-sm leading-relaxed text-white/80">
                   {tourPage.description}
                 </p>
-                <div className="flex items-center gap-1.5 pt-1" aria-hidden>
+                <div className="flex items-center gap-2 pt-1" aria-label="Carousel controls">
+                  <button
+                    className="rounded-full bg-black/35 p-1 text-white/80 hover:text-white"
+                    aria-label="Previous welcome slide"
+                    onClick={() =>
+                      setPage((current) => (current - 1 + PAGES.length) % PAGES.length)
+                    }
+                  >
+                    <ArrowLeft size={14} />
+                  </button>
                   {PAGES.map((p, i) => (
-                    <span
+                    <button
                       key={p.image}
+                      aria-label={`Show welcome slide ${i + 1}`}
+                      aria-current={i === page ? "true" : undefined}
                       className={cn(
                         "h-1.5 rounded-full transition-all",
                         i === page ? "w-4 bg-white" : "w-1.5 bg-white/35",
                       )}
+                      onClick={() => setPage(i)}
                     />
                   ))}
+                  <button
+                    className="rounded-full bg-black/35 p-1 text-white/80 hover:text-white"
+                    aria-label="Next welcome slide"
+                    onClick={() => setPage((current) => (current + 1) % PAGES.length)}
+                  >
+                    <ArrowRight size={14} />
+                  </button>
                 </div>
               </div>
-              <button
-                data-testid="onboarding-skip"
-                className="absolute right-2 top-2 rounded-full bg-black/40 p-1 text-white/80 hover:text-white"
-                aria-label="Skip"
-                onClick={dismiss}
-              >
-                <X size={15} />
-              </button>
             </div>
             <div
               className="mx-auto w-full max-w-6xl flex-1 border-t border-border-subtle px-8 py-5"
@@ -426,36 +447,20 @@ export function OnboardingOverlay() {
                 })}
               </div>
             </div>
-            <div className="mt-auto flex w-full items-center justify-between border-t border-border-subtle px-8 py-4">
+            <div className="mt-auto flex w-full items-center justify-end border-t border-border-subtle px-8 py-4">
               <button
-                data-testid="onboarding-back"
+                data-testid="onboarding-get-started"
                 className={cn(
-                  "flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary",
-                  page === 0 && "invisible",
+                  primaryButtonClass,
+                  "disabled:cursor-not-allowed disabled:opacity-40",
                 )}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                style={primaryButtonStyle}
+                disabled={!setupReady || checksLoading}
+                title={setupReady ? "Open Agent Deck" : "Complete the required setup first"}
+                onClick={() => finishTo(projectMissing ? "projects" : "chat")}
               >
-                <ArrowLeft size={13} /> Back
+                <Rocket size={13} aria-hidden /> {checksLoading ? "Checking…" : "Get Started"}
               </button>
-              {isLastTourPage ? (
-                <button
-                  data-testid="onboarding-check-setup"
-                  className={primaryButtonClass}
-                  style={primaryButtonStyle}
-                  onClick={() => goto("setup")}
-                >
-                  Continue <ArrowRight size={13} aria-hidden />
-                </button>
-              ) : (
-                <button
-                  data-testid="onboarding-next"
-                  className={primaryButtonClass}
-                  style={primaryButtonStyle}
-                  onClick={() => setPage((p) => Math.min(PAGES.length - 1, p + 1))}
-                >
-                  Continue <ArrowRight size={13} aria-hidden />
-                </button>
-              )}
             </div>
           </>
         ) : null}
@@ -518,7 +523,7 @@ export function OnboardingOverlay() {
                         <button
                           data-testid="onboarding-connect-provider"
                           className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
-                          onClick={() => finishTo("providers")}
+                          onClick={() => setPhase("provider")}
                         >
                           Connect a provider
                         </button>
@@ -546,6 +551,26 @@ export function OnboardingOverlay() {
                 Continue <ArrowRight size={13} aria-hidden />
               </button>
             </div>
+          </div>
+        ) : null}
+
+        {phase === "provider" ? (
+          <div className="flex min-h-0 flex-1 flex-col" data-testid="onboarding-provider">
+            <div className="flex items-center justify-between border-b border-border-subtle px-6 py-3">
+              <button
+                className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
+                onClick={() => {
+                  setPhase("setup");
+                  runChecks();
+                }}
+              >
+                <ArrowLeft size={13} /> Back to setup
+              </button>
+              <span className="text-xs text-text-muted">
+                Connect a provider, then return to re-check setup.
+              </span>
+            </div>
+            <ProvidersScreen />
           </div>
         ) : null}
 
@@ -702,8 +727,12 @@ export function OnboardingOverlay() {
               <button
                 data-testid="onboarding-finish"
                 data-target={finalCta.view}
-                className={primaryButtonClass}
+                className={cn(
+                  primaryButtonClass,
+                  "disabled:cursor-not-allowed disabled:opacity-40",
+                )}
                 style={primaryButtonStyle}
+                disabled={!setupReady || checksLoading}
                 onClick={() => finishTo(finalCta.view)}
               >
                 <finalCta.Icon size={13} aria-hidden /> {finalCta.label}
