@@ -183,14 +183,14 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
     binSource = resolved.source;
     checks.push({
       id: "pi-binary",
-      label: "pi binary",
+      label: "Pi binary",
       status: "ok",
       detail: `${resolved.path} (via ${resolved.source})`,
     });
   } catch (error) {
     checks.push({
       id: "pi-binary",
-      label: "pi binary",
+      label: "Pi binary",
       status: "error",
       detail: error instanceof PiNotFoundError ? error.message : String(error),
       fixCommand: "npm install -g @earendil-works/pi-coding-agent",
@@ -201,7 +201,7 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
     const version = await probeVersion(binPath);
     checks.push({
       id: "pi-version",
-      label: "pi version",
+      label: "Pi version",
       status: version ? "ok" : "warn",
       detail: version ?? "could not read --version",
     });
@@ -307,7 +307,7 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
   if (!existsSync(settingsPath)) {
     checks.push({
       id: "settings",
-      label: "pi settings.json",
+      label: "Pi settings.json",
       status: "ok",
       detail: "not present — pi uses built-in defaults",
     });
@@ -324,14 +324,14 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
       const summary = summarizeSettings(parsed);
       checks.push({
         id: "settings",
-        label: "pi settings.json",
+        label: "Pi settings.json",
         status: "ok",
         detail: summary ? `valid JSON — ${summary}` : "valid JSON",
       });
     } else {
       checks.push({
         id: "settings",
-        label: "pi settings.json",
+        label: "Pi settings.json",
         status: "warn",
         detail: `malformed JSON at ${settingsPath} — pi ignores it and falls back to built-in defaults, so your custom settings won't apply; fix or remove it`,
       });

@@ -127,6 +127,19 @@ body {
   animation: detail-enter 340ms cubic-bezier(0.3, 1.04, 0.4, 1);
 }
 
+@keyframes onboarding-slide-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.onboarding-slide-progress {
+  animation: onboarding-slide-progress 6s linear both;
+}
+
 @keyframes onboarding-slide-copy-in {
   from {
     opacity: 0;
@@ -143,7 +156,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .onboarding-slide-copy {
+  .onboarding-slide-copy,
+  .onboarding-slide-progress {
     animation: none;
   }
 }

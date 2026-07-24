@@ -221,12 +221,12 @@ export function OnboardingOverlay() {
 
   // The tour advances on its own, while direct controls remain on the artwork.
   useEffect(() => {
-    if (phase !== "tour") return;
-    const timer = window.setInterval(() => {
-      setPage((current) => (current + 1) % PAGES.length);
+    if (phase !== "tour" || page === PAGES.length - 1) return;
+    const timer = window.setTimeout(() => {
+      setPage((current) => Math.min(current + 1, PAGES.length - 1));
     }, 6_000);
-    return () => window.clearInterval(timer);
-  }, [phase]);
+    return () => window.clearTimeout(timer);
+  }, [page, phase]);
 
   // A close during this session always wins (even when forced via ?onboarding,
   // where the URL param would otherwise keep re-showing it).
@@ -357,32 +357,38 @@ export function OnboardingOverlay() {
                 />
               ))}
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
-              <div
-                key={tourPage.image}
-                className="onboarding-slide-copy absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white"
-              >
-                <h2
-                  data-testid="onboarding-title"
-                  className="text-2xl font-semibold"
-                  style={{ fontStretch: "expanded" }}
-                >
-                  {tourPage.title}
-                </h2>
-                <p className="max-w-3xl text-sm leading-relaxed text-white/80">
-                  {tourPage.description}
-                </p>
+              <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white">
+                <div key={tourPage.image} className="onboarding-slide-copy">
+                  <h2
+                    data-testid="onboarding-title"
+                    className="text-2xl font-semibold"
+                    style={{ fontStretch: "expanded" }}
+                  >
+                    {tourPage.title}
+                  </h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/80">
+                    {tourPage.description}
+                  </p>
+                </div>
                 <div className="flex items-center gap-2 pt-1" aria-label="Carousel controls">
                   {PAGES.map((p, i) => (
                     <button
                       key={p.image}
                       aria-label={`Show welcome slide ${i + 1}`}
                       aria-current={i === page ? "true" : undefined}
-                      className={cn(
-                        "h-1.5 rounded-full transition-all",
-                        i === page ? "w-4 bg-white" : "w-1.5 bg-white/35",
-                      )}
+                      className="h-1.5 w-5 overflow-hidden rounded-full bg-white/30"
                       onClick={() => setPage(i)}
-                    />
+                    >
+                      {i === page ? (
+                        <span
+                          key={`${page}-${phase}`}
+                          className={cn(
+                            "block h-full origin-left rounded-full bg-white",
+                            page < PAGES.length - 1 && "onboarding-slide-progress",
+                          )}
+                        />
+                      ) : null}
+                    </button>
                   ))}
                   <button
                     className="rounded-full bg-black/35 p-1 text-white/80 hover:text-white"
@@ -409,16 +415,30 @@ export function OnboardingOverlay() {
                     {checksLoading ? "Checking your setup…" : "Automatic setup check"}
                   </div>
                   <p className="mt-1 text-xs text-text-muted">
-                    Agent Deck uses its embedded runtime and pinned Pi. Connect optional services
-                    below.
+                    {setupReady
+                      ? "The required runtime and a model provider are ready. Optional integrations can be configured later."
+                      : "Agent Deck is verifying the runtime and provider connection required to start."}
                   </p>
                 </div>
-                <button
-                  className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
-                  onClick={() => goto("setup")}
-                >
-                  View details
-                </button>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "rounded-capsule px-2.5 py-1 text-[11px] font-medium",
+                      setupReady
+                        ? "bg-[color-mix(in_srgb,var(--color-success)_14%,transparent)] text-[var(--color-success)]"
+                        : "bg-[color-mix(in_srgb,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]",
+                    )}
+                  >
+                    {requiredSetupIds.filter((id) => checkById(id)?.status === "ok").length}/
+                    {requiredSetupIds.length} required ready
+                  </span>
+                  <button
+                    className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
+                    onClick={() => goto("setup")}
+                  >
+                    View details
+                  </button>
+                </div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {checksLoading && checks.length === 0
@@ -432,7 +452,7 @@ export function OnboardingOverlay() {
                       </div>
                     ))
                   : null}
-                {checks.slice(0, 6).map((check) => {
+                {checks.map((check) => {
                   const { Icon, color } = STATUS_META[check.status];
                   return (
                     <div
@@ -440,7 +460,14 @@ export function OnboardingOverlay() {
                       className="flex min-w-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
                     >
                       <Icon size={14} style={{ color }} className="shrink-0" />
-                      <span className="truncate text-xs text-text-secondary">{check.label}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
+                        {check.label}
+                      </span>
+                      {requiredSetupIds.includes(check.id) ? (
+                        <span className="text-[9px] uppercase tracking-wide text-text-muted">
+                          Required
+                        </span>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -466,10 +493,10 @@ export function OnboardingOverlay() {
 
         {phase === "setup" ? (
           <div
-            className="mx-auto flex min-h-0 w-full max-w-4xl flex-col py-8"
+            className="mx-auto flex min-h-0 w-full max-w-6xl flex-col px-8 py-8"
             data-testid="onboarding-setup"
           >
-            <div className="flex items-center justify-between px-5 pb-2 pt-4">
+            <div className="flex items-center justify-between pb-2 pt-4">
               <div className="flex items-center gap-2">
                 <Stethoscope size={16} className="text-text-secondary" />
                 <h2
@@ -489,10 +516,23 @@ export function OnboardingOverlay() {
                 {checksLoading ? "Checking…" : "Re-check"}
               </button>
             </div>
-            <p className="px-5 pb-2 text-xs text-text-muted">
-              Agent Deck works best once these pass. You can continue anyway.
-            </p>
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 pb-3">
+            <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-4 py-3">
+              <p className="text-xs leading-relaxed text-text-muted">
+                Required checks unlock Agent Deck. Git, GitHub, and custom settings are optional and
+                can be completed later.
+              </p>
+              <span
+                className={cn(
+                  "shrink-0 rounded-capsule px-3 py-1 text-xs font-medium",
+                  setupReady
+                    ? "bg-[color-mix(in_srgb,var(--color-success)_14%,transparent)] text-[var(--color-success)]"
+                    : "bg-[color-mix(in_srgb,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]",
+                )}
+              >
+                {setupReady ? "Ready to continue" : "Setup required"}
+              </span>
+            </div>
+            <div className="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-y-auto pb-3 md:grid-cols-2">
               {checks.length === 0 && checksLoading ? (
                 <div className="py-6 text-center text-sm text-text-muted">Checking your setup…</div>
               ) : null}
@@ -502,7 +542,7 @@ export function OnboardingOverlay() {
                 return (
                   <div
                     key={check.id}
-                    className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                    className="flex items-start gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-3"
                     data-testid="onboarding-check"
                     data-check-id={check.id}
                     data-check-status={check.status}
@@ -511,11 +551,14 @@ export function OnboardingOverlay() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-text-primary">{check.label}</span>
+                        <span className="text-[9px] uppercase tracking-wide text-text-muted">
+                          {requiredSetupIds.includes(check.id) ? "Required" : "Optional"}
+                        </span>
                         <span className="text-[10px] uppercase tracking-wide" style={{ color }}>
                           {label}
                         </span>
                       </div>
-                      <div className="break-words font-mono text-xs text-text-muted">
+                      <div className="mt-0.5 break-words text-[11px] leading-relaxed text-text-muted">
                         {check.detail}
                       </div>
                       {isProvider && check.status !== "ok" ? (
@@ -533,7 +576,7 @@ export function OnboardingOverlay() {
                 );
               })}
             </div>
-            <div className="flex items-center justify-between border-t border-border-subtle px-5 py-3">
+            <div className="flex items-center justify-between border-t border-border-subtle py-3">
               <button
                 data-testid="onboarding-setup-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
@@ -543,8 +586,12 @@ export function OnboardingOverlay() {
               </button>
               <button
                 data-testid="onboarding-setup-continue"
-                className={primaryButtonClass}
+                className={cn(
+                  primaryButtonClass,
+                  "disabled:cursor-not-allowed disabled:opacity-40",
+                )}
                 style={primaryButtonStyle}
+                disabled={!setupReady || checksLoading}
                 onClick={() => goto("preferences")}
               >
                 Continue <ArrowRight size={13} aria-hidden />

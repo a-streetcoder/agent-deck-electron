@@ -59,33 +59,10 @@ test("walks the tour, runs setup, and gates entry until required setup is ready"
   // headroom precedent as the doctor unit tests.
   await expect(piCheck).toHaveAttribute("data-check-status", "ok", { timeout: 20_000 });
 
-  // Preferences: native OnboardingPreferences toggles/pickers that persist to
-  // /settings. autoTitle defaults on; toggling it off writes through.
-  await page.getByTestId("onboarding-setup-continue").click();
-  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
-  const autoTitle = page.getByTestId("pref-auto-title");
-  await expect(autoTitle).toHaveAttribute("aria-checked", "true");
-  await autoTitle.click();
-  await expect(autoTitle).toHaveAttribute("aria-checked", "false");
-  await expect
-    .poll(async () => {
-      const settings = (await (await fetch(`${harness.baseUrl}/settings`)).json()) as {
-        settings: { autoTitle: boolean };
-      };
-      return settings.settings.autoTitle;
-    })
-    .toBe(false);
-
-  // Continue to the Final step. It cannot bypass the required setup gate.
-  await page.getByTestId("onboarding-preferences-continue").click();
-  await expect(page.getByTestId("onboarding-final")).toBeVisible();
-  const finish = page.getByTestId("onboarding-finish");
-  await expect(finish).toBeVisible();
-  // The routing target is one of the known views, but missing provider auth
-  // keeps the action disabled and onboarding visible.
-  const target = await finish.getAttribute("data-target");
-  expect(["chat", "doctor", "providers", "projects"]).toContain(target);
-  await expect(finish).toBeDisabled();
+  // Missing provider auth blocks progression and offers the integrated
+  // connection flow instead of revealing the main application.
+  await expect(page.getByTestId("onboarding-setup-continue")).toBeDisabled();
+  await expect(page.getByTestId("onboarding-connect-provider")).toBeVisible();
   await expect(overlay).toBeVisible();
 });
 
