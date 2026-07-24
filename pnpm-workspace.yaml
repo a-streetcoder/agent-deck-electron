@@ -6,6 +6,10 @@ packages:
 # Install locked dependencies immediately; do not apply pnpm's release-age delay.
 minimumReleaseAge: 0
 
-onlyBuiltDependencies:
-  - electron
-  - node-pty
+allowBuilds:
+  "@google/genai": true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  node-pty: true
+  protobufjs: true
