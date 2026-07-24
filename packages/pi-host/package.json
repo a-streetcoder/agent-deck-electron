@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@agent-deck/domain": "workspace:*",
-    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@earendil-works/pi-coding-agent": "0.82.0",
     "cross-spawn": "7.0.6"
   },
   "devDependencies": {

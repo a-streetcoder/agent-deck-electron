@@ -20,9 +20,9 @@ test.afterAll(async () => {
 
 test("signing in shows the device code, accepts a code, and reports success", async ({ page }) => {
   const { providers } = (await (await fetch(`${harness.baseUrl}/runtime/providers`)).json()) as {
-    providers: Array<{ id: string }>;
+    providers: Array<{ id: string; supportsOAuth: boolean; supportsAPIKey: boolean }>;
   };
-  const id = providers[0]!.id;
+  const id = providers.find((provider) => provider.supportsOAuth && !provider.supportsAPIKey)!.id;
 
   // Script the login flow: start → poll (device_code + prompt) → respond → poll (done).
   await page.route("**/runtime/providers/*/login", async (route) => {
@@ -53,7 +53,7 @@ test("signing in shows the device code, accepts a code, and reports success", as
 
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-providers").click();
-  await page.getByTestId(`provider-login-${id}`).click();
+  await page.locator(`[data-provider-id="${id}"]`).click();
 
   // The sheet opens and shows the device code + a prompt.
   await expect(page.getByTestId("provider-login-sheet")).toBeVisible();
@@ -63,6 +63,6 @@ test("signing in shows the device code, accepts a code, and reports success", as
   // Answer the prompt → the flow completes with success + a toast.
   await page.getByTestId("login-prompt-input").fill("hunter2");
   await page.getByTestId("login-prompt-submit").click();
-  await expect(page.getByTestId("login-done")).toContainText("Signed in");
-  await expect(page.getByTestId("toast")).toContainText(/Signed in to/);
+  await expect(page.getByTestId("login-done")).toContainText("Connected");
+  await expect(page.getByTestId("toast")).toContainText(/connected/);
 });

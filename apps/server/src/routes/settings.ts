@@ -1,13 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
 import { runDoctor } from "@agent-deck/pi-host";
-import {
-  isKnownProvider,
-  listProviders,
-  logoutProvider,
-  scanEnv,
-  writeEnvVar,
-} from "@agent-deck/resources";
+import { listProviders, logoutProvider, scanEnv, writeEnvVar } from "@agent-deck/resources";
 import {
   isKeybindingCommand,
   isValidChord,
@@ -90,7 +84,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
 
   fastify.get("/runtime/doctor", async () => {
     const report = await runDoctor(resourceHome());
-    const connectedProviders = listProviders(rootsFor()).filter(
+    const connectedProviders = (await listProviders(rootsFor())).filter(
       (provider) => provider.signedIn || provider.configured,
     );
     const authCheck = report.checks.find((check) => check.id === "auth");
@@ -108,17 +102,16 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // providers pi knows about, plus each one's sign-in status read from the
   // global ~/.pi/agent/auth.json. Interactive OAuth sign-in is a follow-up; this
   // covers the read side + logout (disconnect a stored credential).
-  fastify.get("/runtime/providers", async () => ({ providers: listProviders(rootsFor()) }));
+  fastify.get("/runtime/providers", async () => ({ providers: await listProviders(rootsFor()) }));
 
   // Disconnect a stored provider credential (native logout). Only a known
   // provider id is accepted, so arbitrary keys can't be poked into auth.json.
   fastify.post("/runtime/providers/:id/logout", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!isKnownProvider(rootsFor(), id)) {
-      return reply.status(404).send({ error: `unknown provider: ${id}` });
-    }
+    const provider = (await listProviders(rootsFor())).find((entry) => entry.id === id);
+    if (!provider) return reply.status(404).send({ error: `unknown provider: ${id}` });
     try {
-      logoutProvider(rootsFor(), id);
+      await logoutProvider(rootsFor(), id);
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
     }
@@ -131,10 +124,14 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // / prompt / select / progress) to the client and threads responses back.
   fastify.post("/runtime/providers/:id/login", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!isKnownProvider(rootsFor(), id)) {
-      return reply.status(404).send({ error: `unknown provider: ${id}` });
-    }
-    const loginId = providerLogin.start(rootsFor(), id);
+    const parsed = z.object({ authType: z.enum(["api_key", "oauth"]) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const provider = (await listProviders(rootsFor())).find((entry) => entry.id === id);
+    if (!provider) return reply.status(404).send({ error: `unknown provider: ${id}` });
+    const supported =
+      parsed.data.authType === "oauth" ? provider.supportsOAuth : provider.supportsAPIKey;
+    if (!supported) return reply.status(400).send({ error: "authentication method unavailable" });
+    const loginId = providerLogin.start(rootsFor(), id, parsed.data.authType);
     return reply.status(201).send({ loginId });
   });
 

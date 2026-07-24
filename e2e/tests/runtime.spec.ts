@@ -65,7 +65,7 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
 
   const versionCheck = page.locator('[data-check-id="pi-version"]');
   await expect(versionCheck).toHaveAttribute("data-check-status", "ok");
-  await expect(versionCheck).toContainText("0.80.3");
+  await expect(versionCheck).toContainText("0.82.0");
 
   // Node.js runtime check: pi is a Node CLI, so it's a first-class preflight.
   // The e2e runner is on Node ≥ pi's minimum, so it reports ok.

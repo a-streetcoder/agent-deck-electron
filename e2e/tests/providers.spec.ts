@@ -75,10 +75,38 @@ test("renders native provider logos (and a monogram fallback for unknowns)", asy
       status: 200,
       json: {
         providers: [
-          { id: "anthropic", name: "Anthropic", signedIn: false, configured: true },
-          { id: "openai", name: "OpenAI", signedIn: false, configured: true },
-          { id: "github-copilot", name: "GitHub Copilot", signedIn: false, configured: true },
-          { id: "acme-unknown", name: "Acme", signedIn: false, configured: true },
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            signedIn: false,
+            configured: true,
+            supportsOAuth: true,
+            supportsAPIKey: true,
+          },
+          {
+            id: "openai",
+            name: "OpenAI",
+            signedIn: false,
+            configured: true,
+            supportsOAuth: false,
+            supportsAPIKey: true,
+          },
+          {
+            id: "github-copilot",
+            name: "GitHub Copilot",
+            signedIn: false,
+            configured: true,
+            supportsOAuth: true,
+            supportsAPIKey: false,
+          },
+          {
+            id: "acme-unknown",
+            name: "Acme",
+            signedIn: false,
+            configured: true,
+            supportsOAuth: false,
+            supportsAPIKey: true,
+          },
         ],
       },
     });

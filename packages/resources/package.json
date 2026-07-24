@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@agent-deck/domain": "workspace:*",
-    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@earendil-works/pi-ai": "0.82.0",
+    "@earendil-works/pi-coding-agent": "0.82.0",
     "chokidar": "4.0.3",
     "yaml": "2.8.0"
   },

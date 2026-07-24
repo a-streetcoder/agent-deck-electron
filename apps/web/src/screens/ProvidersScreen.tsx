@@ -1,27 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
-import { ShieldCheck } from "lucide-react";
-import { cn } from "@/lib/cn";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChevronRight, KeyRound, Search, ShieldCheck, UserRound } from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 
-/**
- * Providers screen (native provider-login surface): the OAuth-capable model
- * providers pi knows about, with each one's sign-in status read from the global
- * ~/.pi/agent/auth.json, and a Log out action to disconnect a stored credential.
- * Interactive browser/device sign-in is a follow-up milestone; until then an
- * API key can be set on the Environment screen.
- */
 interface ProviderEntry {
   id: string;
   name: string;
   configured: boolean;
   source?: string;
   label?: string;
-  /** A credential stored in auth.json — the only state Log out can act on. */
   signedIn: boolean;
+  supportsAPIKey: boolean;
+  supportsOAuth: boolean;
 }
+
+type AuthType = "api_key" | "oauth";
 
 export function ProvidersScreen({
   onProviderConnected,
@@ -30,7 +25,9 @@ export function ProvidersScreen({
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [loginProvider, setLoginProvider] = useState<ProviderEntry | null>(null);
+  const [search, setSearch] = useState("");
+  const [methodProvider, setMethodProvider] = useState<ProviderEntry | null>(null);
+  const [login, setLogin] = useState<{ provider: ProviderEntry; authType: AuthType } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -38,28 +35,30 @@ export function ProvidersScreen({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as { providers: ProviderEntry[] };
       setProviders(data.providers);
-    } catch (err) {
-      setError(String(err));
+    } catch (error) {
+      setError(String(error));
     } finally {
       setLoaded(true);
     }
   }, [setError]);
 
-  useEffect(() => {
-    void load();
-  }, [load, resourcesVersion]);
+  useEffect(() => void load(), [load, resourcesVersion]);
 
-  const logout = async (provider: ProviderEntry): Promise<void> => {
-    if (!confirm(`Disconnect ${provider.name}? You'll need to sign in again to use it.`)) return;
-    try {
-      const response = await fetch(`/runtime/providers/${encodeURIComponent(provider.id)}/logout`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error(await response.text());
-      await load();
-    } catch (err) {
-      setError(String(err));
-    }
+  const visible = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return providers.filter(
+      (provider) =>
+        !query || provider.name.toLowerCase().includes(query) || provider.id.includes(query),
+    );
+  }, [providers, search]);
+  const subscriptions = visible.filter((provider) => provider.supportsOAuth);
+  const apiKeyOnly = visible.filter(
+    (provider) => provider.supportsAPIKey && !provider.supportsOAuth,
+  );
+
+  const selectProvider = (provider: ProviderEntry): void => {
+    if (provider.supportsOAuth && provider.supportsAPIKey) setMethodProvider(provider);
+    else setLogin({ provider, authType: provider.supportsOAuth ? "oauth" : "api_key" });
   };
 
   return (
@@ -67,94 +66,73 @@ export function ProvidersScreen({
       <div className="mx-auto max-w-3xl">
         <div className="flex items-center gap-2 pb-1">
           <ShieldCheck size={16} className="text-text-secondary" aria-hidden />
-          <h2
-            className="text-base font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            Connect an AI model
-          </h2>
+          <h2 className="text-base font-semibold text-text-primary">Connect an AI provider</h2>
         </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Choose a service you already use. Agent Deck will guide you through its secure sign-in
-          flow without exposing your credentials.
+        <p className="pb-4 text-xs text-text-muted">
+          Use an existing subscription or an API key. Credentials are handled by Pi and stored in
+          your private Agent Deck configuration.
         </p>
+        <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
+          <Search size={14} className="text-text-muted" />
+          <input
+            className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
+            placeholder="Search providers"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
 
-        <div className="space-y-1.5" data-testid="provider-list">
-          {!loaded ? <SkeletonRows count={3} /> : null}
-          {providers.map((provider) => (
-            <div
-              key={provider.id}
-              data-provider-id={provider.id}
-              data-signed-in={provider.signedIn ? "true" : "false"}
-              className="flex items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5"
-            >
-              <ProviderLogo
-                providerId={provider.id}
-                size={22}
-                className="shrink-0 text-text-primary"
-              />
-              <div className="min-w-0 flex-1">
-                <div
-                  className="truncate text-sm font-medium text-text-primary"
-                  style={{ fontStretch: "expanded" }}
-                >
-                  {provider.name}
-                </div>
-                <div className="truncate font-mono text-[11px] text-text-muted">{provider.id}</div>
-              </div>
-              <span
-                data-testid={`provider-status-${provider.id}`}
-                className={cn(
-                  "rounded-capsule border px-2 py-0.5 text-[10px]",
-                  provider.signedIn
-                    ? "border-[var(--color-success)] text-[var(--color-success)]"
-                    : provider.configured
-                      ? "border-border-strong text-text-secondary"
-                      : "border-border-strong text-text-muted",
-                )}
-                title={provider.label ?? provider.source ?? undefined}
-              >
-                {provider.signedIn
-                  ? "Signed in"
-                  : provider.configured
-                    ? `Configured (${provider.source ?? "env"})`
-                    : "Not connected"}
-              </span>
-              {provider.signedIn ? (
-                <button
-                  data-testid={`provider-logout-${provider.id}`}
-                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary hover:text-[var(--color-role-error)]"
-                  onClick={() => void logout(provider)}
-                >
-                  Log out
-                </button>
-              ) : (
-                <button
-                  data-testid={`provider-login-${provider.id}`}
-                  className="rounded-capsule px-2.5 py-0.5 text-xs font-medium shadow-capsule"
-                  style={{
-                    background:
-                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                    color: "var(--color-accent-foreground)",
-                  }}
-                  onClick={() => setLoginProvider(provider)}
-                >
-                  Sign in
-                </button>
-              )}
-            </div>
-          ))}
-          {loaded && providers.length === 0 ? (
-            <div className="py-8 text-center text-sm text-text-muted" data-testid="provider-empty">
-              No OAuth-capable providers registered.
-            </div>
-          ) : null}
-        </div>
+        {!loaded ? <SkeletonRows count={5} /> : null}
+        <ProviderGroup title="Subscriptions" providers={subscriptions} onSelect={selectProvider} />
+        <ProviderGroup title="API key" providers={apiKeyOnly} onSelect={selectProvider} />
+        {loaded && visible.length === 0 ? (
+          <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
+        ) : null}
       </div>
-      {loginProvider ? (
+
+      {methodProvider ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8">
+          <div className="w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated">
+            <h3 className="text-sm font-semibold text-text-primary">
+              Connect {methodProvider.name}
+            </h3>
+            <p className="mt-1 text-xs text-text-muted">Choose how you want to connect.</p>
+            <div className="mt-4 space-y-2">
+              <MethodButton
+                icon={UserRound}
+                title="Use a subscription"
+                detail={`Sign in with your ${methodProvider.name} account.`}
+                onClick={() => {
+                  setLogin({ provider: methodProvider, authType: "oauth" });
+                  setMethodProvider(null);
+                }}
+              />
+              <MethodButton
+                icon={KeyRound}
+                title="Use an API key"
+                detail="Paste an API key for this provider."
+                onClick={() => {
+                  setLogin({ provider: methodProvider, authType: "api_key" });
+                  setMethodProvider(null);
+                }}
+              />
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                className="text-xs text-text-secondary"
+                onClick={() => setMethodProvider(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {login ? (
         <ProviderLoginSheet
-          provider={loginProvider}
-          onClose={() => setLoginProvider(null)}
+          provider={login.provider}
+          authType={login.authType}
+          onClose={() => setLogin(null)}
           onDone={() => {
             void load();
             onProviderConnected?.();
@@ -162,5 +140,70 @@ export function ProvidersScreen({
         />
       ) : null}
     </div>
+  );
+}
+
+function ProviderGroup({
+  title,
+  providers,
+  onSelect,
+}: {
+  title: string;
+  providers: ProviderEntry[];
+  onSelect: (provider: ProviderEntry) => void;
+}) {
+  if (providers.length === 0) return null;
+  return (
+    <section className="mb-5">
+      <h3 className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+        {title}
+      </h3>
+      <div className="space-y-1" data-testid="provider-list">
+        {providers.map((provider) => (
+          <button
+            key={provider.id}
+            data-provider-id={provider.id}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-subtle"
+            onClick={() => onSelect(provider)}
+          >
+            <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+              {provider.name}
+            </span>
+            {provider.configured ? (
+              <CheckCircle2 size={15} className="text-[var(--color-success)]" />
+            ) : (
+              <ChevronRight size={14} className="text-text-muted" />
+            )}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MethodButton({
+  icon: Icon,
+  title,
+  detail,
+  onClick,
+}: {
+  icon: typeof KeyRound;
+  title: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="flex w-full items-center gap-3 rounded-xl border border-border-subtle p-3 text-left hover:bg-surface-subtle"
+      onClick={onClick}
+    >
+      <Icon size={18} className="text-accent" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-text-primary">{title}</span>
+        <span className="block text-xs text-text-muted">{detail}</span>
+      </span>
+      <ChevronRight size={14} className="text-text-muted" />
+    </button>
   );
 }

@@ -116,7 +116,7 @@ interface HealthCheck {
 
 const EMPTY_SETUP_CHECKS: HealthCheck[] = [
   { id: "pi-binary", label: "Pi", status: "ok", detail: "Included with Agent Deck" },
-  { id: "pi-version", label: "Pi version", status: "ok", detail: "0.80.3" },
+  { id: "pi-version", label: "Pi version", status: "ok", detail: "0.82.0" },
   {
     id: "node",
     label: "Built-in runtime",
@@ -715,26 +715,26 @@ export function OnboardingOverlay() {
 
         {phase === "provider" ? (
           <div className="flex min-h-0 flex-1 flex-col" data-testid="onboarding-provider">
-            <div className="flex items-center justify-between border-b border-border-subtle px-6 py-3">
-              <button
-                className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => {
-                  setPhase("tour");
-                  runChecks();
-                }}
-              >
-                <ArrowLeft size={13} /> Back to setup
-              </button>
-              <span className="text-xs text-text-muted">
-                Connect an AI model provider, then return to re-check setup.
-              </span>
-            </div>
             <ProvidersScreen
               onProviderConnected={() => {
                 runChecks();
                 setPhase("tour");
               }}
             />
+            <div className="flex shrink-0 items-center justify-between border-t border-border-subtle px-8 py-4">
+              <button
+                className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                onClick={() => {
+                  setPhase("tour");
+                  runChecks();
+                }}
+              >
+                <ArrowLeft size={13} /> Back
+              </button>
+              <span className="text-xs text-text-muted">
+                Connect at least one provider to continue.
+              </span>
+            </div>
           </div>
         ) : null}
 

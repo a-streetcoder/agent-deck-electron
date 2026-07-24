@@ -11,7 +11,7 @@ import { useAppStore } from "../state/store.ts";
 type LoginEvent =
   | { type: "auth_url"; url: string; instructions?: string }
   | { type: "device_code"; userCode: string; verificationUri: string; expiresInSeconds?: number }
-  | { type: "prompt"; message: string; placeholder?: string }
+  | { type: "prompt"; message: string; placeholder?: string; secret?: boolean }
   | { type: "select"; message: string; options: Array<{ id: string; label: string }> }
   | { type: "progress"; message: string }
   | { type: "done"; ok: boolean; error?: string };
@@ -25,8 +25,10 @@ export function ProviderLoginSheet({
   provider,
   onClose,
   onDone,
+  authType,
 }: {
   provider: { id: string; name: string };
+  authType: "api_key" | "oauth";
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -66,6 +68,8 @@ export function ProviderLoginSheet({
           `/runtime/providers/${encodeURIComponent(provider.id)}/login`,
           {
             method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ authType }),
           },
         );
         if (!response.ok) throw new Error(await response.text());
@@ -86,7 +90,7 @@ export function ProviderLoginSheet({
       const loginId = loginIdRef.current;
       if (loginId) void fetch(`/runtime/providers/login/${loginId}/cancel`, { method: "POST" });
     };
-  }, [provider.id, poll]);
+  }, [authType, provider.id, poll]);
 
   // Poll while the flow is running.
   useEffect(() => {
@@ -101,7 +105,7 @@ export function ProviderLoginSheet({
     const last = events.at(-1);
     if (last?.type === "done" && last.ok && !notifiedRef.current) {
       notifiedRef.current = true;
-      pushToast({ kind: "success", message: `Signed in to ${provider.name}` });
+      pushToast({ kind: "success", message: `${provider.name} connected` });
       onDone();
     }
   }, [events, provider.name, pushToast, onDone]);
@@ -139,7 +143,7 @@ export function ProviderLoginSheet({
           className="text-sm font-semibold text-text-primary"
           style={{ fontStretch: "expanded" }}
         >
-          Sign in to {provider.name}
+          {authType === "api_key" ? "Add an API key for" : "Sign in to"} {provider.name}
         </div>
 
         <div className="flex flex-col gap-2" data-testid="login-events">
@@ -170,6 +174,7 @@ export function ProviderLoginSheet({
               autoFocus
               data-testid="login-prompt-input"
               className={inputClass}
+              type={awaitingPrompt.secret ? "password" : "text"}
               placeholder={awaitingPrompt.placeholder}
               value={promptValue}
               onChange={(event) => setPromptValue(event.target.value)}
@@ -273,7 +278,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
           style={{ color: "var(--color-success)" }}
           data-testid="login-done"
         >
-          <CheckCircle2 size={15} /> Signed in.
+          <CheckCircle2 size={15} /> Connected.
         </div>
       ) : (
         <div
