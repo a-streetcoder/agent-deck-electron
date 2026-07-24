@@ -170,7 +170,7 @@ function ProviderGroup({
           <button
             key={provider.id}
             data-provider-id={provider.id}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-subtle"
+            className="flex w-full items-center gap-3 rounded-xl py-2.5 pl-3 text-left hover:bg-surface-subtle"
             onClick={() => onSelect(provider)}
           >
             <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
