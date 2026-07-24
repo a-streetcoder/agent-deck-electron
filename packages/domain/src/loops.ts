@@ -29,6 +29,7 @@ export const LOOP_STRUCTURES: LoopStructure[] = [
 export const RUNNABLE_LOOP_STRUCTURES = [
   "singleAgent",
   "makerChecker",
+  "agentPipeline",
 ] as const satisfies readonly LoopStructure[];
 
 export function isRunnableLoopStructure(structure: LoopStructure): boolean {
@@ -39,7 +40,14 @@ export function isRunnableLoopStructure(structure: LoopStructure): boolean {
 export function loopDefinitionValidationError(
   loop: Pick<
     LoopDefinition,
-    "name" | "goal" | "structure" | "agentName" | "makerName" | "checkerName" | "checkerRubric"
+    | "name"
+    | "goal"
+    | "structure"
+    | "agentName"
+    | "makerName"
+    | "checkerName"
+    | "checkerRubric"
+    | "pipelineStages"
   >,
 ): string | undefined {
   if (!isRunnableLoopStructure(loop.structure)) return "This Loop structure is unavailable.";
@@ -49,6 +57,13 @@ export function loopDefinitionValidationError(
     if (!(loop.makerName ?? loop.agentName ?? "").trim()) return "A maker agent is required.";
     if (!(loop.checkerName ?? "").trim()) return "A checker agent is required.";
     if (!(loop.checkerRubric ?? "").trim()) return "A checker rubric is required.";
+  }
+  if (loop.structure === "agentPipeline") {
+    if (!loop.goal.trim()) return "A goal is required.";
+    if (!loop.pipelineStages?.length) return "At least one pipeline stage is required.";
+    if (loop.pipelineStages.some((stage) => !stage.trim())) {
+      return "Pipeline stage agent names cannot be blank.";
+    }
   }
   return undefined;
 }
@@ -99,6 +114,8 @@ export interface LoopDefinition {
   makerName?: string;
   checkerName?: string;
   checkerRubric?: string;
+  /** Native flat Pipeline frontmatter. Order and repeated agent names are significant. */
+  pipelineStages?: string[];
   /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
@@ -136,7 +153,7 @@ export type LoopStopReason =
 
 export type LoopCheckerDecision = "APPROVE" | "CONTINUE" | "REJECT" | "ASK_HUMAN" | "FAIL";
 export type LoopGoalDecision = "SUCCESS" | "CONTINUE" | "FAIL";
-export type LoopRunPhase = "maker" | "checker" | "validation" | "evaluator";
+export type LoopRunPhase = "maker" | "checker" | "stage" | "validation" | "evaluator";
 
 export interface LoopTimelineEvent {
   id: string;
@@ -144,11 +161,14 @@ export interface LoopTimelineEvent {
   roleName: string;
   note: string;
   timestamp: string;
+  stageIndex?: number;
 }
 
 export interface LoopRunArtifact {
   id: string;
-  phase: "maker" | "checker" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "evaluator";
+  stageIndex?: number;
+  agentName?: string;
   filename: string;
   filePath: string;
   bytes: number;
@@ -157,12 +177,20 @@ export interface LoopRunArtifact {
 
 export interface LoopChildRecord {
   id: string;
-  phase: "maker" | "checker" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "evaluator";
+  stageIndex?: number;
   agentName?: string;
   startedAt: string;
   endedAt?: string;
   output?: string;
   error?: string;
+}
+
+export interface LoopPipelineStageOutput {
+  id: string;
+  stageIndex: number;
+  agentName: string;
+  output: string;
 }
 
 export interface LoopRunIteration {
@@ -176,6 +204,7 @@ export interface LoopRunIteration {
   checkerDecision?: LoopCheckerDecision;
   evaluatorOutput?: string;
   goalDecision?: LoopGoalDecision;
+  pipelineStageOutputs?: LoopPipelineStageOutput[];
   validationPassed: boolean | null;
   validationEvidence?: string;
   timeline: LoopTimelineEvent[];

@@ -32,6 +32,13 @@ export function loopsDir(roots: ResourceRoots): string {
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+function asPipelineStages(value: unknown): string[] | undefined {
+  if (typeof value === "string") return value.split("|").map((stage) => stage.trim());
+  // Read the short-lived Electron array encoding without rewriting until edit.
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? [...value]
+    : undefined;
+}
 function asStructure(value: unknown): LoopStructure {
   return LOOP_STRUCTURES.includes(value as LoopStructure)
     ? (value as LoopStructure)
@@ -66,6 +73,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     makerName: asString(frontmatter.makerName) || asString(frontmatter.agentName) || undefined,
     checkerName: asString(frontmatter.checkerName) || undefined,
     checkerRubric: asString(frontmatter.checkerRubric) || undefined,
+    pipelineStages: asPipelineStages(frontmatter.pipelineStages),
     maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
@@ -97,6 +105,8 @@ export function scanLoops(roots: ResourceRoots): LoopDefinition[] {
 
 export interface LoopEdit {
   name: string;
+  /** Internal duplication seed so native-only metadata survives the copy. */
+  preservedFrontmatter?: Record<string, unknown>;
   description?: string;
   goal?: string;
   structure?: LoopStructure;
@@ -104,31 +114,42 @@ export interface LoopEdit {
   makerName?: string;
   checkerName?: string;
   checkerRubric?: string;
+  pipelineStages?: string[];
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
 }
 
+// Match LoopDefinitionStore.encode: common fields first, followed by the
+// fields owned by the selected structure. `agentName` remains a supported
+// Electron compatibility field and is serialized with the structure fields.
 const LOOP_FIELD_ORDER = [
   "name",
   "description",
+  "source",
   "structure",
+  "writeTarget",
+  "maxIterations",
+  "validationCommand",
   "agentName",
   "makerName",
   "checkerName",
   "checkerRubric",
-  "maxIterations",
-  "validationCommand",
-  "writeTarget",
+  "pipelineStages",
 ] as const;
+const LOOP_FIELD_KEYS = new Set<string>(LOOP_FIELD_ORDER);
 
 function serializeFrontmatter(record: Record<string, unknown>): string {
   const ordered: Record<string, unknown> = {};
   for (const key of LOOP_FIELD_ORDER) {
     if (record[key] !== undefined) ordered[key] = record[key];
   }
-  for (const [key, value] of Object.entries(record)) {
-    if (!(key in ordered) && value !== undefined) ordered[key] = value;
+  // Native-only metadata must survive Electron edits and copies. Sort it so
+  // output does not depend on parser/object insertion order.
+  for (const key of Object.keys(record)
+    .filter((key) => !LOOP_FIELD_KEYS.has(key))
+    .sort()) {
+    if (record[key] !== undefined) ordered[key] = record[key];
   }
   return YAML.stringify(ordered).trimEnd();
 }
@@ -159,7 +180,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   const dir = loopsDir(roots);
   const existingPath = loopPathByName(roots, edit.name);
   const filePath = existingPath ?? loopFilePath(roots, edit.name);
-  let frontmatter: Record<string, unknown> = {};
+  let frontmatter: Record<string, unknown> = { ...(edit.preservedFrontmatter ?? {}) };
   let body = "";
   if (existingPath) {
     const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
@@ -170,7 +191,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   // Public writes are an authoritative capability boundary too. Existing
   // native/external definitions remain readable and deletable, but an update
   // that omits structure inherits the persisted value and must fail closed.
-  // Only an explicit singleAgent edit converts an unsupported definition.
+  // Only an explicit edit to a valid runnable structure converts an unsupported definition.
   const resultingStructure = edit.structure ?? asStructure(frontmatter.structure);
   if (!isRunnableLoopStructure(resultingStructure)) {
     throw new LoopStructureNotRunnableError(resultingStructure);
@@ -183,6 +204,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     makerName: edit.makerName ?? asString(frontmatter.makerName) ?? asString(frontmatter.agentName),
     checkerName: edit.checkerName ?? asString(frontmatter.checkerName),
     checkerRubric: edit.checkerRubric ?? asString(frontmatter.checkerRubric),
+    pipelineStages: edit.pipelineStages ?? asPipelineStages(frontmatter.pipelineStages),
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
 
@@ -203,6 +225,9 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
       if (edit[key]) frontmatter[key] = edit[key];
       else delete frontmatter[key];
     }
+  }
+  if (edit.pipelineStages !== undefined) {
+    frontmatter.pipelineStages = edit.pipelineStages.join(" | ");
   }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
@@ -265,8 +290,10 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
   let copyName = `Copy of ${name}`;
   for (let n = 2; existingSlugs.has(loopSlug(copyName)); n += 1)
     copyName = `Copy of ${name} (${n})`;
+  const sourceDocument = parseFrontmatter(readFileSync(source.filePath, "utf8"));
   writeLoopFile(roots, {
     name: copyName,
+    preservedFrontmatter: { ...sourceDocument.frontmatter },
     description: source.description,
     goal: source.goal,
     structure: source.structure,
@@ -274,6 +301,7 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     makerName: source.makerName,
     checkerName: source.checkerName,
     checkerRubric: source.checkerRubric,
+    pipelineStages: source.pipelineStages ? [...source.pipelineStages] : undefined,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,

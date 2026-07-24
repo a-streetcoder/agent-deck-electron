@@ -95,7 +95,8 @@ export type ExecuteLoopRole = (request: {
   loop: LoopDefinition;
   prompt: string;
   agentName?: string;
-  phase: "maker" | "checker" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "evaluator";
+  stageIndex?: number;
   cwd: string;
   projectId?: string;
   signal: AbortSignal;
@@ -148,6 +149,13 @@ const CHECKER_DECISIONS = new Set<LoopCheckerDecision>([
   "FAIL",
 ]);
 const GOAL_DECISIONS = new Set<LoopGoalDecision>(["SUCCESS", "CONTINUE", "FAIL"]);
+const MAX_PIPELINE_HANDOFF_CHARS = 12_000;
+const MAX_PIPELINE_REPORT_CHARS = 3_000;
+
+function boundedPipelineEvidence(value: string, max = MAX_PIPELINE_HANDOFF_CHARS): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 32)}\n…[bounded by Agent Deck]`;
+}
 
 const persistedRunSchema = z
   .object({
@@ -213,7 +221,7 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "validation", "evaluator"]),
+                phase: z.enum(["maker", "checker", "stage", "validation", "evaluator"]),
                 roleName: z.string(),
                 note: z.string(),
                 timestamp: z.string(),
@@ -224,17 +232,27 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "evaluator"]),
+                phase: z.enum(["maker", "checker", "stage", "evaluator"]),
                 startedAt: z.string(),
               })
               .passthrough(),
           ),
+          pipelineStageOutputs: z
+            .array(
+              z.object({
+                id: z.string().min(1),
+                stageIndex: z.number().int().nonnegative(),
+                agentName: z.string().min(1),
+                output: z.string(),
+              }),
+            )
+            .optional(),
           artifacts: z
             .array(
               z
                 .object({
                   id: z.string(),
-                  phase: z.enum(["maker", "checker", "evaluator"]),
+                  phase: z.enum(["maker", "checker", "stage", "evaluator"]),
                   filename: z.string(),
                   filePath: z.string(),
                   bytes: z.number().nonnegative(),
@@ -505,7 +523,7 @@ export class LoopEngine {
     run: LoopRun,
     iteration: LoopRunIteration,
     loop: LoopDefinition,
-    phase: "maker" | "checker" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "evaluator",
     prompt: string,
     agentName: string | undefined,
     cwd: string,
@@ -513,20 +531,28 @@ export class LoopEngine {
     signal: AbortSignal,
     executeRole: ExecuteLoopRole | undefined,
     executeAgent: ExecuteAgent | undefined,
+    stageIndex?: number,
   ): Promise<string> {
-    const child: LoopChildRecord = { id: randomUUID(), phase, agentName, startedAt: this.now() };
+    const child: LoopChildRecord = {
+      id: randomUUID(),
+      phase,
+      stageIndex,
+      agentName,
+      startedAt: this.now(),
+    };
     iteration.children.push(child);
     iteration.timeline.push({
       id: randomUUID(),
       phase,
       roleName: agentName ?? "Goal evaluator",
-      note: `${phase} started`,
+      note: phase === "stage" ? `stage ${(stageIndex ?? 0) + 1} started` : `${phase} started`,
       timestamp: child.startedAt,
+      stageIndex,
     });
     this.changed(run);
     try {
       const output = executeRole
-        ? await executeRole({ loop, prompt, agentName, phase, cwd, projectId, signal })
+        ? await executeRole({ loop, prompt, agentName, phase, stageIndex, cwd, projectId, signal })
         : await executeAgent!({ ...loop, goal: prompt, agentName }, cwd, projectId);
       if (signal.aborted || isLoopRunTerminal(run.status)) return output;
       child.output = output;
@@ -535,8 +561,9 @@ export class LoopEngine {
         id: randomUUID(),
         phase,
         roleName: agentName ?? "Goal evaluator",
-        note: `${phase} completed`,
+        note: phase === "stage" ? `stage ${(stageIndex ?? 0) + 1} completed` : `${phase} completed`,
         timestamp: child.endedAt,
+        stageIndex,
       });
       this.changed(run);
       return output;
@@ -551,13 +578,18 @@ export class LoopEngine {
   private persistArtifact(
     run: LoopRun,
     iteration: LoopRunIteration,
-    phase: "maker" | "checker" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "evaluator",
     output: string,
+    stageIndex?: number,
+    agentName?: string,
   ): void {
     if (!this.artifactsRoot || isLoopRunTerminal(run.status)) return;
     const directory = path.join(this.artifactsRoot, run.id);
     mkdirSync(directory, { recursive: true });
-    const filename = `iteration-${iteration.index}-${phase}.md`;
+    const filename =
+      phase === "stage"
+        ? `iteration-${iteration.index}-stage-${(stageIndex ?? 0) + 1}.md`
+        : `iteration-${iteration.index}-${phase}.md`;
     const filePath = path.join(directory, filename);
     const temp = `${filePath}.${randomUUID()}.tmp`;
     try {
@@ -569,6 +601,8 @@ export class LoopEngine {
     const artifact: LoopRunArtifact = {
       id: randomUUID(),
       phase,
+      stageIndex,
+      agentName,
       filename,
       filePath,
       bytes: Buffer.byteLength(output),
@@ -578,9 +612,10 @@ export class LoopEngine {
     iteration.timeline.push({
       id: randomUUID(),
       phase,
-      roleName: phase === "evaluator" ? "Goal evaluator" : phase,
+      roleName: phase === "evaluator" ? "Goal evaluator" : (agentName ?? phase),
       note: `Saved report artifact: ${filename}`,
       timestamp: artifact.createdAt,
+      stageIndex,
     });
     this.changed(run);
   }
@@ -648,6 +683,117 @@ export class LoopEngine {
       run.iterations.push(iteration);
       this.changed(run);
       try {
+        if (loop.structure === "agentPipeline") {
+          const stageOutputs = (iteration.pipelineStageOutputs ??= []);
+          const stages = loop.pipelineStages!;
+          for (const [stageIndex, agentName] of stages.entries()) {
+            if (this.stopped(run, signal)) return;
+            const handoff = stageOutputs
+              .map(
+                (stage) =>
+                  `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
+              )
+              .join("\n\n");
+            const prompt = [
+              `Goal: ${loop.goal}`,
+              `Iteration: ${index}`,
+              `Pipeline stage: ${stageIndex + 1} of ${stages.length}`,
+              `You are the configured pipeline agent "${agentName}". Complete only this stage and provide a concise handoff report for later stages.`,
+              feedback
+                ? `Prior-iteration evaluator and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+                : "",
+              handoff
+                ? `Bounded reports from completed stages in this iteration:\n${boundedPipelineEvidence(handoff)}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+            const output = await this.role(
+              run,
+              iteration,
+              loop,
+              "stage",
+              prompt,
+              agentName,
+              cwd,
+              run.projectId,
+              signal,
+              executeRole,
+              executeAgent,
+              stageIndex,
+            );
+            if (this.stopped(run, signal)) return;
+            stageOutputs.push({ id: randomUUID(), stageIndex, agentName, output });
+            iteration.output = output;
+            this.changed(run);
+            if (loop.writeTarget === "artifactMarkdown") {
+              this.persistArtifact(run, iteration, "stage", output, stageIndex, agentName);
+            }
+          }
+
+          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          if (loop.validationCommand) {
+            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
+          }
+          if (this.stopped(run, signal)) return;
+          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+          iteration.validationEvidence = validation.evidence;
+
+          const reports = stageOutputs
+            .map(
+              (stage) =>
+                `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
+            )
+            .join("\n\n");
+          const evaluatorPrompt = [
+            `Goal: ${loop.goal}`,
+            `Iteration: ${index}`,
+            "Evaluate the completed pipeline only; do not edit project files.",
+            `Ordered pipeline reports:\n${boundedPipelineEvidence(reports)}`,
+            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
+          ].join("\n\n");
+          iteration.evaluatorOutput = await this.role(
+            run,
+            iteration,
+            loop,
+            "evaluator",
+            evaluatorPrompt,
+            undefined,
+            cwd,
+            run.projectId,
+            signal,
+            executeRole,
+            executeAgent,
+          );
+          if (this.stopped(run, signal)) return;
+          if (loop.writeTarget === "artifactMarkdown") {
+            this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
+          }
+          const goalDecision = exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS);
+          if (!goalDecision) {
+            iteration.endedAt = this.now();
+            this.changed(run);
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          iteration.goalDecision = goalDecision;
+          iteration.endedAt = this.now();
+          this.changed(run);
+          if (goalDecision === "FAIL") {
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (goalDecision === "SUCCESS" && validation.passed) {
+            this.finalize(run, "completed", "success");
+            return;
+          }
+          feedback = boundedPipelineEvidence(
+            [iteration.evaluatorOutput, validation.evidence].join("\n\n"),
+          );
+          continue;
+        }
+
         const makerName = loop.makerName || loop.agentName;
         const makerPrompt = [
           `Goal: ${loop.goal}`,

@@ -171,7 +171,92 @@ describe("loop definition store", () => {
     });
   });
 
-  it.each<LoopStructure>(["agentPipeline", "parallelAgents", "discoveryTriage", "humanApproval"])(
+  it("round-trips native Pipeline order, repeated names, duplication, and unknown metadata", () => {
+    const roots = { home: makeHome() };
+    const dir = loopsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "native-pipeline.loop.md");
+    writeFileSync(
+      filePath,
+      [
+        "---",
+        "name: Native Pipeline",
+        "unknownZulu: last",
+        "pipelineStages: Agent A | Agent A | Agent B",
+        "maxIterations: 7",
+        "source: user",
+        "validationCommand: pnpm test",
+        "structure: agentPipeline",
+        "description: Native ordered pipeline",
+        "unknownAlpha: first",
+        "writeTarget: artifactMarkdown",
+        "---",
+        "",
+        "Ship in order.",
+        "",
+      ].join("\n"),
+    );
+    expect(scanLoops(roots)[0]).toMatchObject({
+      structure: "agentPipeline",
+      pipelineStages: ["Agent A", "Agent A", "Agent B"],
+    });
+    writeLoopFile(roots, {
+      name: "Native Pipeline",
+      pipelineStages: ["Agent B", "Agent A", "Agent A"],
+    });
+    const raw = readFileSync(filePath, "utf8");
+    expect(raw).toBe(
+      [
+        "---",
+        "name: Native Pipeline",
+        "description: Native ordered pipeline",
+        "source: user",
+        "structure: agentPipeline",
+        "writeTarget: artifactMarkdown",
+        "maxIterations: 7",
+        "validationCommand: pnpm test",
+        "pipelineStages: Agent B | Agent A | Agent A",
+        "unknownAlpha: first",
+        "unknownZulu: last",
+        "---",
+        "",
+        "Ship in order.",
+        "",
+      ].join("\n"),
+    );
+    expect(duplicateLoop(roots, "Native Pipeline")).toBe("Copy of Native Pipeline");
+    const pipelineCopy = scanLoops(roots).find((loop) => loop.name === "Copy of Native Pipeline")!;
+    expect(pipelineCopy).toMatchObject({
+      pipelineStages: ["Agent B", "Agent A", "Agent A"],
+    });
+    expect(readFileSync(pipelineCopy.filePath, "utf8")).toBe(
+      raw.replace("name: Native Pipeline", "name: Copy of Native Pipeline"),
+    );
+    expect(() =>
+      writeLoopFile(
+        { home: makeHome() },
+        {
+          name: "Empty Pipeline",
+          goal: "g",
+          structure: "agentPipeline",
+          pipelineStages: [],
+        },
+      ),
+    ).toThrow("At least one pipeline stage");
+    expect(() =>
+      writeLoopFile(
+        { home: makeHome() },
+        {
+          name: "Blank Pipeline",
+          goal: "g",
+          structure: "agentPipeline",
+          pipelineStages: ["Agent A", " "],
+        },
+      ),
+    ).toThrow("cannot be blank");
+  });
+
+  it.each<LoopStructure>(["parallelAgents", "discoveryTriage", "humanApproval"])(
     "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
     (structure) => {
       const createRoots = { home: makeHome() };

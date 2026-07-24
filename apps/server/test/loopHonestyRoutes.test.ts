@@ -30,7 +30,6 @@ import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loop
 import { SessionCreationError } from "../src/SessionManager.ts";
 
 const unsupportedStructures: LoopStructure[] = [
-  "agentPipeline",
   "parallelAgents",
   "discoveryTriage",
   "humanApproval",
@@ -52,6 +51,7 @@ function makeRoutes(
   servers.push(fastify);
   const createSession = vi.fn();
   const destroySession = vi.fn();
+  const runSubagent = vi.fn();
   const announceCreated = vi.fn();
   const startEngine = vi.fn();
   const stopEngine = vi.fn();
@@ -78,6 +78,7 @@ function makeRoutes(
     sessions: {
       create: createSession,
       destroy: destroySession,
+      runSubagent,
       announceCreated,
     },
     index: {
@@ -115,6 +116,7 @@ function makeRoutes(
     fastify,
     createSession,
     destroySession,
+    runSubagent,
     announceCreated,
     startEngine,
     stopEngine,
@@ -418,6 +420,108 @@ describe("loop route honesty gate", () => {
     expect(destroySession).toHaveBeenCalledOnce();
     expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
     expect(gitDeleteOwnedWorktreeBranch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects invalid native Pipeline configuration before runtime allocation", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-pipeline-invalid-"));
+    const filePath = writeExternalLoop(home, "Invalid Pipeline", "agentPipeline");
+    const original = readFileSync(filePath, "utf8");
+    const { fastify, createSession, startEngine } = makeRoutes(home);
+
+    const run = await fastify.inject({
+      method: "POST",
+      url: "/loops/Invalid%20Pipeline/run",
+      payload: { projectId: "project" },
+    });
+    expect(run.statusCode).toBe(422);
+    expect(run.json()).toMatchObject({ code: "loop_definition_invalid" });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+
+    const duplicate = await fastify.inject({
+      method: "POST",
+      url: "/loops/Invalid%20Pipeline/duplicate",
+    });
+    expect(duplicate.statusCode).toBe(422);
+    expect(duplicate.json()).toMatchObject({ code: "loop_definition_invalid" });
+    expect(readFileSync(filePath, "utf8")).toBe(original);
+  });
+
+  it("applies Pipeline stage tool policy by write target and evaluator no-tools policy", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-pipeline-policy-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Artifact Pipeline",
+        structure: "agentPipeline",
+        goal: "Run stages.",
+        pipelineStages: ["A", "A", "B"],
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    writeLoopFile(
+      { home },
+      {
+        name: "Checkout Pipeline",
+        structure: "agentPipeline",
+        goal: "Run stages.",
+        pipelineStages: ["A", "B"],
+        writeTarget: "currentCheckout",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine, runSubagent } = makeRoutes(home);
+    let parentNumber = 0;
+    createSession.mockImplementation(() => ({
+      meta: {
+        id: `pipeline-parent-${++parentNumber}`,
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    }));
+    const never = new Promise<void>(() => {});
+    settledEngine.mockReturnValue(never);
+    startEngine.mockImplementation((_loop, _cwd, options) => ({
+      id: `pipeline-run-${parentNumber}`,
+      loopName: "Pipeline",
+      projectId: "project",
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      options,
+    }));
+    runSubagent.mockResolvedValue("report");
+
+    const artifact = await fastify.inject({
+      method: "POST",
+      url: "/loops/Artifact%20Pipeline/run",
+      payload: { projectId: "project" },
+    });
+    expect(artifact.statusCode).toBe(201);
+    const artifactOptions = startEngine.mock.calls[0]![2];
+    await artifactOptions.executeRole({ prompt: "stage", agentName: "A", phase: "stage" });
+    await artifactOptions.executeRole({ prompt: "evaluate", phase: "evaluator" });
+    expect(runSubagent).toHaveBeenNthCalledWith(1, "pipeline-parent-1", "stage", "A", "readOnly");
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      2,
+      "pipeline-parent-1",
+      "evaluate",
+      undefined,
+      "none",
+    );
+
+    const checkout = await fastify.inject({
+      method: "POST",
+      url: "/loops/Checkout%20Pipeline/run",
+      payload: { projectId: "project" },
+    });
+    expect(checkout.statusCode).toBe(201);
+    const checkoutOptions = startEngine.mock.calls[1]![2];
+    await checkoutOptions.executeRole({ prompt: "stage", agentName: "B", phase: "stage" });
+    expect(runSubagent).toHaveBeenNthCalledWith(3, "pipeline-parent-2", "stage", "B", "configured");
   });
 
   it("rejects concurrent current-checkout runs before a second Pi allocation and releases after cleanup", async () => {

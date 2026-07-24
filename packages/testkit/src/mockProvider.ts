@@ -43,11 +43,19 @@ export interface ChatCompletionRequest {
   [key: string]: unknown;
 }
 
+export interface MockProviderEvent {
+  requestIndex: number;
+  kind: "request" | "delta" | "done";
+  text?: string;
+}
+
 export interface MockProviderServer {
   port: number;
   baseUrl: string;
   /** All request bodies received, in order (for asserting system prompts etc.). */
   requests: ChatCompletionRequest[];
+  /** Real SSE emission order, for proving incremental delivery and no overlap. */
+  events: MockProviderEvent[];
   close(): Promise<void>;
 }
 
@@ -75,6 +83,7 @@ export async function startMockProvider(
   const toolCall = options.toolCall;
   const chunkDelayMs = options.chunkDelayMs ?? 5;
   const requests: ChatCompletionRequest[] = [];
+  const events: MockProviderEvent[] = [];
 
   const server: Server = createServer((req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
@@ -92,6 +101,8 @@ export async function startMockProvider(
         return;
       }
       requests.push(body);
+      const requestIndex = requests.length - 1;
+      events.push({ requestIndex, kind: "request" });
       const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
       const lastUserText = contentToString(lastUser?.content ?? "");
       const id = `chatcmpl-mock-${requests.length}`;
@@ -138,6 +149,7 @@ export async function startMockProvider(
         );
         res.write(chunk({}, "tool_calls"));
         res.write("data: [DONE]\n\n");
+        events.push({ requestIndex, kind: "done" });
         res.end();
         return;
       }
@@ -148,7 +160,9 @@ export async function startMockProvider(
       res.write(chunk({ role: "assistant", content: "" }, null));
       const timer = setInterval(() => {
         if (i < words.length) {
-          res.write(chunk({ content: words[i] }, null));
+          const text = words[i]!;
+          res.write(chunk({ content: text }, null));
+          events.push({ requestIndex, kind: "delta", text });
           i += 1;
           return;
         }
@@ -169,6 +183,7 @@ export async function startMockProvider(
           })}\n\n`,
         );
         res.write("data: [DONE]\n\n");
+        events.push({ requestIndex, kind: "done" });
         res.end();
       }, chunkDelayMs);
     });
@@ -181,6 +196,7 @@ export async function startMockProvider(
     port,
     baseUrl: `http://127.0.0.1:${port}`,
     requests,
+    events,
     close: () =>
       new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

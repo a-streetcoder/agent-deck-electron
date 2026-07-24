@@ -5,7 +5,18 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, Play, Plus, Repeat, ShieldCheck, Square, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  Play,
+  Plus,
+  Repeat,
+  ShieldCheck,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
@@ -51,6 +62,7 @@ const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, stri
 const PHASE_LABEL = {
   maker: "Maker",
   checker: "Checker",
+  stage: "Pipeline stage",
   validation: "Validation",
   evaluator: "Goal evaluator",
 } as const;
@@ -71,6 +83,7 @@ interface LoopDraft {
   makerName: string;
   checkerName: string;
   checkerRubric: string;
+  pipelineStages: string[];
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
@@ -92,6 +105,7 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     makerName: loop?.makerName ?? loop?.agentName ?? "",
     checkerName: loop?.checkerName ?? "",
     checkerRubric: loop?.checkerRubric ?? "",
+    pipelineStages: loop?.pipelineStages ? [...loop.pipelineStages] : [],
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
     writeTarget: loop?.writeTarget ?? "artifactMarkdown",
@@ -229,6 +243,10 @@ export function LoopsScreen() {
           checkerName: draft.structure === "makerChecker" ? draft.checkerName.trim() : undefined,
           checkerRubric:
             draft.structure === "makerChecker" ? draft.checkerRubric.trim() : undefined,
+          pipelineStages:
+            draft.structure === "agentPipeline"
+              ? draft.pipelineStages.map((stage) => stage.trim())
+              : undefined,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
           writeTarget: draft.writeTarget,
@@ -570,6 +588,15 @@ export function LoopsScreen() {
                           : ""}
                       </div>
                     ) : null}
+                    {iteration.pipelineStageOutputs?.length ? (
+                      <ol className="mt-1" data-testid="loop-pipeline-stage-outputs">
+                        {iteration.pipelineStageOutputs.map((stage) => (
+                          <li key={stage.id} data-stage-index={stage.stageIndex}>
+                            Stage {stage.stageIndex + 1}: {stage.agentName} — {stage.output}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
                     {iteration.goalDecision ? (
                       <div data-testid="loop-evaluator-decision">
                         Goal evaluator: {iteration.goalDecision}
@@ -848,6 +875,102 @@ export function LoopsScreen() {
                   />
                 </label>
               </div>
+            ) : null}
+            {draft.structure === "agentPipeline" ? (
+              <fieldset
+                className="space-y-2 rounded-lg border border-border-subtle p-2"
+                data-testid="loop-pipeline-config"
+                aria-describedby="loop-pipeline-help"
+              >
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Ordered pipeline stages
+                </legend>
+                <p id="loop-pipeline-help" className="text-detail text-text-muted">
+                  Stages run strictly from top to bottom each iteration. Repeated agent names are
+                  allowed; later stages receive bounded handoff reports.
+                </p>
+                {draft.pipelineStages.map((stage, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-1"
+                    data-testid={`loop-pipeline-stage-${index}`}
+                  >
+                    <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
+                    <ControlInput
+                      className={inputClass}
+                      data-testid={`loop-pipeline-stage-agent-${index}`}
+                      aria-label={`Pipeline stage ${index + 1} agent`}
+                      list="loop-agent-choices"
+                      disabled={saving}
+                      value={stage}
+                      onChange={(event) => {
+                        const pipelineStages = [...draft.pipelineStages];
+                        pipelineStages[index] = event.target.value;
+                        setDraft({ ...draft, pipelineStages });
+                      }}
+                    />
+                    <ControlButton
+                      type="button"
+                      title="Move stage up"
+                      aria-label={`Move pipeline stage ${index + 1} up`}
+                      disabled={saving || index === 0}
+                      onClick={() => {
+                        const pipelineStages = [...draft.pipelineStages];
+                        [pipelineStages[index - 1], pipelineStages[index]] = [
+                          pipelineStages[index]!,
+                          pipelineStages[index - 1]!,
+                        ];
+                        setDraft({ ...draft, pipelineStages });
+                      }}
+                    >
+                      <ArrowUp size={13} aria-hidden />
+                    </ControlButton>
+                    <ControlButton
+                      type="button"
+                      title="Move stage down"
+                      aria-label={`Move pipeline stage ${index + 1} down`}
+                      disabled={saving || index === draft.pipelineStages.length - 1}
+                      onClick={() => {
+                        const pipelineStages = [...draft.pipelineStages];
+                        [pipelineStages[index], pipelineStages[index + 1]] = [
+                          pipelineStages[index + 1]!,
+                          pipelineStages[index]!,
+                        ];
+                        setDraft({ ...draft, pipelineStages });
+                      }}
+                    >
+                      <ArrowDown size={13} aria-hidden />
+                    </ControlButton>
+                    <ControlButton
+                      type="button"
+                      title="Remove stage"
+                      aria-label={`Remove pipeline stage ${index + 1}`}
+                      disabled={saving}
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          pipelineStages: draft.pipelineStages.filter(
+                            (_stage, stageIndex) => stageIndex !== index,
+                          ),
+                        })
+                      }
+                    >
+                      <X size={13} aria-hidden />
+                    </ControlButton>
+                  </div>
+                ))}
+                <ControlButton
+                  type="button"
+                  data-testid="loop-pipeline-add-stage"
+                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                  disabled={saving}
+                  onClick={() =>
+                    setDraft({ ...draft, pipelineStages: [...draft.pipelineStages, ""] })
+                  }
+                >
+                  <Plus size={12} aria-hidden /> Add stage
+                </ControlButton>
+              </fieldset>
             ) : null}
             <datalist id="loop-agent-choices">
               {agents.map((agent) => (

@@ -34,7 +34,7 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
-  it.each<LoopStructure>(["agentPipeline", "parallelAgents", "discoveryTriage", "humanApproval"])(
+  it.each<LoopStructure>(["parallelAgents", "discoveryTriage", "humanApproval"])(
     "rejects unsupported %s before allocating a run or invoking its executor",
     (structure) => {
       let calls = 0;
@@ -52,6 +52,227 @@ describe("loop engine (single-agent)", () => {
       expect(engine.list()).toEqual([]);
     },
   );
+
+  it("runs Pipeline A → A → B in exact order with distinct identities and bounded handoffs", async () => {
+    const calls: Array<{ phase: string; agentName?: string; prompt: string }> = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, agentName, prompt }) => {
+        calls.push({ phase, agentName, prompt });
+        if (phase === "evaluator") return "SUCCESS\nPipeline complete";
+        return agentName === "Agent A" && calls.length === 1
+          ? "x".repeat(20_000)
+          : `${agentName} report`;
+      },
+      runValidation: async () => {
+        calls.push({ phase: "validation", prompt: "" });
+        return { passed: true, evidence: "validation green" };
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "agentPipeline",
+        pipelineStages: ["Agent A", "Agent A", "Agent B"],
+        validationCommand: "test",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+
+    expect(calls.map(({ phase, agentName }) => `${phase}:${agentName ?? ""}`)).toEqual([
+      "stage:Agent A",
+      "stage:Agent A",
+      "stage:Agent B",
+      "validation:",
+      "evaluator:",
+    ]);
+    const iteration = run.iterations[0]!;
+    expect(iteration.pipelineStageOutputs?.map((stage) => stage.agentName)).toEqual([
+      "Agent A",
+      "Agent A",
+      "Agent B",
+    ]);
+    expect(
+      new Set(
+        iteration.children.filter((child) => child.phase === "stage").map((child) => child.id),
+      ).size,
+    ).toBe(3);
+    expect(
+      iteration.children
+        .filter((child) => child.phase === "stage")
+        .map((child) => child.stageIndex),
+    ).toEqual([0, 1, 2]);
+    expect(calls[2]!.prompt).toContain("Stage 1 (Agent A) report");
+    expect(calls[2]!.prompt).toContain("Stage 2 (Agent A) report");
+    expect(calls[2]!.prompt.length).toBeLessThan(13_000);
+    expect(run).toMatchObject({ status: "completed", stopReason: "success" });
+  });
+
+  it("uses evaluator plus validation policy and carries prior-iteration evidence forward", async () => {
+    let iteration = 0;
+    const firstStagePrompts: string[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, stageIndex, prompt }) => {
+        if (phase === "stage") {
+          if (stageIndex === 0) {
+            iteration += 1;
+            firstStagePrompts.push(prompt);
+          }
+          return `stage report iteration ${iteration}`;
+        }
+        return iteration === 1 ? "CONTINUE\nNeed another pass" : "SUCCESS\nDone";
+      },
+      runValidation: async () => ({
+        passed: iteration === 2,
+        evidence: iteration === 1 ? "tests failed first" : "tests green",
+      }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "agentPipeline",
+        pipelineStages: ["A", "B"],
+        validationCommand: "test",
+        maxIterations: 3,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run.status).toBe("completed");
+    expect(run.iterations.map((item) => item.goalDecision)).toEqual(["CONTINUE", "SUCCESS"]);
+    expect(firstStagePrompts[1]).toContain("Need another pass");
+    expect(firstStagePrompts[1]).toContain("tests failed first");
+  });
+
+  it.each(["FAIL\nUnsafe result", "not a goal decision"])(
+    "fails Pipeline closed for evaluator output %s",
+    async (evaluatorOutput) => {
+      const engine = new LoopEngine({
+        executeRole: async ({ phase }) => (phase === "evaluator" ? evaluatorOutput : "report"),
+      });
+      const run = engine.start(
+        makeLoop({ structure: "agentPipeline", pipelineStages: ["A"] }),
+        cwd(),
+      );
+      await engine.settled(run.id);
+      expect(run).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+    },
+  );
+
+  it("does not complete Pipeline on evaluator SUCCESS until configured validation passes", async () => {
+    let validationCalls = 0;
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS\nLooks done" : "report"),
+      runValidation: async () => ({
+        passed: ++validationCalls === 2,
+        evidence: validationCalls === 1 ? "red" : "green",
+      }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "agentPipeline",
+        pipelineStages: ["A"],
+        validationCommand: "test",
+        maxIterations: 2,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run.status).toBe("completed");
+    expect(run.iterations.map((item) => item.goalDecision)).toEqual(["SUCCESS", "SUCCESS"]);
+    expect(run.iterations.map((item) => item.validationPassed)).toEqual([false, true]);
+  });
+
+  it("short-circuits Pipeline stage failure before later stages, validation, or evaluator", async () => {
+    const phases: string[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, stageIndex }) => {
+        phases.push(`${phase}-${stageIndex ?? "e"}`);
+        if (phase === "stage" && stageIndex === 1) throw new Error("stage failed");
+        return "report";
+      },
+      runValidation: async () => {
+        phases.push("validation");
+        return true;
+      },
+    });
+    const run = engine.start(
+      makeLoop({ structure: "agentPipeline", pipelineStages: ["A", "A", "B"] }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(phases).toEqual(["stage-0", "stage-1"]);
+    expect(run).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+  });
+
+  it("stops Pipeline during a stage and at a stage boundary without later work", async () => {
+    let stageStarted!: () => void;
+    const started = new Promise<void>((resolve) => (stageStarted = resolve));
+    const duringPhases: string[] = [];
+    const during = new LoopEngine({
+      executeRole: async ({ phase, signal }) => {
+        duringPhases.push(phase);
+        stageStarted();
+        return await new Promise<string>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        });
+      },
+    });
+    const duringRun = during.start(
+      makeLoop({ structure: "agentPipeline", pipelineStages: ["A", "B"] }),
+      cwd(),
+    );
+    await started;
+    await during.stop(duringRun.id);
+    expect(duringRun.status).toBe("stopped");
+    expect(duringPhases).toEqual(["stage"]);
+
+    let boundaryRunId = "";
+    const boundaryPhases: string[] = [];
+    const boundary = new LoopEngine({
+      executeRole: async ({ phase }) => {
+        boundaryPhases.push(phase);
+        if (phase === "stage") queueMicrotask(() => void boundary.stop(boundaryRunId));
+        return "stage report";
+      },
+    });
+    const boundaryRun = boundary.start(
+      makeLoop({ structure: "agentPipeline", pipelineStages: ["A", "B"] }),
+      cwd(),
+    );
+    boundaryRunId = boundaryRun.id;
+    await boundary.settled(boundaryRun.id);
+    expect(boundaryRun.status).toBe("stopped");
+    expect(boundaryPhases).toEqual(["stage"]);
+  });
+
+  it("stops Pipeline during validation without starting the evaluator", async () => {
+    const phases: string[] = [];
+    let validationStarted!: () => void;
+    const started = new Promise<void>((resolve) => (validationStarted = resolve));
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) => {
+        phases.push(phase);
+        return phase === "evaluator" ? "SUCCESS" : "report";
+      },
+      runValidation: async (_cwd, _command, signal) => {
+        validationStarted();
+        return await new Promise((resolve) => {
+          signal?.addEventListener("abort", () => resolve(false), { once: true });
+        });
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "agentPipeline",
+        pipelineStages: ["A", "B"],
+        validationCommand: "test",
+      }),
+      cwd(),
+    );
+    await started;
+    await engine.stop(run.id);
+    expect(run).toMatchObject({ status: "stopped", stopReason: "userStopped" });
+    expect(phases).toEqual(["stage", "stage"]);
+  });
 
   it("runs maker, report-only checker, validation, then evaluator and revises with evidence", async () => {
     const calls: Array<{ phase: string; prompt: string }> = [];

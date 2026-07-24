@@ -57,6 +57,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   await expect(page.getByTestId("loop-structure").locator("option")).toHaveText([
     "Single agent",
     "Maker / checker",
+    "Agent pipeline",
   ]);
   await page.getByTestId("loop-max-iterations").fill("6");
   await page.getByTestId("loop-validation").fill("pnpm test");

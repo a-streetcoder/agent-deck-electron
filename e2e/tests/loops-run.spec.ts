@@ -22,6 +22,9 @@ test.beforeAll(async () => {
   harness = await startHarness({
     chunkDelayMs: 35,
     reply: (message) => {
+      if (message.includes("Pipeline stage:")) {
+        return "Pipeline stage produced a detailed ordered streamed handoff report.";
+      }
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker found concrete passing evidence.";
       }
@@ -40,6 +43,14 @@ test.beforeAll(async () => {
   writeFileSync(
     path.join(agentsDir, "Checker.md"),
     "---\nname: Checker\ntools: read, bash, edit\n---\nCheck.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Agent A.md"),
+    "---\nname: Agent A\ntools: read, bash, edit\n---\nRun A.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Agent B.md"),
+    "---\nname: Agent B\ntools: read, bash, edit\n---\nRun B.\n",
   );
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
@@ -69,6 +80,8 @@ test.beforeAll(async () => {
   await putLoop({
     name: "Slow Stop",
     goal: "Keep working until stopped.",
+    structure: "agentPipeline",
+    pipelineStages: ["Agent A", "Agent B"],
     validationCommand: "exit 1",
     writeTarget: "currentCheckout",
     maxIterations: 10,
@@ -92,6 +105,55 @@ test("runs a single-agent loop to completion", async ({ page }) => {
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-iterations")).toContainText("✓ passed");
+});
+
+test("authors, reorders, duplicates, runs, retries, and restores an accessible Pipeline", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("new-loop").click();
+  await expect(page.getByTestId("loop-name")).toBeFocused();
+  await page.getByTestId("loop-name").fill("Authored Pipeline");
+  await page.getByTestId("loop-goal").fill("Run repeated agents in the configured order.");
+  await page.getByTestId("loop-structure").selectOption("agentPipeline");
+  const config = page.getByTestId("loop-pipeline-config");
+  await expect(config).toContainText("strictly from top to bottom");
+  await page.getByTestId("loop-pipeline-add-stage").click();
+  await page.getByTestId("loop-pipeline-add-stage").click();
+  await page.getByTestId("loop-pipeline-add-stage").click();
+  await page.getByTestId("loop-pipeline-stage-agent-0").fill("Agent A");
+  await page.getByTestId("loop-pipeline-stage-agent-1").fill("Agent B");
+  await page.getByTestId("loop-pipeline-stage-agent-2").fill("Agent A");
+  await page.getByRole("button", { name: "Move pipeline stage 3 up" }).click();
+  await expect(page.getByTestId("loop-pipeline-stage-agent-0")).toHaveValue("Agent A");
+  await expect(page.getByTestId("loop-pipeline-stage-agent-1")).toHaveValue("Agent A");
+  await expect(page.getByTestId("loop-pipeline-stage-agent-2")).toHaveValue("Agent B");
+  await page.getByTestId("loop-validation").fill("exit 0");
+  await page.getByTestId("loop-save").click();
+
+  const row = page.locator('[data-loop-name="Authored Pipeline"]');
+  await expect(row).toContainText("Agent pipeline");
+  await page.getByTestId("loop-duplicate-Authored Pipeline").click();
+  await expect(page.locator('[data-loop-name="Copy of Authored Pipeline"]')).toBeVisible();
+
+  await page.getByTestId("loop-run-Authored Pipeline").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const outputs = page.getByTestId("loop-pipeline-stage-outputs");
+  await expect(outputs.locator("li")).toHaveCount(3);
+  await expect(outputs.locator("li").nth(0)).toContainText("Stage 1: Agent A");
+  await expect(outputs.locator("li").nth(1)).toContainText("Stage 2: Agent A");
+  await expect(outputs.locator("li").nth(2)).toContainText("Stage 3: Agent B");
+  await expect(page.getByTestId("loop-run-live-status")).toHaveAttribute("role", "status");
+
+  await page.getByTestId("loop-run-retry").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  await page.reload();
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-pipeline-stage-outputs")).toContainText("Stage 3: Agent B");
 });
 
 test("shows ordered Maker+Checker evidence, disables launches, retries, and restores history", async ({

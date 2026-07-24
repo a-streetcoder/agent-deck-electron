@@ -165,6 +165,7 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     makerName: z.string().max(200).optional(),
     checkerName: z.string().max(200).optional(),
     checkerRubric: z.string().max(20_000).optional(),
+    pipelineStages: z.array(z.string().max(200)).max(100).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),

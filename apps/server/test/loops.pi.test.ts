@@ -41,6 +41,14 @@ beforeAll(async () => {
     path.join(agentsDir, "Checker.md"),
     "---\nname: Checker\ntools: read, grep, bash, edit, write\n---\nReview only.\n",
   );
+  writeFileSync(
+    path.join(agentsDir, "Agent A.md"),
+    "---\nname: Agent A\ntools: read, grep, bash, edit, write\n---\nRun stage A.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Agent B.md"),
+    "---\nname: Agent B\ntools: read, grep, bash, edit, write\n---\nRun stage B.\n",
+  );
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -54,6 +62,12 @@ beforeAll(async () => {
       }
       if (message.includes("exact first non-empty line must be SUCCESS")) {
         return "SUCCESS\nEvaluator streamed independent ordered evidence of completion.";
+      }
+      if (message.includes("Pipeline stage: 1")) {
+        return "Stage A streamed multiple ordered handoff delta words.";
+      }
+      if (message.includes("Pipeline stage: 2") || message.includes("Pipeline stage: 3")) {
+        return "Stage B streamed only after final A handoff evidence arrived.";
       }
       return "Maker streamed several ordered implementation delta words.";
     },
@@ -193,6 +207,99 @@ describe("loop run engine (real pi)", () => {
     }
   });
 
+  it("streams real Pi Pipeline stages in strict order before evaluator finalization", async () => {
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "pipeline-loop",
+        goal: "Deliver ordered staged work.",
+        structure: "agentPipeline",
+        pipelineStages: ["Agent A", "Agent A", "Agent B"],
+        validationCommand: "exit 0",
+        writeTarget: "artifactMarkdown",
+        maxIterations: 2,
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("pipeline-loop"));
+    expect(run.status).toBe("completed");
+    expect(run.iterations[0]!.pipelineStageOutputs?.map((stage) => stage.agentName)).toEqual([
+      "Agent A",
+      "Agent A",
+      "Agent B",
+    ]);
+    expect(run.iterations[0]!.children.map((child) => child.phase)).toEqual([
+      "stage",
+      "stage",
+      "stage",
+      "evaluator",
+    ]);
+    expect(
+      run.iterations[0]!.children.every((child) => (child.output?.split(" ").length ?? 0) > 4),
+    ).toBe(true);
+    const prompts = mock.requests
+      .slice(requestStart)
+      .map((request) => JSON.stringify(request.messages.at(-1)?.content));
+    const firstA = prompts.findIndex((prompt) => prompt.includes("Pipeline stage: 1"));
+    const secondA = prompts.findIndex((prompt) => prompt.includes("Pipeline stage: 2"));
+    const stageB = prompts.findIndex((prompt) => prompt.includes("Pipeline stage: 3"));
+    expect(firstA).toBeGreaterThanOrEqual(0);
+    expect(firstA).toBeLessThan(secondA);
+    expect(secondA).toBeLessThan(stageB);
+    expect(prompts[stageB]).toContain("Stage 1 (Agent A) report");
+    expect(prompts[stageB]).toContain("Stage 2 (Agent A) report");
+    const firstRequestIndex = requestStart + firstA;
+    const secondRequestIndex = requestStart + secondA;
+    const stageBRequestIndex = requestStart + stageB;
+    expect(
+      mock.events.filter(
+        (event) => event.requestIndex === firstRequestIndex && event.kind === "delta",
+      ).length,
+    ).toBeGreaterThan(2);
+    expect(
+      mock.events.filter(
+        (event) => event.requestIndex === secondRequestIndex && event.kind === "delta",
+      ).length,
+    ).toBeGreaterThan(2);
+    const secondAFinal = mock.events.findIndex(
+      (event) => event.requestIndex === secondRequestIndex && event.kind === "done",
+    );
+    const stageBStarted = mock.events.findIndex(
+      (event) => event.requestIndex === stageBRequestIndex && event.kind === "request",
+    );
+    expect(secondAFinal).toBeGreaterThanOrEqual(0);
+    expect(secondAFinal).toBeLessThan(stageBStarted);
+    const stageRequests = mock.requests
+      .slice(requestStart)
+      .filter((request) =>
+        JSON.stringify(request.messages.at(-1)?.content).includes("Pipeline stage:"),
+      );
+    for (const request of stageRequests) {
+      const names = (Array.isArray(request.tools) ? request.tools : []).flatMap((tool) => {
+        const fn =
+          tool && typeof tool === "object"
+            ? (tool as { function?: { name?: unknown } }).function
+            : undefined;
+        return typeof fn?.name === "string" ? [fn.name] : [];
+      });
+      expect(names).toEqual(["read", "grep"]);
+    }
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
+      "iteration-1-stage-1.md",
+      "iteration-1-stage-2.md",
+      "iteration-1-stage-3.md",
+      "iteration-1-evaluator.md",
+    ]);
+    expect(
+      run.iterations[0]!.artifacts.every(
+        (artifact) =>
+          !artifact.filePath.startsWith(project + path.sep) && existsSync(artifact.filePath),
+      ),
+    ).toBe(true);
+  });
+
   it("runs every iteration then fails when validation never passes (exit 1)", async () => {
     await putLoop("fail-loop", "exit 1", 2);
     const run = await waitTerminal(await startRun("fail-loop"));
@@ -228,6 +335,8 @@ describe("loop run engine (real pi)", () => {
       body: JSON.stringify({
         name: "wt-loop",
         goal: "Do the work.",
+        structure: "agentPipeline",
+        pipelineStages: ["Agent A", "Agent B"],
         validationCommand: "exit 0",
         maxIterations: 2,
         writeTarget: "newWorktree",
