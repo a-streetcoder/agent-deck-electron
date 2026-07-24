@@ -31,6 +31,12 @@ mac:
   entitlementsInherit: build/entitlements.mac.inherit.plist
   notarize: true
 
+win:
+  icon: build/icon.ico
+
+linux:
+  icon: build/icon.png
+
 dmg:
   title: Agent Deck ${version}
   sign: true
