@@ -333,7 +333,7 @@ export function OnboardingOverlay() {
       <div className="flex min-h-full w-full flex-col bg-surface-elevated">
         {phase === "tour" ? (
           <>
-            <div className="relative h-[min(52vh,520px)] w-full shrink-0 bg-surface-subtle">
+            <div className="relative h-[min(44vh,440px)] w-full shrink-0 bg-surface-subtle">
               <img
                 key={tourPage.image}
                 data-testid="onboarding-image"
@@ -341,6 +341,30 @@ export function OnboardingOverlay() {
                 alt=""
                 className="h-full w-full object-cover"
               />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white">
+                <h2
+                  data-testid="onboarding-title"
+                  className="text-2xl font-semibold"
+                  style={{ fontStretch: "expanded" }}
+                >
+                  {tourPage.title}
+                </h2>
+                <p className="max-w-3xl text-sm leading-relaxed text-white/80">
+                  {tourPage.description}
+                </p>
+                <div className="flex items-center gap-1.5 pt-1" aria-hidden>
+                  {PAGES.map((p, i) => (
+                    <span
+                      key={p.image}
+                      className={cn(
+                        "h-1.5 rounded-full transition-all",
+                        i === page ? "w-4 bg-white" : "w-1.5 bg-white/35",
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
               <button
                 data-testid="onboarding-skip"
                 className="absolute right-2 top-2 rounded-full bg-black/40 p-1 text-white/80 hover:text-white"
@@ -350,66 +374,19 @@ export function OnboardingOverlay() {
                 <X size={15} />
               </button>
             </div>
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-8 py-5">
-              <h2
-                data-testid="onboarding-title"
-                className="text-xl font-semibold text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
-                {tourPage.title}
-              </h2>
-              <p className="text-sm leading-relaxed text-text-secondary">{tourPage.description}</p>
-              <div className="flex items-center gap-1.5 pt-1" aria-hidden>
-                {PAGES.map((p, i) => (
-                  <span
-                    key={p.image}
-                    className={cn(
-                      "h-1.5 rounded-full transition-all",
-                      i === page ? "w-4 bg-[var(--color-brand-accent)]" : "w-1.5 bg-border-strong",
-                    )}
-                  />
-                ))}
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <button
-                  data-testid="onboarding-back"
-                  className={cn(
-                    "flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary",
-                    page === 0 && "invisible",
-                  )}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                >
-                  <ArrowLeft size={13} /> Back
-                </button>
-                {isLastTourPage ? (
-                  <button
-                    data-testid="onboarding-check-setup"
-                    className={primaryButtonClass}
-                    style={primaryButtonStyle}
-                    onClick={() => goto("setup")}
-                  >
-                    <Stethoscope size={13} aria-hidden /> Check Setup
-                  </button>
-                ) : (
-                  <button
-                    data-testid="onboarding-next"
-                    className={primaryButtonClass}
-                    style={primaryButtonStyle}
-                    onClick={() => setPage((p) => Math.min(PAGES.length - 1, p + 1))}
-                  >
-                    Continue <ArrowRight size={13} aria-hidden />
-                  </button>
-                )}
-              </div>
-            </div>
             <div
-              className="mx-auto w-full max-w-6xl border-t border-border-subtle px-8 py-5"
+              className="mx-auto w-full max-w-6xl flex-1 border-t border-border-subtle px-8 py-5"
               data-testid="onboarding-setup-summary"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                    <Stethoscope size={15} /> Automatic setup check
+                    {checksLoading ? (
+                      <RefreshCw size={15} className="animate-spin text-accent" />
+                    ) : (
+                      <Stethoscope size={15} />
+                    )}
+                    {checksLoading ? "Checking your setup…" : "Automatic setup check"}
                   </div>
                   <p className="mt-1 text-xs text-text-muted">
                     Agent Deck uses its embedded runtime and pinned Pi. Connect optional services
@@ -424,9 +401,17 @@ export function OnboardingOverlay() {
                 </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {checksLoading && checks.length === 0 ? (
-                  <div className="text-xs text-text-muted">Checking your setup…</div>
-                ) : null}
+                {checksLoading && checks.length === 0
+                  ? Array.from({ length: 6 }, (_, index) => (
+                      <div
+                        key={index}
+                        className="flex animate-pulse items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
+                      >
+                        <span className="h-3.5 w-3.5 rounded-full bg-border-strong" />
+                        <span className="h-2.5 w-20 rounded bg-border-strong" />
+                      </div>
+                    ))
+                  : null}
                 {checks.slice(0, 6).map((check) => {
                   const { Icon, color } = STATUS_META[check.status];
                   return (
@@ -440,6 +425,37 @@ export function OnboardingOverlay() {
                   );
                 })}
               </div>
+            </div>
+            <div className="mt-auto flex w-full items-center justify-between border-t border-border-subtle px-8 py-4">
+              <button
+                data-testid="onboarding-back"
+                className={cn(
+                  "flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary",
+                  page === 0 && "invisible",
+                )}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ArrowLeft size={13} /> Back
+              </button>
+              {isLastTourPage ? (
+                <button
+                  data-testid="onboarding-check-setup"
+                  className={primaryButtonClass}
+                  style={primaryButtonStyle}
+                  onClick={() => goto("setup")}
+                >
+                  Continue <ArrowRight size={13} aria-hidden />
+                </button>
+              ) : (
+                <button
+                  data-testid="onboarding-next"
+                  className={primaryButtonClass}
+                  style={primaryButtonStyle}
+                  onClick={() => setPage((p) => Math.min(PAGES.length - 1, p + 1))}
+                >
+                  Continue <ArrowRight size={13} aria-hidden />
+                </button>
+              )}
             </div>
           </>
         ) : null}
