@@ -1,5 +1,6 @@
 {
   "name": "@agent-deck/desktop",
+  "productName": "Agent Deck",
   "version": "0.0.1",
   "private": true,
   "type": "module",

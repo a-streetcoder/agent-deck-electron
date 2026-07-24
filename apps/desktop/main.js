@@ -19,6 +19,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 // Present as "Agent Deck" everywhere the OS shows the app name (menu bar,
 // About panel) instead of the package/Electron default.
 app.setName("Agent Deck");
+if (process.platform === "win32") app.setAppUserModelId("com.streetcoding.agentdeck");
 
 /** Background dark so there's no white flash before the UI paints. */
 const WINDOW_BG = "#0f1115";
@@ -207,6 +208,7 @@ function createWindow(port) {
     minWidth: 940,
     minHeight: 600,
     backgroundColor: WINDOW_BG,
+    title: "Agent Deck",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     titleBarOverlay:
       process.platform === "darwin"
