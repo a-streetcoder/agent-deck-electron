@@ -1,46 +1,12 @@
 # Agent guide
 
-This repository is the Electron implementation of Agent Deck for macOS, Windows,
-and Linux. The desktop shell is Electron, the interface is React/Vite, and the
-Node/TypeScript server runs Pi through its JSONL RPC mode.
+This is the cross-platform Electron implementation of Agent Deck, with a React/Vite UI and a Node/TypeScript backend that hosts Pi through JSONL RPC.
 
-Use Node.js 22.19 or newer and pnpm. Install and validate from the repository root:
+Use Node.js 22.19+ and pnpm. Preserve real streamed events, test Pi-facing changes against the pinned real Pi binary, and never modify bundled resources for user edits—write through the override and persistence layers instead.
 
-- `pnpm install`
-- `pnpm typecheck`
-- `pnpm lint`
-- `pnpm format:check`
-- `pnpm test`
-- `pnpm test:pi`
-- `pnpm test:e2e`
-- `pnpm dev`
-- `pnpm build`
-- `pnpm pack:mac`
+For detailed guidance, read the relevant guide before editing that area:
 
-`pnpm dev` is the normal development loop: Vite hot-reloads renderer changes,
-the server runs under `tsx watch`, and Electron restarts when its main or preload
-source changes.
-
-`pnpm pack:mac` creates an unsigned Apple Silicon application for local
-production-layout testing. Signed releases use the manually dispatched
-`.github/workflows/release-macos.yml` workflow; validate downloaded DMGs with
-`pnpm validate:mac -- /path/to/file.dmg`.
-
-Source layout:
-
-- `apps/desktop` — Electron main process and preload bridge.
-- `apps/web` — React/Vite renderer.
-- `apps/server` — Fastify backend and application services.
-- `packages` — shared domain, contracts, runtime, Pi host, resources, MCP, and memory packages.
-- `e2e` — Playwright coverage for the web and Electron shells.
-- `docs` — architecture history, parity audits, plans, and runtime references.
-
-The public native macOS implementation at
-`https://github.com/a-streetcoder/agent-deck` is a product and behavior reference,
-not a build dependency. Port features deliberately; do not copy Swift/Xcode
-artifacts into this repository.
-
-Never edit bundled built-in resources in place. User edits must go through the
-application's override and persistence paths. Keep write targets explicit in the
-UI. Preserve real streaming and validate Pi-facing changes against the real
-pinned Pi binary.
+- Architecture and project constraints: [docs/agent-guidelines/ARCHITECTURE.md](docs/agent-guidelines/ARCHITECTURE.md)
+- Development commands: [docs/agent-guidelines/DEVELOPMENT.md](docs/agent-guidelines/DEVELOPMENT.md)
+- Test selection and required checks: [docs/agent-guidelines/TESTING.md](docs/agent-guidelines/TESTING.md)
+- macOS packaging and releases: [docs/agent-guidelines/RELEASE.md](docs/agent-guidelines/RELEASE.md)
