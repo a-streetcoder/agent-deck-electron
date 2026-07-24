@@ -330,7 +330,7 @@ export function OnboardingOverlay() {
       data-testid="onboarding"
       aria-label="Welcome to Agent Deck"
     >
-      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col bg-surface-elevated">
+      <div className="flex min-h-full w-full flex-col bg-surface-elevated">
         {phase === "tour" ? (
           <>
             <div className="relative h-[min(52vh,520px)] w-full shrink-0 bg-surface-subtle">
@@ -350,7 +350,7 @@ export function OnboardingOverlay() {
                 <X size={15} />
               </button>
             </div>
-            <div className="flex flex-col gap-3 px-5 py-4">
+            <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-8 py-5">
               <h2
                 data-testid="onboarding-title"
                 className="text-xl font-semibold text-text-primary"
@@ -403,7 +403,7 @@ export function OnboardingOverlay() {
               </div>
             </div>
             <div
-              className="border-t border-border-subtle px-5 py-4"
+              className="mx-auto w-full max-w-6xl border-t border-border-subtle px-8 py-5"
               data-testid="onboarding-setup-summary"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -445,7 +445,10 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "setup" ? (
-          <div className="flex min-h-0 flex-col" data-testid="onboarding-setup">
+          <div
+            className="mx-auto flex min-h-0 w-full max-w-4xl flex-col py-8"
+            data-testid="onboarding-setup"
+          >
             <div className="flex items-center justify-between px-5 pb-2 pt-4">
               <div className="flex items-center gap-2">
                 <Stethoscope size={16} className="text-text-secondary" />
@@ -531,7 +534,10 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "preferences" ? (
-          <div className="flex min-h-0 flex-col" data-testid="onboarding-preferences">
+          <div
+            className="mx-auto flex min-h-0 w-full max-w-3xl flex-col py-8"
+            data-testid="onboarding-preferences"
+          >
             <div className="flex items-center gap-2 px-5 pb-1 pt-4">
               <SlidersHorizontal size={16} className="text-text-secondary" />
               <h2
@@ -645,7 +651,10 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "final" ? (
-          <div className="flex flex-col gap-3 px-5 py-5" data-testid="onboarding-final">
+          <div
+            className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-3 px-5 py-8"
+            data-testid="onboarding-final"
+          >
             <h2
               className="text-base font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
