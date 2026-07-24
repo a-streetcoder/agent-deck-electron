@@ -390,6 +390,8 @@ export function App() {
             <div
               className="bg-danger-subtle px-6 py-2 text-sm text-danger"
               data-testid="error-banner"
+              role="alert"
+              aria-live="assertive"
             >
               {error}
             </div>

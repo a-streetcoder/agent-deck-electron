@@ -1,11 +1,27 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { LOOP_STRUCTURE_UNSUPPORTED_CODE, type LoopStructure } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
 import { deleteLoopFile, duplicateLoop, loopsDir, scanLoops, writeLoopFile } from "../src/loops.ts";
 
 function makeHome(): string {
   return mkdtempSync(path.join(tmpdir(), "loops-home-"));
+}
+
+function writeExternalLoop(
+  roots: { home: string },
+  name: string,
+  structure: LoopStructure,
+): string {
+  const dir = loopsDir(roots);
+  const filePath = path.join(dir, "native.loop.md");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    filePath,
+    `---\nname: ${name}\nstructure: ${structure}\nmaxIterations: 7\ncheckerRubric: preserve me\n---\n\nExternal goal.\n`,
+  );
+  return filePath;
 }
 
 describe("loop definition store", () => {
@@ -126,6 +142,57 @@ describe("loop definition store", () => {
 
     expect(() => duplicateLoop(roots, "Ghost")).toThrow("loop_not_found");
   });
+
+  it.each<LoopStructure>([
+    "makerChecker",
+    "agentPipeline",
+    "parallelAgents",
+    "discoveryTriage",
+    "humanApproval",
+  ])(
+    "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
+    (structure) => {
+      const createRoots = { home: makeHome() };
+      expect(() =>
+        writeLoopFile(createRoots, { name: "Unsupported Create", goal: "g", structure }),
+      ).toThrow(expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }));
+      expect(existsSync(loopsDir(createRoots))).toBe(false);
+
+      // Native/external tools may have written this structure. Public updates
+      // that inherit it and direct duplication both fail without touching it.
+      const roots = { home: makeHome() };
+      const filePath = writeExternalLoop(roots, "Native Loop", structure);
+      const original = readFileSync(filePath, "utf8");
+      expect(() =>
+        writeLoopFile(roots, { name: "Native Loop", description: "no mutation" }),
+      ).toThrow(expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }));
+      expect(() => duplicateLoop(roots, "Native Loop")).toThrow(
+        expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }),
+      );
+      expect(scanLoops(roots)).toHaveLength(1);
+      expect(readFileSync(filePath, "utf8")).toBe(original);
+      expect(existsSync(path.join(loopsDir(roots), "copy-of-native-loop.loop.md"))).toBe(false);
+
+      // Explicit conversion is the sole supported write and retains unknown
+      // native metadata plus fields/body omitted by this edit.
+      expect(
+        writeLoopFile(roots, {
+          name: "Native Loop",
+          structure: "singleAgent",
+          description: "converted",
+        }),
+      ).toBe(filePath);
+      const converted = readFileSync(filePath, "utf8");
+      expect(converted).toContain("structure: singleAgent");
+      expect(converted).toContain("checkerRubric: preserve me");
+      expect(converted).toContain("maxIterations: 7");
+      expect(converted).toContain("External goal.");
+      expect(scanLoops(roots)[0]).toMatchObject({
+        structure: "singleAgent",
+        description: "converted",
+      });
+    },
+  );
 
   it("rejects a different name that collides on the same slug", () => {
     const home = makeHome();

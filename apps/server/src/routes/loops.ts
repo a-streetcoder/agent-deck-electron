@@ -1,11 +1,33 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { deleteLoopFile, duplicateLoop, scanLoops, writeLoopFile } from "@agent-deck/resources";
+import {
+  isRunnableLoopStructure,
+  LOOP_STRUCTURE_LABEL,
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopStructure,
+} from "@agent-deck/domain";
+import {
+  deleteLoopFile,
+  duplicateLoop,
+  LoopStructureNotRunnableError,
+  scanLoops,
+  writeLoopFile,
+} from "@agent-deck/resources";
 import { z } from "zod";
 import { createSessionWorktree, gitWorktreeRemove, type GitWorktree } from "../git.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
+
+function unsupportedStructureError(structure: LoopStructure): {
+  code: typeof LOOP_STRUCTURE_UNSUPPORTED_CODE;
+  error: string;
+} {
+  return {
+    code: LOOP_STRUCTURE_UNSUPPORTED_CODE,
+    error: `${LOOP_STRUCTURE_LABEL[structure]} loops are not available to run. Convert this loop to Single agent first.`,
+  };
+}
 
 /**
  * Loop definitions (Bank CRUD) + the loop run engine routes. Moved verbatim
@@ -51,14 +73,25 @@ export function registerLoopRoutes(ctx: ServerContext): void {
   fastify.put("/loops", async (request, reply) => {
     const parsed = loopEditBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const roots = rootsFor();
+    const existing = scanLoops(roots).find((loop) => loop.name === parsed.data.name);
+    const resultingStructure = parsed.data.structure ?? existing?.structure ?? "singleAgent";
+    if (!isRunnableLoopStructure(resultingStructure)) {
+      return reply.status(422).send(unsupportedStructureError(resultingStructure));
+    }
     try {
-      writeLoopFile(rootsFor(), parsed.data);
+      writeLoopFile(roots, parsed.data);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "loop_slug_conflict") {
         return reply
           .status(409)
           .send({ error: "Another loop already uses a name that resolves to the same file." });
+      }
+      // Repeat the route contract if the persisted structure changed between
+      // the optimistic scan above and the authoritative resource write.
+      if (error instanceof LoopStructureNotRunnableError) {
+        return reply.status(422).send(unsupportedStructureError(error.structure));
       }
       return reply.status(500).send({ error: message });
     }
@@ -76,14 +109,26 @@ export function registerLoopRoutes(ctx: ServerContext): void {
 
   fastify.post("/loops/:name/duplicate", async (request, reply) => {
     const name = (request.params as { name: string }).name;
+    const roots = rootsFor();
+    const source = scanLoops(roots).find((loop) => loop.name === name);
+    if (!source) return reply.status(404).send({ error: `unknown loop: ${name}` });
+    if (!isRunnableLoopStructure(source.structure)) {
+      return reply.status(422).send(unsupportedStructureError(source.structure));
+    }
     try {
-      const copyName = duplicateLoop(rootsFor(), name);
+      const copyName = duplicateLoop(roots, name);
       broadcast({ type: "resources_changed" });
       return { name: copyName };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "loop_not_found") {
         return reply.status(404).send({ error: `unknown loop: ${name}` });
+      }
+      // The resource layer repeats the invariant to close direct-call and
+      // check/use races. Preserve the same user-facing typed 422 contract if
+      // the source changed after the route's initial scan.
+      if (error instanceof LoopStructureNotRunnableError) {
+        return reply.status(422).send(unsupportedStructureError(error.structure));
       }
       return reply.status(500).send({ error: message });
     }
@@ -96,6 +141,12 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     const name = (request.params as { name: string }).name;
     const loop = scanLoops(rootsFor()).find((l) => l.name === name);
     if (!loop) return reply.status(404).send({ error: `unknown loop: ${name}` });
+    // This must precede request parsing, project lookup, worktree creation,
+    // session/Pi allocation, and LoopEngine.start: unsupported persisted/native
+    // definitions are readable but never silently run as single-agent loops.
+    if (!isRunnableLoopStructure(loop.structure)) {
+      return reply.status(422).send(unsupportedStructureError(loop.structure));
+    }
     const parsed = z
       .object({
         projectId: z.string().optional(),

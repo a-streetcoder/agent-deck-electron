@@ -4,6 +4,8 @@ import { promisify } from "node:util";
 import {
   clampMaxIterations,
   isLoopRunTerminal,
+  isRunnableLoopStructure,
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopDefinition,
   type LoopRun,
   type LoopRunStatus,
@@ -52,6 +54,17 @@ export interface LoopStartOptions {
   projectId?: string;
   /** Per-run agent executor (the server builds one bound to a parent session). */
   executeAgent?: ExecuteAgent;
+}
+
+export class UnsupportedLoopStructureError extends Error {
+  readonly code = LOOP_STRUCTURE_UNSUPPORTED_CODE;
+
+  constructor(readonly structure: LoopDefinition["structure"]) {
+    super(
+      `Loop structure "${structure}" is not available to run. Convert it to Single agent first.`,
+    );
+    this.name = "UnsupportedLoopStructureError";
+  }
 }
 
 /** Cap on retained runs; oldest terminal runs are evicted past this. */
@@ -104,6 +117,11 @@ export class LoopEngine {
 
   /** Start a run (executes in the background); returns the initial run record. */
   start(loop: LoopDefinition, cwd: string, options: LoopStartOptions = {}): LoopRun {
+    // Independent fail-closed boundary: callers cannot accidentally route a
+    // persisted native structure through the single-agent executor.
+    if (!isRunnableLoopStructure(loop.structure)) {
+      throw new UnsupportedLoopStructureError(loop.structure);
+    }
     const executeAgent = options.executeAgent ?? this.defaultExecuteAgent;
     if (!executeAgent) throw new Error("no agent executor configured for this loop run");
     this.evictOldRuns();

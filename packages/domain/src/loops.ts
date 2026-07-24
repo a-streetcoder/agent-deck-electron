@@ -25,6 +25,15 @@ export const LOOP_STRUCTURES: LoopStructure[] = [
   "humanApproval",
 ];
 
+/** Structures with an implemented execution engine in this application. */
+export const RUNNABLE_LOOP_STRUCTURES = ["singleAgent"] as const satisfies readonly LoopStructure[];
+
+export function isRunnableLoopStructure(structure: LoopStructure): boolean {
+  return (RUNNABLE_LOOP_STRUCTURES as readonly LoopStructure[]).includes(structure);
+}
+
+export const LOOP_STRUCTURE_UNSUPPORTED_CODE = "loop_structure_unsupported";
+
 export const LOOP_STRUCTURE_LABEL: Record<LoopStructure, string> = {
   singleAgent: "Single agent",
   makerChecker: "Maker / checker",

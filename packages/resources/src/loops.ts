@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import path from "node:path";
 import {
   clampMaxIterations,
+  isRunnableLoopStructure,
   LOOP_STRUCTURES,
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
   LOOP_WRITE_TARGETS,
   type LoopDefinition,
   type LoopStructure,
@@ -153,7 +155,18 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
     frontmatter = { ...existing.frontmatter };
     body = existing.body.trim();
-  } else if (existsSync(filePath)) {
+  }
+
+  // Public writes are an authoritative capability boundary too. Existing
+  // native/external definitions remain readable and deletable, but an update
+  // that omits structure inherits the persisted value and must fail closed.
+  // Only an explicit singleAgent edit converts an unsupported definition.
+  const resultingStructure = edit.structure ?? asStructure(frontmatter.structure);
+  if (!isRunnableLoopStructure(resultingStructure)) {
+    throw new LoopStructureNotRunnableError(resultingStructure);
+  }
+
+  if (!existingPath && existsSync(filePath)) {
     // The slug is occupied by a loop with a different name — refuse to clobber.
     throw new Error("loop_slug_conflict");
   }
@@ -186,15 +199,31 @@ export function deleteLoopFile(roots: ResourceRoots, name: string): void {
   rmSync(filePath, { force: true });
 }
 
+export class LoopStructureNotRunnableError extends Error {
+  readonly code = LOOP_STRUCTURE_UNSUPPORTED_CODE;
+
+  constructor(readonly structure: LoopStructure) {
+    super(LOOP_STRUCTURE_UNSUPPORTED_CODE);
+    this.name = "LoopStructureNotRunnableError";
+  }
+}
+
 /**
  * Duplicate a loop as a new "Copy of <name>" (native duplicateUserDefinition),
  * de-duplicating the name if a copy already exists. Returns the new loop's name.
- * Throws "loop_not_found" if the source doesn't exist.
+ * Throws "loop_not_found" if the source doesn't exist, or
+ * LoopStructureNotRunnableError when no engine exists for its structure.
  */
 export function duplicateLoop(roots: ResourceRoots, name: string): string {
   const loops = scanLoops(roots);
   const source = loops.find((loop) => loop.name === name);
   if (!source) throw new Error("loop_not_found");
+  // This resource boundary is authoritative too: direct callers and a source
+  // changed between a route's check and this scan must never copy an
+  // unsupported structure. Check before deriving a destination name or writing.
+  if (!isRunnableLoopStructure(source.structure)) {
+    throw new LoopStructureNotRunnableError(source.structure);
+  }
   // De-dup by SLUG (the filename key), not name — otherwise a name-unique copy
   // could still collide on disk with a differently-named loop and throw.
   const existingSlugs = new Set(loops.map((loop) => loopSlug(loop.name)));

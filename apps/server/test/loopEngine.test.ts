@@ -1,5 +1,9 @@
 import { cwd } from "node:process";
-import type { LoopDefinition } from "@agent-deck/domain";
+import {
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopDefinition,
+  type LoopStructure,
+} from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
 import { LoopEngine } from "../src/loopEngine.ts";
 
@@ -27,6 +31,28 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
+  it.each<LoopStructure>([
+    "makerChecker",
+    "agentPipeline",
+    "parallelAgents",
+    "discoveryTriage",
+    "humanApproval",
+  ])("rejects unsupported %s before allocating a run or invoking its executor", (structure) => {
+    let calls = 0;
+    const engine = new LoopEngine({
+      executeAgent: async () => {
+        calls += 1;
+        return "must not run";
+      },
+    });
+
+    expect(() => engine.start(makeLoop({ structure }), cwd())).toThrow(
+      expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }),
+    );
+    expect(calls).toBe(0);
+    expect(engine.list()).toEqual([]);
+  });
+
   it("stops on the first passing validation (exit 0)", async () => {
     let calls = 0;
     const engine = new LoopEngine({
