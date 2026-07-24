@@ -581,6 +581,11 @@ test("attention events notify + badge while unfocused, and focus clears the badg
 });
 
 test("the app presents itself as Agent Deck", async () => {
-  const name = await app.evaluate(({ app: electronApp }) => electronApp.getName());
-  expect(name).toBe("Agent Deck");
+  const identity = await app.evaluate(({ app: electronApp, Menu }) => ({
+    name: electronApp.getName(),
+    platform: process.platform,
+    firstMenuLabel: Menu.getApplicationMenu()?.items[0]?.label,
+  }));
+  expect(identity.name).toBe("Agent Deck");
+  if (identity.platform === "darwin") expect(identity.firstMenuLabel).toBe("Agent Deck");
 });

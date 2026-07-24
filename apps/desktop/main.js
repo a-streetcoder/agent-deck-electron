@@ -209,6 +209,7 @@ function createWindow(port) {
     minHeight: 600,
     backgroundColor: WINDOW_BG,
     title: "Agent Deck",
+    icon: path.join(repoRoot, "build", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     titleBarOverlay:
       process.platform === "darwin"
@@ -273,7 +274,24 @@ function sendMenu(action) {
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
   const template = [
-    ...(isMac ? [{ role: "appMenu" }] : []),
+    ...(isMac
+      ? [
+          {
+            label: "Agent Deck",
+            submenu: [
+              { role: "about", label: "About Agent Deck" },
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide", label: "Hide Agent Deck" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit", label: "Quit Agent Deck" },
+            ],
+          },
+        ]
+      : []),
     {
       id: "menu-file",
       label: "File",
@@ -510,7 +528,15 @@ app.on("web-contents-created", (_event, contents) => {
   }
 });
 
-app.whenReady().then(bootstrap);
+app.whenReady().then(() => {
+  // `pnpm dev` runs Electron's generic executable rather than a packaged app
+  // bundle, so macOS otherwise displays Electron's icon in the Dock. Packaged
+  // builds get the same artwork from electron-builder's bundle metadata.
+  if (process.platform === "darwin" && !app.isPackaged) {
+    app.dock.setIcon(path.join(repoRoot, "build", "icon.png"));
+  }
+  return bootstrap();
+});
 
 app.on("activate", () => {
   // macOS: re-open a window when the dock icon is clicked and none are open.
