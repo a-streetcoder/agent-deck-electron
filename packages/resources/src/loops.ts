@@ -4,6 +4,7 @@ import {
   clampMaxIterations,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
   LOOP_STRUCTURES,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
@@ -46,6 +47,44 @@ function asParallelBranches(value: unknown): string[] | undefined {
     ? normalizeParallelBranches(value)
     : undefined;
 }
+function nativeLineDocument(content: string): {
+  frontmatter: Record<string, unknown>;
+  body: string;
+} {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalized.startsWith("---\n")) return { frontmatter: {}, body: normalized.trim() };
+  const closingWithBody = normalized.indexOf("\n---\n", 4);
+  const closingAtEnd = normalized.endsWith("\n---") ? normalized.length - 4 : -1;
+  const closing = closingWithBody >= 0 ? closingWithBody : closingAtEnd;
+  if (closing < 0) return { frontmatter: {}, body: normalized.trim() };
+  const frontmatter: Record<string, unknown> = {};
+  for (const line of normalized.slice(4, closing).split("\n")) {
+    const separator = line.indexOf(":");
+    if (separator < 0) continue;
+    frontmatter[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+  }
+  const bodyStart = closingWithBody >= 0 ? closing + 5 : normalized.length;
+  return { frontmatter, body: normalized.slice(bodyStart).trim() };
+}
+
+function parseLoopDocument(content: string): {
+  frontmatter: Record<string, unknown>;
+  body: string;
+} {
+  try {
+    return parseFrontmatter(content) as {
+      frontmatter: Record<string, unknown>;
+      body: string;
+    };
+  } catch {
+    return nativeLineDocument(content);
+  }
+}
+
+function nativeLineFrontmatterValue(content: string, wantedKey: string): string | undefined {
+  return asString(nativeLineDocument(content).frontmatter[wantedKey]);
+}
+
 function asStructure(value: unknown): LoopStructure {
   return LOOP_STRUCTURES.includes(value as LoopStructure)
     ? (value as LoopStructure)
@@ -68,7 +107,7 @@ export function loopSlug(name: string): string {
 }
 
 export function parseLoopFile(filePath: string, content: string): LoopDefinition {
-  const { frontmatter, body } = parseFrontmatter(content);
+  const { frontmatter, body } = parseLoopDocument(content);
   const base = path.basename(filePath).replace(/\.loop\.md$/i, "");
   return {
     id: filePath,
@@ -82,6 +121,13 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     checkerRubric: asString(frontmatter.checkerRubric) || undefined,
     pipelineStages: asPipelineStages(frontmatter.pipelineStages),
     parallelBranches: asParallelBranches(frontmatter.parallelBranches),
+    triageAgent: asString(frontmatter.triageAgent) || undefined,
+    classificationPrompt:
+      asStructure(frontmatter.structure) === "discoveryTriage"
+        ? normalizeLoopClassificationPrompt(
+            nativeLineFrontmatterValue(content, "classificationPrompt"),
+          )
+        : asString(frontmatter.classificationPrompt) || undefined,
     maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
@@ -124,6 +170,8 @@ export interface LoopEdit {
   checkerRubric?: string;
   pipelineStages?: string[];
   parallelBranches?: string[];
+  triageAgent?: string;
+  classificationPrompt?: string;
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
@@ -146,6 +194,8 @@ const LOOP_FIELD_ORDER = [
   "checkerRubric",
   "pipelineStages",
   "parallelBranches",
+  "triageAgent",
+  "classificationPrompt",
 ] as const;
 const LOOP_FIELD_KEYS = new Set<string>(LOOP_FIELD_ORDER);
 
@@ -161,7 +211,13 @@ function serializeFrontmatter(record: Record<string, unknown>): string {
     .sort()) {
     if (record[key] !== undefined) ordered[key] = record[key];
   }
-  return YAML.stringify(ordered).trimEnd();
+  return Object.entries(ordered)
+    .map(([key, value]) =>
+      key === "classificationPrompt"
+        ? `classificationPrompt: ${normalizeLoopClassificationPrompt(asString(value))}`
+        : YAML.stringify({ [key]: value }).trimEnd(),
+    )
+    .join("\n");
 }
 
 function loopFilePath(roots: ResourceRoots, name: string): string {
@@ -191,10 +247,16 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   const existingPath = loopPathByName(roots, edit.name);
   const filePath = existingPath ?? loopFilePath(roots, edit.name);
   let frontmatter: Record<string, unknown> = { ...(edit.preservedFrontmatter ?? {}) };
+  let persistedClassificationPrompt: string | undefined;
   let body = "";
   if (existingPath) {
-    const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
+    const existingContent = readFileSync(filePath, "utf8");
+    const existing = parseLoopDocument(existingContent);
     frontmatter = { ...existing.frontmatter };
+    persistedClassificationPrompt = nativeLineFrontmatterValue(
+      existingContent,
+      "classificationPrompt",
+    );
     body = existing.body.trim();
   }
 
@@ -216,6 +278,12 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     checkerRubric: edit.checkerRubric ?? asString(frontmatter.checkerRubric),
     pipelineStages: edit.pipelineStages ?? asPipelineStages(frontmatter.pipelineStages),
     parallelBranches: edit.parallelBranches ?? asParallelBranches(frontmatter.parallelBranches),
+    triageAgent: edit.triageAgent ?? asString(frontmatter.triageAgent),
+    classificationPrompt: normalizeLoopClassificationPrompt(
+      edit.classificationPrompt ??
+        persistedClassificationPrompt ??
+        asString(frontmatter.classificationPrompt),
+    ),
     writeTarget: edit.writeTarget ?? asWriteTarget(frontmatter.writeTarget),
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
@@ -243,6 +311,20 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   }
   if (edit.parallelBranches !== undefined) {
     frontmatter.parallelBranches = normalizeParallelBranches(edit.parallelBranches).join(" | ");
+  }
+  if (edit.triageAgent !== undefined) {
+    if (edit.triageAgent) frontmatter.triageAgent = edit.triageAgent;
+    else delete frontmatter.triageAgent;
+  }
+  if (resultingStructure === "discoveryTriage") {
+    frontmatter.classificationPrompt = normalizeLoopClassificationPrompt(
+      edit.classificationPrompt ??
+        persistedClassificationPrompt ??
+        asString(frontmatter.classificationPrompt),
+    );
+  } else if (edit.classificationPrompt !== undefined) {
+    if (edit.classificationPrompt) frontmatter.classificationPrompt = edit.classificationPrompt;
+    else delete frontmatter.classificationPrompt;
   }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
@@ -305,7 +387,7 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
   let copyName = `Copy of ${name}`;
   for (let n = 2; existingSlugs.has(loopSlug(copyName)); n += 1)
     copyName = `Copy of ${name} (${n})`;
-  const sourceDocument = parseFrontmatter(readFileSync(source.filePath, "utf8"));
+  const sourceDocument = parseLoopDocument(readFileSync(source.filePath, "utf8"));
   writeLoopFile(roots, {
     name: copyName,
     preservedFrontmatter: { ...sourceDocument.frontmatter },
@@ -318,6 +400,8 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     checkerRubric: source.checkerRubric,
     pipelineStages: source.pipelineStages ? [...source.pipelineStages] : undefined,
     parallelBranches: source.parallelBranches ? [...source.parallelBranches] : undefined,
+    triageAgent: source.triageAgent,
+    classificationPrompt: source.classificationPrompt,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,

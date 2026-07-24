@@ -14,6 +14,7 @@ import {
   duplicateLoop,
   LoopDefinitionInvalidError,
   LoopStructureNotRunnableError,
+  scanAgents,
   scanLoops,
   writeLoopFile,
 } from "@agent-deck/resources";
@@ -168,6 +169,8 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     checkerRubric: z.string().max(20_000).optional(),
     pipelineStages: z.array(z.string().max(200)).max(100).optional(),
     parallelBranches: z.array(z.string().max(200)).max(100).optional(),
+    triageAgent: z.string().max(200).optional(),
+    classificationPrompt: z.string().max(20_000).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
@@ -281,6 +284,17 @@ export function registerLoopRoutes(ctx: ServerContext): void {
     const definitionError = loopDefinitionValidationError(loop);
     if (definitionError) {
       return reply.status(422).send({ code: "loop_definition_invalid", error: definitionError });
+    }
+    if (loop.structure === "discoveryTriage") {
+      const configuredAgent = scanAgents(rootsFor()).find(
+        (agent) => agent.name === loop.triageAgent && !agent.shadowed && !agent.disabled,
+      );
+      if (!configuredAgent) {
+        return reply.status(422).send({
+          code: "loop_definition_invalid",
+          error: `The configured triage agent "${loop.triageAgent}" is unavailable.`,
+        });
+      }
     }
     const defaults = envDefaults();
     // A loop runs its agent + shell validation command in a project's working

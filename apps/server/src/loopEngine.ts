@@ -7,6 +7,7 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopChildRecord,
@@ -96,7 +97,7 @@ export type ExecuteLoopRole = (request: {
   loop: LoopDefinition;
   prompt: string;
   agentName?: string;
-  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator";
   stageIndex?: number;
   branchIndex?: number;
   cwd: string;
@@ -223,7 +224,15 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "stage", "branch", "validation", "evaluator"]),
+                phase: z.enum([
+                  "maker",
+                  "checker",
+                  "stage",
+                  "branch",
+                  "triage",
+                  "validation",
+                  "evaluator",
+                ]),
                 roleName: z.string(),
                 note: z.string(),
                 timestamp: z.string(),
@@ -234,7 +243,7 @@ const persistedRunSchema = z
             z
               .object({
                 id: z.string(),
-                phase: z.enum(["maker", "checker", "stage", "branch", "evaluator"]),
+                phase: z.enum(["maker", "checker", "stage", "branch", "triage", "evaluator"]),
                 status: z.enum(["queued", "running", "completed", "failed", "stopped"]).optional(),
                 queuedAt: z.string().optional(),
                 startedAt: z.string().optional(),
@@ -267,7 +276,7 @@ const persistedRunSchema = z
               z
                 .object({
                   id: z.string(),
-                  phase: z.enum(["maker", "checker", "stage", "branch", "evaluator"]),
+                  phase: z.enum(["maker", "checker", "stage", "branch", "triage", "evaluator"]),
                   filename: z.string(),
                   filePath: z.string(),
                   bytes: z.number().nonnegative(),
@@ -546,7 +555,7 @@ export class LoopEngine {
     run: LoopRun,
     iteration: LoopRunIteration,
     loop: LoopDefinition,
-    phase: "maker" | "checker" | "stage" | "branch" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator",
     prompt: string,
     agentName: string | undefined,
     cwd: string,
@@ -597,7 +606,13 @@ export class LoopEngine {
             signal,
           })
         : await executeAgent!({ ...loop, goal: prompt, agentName }, cwd, projectId);
-      if (signal.aborted || isLoopRunTerminal(run.status)) return output;
+      if (signal.aborted || run.status === "stopping") {
+        child.status = "stopped";
+        child.endedAt = this.now();
+        this.changed(run);
+        return output;
+      }
+      if (isLoopRunTerminal(run.status)) return output;
       child.output = output;
       child.status = "completed";
       child.endedAt = this.now();
@@ -621,7 +636,7 @@ export class LoopEngine {
       child.error = error instanceof Error ? error.message : String(error);
       child.status = signal.aborted ? "stopped" : "failed";
       child.endedAt = this.now();
-      if (!signal.aborted) this.changed(run);
+      if (!isLoopRunTerminal(run.status)) this.changed(run);
       throw error;
     }
   }
@@ -699,7 +714,7 @@ export class LoopEngine {
   private persistArtifact(
     run: LoopRun,
     iteration: LoopRunIteration,
-    phase: "maker" | "checker" | "stage" | "branch" | "evaluator",
+    phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator",
     output: string,
     stageIndex?: number,
     agentName?: string,
@@ -969,6 +984,120 @@ export class LoopEngine {
           feedback = boundedPipelineEvidence(
             [iteration.evaluatorOutput, validation.evidence].join("\n\n"),
           );
+          continue;
+        }
+
+        if (loop.structure === "discoveryTriage") {
+          const triageAgent = loop.triageAgent!;
+          const classificationPrompt = normalizeLoopClassificationPrompt(loop.classificationPrompt);
+          const artifactPath = this.artifactsRoot
+            ? path.join(this.artifactsRoot, run.id, `iteration-${index}-triage.md`)
+            : "Agent Deck's durable in-memory run artifact";
+          const targetInstructions =
+            loop.writeTarget === "artifactMarkdown"
+              ? "This is report-only discovery. Do not edit project files. Return the complete Markdown classification report; Agent Deck will persist it as the artifact."
+              : loop.writeTarget === "newWorktree"
+                ? "Work only in the selected isolated worktree. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files."
+                : "Work only in the selected current checkout. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files.";
+          const prompt = [
+            "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
+            `Loop goal: ${loop.goal}`,
+            `Iteration: ${index} of ${run.maxIterations}`,
+            `Write target: ${loop.writeTarget}`,
+            `Artifact path: ${artifactPath}`,
+            "You are performing discovery and triage for this loop step.",
+            `Classification prompt: ${classificationPrompt}`,
+            targetInstructions,
+            "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Do not implement fixes unless the loop goal explicitly asks you to. Produce a concise Markdown triage artifact.",
+            feedback
+              ? `Bounded prior iteration classification, evaluation, and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+          const classificationOutput = await this.role(
+            run,
+            iteration,
+            loop,
+            "triage",
+            prompt,
+            triageAgent,
+            cwd,
+            run.projectId,
+            signal,
+            executeRole,
+            executeAgent,
+          );
+          if (this.stopped(run, signal)) return;
+          iteration.classificationOutput = classificationOutput;
+          iteration.output = classificationOutput;
+          this.persistArtifact(
+            run,
+            iteration,
+            "triage",
+            iteration.classificationOutput,
+            undefined,
+            triageAgent,
+          );
+
+          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          if (loop.validationCommand) {
+            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
+          }
+          if (this.stopped(run, signal)) return;
+          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+          iteration.validationEvidence = validation.evidence;
+
+          const evaluatorPrompt = [
+            `Goal: ${loop.goal}`,
+            `Iteration: ${index}`,
+            "Evaluate the discovery and classification report only; do not edit project files.",
+            `Classification prompt: ${classificationPrompt}`,
+            `Triage report:\n${boundedPipelineEvidence(iteration.classificationOutput)}`,
+            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
+          ].join("\n\n");
+          const evaluatorOutput = await this.role(
+            run,
+            iteration,
+            loop,
+            "evaluator",
+            evaluatorPrompt,
+            undefined,
+            cwd,
+            run.projectId,
+            signal,
+            executeRole,
+            executeAgent,
+          );
+          if (this.stopped(run, signal)) return;
+          iteration.evaluatorOutput = evaluatorOutput;
+          if (loop.writeTarget === "artifactMarkdown") {
+            this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
+          }
+          const goalDecision = exactFirstLine(evaluatorOutput, GOAL_DECISIONS);
+          if (!goalDecision) {
+            iteration.endedAt = this.now();
+            this.changed(run);
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          iteration.goalDecision = goalDecision;
+          iteration.endedAt = this.now();
+          this.changed(run);
+          if (goalDecision === "FAIL") {
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (goalDecision === "SUCCESS" && validation.passed) {
+            this.finalize(run, "completed", "success");
+            return;
+          }
+          feedback = [
+            `Prior classification:\n${boundedPipelineEvidence(iteration.classificationOutput, 5_500)}`,
+            `Prior evaluation:\n${boundedPipelineEvidence(iteration.evaluatorOutput, 2_800)}`,
+            `Prior validation:\n${boundedPipelineEvidence(validation.evidence, 2_800)}`,
+          ].join("\n\n");
           continue;
         }
 

@@ -31,10 +31,20 @@ export const RUNNABLE_LOOP_STRUCTURES = [
   "makerChecker",
   "agentPipeline",
   "parallelAgents",
+  "discoveryTriage",
 ] as const satisfies readonly LoopStructure[];
 
 export function isRunnableLoopStructure(structure: LoopStructure): boolean {
   return (RUNNABLE_LOOP_STRUCTURES as readonly LoopStructure[]).includes(structure);
+}
+
+export const LOOP_DEFAULT_CLASSIFICATION_PROMPT =
+  "Classify findings by severity and summarize recommended next action.";
+
+/** Native LoopDiscoveryTriageConfig normalization, including CR-only input. */
+export function normalizeLoopClassificationPrompt(value: string | undefined): string {
+  const normalized = (value ?? "").replace(/\r\n|\r|\n/g, " ").trim();
+  return normalized || LOOP_DEFAULT_CLASSIFICATION_PROMPT;
 }
 
 /** Structure-specific authoring/run validity; unsupported structures always fail closed. */
@@ -50,6 +60,8 @@ export function loopDefinitionValidationError(
     | "checkerRubric"
     | "pipelineStages"
     | "parallelBranches"
+    | "triageAgent"
+    | "classificationPrompt"
     | "writeTarget"
   >,
 ): string | undefined {
@@ -76,6 +88,10 @@ export function loopDefinitionValidationError(
     if (loop.writeTarget !== "artifactMarkdown") {
       return "Parallel agents are report-only and require the Artifact (markdown) write target.";
     }
+  }
+  if (loop.structure === "discoveryTriage") {
+    if (!loop.goal.trim()) return "A goal is required.";
+    if (!(loop.triageAgent ?? "").trim()) return "A triage agent is required.";
   }
   return undefined;
 }
@@ -143,6 +159,9 @@ export interface LoopDefinition {
   pipelineStages?: string[];
   /** Native flat Parallel frontmatter. Blanks are dropped and first duplicate wins. */
   parallelBranches?: string[];
+  /** Native flat Discovery/Triage frontmatter. */
+  triageAgent?: string;
+  classificationPrompt?: string;
   /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
@@ -180,7 +199,14 @@ export type LoopStopReason =
 
 export type LoopCheckerDecision = "APPROVE" | "CONTINUE" | "REJECT" | "ASK_HUMAN" | "FAIL";
 export type LoopGoalDecision = "SUCCESS" | "CONTINUE" | "FAIL";
-export type LoopRunPhase = "maker" | "checker" | "stage" | "branch" | "validation" | "evaluator";
+export type LoopRunPhase =
+  | "maker"
+  | "checker"
+  | "stage"
+  | "branch"
+  | "triage"
+  | "validation"
+  | "evaluator";
 
 export interface LoopTimelineEvent {
   id: string;
@@ -194,7 +220,7 @@ export interface LoopTimelineEvent {
 
 export interface LoopRunArtifact {
   id: string;
-  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator";
   stageIndex?: number;
   branchIndex?: number;
   agentName?: string;
@@ -208,7 +234,7 @@ export type LoopChildStatus = "queued" | "running" | "completed" | "failed" | "s
 
 export interface LoopChildRecord {
   id: string;
-  phase: "maker" | "checker" | "stage" | "branch" | "evaluator";
+  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator";
   stageIndex?: number;
   branchIndex?: number;
   agentName?: string;
@@ -249,6 +275,8 @@ export interface LoopRunIteration {
   goalDecision?: LoopGoalDecision;
   pipelineStageOutputs?: LoopPipelineStageOutput[];
   parallelBranchOutputs?: LoopParallelBranchOutput[];
+  /** Discovery/Triage agent's durable Markdown classification report. */
+  classificationOutput?: string;
   validationPassed: boolean | null;
   validationEvidence?: string;
   timeline: LoopTimelineEvent[];

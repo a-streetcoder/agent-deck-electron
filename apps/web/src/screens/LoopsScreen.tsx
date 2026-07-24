@@ -21,7 +21,9 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  normalizeLoopClassificationPrompt,
   normalizeParallelBranches,
+  LOOP_DEFAULT_CLASSIFICATION_PROMPT,
   LOOP_DEFAULT_MAX_ITERATIONS,
   LOOP_MAX_ITERATIONS_LIMIT,
   LOOP_STRUCTURE_LABEL,
@@ -65,6 +67,7 @@ const PHASE_LABEL = {
   checker: "Checker",
   stage: "Pipeline stage",
   branch: "Parallel branch",
+  triage: "Discovery / triage",
   validation: "Validation",
   evaluator: "Goal evaluator",
 } as const;
@@ -107,6 +110,8 @@ interface LoopDraft {
   checkerRubric: string;
   pipelineStages: string[];
   parallelBranches: string[];
+  triageAgent: string;
+  classificationPrompt: string;
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
@@ -130,6 +135,8 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     checkerRubric: loop?.checkerRubric ?? "",
     pipelineStages: loop?.pipelineStages ? [...loop.pipelineStages] : [],
     parallelBranches: loop?.parallelBranches ? [...loop.parallelBranches] : [],
+    triageAgent: loop?.triageAgent ?? "",
+    classificationPrompt: loop?.classificationPrompt ?? LOOP_DEFAULT_CLASSIFICATION_PROMPT,
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
     writeTarget:
@@ -159,6 +166,7 @@ export function LoopsScreen() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const triageAgentRef = useRef<HTMLInputElement>(null);
   const focusRetryAfterStopRef = useRef(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Runs we've already toasted on completion, so a terminal state toasts once.
@@ -277,6 +285,11 @@ export function LoopsScreen() {
           parallelBranches:
             draft.structure === "parallelAgents"
               ? normalizeParallelBranches(draft.parallelBranches)
+              : undefined,
+          triageAgent: draft.structure === "discoveryTriage" ? draft.triageAgent.trim() : undefined,
+          classificationPrompt:
+            draft.structure === "discoveryTriage"
+              ? normalizeLoopClassificationPrompt(draft.classificationPrompt)
               : undefined,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
@@ -626,6 +639,24 @@ export function LoopsScreen() {
                         </li>
                       ))}
                     </ol>
+                    {iteration.children
+                      .filter((child) => child.phase === "triage")
+                      .map((child) => (
+                        <div key={child.id} data-testid="loop-triage-status">
+                          Triage agent {child.agentName} — {childStatusLabel(child)}
+                        </div>
+                      ))}
+                    {iteration.classificationOutput ? (
+                      <div
+                        className="mt-1 min-w-0 break-words"
+                        data-testid="loop-classification-output"
+                      >
+                        <span className="font-medium">Classification report:</span>
+                        <pre className="mt-1 max-w-full whitespace-pre-wrap break-words font-sans">
+                          {iteration.classificationOutput}
+                        </pre>
+                      </div>
+                    ) : null}
                     {iteration.checkerDecision ? (
                       <div data-testid="loop-checker-decision">
                         Checker decision: {iteration.checkerDecision}
@@ -886,7 +917,17 @@ export function LoopsScreen() {
                       ...(structure === "parallelAgents"
                         ? { writeTarget: "artifactMarkdown" as const }
                         : {}),
+                      ...(structure === "discoveryTriage"
+                        ? {
+                            classificationPrompt: normalizeLoopClassificationPrompt(
+                              draft.classificationPrompt,
+                            ),
+                          }
+                        : {}),
                     });
+                    if (structure === "discoveryTriage") {
+                      requestAnimationFrame(() => triageAgentRef.current?.focus());
+                    }
                   }}
                   aria-describedby={
                     isRunnableLoopStructure(draft.structure)
@@ -1161,6 +1202,53 @@ export function LoopsScreen() {
                 >
                   <Plus size={12} aria-hidden /> Add branch
                 </ControlButton>
+              </fieldset>
+            ) : null}
+            {draft.structure === "discoveryTriage" ? (
+              <fieldset
+                className="space-y-3 rounded-lg border border-border-subtle p-2"
+                data-testid="loop-triage-config"
+                aria-describedby="loop-triage-help"
+              >
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Discovery and classification
+                </legend>
+                <p id="loop-triage-help" className="text-detail text-text-muted">
+                  The selected agent runs once per iteration. Artifact targets are report-only;
+                  checkout and worktree targets permit edits only when the goal explicitly requests
+                  implementation.
+                </p>
+                <label className="block text-xs text-text-muted">
+                  Triage agent
+                  <ControlInput
+                    ref={triageAgentRef}
+                    data-testid="loop-triage-agent"
+                    className={inputClass}
+                    list="loop-agent-choices"
+                    placeholder="agent name"
+                    value={draft.triageAgent}
+                    onChange={(event) => setDraft({ ...draft, triageAgent: event.target.value })}
+                  />
+                </label>
+                <label className="block text-xs text-text-muted">
+                  Classification prompt
+                  <ControlTextArea
+                    data-testid="loop-classification-prompt"
+                    className={`${inputClass} min-h-[100px]`}
+                    value={draft.classificationPrompt}
+                    onChange={(event) =>
+                      setDraft({ ...draft, classificationPrompt: event.target.value })
+                    }
+                    onBlur={() => {
+                      if (!draft.classificationPrompt.trim()) {
+                        setDraft({
+                          ...draft,
+                          classificationPrompt: LOOP_DEFAULT_CLASSIFICATION_PROMPT,
+                        });
+                      }
+                    }}
+                  />
+                </label>
               </fieldset>
             ) : null}
             <datalist id="loop-agent-choices">

@@ -59,15 +59,17 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
     "Maker / checker",
     "Agent pipeline",
     "Parallel agents",
+    "Discovery + triage",
   ]);
   await page.getByTestId("loop-max-iterations").fill("6");
   await page.getByTestId("loop-validation").fill("pnpm test");
   await page.getByTestId("loop-save").click();
 
-  const row = page.locator('[data-loop-name="Green Suite"]');
-  await expect(row).toBeVisible({ timeout: 10_000 });
-  await expect(row).toContainText("Single agent");
-  await expect(row).toContainText("6×");
+  const rowButton = page.getByRole("button", { name: /^Green Suite/ });
+  const row = rowButton.locator("..");
+  await expect(rowButton).toBeVisible({ timeout: 10_000 });
+  await expect(rowButton).toContainText("Single agent");
+  await expect(rowButton).toContainText("6×");
 
   // Persisted to disk in the loops catalog.
   expect(existsSync(loopFile())).toBe(true);
@@ -77,7 +79,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   expect(raw).toContain("Make the test suite pass.");
 
   // Edit: reopen (name is fixed once created), bump iterations.
-  await page.getByTestId("loop-open-Green Suite").click();
+  await rowButton.click();
   await expect(page.getByTestId("loop-name")).toBeDisabled();
   await page.getByTestId("loop-max-iterations").fill("10");
   await page.getByTestId("loop-save").click();
@@ -85,16 +87,17 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   expect(readFileSync(loopFile(), "utf8")).toContain("maxIterations: 10");
 
   // Duplicate → a "Copy of …" appears alongside the original.
-  await page.getByTestId("loop-duplicate-Green Suite").click();
-  await expect(page.locator('[data-loop-name="Copy of Green Suite"]')).toBeVisible();
+  await row.getByTitle("Duplicate loop").click();
+  const copyButton = page.getByRole("button", { name: /^Copy of Green Suite/ });
+  await expect(copyButton).toBeVisible();
   await expect(row).toBeVisible();
 
   // Delete both (confirm-gated).
   page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByTestId("loop-delete-Copy of Green Suite").click();
-  await expect(page.locator('[data-loop-name="Copy of Green Suite"]')).toHaveCount(0);
+  await copyButton.locator("..").getByTitle("Delete loop").click();
+  await expect(copyButton).toHaveCount(0);
   page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByTestId("loop-delete-Green Suite").click();
+  await row.getByTitle("Delete loop").click();
   await expect(row).toHaveCount(0);
   await expect(page.getByTestId("loop-empty")).toBeVisible();
   expect(existsSync(loopFile())).toBe(false);

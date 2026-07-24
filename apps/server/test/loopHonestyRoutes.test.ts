@@ -33,7 +33,7 @@ import {
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
-const unsupportedStructures: LoopStructure[] = ["discoveryTriage", "humanApproval"];
+const unsupportedStructures: LoopStructure[] = ["humanApproval"];
 
 const servers: ReturnType<typeof Fastify>[] = [];
 
@@ -420,6 +420,156 @@ describe("loop route honesty gate", () => {
     expect(destroySession).toHaveBeenCalledOnce();
     expect(strictRemoveOwnedLoopWorktree).toHaveBeenCalledOnce();
     expect(gitDeleteOwnedWorktreeBranch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects invalid Discovery/Triage configuration before runtime allocation", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-triage-invalid-"));
+    const filePath = writeExternalLoop(home, "Invalid Triage", "discoveryTriage");
+    const original = readFileSync(filePath, "utf8");
+    const { fastify, createSession, startEngine } = makeRoutes(home);
+
+    const run = await fastify.inject({
+      method: "POST",
+      url: "/loops/Invalid%20Triage/run",
+      payload: { projectId: "project" },
+    });
+    expect(run.statusCode).toBe(422);
+    expect(run.json()).toMatchObject({ code: "loop_definition_invalid" });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(createLoopWorktree).not.toHaveBeenCalled();
+
+    const duplicate = await fastify.inject({
+      method: "POST",
+      url: "/loops/Invalid%20Triage/duplicate",
+    });
+    expect(duplicate.statusCode).toBe(422);
+    expect(duplicate.json()).toMatchObject({ code: "loop_definition_invalid" });
+    expect(readFileSync(filePath, "utf8")).toBe(original);
+
+    writeFileSync(
+      filePath,
+      original.replace(
+        "externalMetadata: preserve",
+        "triageAgent: Missing Explorer\nclassificationPrompt: Classify severity and owner.\nexternalMetadata: preserve",
+      ),
+    );
+    const unavailable = await fastify.inject({
+      method: "POST",
+      url: "/loops/Invalid%20Triage/run",
+      payload: { projectId: "project" },
+    });
+    expect(unavailable.statusCode).toBe(422);
+    expect(unavailable.json()).toMatchObject({
+      code: "loop_definition_invalid",
+      error: expect.stringContaining("Missing Explorer"),
+    });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(createLoopWorktree).not.toHaveBeenCalled();
+  });
+
+  it("applies Discovery/Triage tool policy for every target and preserves configured identity", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-triage-policy-"));
+    const agentsDir = path.join(home, ".pi", "agent", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      path.join(agentsDir, "Configured Explorer.md"),
+      "---\nname: Configured Explorer\n---\nClassify discovery evidence.\n",
+    );
+    for (const [name, writeTarget] of [
+      ["Artifact Triage", "artifactMarkdown"],
+      ["Checkout Triage", "currentCheckout"],
+      ["Worktree Triage", "newWorktree"],
+    ] as const) {
+      writeLoopFile(
+        { home },
+        {
+          name,
+          structure: "discoveryTriage",
+          goal: "Discover risks without implicit implementation.",
+          triageAgent: "Configured Explorer",
+          classificationPrompt: "Classify severity, owner, evidence, and next action.",
+          writeTarget,
+        },
+      );
+    }
+    vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => ({
+      path: target,
+      branch,
+      sourceBranch: "main",
+      branchOwned: true as const,
+    }));
+    const { fastify, createSession, startEngine, settledEngine, runSubagent } = makeRoutes(home);
+    let parentNumber = 0;
+    createSession.mockImplementation(({ cwd: parentCwd }) => ({
+      meta: {
+        id: `triage-parent-${++parentNumber}`,
+        cwd: parentCwd,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    }));
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    startEngine.mockImplementation((loop, runCwd, options) => ({
+      id: `triage-run-${parentNumber}`,
+      loopName: loop.name,
+      projectId: "project",
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      loop,
+      runCwd,
+      options,
+    }));
+    runSubagent.mockResolvedValue("classification");
+
+    for (const name of ["Artifact Triage", "Checkout Triage", "Worktree Triage"]) {
+      const response = await fastify.inject({
+        method: "POST",
+        url: `/loops/${encodeURIComponent(name)}/run`,
+        payload: { projectId: "project" },
+      });
+      expect(response.statusCode).toBe(201);
+      const call = startEngine.mock.calls.at(-1)!;
+      expect(call[0]).toMatchObject({
+        triageAgent: "Configured Explorer",
+        classificationPrompt: "Classify severity, owner, evidence, and next action.",
+      });
+      const options = call[2];
+      await options.executeRole({
+        prompt: `triage-${name}`,
+        agentName: "Configured Explorer",
+        phase: "triage",
+      });
+      await options.executeRole({ prompt: `evaluate-${name}`, phase: "evaluator" });
+    }
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      1,
+      "triage-parent-1",
+      "triage-Artifact Triage",
+      "Configured Explorer",
+      "readOnly",
+    );
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      3,
+      "triage-parent-2",
+      "triage-Checkout Triage",
+      "Configured Explorer",
+      "configured",
+    );
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      5,
+      "triage-parent-3",
+      "triage-Worktree Triage",
+      "Configured Explorer",
+      "configured",
+    );
+    expect(runSubagent.mock.calls.filter((call) => call[3] === "none")).toHaveLength(3);
+    expect(createLoopWorktree).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid native Pipeline configuration before runtime allocation", async () => {

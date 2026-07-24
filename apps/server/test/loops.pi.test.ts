@@ -53,6 +53,10 @@ beforeAll(async () => {
     path.join(agentsDir, "Agent C.md"),
     "---\nname: Agent C\ntools: read, grep, bash, edit, write\n---\nRun independent report C.\n",
   );
+  writeFileSync(
+    path.join(agentsDir, "Triage Agent.md"),
+    "---\nname: Triage Agent\ntools: read, grep, bash, edit, write\n---\nClassify discovery evidence.\n",
+  );
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -66,6 +70,9 @@ beforeAll(async () => {
       }
       if (message.includes("exact first non-empty line must be SUCCESS")) {
         return "SUCCESS\nEvaluator streamed independent ordered evidence of completion.";
+      }
+      if (message.includes("You are performing discovery and triage")) {
+        return "# Classification\nCritical release risk streamed with owner evidence and safest next action.";
       }
       if (message.includes("Parallel branch:")) {
         const agent = message.match(/Assigned agent: (Agent [ABC])/)?.[1] ?? "Parallel agent";
@@ -444,6 +451,81 @@ describe("loop run engine (real pi)", () => {
           !artifact.filePath.startsWith(project + path.sep) && existsSync(artifact.filePath),
       ),
     ).toBe(true);
+  });
+
+  it("streams the configured real Pi Discovery/Triage agent before no-tools evaluation", async () => {
+    const classificationPrompt =
+      "Classify by severity and user impact.\nAssign an owner with evidence.\nRecommend the safest next action.";
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "triage-loop",
+        goal: "Discover and classify release risks without implementing fixes.",
+        structure: "discoveryTriage",
+        triageAgent: "Triage Agent",
+        classificationPrompt,
+        validationCommand: "exit 0",
+        writeTarget: "artifactMarkdown",
+        maxIterations: 2,
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("triage-loop"));
+    expect(run).toMatchObject({ status: "completed", stopReason: "success" });
+    expect(run.iterations[0]).toMatchObject({
+      classificationOutput: expect.stringContaining("Critical release risk"),
+      validationPassed: true,
+      goalDecision: "SUCCESS",
+    });
+    expect(run.iterations[0]!.children).toMatchObject([
+      { phase: "triage", agentName: "Triage Agent", status: "completed" },
+      { phase: "evaluator", status: "completed" },
+    ]);
+    const roleRequests = mock.requests.slice(requestStart);
+    const triageOffset = roleRequests.findIndex((request) =>
+      JSON.stringify(request.messages.at(-1)?.content).includes(
+        "You are performing discovery and triage",
+      ),
+    );
+    const evaluatorOffset = roleRequests.findIndex((request) =>
+      JSON.stringify(request.messages.at(-1)?.content).includes(
+        "Evaluate the discovery and classification report only",
+      ),
+    );
+    expect(triageOffset).toBeGreaterThanOrEqual(0);
+    expect(triageOffset).toBeLessThan(evaluatorOffset);
+    const triagePrompt = JSON.stringify(roleRequests[triageOffset]!.messages.at(-1)?.content);
+    expect(triagePrompt).toContain(classificationPrompt.replaceAll("\n", " "));
+    expect(triagePrompt).toContain(
+      "Do not implement fixes unless the loop goal explicitly asks you to",
+    );
+    const triageRequestIndex = requestStart + triageOffset;
+    expect(
+      mock.events.filter(
+        (event) => event.requestIndex === triageRequestIndex && event.kind === "delta",
+      ).length,
+    ).toBeGreaterThan(4);
+    const triageTools = (
+      Array.isArray(roleRequests[triageOffset]!.tools) ? roleRequests[triageOffset]!.tools : []
+    ).flatMap((tool) => {
+      const fn =
+        tool && typeof tool === "object"
+          ? (tool as { function?: { name?: unknown } }).function
+          : undefined;
+      return typeof fn?.name === "string" ? [fn.name] : [];
+    });
+    expect(triageTools).toEqual(["read", "grep"]);
+    expect(
+      Array.isArray(roleRequests[evaluatorOffset]!.tools)
+        ? roleRequests[evaluatorOffset]!.tools
+        : [],
+    ).toEqual([]);
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
+      "iteration-1-triage.md",
+      "iteration-1-evaluator.md",
+    ]);
   });
 
   it("runs every iteration then fails when validation never passes (exit 1)", async () => {

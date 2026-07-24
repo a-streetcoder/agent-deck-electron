@@ -6,7 +6,6 @@ import {
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopChildRecord,
   type LoopDefinition,
-  type LoopStructure,
 } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
 import { LoopEngine } from "../src/loopEngine.ts";
@@ -35,24 +34,233 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
-  it.each<LoopStructure>(["discoveryTriage", "humanApproval"])(
-    "rejects unsupported %s before allocating a run or invoking its executor",
-    (structure) => {
-      let calls = 0;
+  it("rejects unsupported humanApproval before allocating a run or invoking its executor", () => {
+    let calls = 0;
+    const engine = new LoopEngine({
+      executeAgent: async () => {
+        calls += 1;
+        return "must not run";
+      },
+    });
+
+    expect(() => engine.start(makeLoop({ structure: "humanApproval" }), cwd())).toThrow(
+      expect.objectContaining({
+        code: LOOP_STRUCTURE_UNSUPPORTED_CODE,
+        structure: "humanApproval",
+      }),
+    );
+    expect(calls).toBe(0);
+    expect(engine.list()).toEqual([]);
+  });
+
+  it("runs configured Discovery/Triage with exact prompt, bounded evidence, artifacts, and lifecycle", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-triage-data-"));
+    const requests: Array<{ phase: string; agentName?: string; prompt: string }> = [];
+    let validationCalls = 0;
+    const firstClassification = `# Classification\n${"evidence ".repeat(2_000)}`;
+    const engine = new LoopEngine({
+      dataDir,
+      runValidation: async () => {
+        validationCalls += 1;
+        return { passed: validationCalls === 2, evidence: `validation-${validationCalls}` };
+      },
+      executeRole: async ({ phase, agentName, prompt }) => {
+        requests.push({ phase, agentName, prompt });
+        if (phase === "triage") {
+          return requests.filter((request) => request.phase === "triage").length === 1
+            ? firstClassification
+            : "# Classification\nresolved";
+        }
+        return validationCalls === 1 ? "CONTINUE\nMore evidence needed" : "SUCCESS\nClassified";
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Severity and impact\nOwner and safest next action",
+        maxIterations: 2,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+
+    expect(run.status).toBe("completed");
+    expect(run.iterations).toHaveLength(2);
+    expect(run.iterations[0]).toMatchObject({
+      classificationOutput: firstClassification,
+      validationPassed: false,
+      goalDecision: "CONTINUE",
+    });
+    expect(run.iterations[0]!.children).toMatchObject([
+      { phase: "triage", agentName: "Explorer", status: "completed" },
+      { phase: "evaluator", status: "completed" },
+    ]);
+    expect(run.iterations[0]!.timeline.map((event) => event.phase)).toEqual([
+      "triage",
+      "triage",
+      "triage",
+      "validation",
+      "validation",
+      "evaluator",
+      "evaluator",
+      "evaluator",
+    ]);
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
+      "iteration-1-triage.md",
+      "iteration-1-evaluator.md",
+    ]);
+    const triageRequests = requests.filter((request) => request.phase === "triage");
+    expect(triageRequests.map((request) => request.agentName)).toEqual(["Explorer", "Explorer"]);
+    expect(triageRequests[0]!.prompt).toContain("Loop goal: do the thing");
+    expect(triageRequests[0]!.prompt).toContain(
+      "Classification prompt: Severity and impact Owner and safest next action",
+    );
+    expect(triageRequests[0]!.prompt).toContain(
+      "Do not implement fixes unless the loop goal explicitly asks you to",
+    );
+    expect(triageRequests[0]!.prompt).toContain(
+      path.join(dataDir, "loop-artifacts", run.id, "iteration-1-triage.md"),
+    );
+    expect(triageRequests[1]!.prompt).toContain("validation-1");
+    expect(triageRequests[1]!.prompt).toContain("CONTINUE\nMore evidence needed");
+    expect(triageRequests[1]!.prompt.length).toBeLessThan(15_000);
+    expect(readFileSync(run.iterations[0]!.artifacts[0]!.filePath, "utf8")).toBe(
+      firstClassification,
+    );
+  });
+
+  it.each([
+    ["artifactMarkdown", "report-only discovery. Do not edit project files"],
+    ["currentCheckout", "selected current checkout"],
+    ["newWorktree", "selected isolated worktree"],
+  ] as const)(
+    "gives Discovery/Triage truthful %s write instructions",
+    async (writeTarget, text) => {
+      let triagePrompt = "";
       const engine = new LoopEngine({
-        executeAgent: async () => {
-          calls += 1;
-          return "must not run";
+        executeRole: async ({ phase, prompt }) => {
+          if (phase === "triage") {
+            triagePrompt = prompt;
+            return "classified";
+          }
+          return "SUCCESS\nDone";
         },
       });
-
-      expect(() => engine.start(makeLoop({ structure }), cwd())).toThrow(
-        expect.objectContaining({ code: LOOP_STRUCTURE_UNSUPPORTED_CODE, structure }),
+      const run = engine.start(
+        makeLoop({
+          structure: "discoveryTriage",
+          triageAgent: "Explorer",
+          classificationPrompt: "Classify",
+          validationCommand: "",
+          writeTarget,
+        }),
+        cwd(),
       );
-      expect(calls).toBe(0);
-      expect(engine.list()).toEqual([]);
+      await engine.settled(run.id);
+      expect(run.status).toBe("completed");
+      expect(triagePrompt).toContain(text);
+      expect(triagePrompt).toContain(
+        writeTarget === "artifactMarkdown"
+          ? "Do not implement fixes unless the loop goal explicitly asks you to"
+          : "only when the loop goal explicitly requests implementation",
+      );
     },
   );
+
+  it("applies Discovery/Triage role, validation, and evaluator failure policy", async () => {
+    let validationAfterRoleFailure = 0;
+    const roleFailure = new LoopEngine({
+      runValidation: async () => {
+        validationAfterRoleFailure += 1;
+        return true;
+      },
+      executeRole: async ({ phase }) => {
+        if (phase === "triage") throw new Error("triage unavailable");
+        throw new Error("evaluator must not run");
+      },
+    });
+    const roleFailed = roleFailure.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Classify",
+      }),
+      cwd(),
+    );
+    await roleFailure.settled(roleFailed.id);
+    expect(roleFailed).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+    expect(roleFailed.iterations[0]!.children).toMatchObject([
+      { phase: "triage", status: "failed", error: "triage unavailable" },
+    ]);
+    expect(validationAfterRoleFailure).toBe(0);
+
+    const failedValidation = new LoopEngine({
+      runValidation: async () => ({ passed: false, evidence: "exit 1" }),
+      executeRole: async ({ phase }) =>
+        phase === "triage" ? "classified" : "SUCCESS\nReport is otherwise complete",
+    });
+    const capped = failedValidation.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Classify",
+        maxIterations: 1,
+      }),
+      cwd(),
+    );
+    await failedValidation.settled(capped.id);
+    expect(capped).toMatchObject({
+      status: "notAchieved",
+      stopReason: "validationFailedAfterFinalIteration",
+    });
+
+    const evaluatorFailure = new LoopEngine({
+      executeRole: async ({ phase }) => (phase === "triage" ? "classified" : "FAIL\nUnsafe"),
+    });
+    const failed = evaluatorFailure.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Classify",
+      }),
+      cwd(),
+    );
+    await evaluatorFailure.settled(failed.id);
+    expect(failed).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+  });
+
+  it("stops an in-flight Discovery/Triage child without evaluator or late writes", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered = false;
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) => {
+        if (phase === "triage") {
+          entered = true;
+          await gate;
+          return "late classification";
+        }
+        throw new Error("evaluator must not run");
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Classify",
+      }),
+      cwd(),
+    );
+    await expect.poll(() => entered).toBe(true);
+    const stopping = engine.stop(run.id);
+    release();
+    await stopping;
+    expect(run).toMatchObject({ status: "stopped", stopReason: "userStopped" });
+    expect(run.iterations[0]!.children).toMatchObject([{ phase: "triage", status: "stopped" }]);
+    expect(run.iterations[0]!.classificationOutput).toBeUndefined();
+    expect(run.iterations[0]!.artifacts).toEqual([]);
+  });
 
   it("rejects unsafe or empty Parallel definitions before allocating a run", () => {
     let calls = 0;
@@ -853,13 +1061,22 @@ describe("loop engine (single-agent)", () => {
         return "out";
       },
     });
-    const active = first.start(makeLoop({ writeTarget: "currentCheckout" }), cwd(), {
-      launch: {
-        sessionId: "loop-parent",
+    const active = first.start(
+      makeLoop({
+        structure: "discoveryTriage",
+        triageAgent: "Explorer",
+        classificationPrompt: "Classify recovery evidence.",
         writeTarget: "currentCheckout",
-        checkoutLockKey: "/canonical/project",
+      }),
+      cwd(),
+      {
+        launch: {
+          sessionId: "loop-parent",
+          writeTarget: "currentCheckout",
+          checkoutLockKey: "/canonical/project",
+        },
       },
-    });
+    );
     expect(JSON.parse(readFileSync(path.join(dataDir, "loop-runs.json"), "utf8"))[0].status).toBe(
       "running",
     );
@@ -869,7 +1086,18 @@ describe("loop engine (single-agent)", () => {
       status: "interrupted",
       stopReason: "appInterrupted",
       launch: { sessionId: "loop-parent", checkoutLockKey: "/canonical/project" },
-      iterations: [{ children: [{ status: "stopped", endedAt: expect.any(String) }] }],
+      iterations: [
+        {
+          children: [
+            {
+              phase: "triage",
+              agentName: "Explorer",
+              status: "stopped",
+              endedAt: expect.any(String),
+            },
+          ],
+        },
+      ],
     });
     expect(recoveredEngine.recoveryCheckoutLocks()).toEqual(
       new Map([["/canonical/project", active.id]]),

@@ -22,6 +22,12 @@ test.beforeAll(async () => {
   harness = await startHarness({
     chunkDelayMs: 35,
     reply: (message) => {
+      if (message.includes("You are performing discovery and triage")) {
+        if (message.includes("Keep triage running")) {
+          return `# Classification\n${"slow streamed triage evidence ".repeat(20)}`;
+        }
+        return "# Classification\nHigh impact finding with owner, evidence, and safest next action.";
+      }
       if (message.includes("Parallel branch:")) {
         return "Parallel branch produced detailed independent streamed report evidence.";
       }
@@ -58,6 +64,14 @@ test.beforeAll(async () => {
   writeFileSync(
     path.join(agentsDir, "Agent C.md"),
     "---\nname: Agent C\ntools: read, bash, edit\n---\nRun C.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Triage Agent.md"),
+    "---\nname: Triage Agent\ntools: read, bash, edit\n---\nClassify.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Broken Triage.md"),
+    "---\nname: Broken Triage\ntools: read\n---\nExercise runtime failure.\n",
   );
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
@@ -98,6 +112,36 @@ test.beforeAll(async () => {
     goal: "Keep independent reports running until stopped.",
     structure: "parallelAgents",
     parallelBranches: ["Agent A", "Agent B", "Agent C"],
+    validationCommand: "exit 1",
+    writeTarget: "artifactMarkdown",
+    maxIterations: 10,
+  });
+  await putLoop({
+    name: "Unavailable Triage",
+    goal: "Discover unavailable-agent behavior.",
+    structure: "discoveryTriage",
+    triageAgent: "Unavailable Explorer",
+    classificationPrompt: "",
+    validationCommand: "exit 0",
+    writeTarget: "artifactMarkdown",
+    maxIterations: 1,
+  });
+  await putLoop({
+    name: "Failing Triage",
+    goal: "Force triage runtime failure.",
+    structure: "discoveryTriage",
+    triageAgent: "Broken Triage",
+    classificationPrompt: "Classify failure evidence.",
+    validationCommand: "exit 0",
+    writeTarget: "artifactMarkdown",
+    maxIterations: 1,
+  });
+  await putLoop({
+    name: "Slow Triage Stop",
+    goal: "Keep triage running until stopped.",
+    structure: "discoveryTriage",
+    triageAgent: "Triage Agent",
+    classificationPrompt: "Classify severity, owner, evidence, and next action.",
     validationCommand: "exit 1",
     writeTarget: "artifactMarkdown",
     maxIterations: 10,
@@ -254,6 +298,157 @@ test("authors, normalizes, duplicates, runs, retries, and restores accessible Pa
   await expect(page.getByTestId("loop-parallel-branch-outputs")).toContainText(
     "Configured branch 2: Agent A",
   );
+});
+
+test("authors, duplicates, runs, reloads, stops, and retries accessible Discovery/Triage", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("new-loop").click();
+  await page.getByTestId("loop-name").fill("Authored Triage");
+  await page.getByTestId("loop-goal").fill("Discover release risks without implementing fixes.");
+  await page.getByTestId("loop-structure").selectOption("discoveryTriage");
+  const config = page.getByTestId("loop-triage-config");
+  await expect(config).toContainText("runs once per iteration");
+  await expect(config).toContainText("only when the goal explicitly requests implementation");
+  const triageAgent = page.getByTestId("loop-triage-agent");
+  await expect(triageAgent).toBeFocused();
+  await expect(page.getByRole("alert")).toContainText("A triage agent is required");
+  await expect(page.getByTestId("loop-save")).toBeDisabled();
+  await triageAgent.fill("Triage Agent");
+  const prompt = page.getByTestId("loop-classification-prompt");
+  const nativeDefault = "Classify findings by severity and summarize recommended next action.";
+  await expect(prompt).toHaveValue(nativeDefault);
+  await prompt.fill("   ");
+  await prompt.blur();
+  await expect(prompt).toHaveValue(nativeDefault);
+  const classification =
+    "Classify severity and impact.\nAssign owner and evidence.\nRecommend next action.";
+  const normalizedClassification =
+    "Classify severity and impact. Assign owner and evidence. Recommend next action.";
+  await prompt.fill(classification);
+  await page.getByTestId("loop-validation").fill("exit 0");
+  await page.getByTestId("loop-save").click();
+
+  await page.getByTestId("loop-open-Authored Triage").click();
+  await expect(page.getByTestId("loop-triage-agent")).toHaveValue("Triage Agent");
+  await expect(page.getByTestId("loop-classification-prompt")).toHaveValue(
+    normalizedClassification,
+  );
+  await page.getByTestId("loop-cancel").click();
+  await page.getByTestId("loop-duplicate-Authored Triage").click();
+  await expect(page.locator('[data-loop-name="Copy of Authored Triage"]')).toBeVisible();
+
+  await page.getByTestId("loop-run-Authored Triage").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const iterations = page.getByTestId("loop-run-iterations");
+  await expect(iterations.locator('[data-phase="triage"]').first()).toBeVisible();
+  await expect(iterations).toContainText("High impact finding");
+  await expect(iterations).toContainText("iteration-1-triage.md");
+  await expect(page.getByTestId("loop-validation-evidence")).toContainText("exit 0");
+  await expect(page.getByTestId("loop-evaluator-decision")).toContainText("SUCCESS");
+  await expect(page.getByTestId("loop-run-live-status")).toHaveAttribute("aria-live", "polite");
+  await expect(page.getByTestId("loop-run-live-status")).toHaveAttribute("aria-atomic", "true");
+  await page.setViewportSize({ width: 500, height: 600 });
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("loop-run-panel")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-run-iterations")).toContainText("High impact finding");
+
+  await page.getByTestId("loop-run-Unavailable Triage").click();
+  await expect(page.getByRole("alert")).toContainText(
+    'The configured triage agent "Unavailable Explorer" is unavailable',
+  );
+  await expect(page.getByTestId("loop-run-panel")).toContainText("Authored Triage");
+
+  await page.route(/\/loops\/Failing%20Triage\/run$/, async (route) => {
+    const now = new Date().toISOString();
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        run: {
+          id: "00000000-0000-4000-8000-000000000404",
+          loopName: "Failing Triage",
+          projectId,
+          status: "failed",
+          currentIteration: 1,
+          maxIterations: 1,
+          stopReason: "agentFailed",
+          startedAt: now,
+          updatedAt: now,
+          endedAt: now,
+          iterations: [
+            {
+              id: "triage-failed-iteration",
+              index: 1,
+              startedAt: now,
+              endedAt: now,
+              output: "triage provider failed",
+              validationPassed: null,
+              timeline: [
+                {
+                  id: "triage-started",
+                  phase: "triage",
+                  roleName: "Broken Triage",
+                  note: "triage started",
+                  timestamp: now,
+                },
+              ],
+              children: [
+                {
+                  id: "triage-failed-child",
+                  phase: "triage",
+                  agentName: "Broken Triage",
+                  status: "failed",
+                  startedAt: now,
+                  endedAt: now,
+                  error: "triage provider failed",
+                },
+              ],
+              artifacts: [],
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.getByTestId("loop-run-Failing Triage").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "failed", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("loop-triage-status")).toContainText("Broken Triage — Failed");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Discovery / triage error" }),
+  ).toContainText(/triage provider failed|request failed|error/i);
+  await expect(page.getByTestId("loop-run-iterations")).toContainText("Discovery / triage error");
+
+  await page.getByTestId("loop-run-Slow Triage Stop").click();
+  const stop = page.getByTestId("loop-run-stop");
+  await expect(stop).toBeVisible();
+  await stop.focus();
+  await stop.click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "stopped", {
+    timeout: 30_000,
+  });
+  const retry = page.getByTestId("loop-run-retry");
+  await expect(retry).toBeFocused();
+  await retry.click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "running");
+  await page.getByTestId("loop-run-stop").click();
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "stopped", {
+    timeout: 30_000,
+  });
 });
 
 test("shows queued Parallel branches, announces transitions, and focuses Retry after Stop", async ({

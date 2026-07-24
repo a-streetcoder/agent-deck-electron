@@ -1,12 +1,36 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { LOOP_STRUCTURE_UNSUPPORTED_CODE, type LoopStructure } from "@agent-deck/domain";
+import {
+  LOOP_DEFAULT_CLASSIFICATION_PROMPT,
+  LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopStructure,
+} from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
 import { deleteLoopFile, duplicateLoop, loopsDir, scanLoops, writeLoopFile } from "../src/loops.ts";
 
 function makeHome(): string {
   return mkdtempSync(path.join(tmpdir(), "loops-home-"));
+}
+
+function parseWithNativeLineReader(content: string): Record<string, string> {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const closingWithBody = normalized.indexOf("\n---\n", 4);
+  const closing =
+    closingWithBody >= 0
+      ? closingWithBody
+      : normalized.endsWith("\n---")
+        ? normalized.length - 4
+        : -1;
+  if (closing < 0) return {};
+  const frontmatter = normalized.slice(4, closing);
+  return Object.fromEntries(
+    frontmatter.split("\n").flatMap((line) => {
+      const separator = line.indexOf(":");
+      if (separator < 0) return [];
+      return [[line.slice(0, separator).trim(), line.slice(separator + 1).trim()]];
+    }),
+  );
 }
 
 function writeExternalLoop(
@@ -355,7 +379,152 @@ describe("loop definition store", () => {
     expect(readFileSync(filePath, "utf8")).toBe(original);
   });
 
-  it.each<LoopStructure>(["discoveryTriage", "humanApproval"])(
+  it("cross-reads, canonically edits, and duplicates native Discovery/Triage metadata", () => {
+    const roots = { home: makeHome() };
+    const filePath = path.join(loopsDir(roots), "native-triage.loop.md");
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(
+      filePath,
+      [
+        "---",
+        "unknownZulu: last",
+        "classificationPrompt: Classify by severity and assign an owner.",
+        "name: Native Triage",
+        "triageAgent: Explorer",
+        "structure: discoveryTriage",
+        "writeTarget: artifactMarkdown",
+        "maxIterations: 3",
+        "unknownAlpha: first",
+        "---",
+        "",
+        "Discover release risks.",
+        "",
+      ].join("\n"),
+    );
+
+    expect(scanLoops(roots)[0]).toMatchObject({
+      structure: "discoveryTriage",
+      triageAgent: "Explorer",
+      classificationPrompt: "Classify by severity and assign an owner.",
+    });
+    writeLoopFile(roots, {
+      name: "Native Triage",
+      description: "Classified discovery",
+      triageAgent: "Triage Agent",
+      classificationPrompt:
+        "  Severity: high impact # release\r\nOwner and evidence\rSafest next action  ",
+    });
+    const normalizedPrompt =
+      "Severity: high impact # release Owner and evidence Safest next action";
+    const expected = [
+      "---",
+      "name: Native Triage",
+      "description: Classified discovery",
+      "structure: discoveryTriage",
+      "writeTarget: artifactMarkdown",
+      "maxIterations: 3",
+      "triageAgent: Triage Agent",
+      `classificationPrompt: ${normalizedPrompt}`,
+      "unknownAlpha: first",
+      "unknownZulu: last",
+      "---",
+      "",
+      "Discover release risks.",
+      "",
+    ].join("\n");
+    const saved = readFileSync(filePath, "utf8");
+    expect(saved).toBe(expected);
+    expect(parseWithNativeLineReader(saved).classificationPrompt).toBe(normalizedPrompt);
+
+    expect(duplicateLoop(roots, "Native Triage")).toBe("Copy of Native Triage");
+    const copy = scanLoops(roots).find((loop) => loop.name === "Copy of Native Triage")!;
+    expect(copy).toMatchObject({
+      triageAgent: "Triage Agent",
+      classificationPrompt: normalizedPrompt,
+    });
+    const copied = readFileSync(copy.filePath, "utf8");
+    expect(copied).toBe(expected.replace("name: Native Triage", "name: Copy of Native Triage"));
+    expect(parseWithNativeLineReader(copied).classificationPrompt).toBe(normalizedPrompt);
+  });
+
+  it("accepts native final delimiters and cross-reads quoted triage text without changing bodies", () => {
+    const prompt = 'Severity: "high" # release';
+    const nativeRoots = { home: makeHome() };
+    const nativePath = path.join(loopsDir(nativeRoots), "final-delimiter.loop.md");
+    mkdirSync(path.dirname(nativePath), { recursive: true });
+    const nativeOnly = [
+      "---",
+      "name: Final Delimiter Triage",
+      "structure: discoveryTriage",
+      "writeTarget: artifactMarkdown",
+      "triageAgent: Explorer",
+      `classificationPrompt: ${prompt}`,
+      "---",
+    ].join("\n");
+    writeFileSync(nativePath, nativeOnly);
+
+    expect(parseWithNativeLineReader(nativeOnly).classificationPrompt).toBe(prompt);
+    expect(scanLoops(nativeRoots)[0]).toMatchObject({
+      name: "Final Delimiter Triage",
+      goal: "",
+      triageAgent: "Explorer",
+      classificationPrompt: prompt,
+    });
+
+    const electronRoots = { home: makeHome() };
+    const electronPath = writeLoopFile(electronRoots, {
+      name: "Electron Triage",
+      structure: "discoveryTriage",
+      goal: "Discover release risks.",
+      triageAgent: "Explorer",
+      classificationPrompt: prompt,
+      writeTarget: "artifactMarkdown",
+    });
+    const serialized = readFileSync(electronPath, "utf8");
+    const serializedNative = parseWithNativeLineReader(serialized);
+    expect(serializedNative.classificationPrompt).toBe(prompt);
+    expect(Object.keys(serializedNative).indexOf("triageAgent")).toBeLessThan(
+      Object.keys(serializedNative).indexOf("classificationPrompt"),
+    );
+    expect(scanLoops(electronRoots)[0]).toMatchObject({
+      goal: "Discover release risks.",
+      classificationPrompt: prompt,
+    });
+
+    expect(duplicateLoop(electronRoots, "Electron Triage")).toBe("Copy of Electron Triage");
+    const duplicate = scanLoops(electronRoots).find(
+      (loop) => loop.name === "Copy of Electron Triage",
+    )!;
+    const duplicateText = readFileSync(duplicate.filePath, "utf8");
+    expect(parseWithNativeLineReader(duplicateText).classificationPrompt).toBe(prompt);
+    expect(duplicate).toMatchObject({
+      goal: "Discover release risks.",
+      classificationPrompt: prompt,
+    });
+  });
+
+  it("defaults missing and blank native Discovery/Triage classification prompts", () => {
+    for (const [name, promptLine] of [
+      ["Missing Prompt", ""],
+      ["Blank Prompt", "classificationPrompt:    \n"],
+    ] as const) {
+      const roots = { home: makeHome() };
+      const filePath = path.join(loopsDir(roots), "native-triage.loop.md");
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      writeFileSync(
+        filePath,
+        `---\nname: ${name}\nstructure: discoveryTriage\ntriageAgent: Explorer\n${promptLine}writeTarget: artifactMarkdown\n---\n\nDiscover risks.\n`,
+      );
+      expect(scanLoops(roots)[0]!.classificationPrompt).toBe(LOOP_DEFAULT_CLASSIFICATION_PROMPT);
+      writeLoopFile(roots, { name, description: "canonicalized" });
+      const saved = readFileSync(filePath, "utf8");
+      expect(parseWithNativeLineReader(saved).classificationPrompt).toBe(
+        LOOP_DEFAULT_CLASSIFICATION_PROMPT,
+      );
+    }
+  });
+
+  it.each<LoopStructure>(["humanApproval"])(
     "rejects unsupported %s writes/duplicates without mutation and permits explicit conversion",
     (structure) => {
       const createRoots = { home: makeHome() };
