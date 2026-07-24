@@ -56,13 +56,54 @@ test("signing in shows the device code, accepts a code, and reports success", as
   await page.locator(`[data-provider-id="${id}"]`).click();
 
   // The sheet opens and shows the device code + a prompt.
-  await expect(page.getByTestId("provider-login-sheet")).toBeVisible();
+  const sheet = page.getByTestId("provider-login-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveAccessibleName(/Sign in to/);
   await expect(page.getByTestId("login-device-code")).toHaveText("WXYZ-1234");
   await expect(page.getByTestId("login-auth-url")).toHaveCount(0);
 
-  // Answer the prompt → the flow completes with success + a toast.
-  await page.getByTestId("login-prompt-input").fill("hunter2");
-  await page.getByTestId("login-prompt-submit").click();
+  // The field gets a full row and conventional Cancel → Submit footer actions.
+  const input = page.getByTestId("login-prompt-input");
+  const actions = page.getByTestId("provider-login-actions");
+  const cancel = actions.getByRole("button", { name: "Cancel" });
+  const submit = actions.getByRole("button", { name: "Submit" });
+  await expect(cancel).toBeVisible();
+  await expect(submit).toBeVisible();
+  const [inputBox, actionsBox, cancelBox, submitBox] = await Promise.all([
+    input.boundingBox(),
+    actions.boundingBox(),
+    cancel.boundingBox(),
+    submit.boundingBox(),
+  ]);
+  expect(inputBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(cancelBox).not.toBeNull();
+  expect(submitBox).not.toBeNull();
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(inputBox!.y + inputBox!.height);
+  expect(cancelBox!.x).toBeLessThan(submitBox!.x);
+
+  // Enter still submits the prompt → the flow completes with success + a toast.
+  await input.fill("hunter2");
+  await input.press("Enter");
   await expect(page.getByTestId("login-done")).toContainText("Connected");
   await expect(page.getByTestId("toast")).toContainText(/connected/);
+  await expect(actions.getByRole("button", { name: "Close" })).toBeVisible();
+});
+
+test("providers with two login methods use a labelled, dismissible chooser", async ({ page }) => {
+  const { providers } = (await (await fetch(`${harness.baseUrl}/runtime/providers`)).json()) as {
+    providers: Array<{ id: string; supportsOAuth: boolean; supportsAPIKey: boolean; name: string }>;
+  };
+  const provider = providers.find((entry) => entry.supportsOAuth && entry.supportsAPIKey)!;
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-providers").click();
+  await page.locator(`[data-provider-id="${provider.id}"]`).click();
+
+  const chooser = page.getByRole("dialog", { name: `Connect ${provider.name}` });
+  await expect(chooser).toBeVisible();
+  await expect(chooser.getByRole("button", { name: "Use a subscription" })).toBeVisible();
+  await expect(chooser.getByRole("button", { name: "Use an API key" })).toBeVisible();
+  await chooser.getByRole("button", { name: "Cancel" }).click();
+  await expect(chooser).toHaveCount(0);
 });
