@@ -533,7 +533,12 @@ app.whenReady().then(() => {
   // bundle, so macOS otherwise displays Electron's icon in the Dock. Packaged
   // builds get the same artwork from electron-builder's bundle metadata.
   if (process.platform === "darwin" && !app.isPackaged) {
-    app.dock.setIcon(path.join(repoRoot, "build", "icon.icns"));
+    try {
+      app.dock.setIcon(path.join(repoRoot, "build", "icon.png"));
+    } catch (error) {
+      // Branding must never prevent the development app from starting.
+      console.warn("Unable to set the development Dock icon:", error);
+    }
   }
   return bootstrap();
 });
