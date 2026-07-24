@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight, KeyRound, Search, ShieldCheck, UserRound } from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
+import { AppScrollView } from "../design-system/components/AppScrollView.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -82,10 +83,7 @@ export function ProvidersScreen({
           />
         </label>
 
-        <div
-          className="provider-scroll-area min-h-0 flex-1 overflow-y-auto pr-3"
-          data-testid="provider-scroll-area"
-        >
+        <AppScrollView className="flex-1" contentClassName="pr-3" testId="provider-scroll-area">
           {!loaded ? <SkeletonRows count={5} /> : null}
           <ProviderGroup
             title="Subscriptions"
@@ -96,7 +94,7 @@ export function ProvidersScreen({
           {loaded && visible.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
           ) : null}
-        </div>
+        </AppScrollView>
       </div>
 
       {methodProvider ? (
