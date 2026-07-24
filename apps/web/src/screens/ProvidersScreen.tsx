@@ -82,7 +82,10 @@ export function ProvidersScreen({
           />
         </label>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-3" data-testid="provider-scroll-area">
+        <div
+          className="provider-scroll-area min-h-0 flex-1 overflow-y-auto pr-3"
+          data-testid="provider-scroll-area"
+        >
           {!loaded ? <SkeletonRows count={5} /> : null}
           <ProviderGroup
             title="Subscriptions"

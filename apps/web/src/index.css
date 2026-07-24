@@ -83,6 +83,32 @@ body {
   outline: none;
 }
 
+/* Provider setup uses an overlay-style scrollbar so an OS configured to always
+   show classic scrollbars does not consume a wide strip of this focused flow. */
+.provider-scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar) transparent;
+}
+
+.provider-scroll-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.provider-scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.provider-scroll-area::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--color-scrollbar);
+  background-clip: padding-box;
+}
+
+.provider-scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-scrollbar-hover);
+}
+
 /* Native SidebarTransition spring for screens that mount on demand:
    slide up 10px + fade, motion and fade on the same settle curve. */
 @keyframes detail-enter {

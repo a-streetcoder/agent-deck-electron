@@ -37,6 +37,7 @@ export function ProviderLoginSheet({
   const [status, setStatus] = useState<LoginStatus>("running");
   const [promptValue, setPromptValue] = useState("");
   const [fatal, setFatal] = useState<string | null>(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
   const loginIdRef = useRef<string | null>(null);
   const cursorRef = useRef(0);
   const notifiedRef = useRef(false);
@@ -125,6 +126,7 @@ export function ProviderLoginSheet({
   const awaitingPrompt = status === "running" && last?.type === "prompt" ? last : null;
   const awaitingSelect = status === "running" && last?.type === "select" ? last : null;
   const doneEvent = last?.type === "done" ? last : null;
+  const hasBrowserAuth = events.some((event) => event.type === "auth_url");
 
   return (
     <div
@@ -162,35 +164,38 @@ export function ProviderLoginSheet({
           ) : null}
         </div>
 
-        {awaitingPrompt ? (
+        {awaitingPrompt && (!hasBrowserAuth || showManualEntry) ? (
           <form
-            className="flex gap-2"
+            className="flex flex-col gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void respond(promptValue);
             }}
           >
-            <input
-              autoFocus
-              data-testid="login-prompt-input"
-              className={inputClass}
-              type={awaitingPrompt.secret ? "password" : "text"}
-              placeholder={awaitingPrompt.placeholder}
-              value={promptValue}
-              onChange={(event) => setPromptValue(event.target.value)}
-            />
-            <button
-              type="submit"
-              data-testid="login-prompt-submit"
-              className="rounded-capsule px-3 py-1.5 text-sm font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-            >
-              Submit
-            </button>
+            <label className="text-xs text-text-secondary">{awaitingPrompt.message}</label>
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                data-testid="login-prompt-input"
+                className={inputClass}
+                type={awaitingPrompt.secret ? "password" : "text"}
+                placeholder={awaitingPrompt.placeholder}
+                value={promptValue}
+                onChange={(event) => setPromptValue(event.target.value)}
+              />
+              <button
+                type="submit"
+                data-testid="login-prompt-submit"
+                className="rounded-capsule px-3 py-1.5 text-sm font-medium shadow-capsule"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+              >
+                Submit
+              </button>
+            </div>
           </form>
         ) : null}
 
@@ -209,7 +214,17 @@ export function ProviderLoginSheet({
           </div>
         ) : null}
 
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex items-center justify-between gap-2 pt-1">
+          {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
+            <button
+              className="text-xs text-text-muted hover:text-text-primary"
+              onClick={() => setShowManualEntry(true)}
+            >
+              Enter a code manually
+            </button>
+          ) : (
+            <span />
+          )}
           <button
             className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
             onClick={onClose}
@@ -226,19 +241,22 @@ function LoginStep({ event }: { event: LoginEvent }) {
   switch (event.type) {
     case "auth_url":
       return (
-        <div className="rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm">
-          <div className="text-text-muted">Open this URL to authorize:</div>
+        <div className="rounded-xl border border-border-subtle bg-surface px-4 py-3 text-sm">
+          <div className="font-medium text-text-primary">Continue in your browser</div>
+          <div className="mt-1 text-xs leading-relaxed text-text-muted">
+            Sign in securely with the provider, then return to Agent Deck.
+          </div>
           <a
             href={event.url}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1 break-all font-mono text-[12px] text-[var(--color-brand-accent)]"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent"
             data-testid="login-auth-url"
           >
-            <ExternalLink size={12} className="shrink-0" /> {event.url}
+            <ExternalLink size={12} /> Open browser
           </a>
           {event.instructions ? (
-            <div className="mt-1 text-xs text-text-muted">{event.instructions}</div>
+            <div className="mt-2 text-[11px] text-text-muted">{event.instructions}</div>
           ) : null}
         </div>
       );
@@ -268,7 +286,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
     case "progress":
       return <div className="text-xs text-text-muted">{event.message}</div>;
     case "prompt":
-      return <div className="text-sm text-text-primary">{event.message}</div>;
+      return null;
     case "select":
       return <div className="text-sm text-text-primary">{event.message}</div>;
     case "done":

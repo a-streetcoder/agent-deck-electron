@@ -11,7 +11,17 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, screen, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  Notification,
+  screen,
+  shell,
+} from "electron";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
@@ -22,10 +32,11 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 app.setName("Agent Deck");
 if (process.platform === "win32") app.setAppUserModelId("com.streetcoding.agentdeck");
 
-/** Background dark so there's no white flash before the UI paints. */
-const WINDOW_BG = "#0f1115";
-const TITLEBAR_BG = "#28282b";
-const TITLEBAR_SYMBOL = "#f5f5f7";
+/** Match the window chrome to the operating system before the renderer paints. */
+const windowColors = () =>
+  nativeTheme.shouldUseDarkColors
+    ? { background: "#1e1e20", titlebar: "#28282b", symbol: "#f5f5f7" }
+    : { background: "#f7f7f8", titlebar: "#ffffff", symbol: "#18181b" };
 
 let serverProcess = null;
 let serverPort = null;
@@ -34,6 +45,19 @@ let mainWindow = null;
 // a turn-complete / approval-needed event arrives while the window is UNFOCUSED,
 // reset to 0 once the window is focused (the user has "seen" it).
 let attentionCount = 0;
+
+nativeTheme.on("updated", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const colors = windowColors();
+  mainWindow.setBackgroundColor(colors.background);
+  if (process.platform !== "darwin") {
+    mainWindow.setTitleBarOverlay({
+      color: colors.titlebar,
+      symbolColor: colors.symbol,
+      height: 40,
+    });
+  }
+});
 
 /** Resolve pnpm's executable name per platform (dev PATH is inherited). */
 function pnpmCommand() {
@@ -250,14 +274,18 @@ function createWindow(port) {
     height: 860,
     minWidth: 940,
     minHeight: 600,
-    backgroundColor: WINDOW_BG,
+    backgroundColor: windowColors().background,
     title: "Agent Deck",
     icon: path.join(repoRoot, "build", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     titleBarOverlay:
       process.platform === "darwin"
         ? undefined
-        : { color: TITLEBAR_BG, symbolColor: TITLEBAR_SYMBOL, height: 40 },
+        : {
+            color: windowColors().titlebar,
+            symbolColor: windowColors().symbol,
+            height: 40,
+          },
     autoHideMenuBar: process.platform !== "darwin",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
