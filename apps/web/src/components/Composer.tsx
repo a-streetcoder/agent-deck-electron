@@ -335,6 +335,7 @@ export function Composer() {
         images.length === 0 &&
         pendingComments.length === 0 &&
         pendingElementContexts.length === 0) ||
+      !session ||
       connection !== "open" ||
       running
     )
@@ -626,6 +627,7 @@ export function Composer() {
                 images.length === 0 &&
                 pendingComments.length === 0 &&
                 pendingElementContexts.length === 0) ||
+              !session ||
               connection !== "open"
             }
             onSend={submit}

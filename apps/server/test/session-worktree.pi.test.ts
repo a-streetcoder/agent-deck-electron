@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -32,6 +32,20 @@ function git(args: string[]): void {
   execFileSync("git", args, { cwd: repoDir, stdio: "ignore" });
 }
 
+function sessionBranches(): string[] {
+  return execFileSync(
+    "git",
+    ["branch", "--format=%(refname:short)", "--list", "agent-deck/session-*"],
+    {
+      cwd: repoDir,
+    },
+  )
+    .toString()
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+}
+
 async function patchSettings(body: unknown): Promise<Response> {
   return fetch(`http://127.0.0.1:${server.port}/settings`, {
     method: "PATCH",
@@ -47,8 +61,8 @@ interface SessionResp {
   worktreeSourceBranch?: string;
 }
 
-async function createSession(projectId: string): Promise<SessionResp> {
-  const res = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+async function createSessionResponse(projectId: string): Promise<Response> {
+  return fetch(`http://127.0.0.1:${server.port}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -59,6 +73,10 @@ async function createSession(projectId: string): Promise<SessionResp> {
       env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
     }),
   });
+}
+
+async function createSession(projectId: string): Promise<SessionResp> {
+  const res = await createSessionResponse(projectId);
   expect(res.status).toBe(201);
   const { session } = (await res.json()) as { session: SessionResp };
   return session;
@@ -125,6 +143,57 @@ describe("session worktree isolation", () => {
     });
     expect(del.status).toBe(200);
     expect(existsSync(session.cwd)).toBe(false);
+  });
+
+  it("fails closed from detached HEAD without a session, primary-checkout Pi, or target residue", async () => {
+    const projectId = await addProject();
+    expect((await patchSettings({ worktreeIsolation: true })).status).toBe(200);
+    const beforeSessions = server.sessions.list().map((meta) => meta.id);
+    const root = path.join(dataDir, "session-worktrees");
+    const beforeTargets = existsSync(root) ? readdirSync(root).sort() : [];
+
+    git(["checkout", "--detach"]);
+    try {
+      const response = await createSessionResponse(projectId);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        code: "worktree_isolation_failed",
+        error:
+          "Session creation stopped because an isolated worktree couldn't be created: detached HEAD — check out a branch first — Fix the project's Git state or disable worktree isolation, then try again.",
+      });
+      expect(server.sessions.list().map((meta) => meta.id)).toEqual(beforeSessions);
+      const listed = await fetch(
+        `http://127.0.0.1:${server.port}/sessions?projectId=${encodeURIComponent(projectId)}`,
+      );
+      expect(((await listed.json()) as { sessions: SessionResp[] }).sessions).toEqual([]);
+      const afterTargets = existsSync(root) ? readdirSync(root).sort() : [];
+      expect(afterTargets).toEqual(beforeTargets);
+    } finally {
+      git(["checkout", "main"]);
+    }
+  });
+
+  it("removes the generated worktree and branch when session startup fails after allocation", async () => {
+    const projectId = await addProject();
+    expect((await patchSettings({ worktreeIsolation: true })).status).toBe(200);
+    const root = path.join(dataDir, "session-worktrees");
+    const beforeTargets = existsSync(root) ? readdirSync(root).sort() : [];
+    const beforeBranches = sessionBranches();
+    const previousPiPath = process.env.AGENT_DECK_PI_PATH;
+    process.env.AGENT_DECK_PI_PATH = path.join(dataDir, "missing-pi-binary");
+    try {
+      const response = await createSessionResponse(projectId);
+      expect(response.status).toBe(500);
+      expect((await response.json()) as { code: string }).toEqual(
+        expect.objectContaining({ code: "session_creation_failed" }),
+      );
+      expect(server.sessions.list().some((meta) => meta.projectId === projectId)).toBe(false);
+      expect(existsSync(root) ? readdirSync(root).sort() : []).toEqual(beforeTargets);
+      expect(sessionBranches()).toEqual(beforeBranches);
+    } finally {
+      if (previousPiPath === undefined) delete process.env.AGENT_DECK_PI_PATH;
+      else process.env.AGENT_DECK_PI_PATH = previousPiPath;
+    }
   });
 
   it("runs in the project root when the setting is off (no worktree)", async () => {

@@ -65,6 +65,8 @@ export interface TransportHost {
 
 export interface ClientTransport {
   connect(sessionId: string): void;
+  /** Deliberately close and forget the current subscription; no reconnect. */
+  disconnect(): void;
   send(message: ClientMessage): void;
   /** Open (or reattach `terminalId` to) the session terminal; rejects offline. */
   openTerminal(request: {
@@ -207,6 +209,15 @@ export class RpcClientTransport implements ClientTransport {
     });
     this.transport = transport;
     transport.connect();
+  }
+
+  disconnect(): void {
+    this.generation++;
+    this.currentSessionId = null;
+    const transport = this.transport;
+    this.transport = null;
+    transport?.close();
+    this.host.setConnection("closed");
   }
 
   send(message: ClientMessage): void {

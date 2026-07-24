@@ -463,20 +463,34 @@ export interface GitWorktree {
   branch: string;
   /** The branch the worktree was forked from. */
   sourceBranch: string;
+  /** Proof that createSessionWorktree atomically created this branch. */
+  branchOwned: true;
 }
 
 /**
- * Add a worktree on a NEW branch off sourceBranch (native
- * PiAgentSessionWorktreeService worktree add -b). `targetPath` must not exist —
- * git creates it. Throws "not_a_repo" / a git error on failure.
+ * Add a worktree for an EXISTING branch. Branch creation is a separate atomic
+ * command in createSessionWorktree so a failed add can delete only a branch this
+ * attempt conclusively created, never a pre-existing same-named branch.
  */
 export async function gitWorktreeAdd(
   projectDir: string,
   targetPath: string,
   branch: string,
-  sourceBranch: string,
 ): Promise<void> {
-  await runGit(projectDir, ["worktree", "add", "-b", branch, targetPath, sourceBranch]);
+  await runGit(projectDir, ["worktree", "add", targetPath, branch]);
+}
+
+/** Delete a branch only when the caller holds createSessionWorktree's ownership
+ * proof and the name is in Agent Deck's private namespace. Throws on failure so
+ * transaction callers can log it without masking their primary typed error. */
+export async function gitDeleteOwnedWorktreeBranch(
+  projectDir: string,
+  worktree: GitWorktree,
+): Promise<void> {
+  if (worktree.branchOwned !== true || !worktree.branch.startsWith("agent-deck/")) {
+    throw new Error("refusing to delete an unowned worktree branch");
+  }
+  await runGit(projectDir, ["branch", "-D", "--", worktree.branch]);
 }
 
 /**
@@ -493,14 +507,22 @@ export async function createSessionWorktree(
 ): Promise<GitWorktree> {
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
+  // `git branch` is atomic: success proves this attempt owns the new ref;
+  // failure (including a pre-existing branch or a concurrent creator) means we
+  // own nothing and therefore must not delete anything.
+  await runGit(projectDir, ["branch", branch, sourceBranch]);
+  const worktree: GitWorktree = { path: targetPath, branch, sourceBranch, branchOwned: true };
   try {
-    await gitWorktreeAdd(projectDir, targetPath, branch, sourceBranch);
+    await gitWorktreeAdd(projectDir, targetPath, branch);
   } catch (error) {
-    // Best-effort: clean any partial worktree git created before failing.
+    // Cleanup is best-effort and may not replace the allocation error. Worktree
+    // removal precedes branch deletion because Git refuses to delete a checked-
+    // out branch; both are awaited for Windows handle-release ordering.
     await gitWorktreeRemove(projectDir, targetPath);
+    await gitDeleteOwnedWorktreeBranch(projectDir, worktree).catch(() => {});
     throw error;
   }
-  return { path: targetPath, branch, sourceBranch };
+  return worktree;
 }
 
 /**

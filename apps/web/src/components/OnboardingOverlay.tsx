@@ -782,7 +782,7 @@ export function OnboardingOverlay() {
                   <PrefToggle
                     testid="pref-worktree"
                     label="Isolate sessions in a worktree"
-                    description="Run each session in its own git worktree."
+                    description="Run each project session in its own git worktree. Session creation stops if isolation cannot be made."
                     checked={prefs.worktreeIsolation}
                     onChange={(v) => patchPref({ worktreeIsolation: v })}
                   />

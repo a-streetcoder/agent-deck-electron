@@ -1,5 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ChevronDown, LayoutGrid, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { chooseDirectory, isElectron } from "@/lib/native";
@@ -44,17 +44,84 @@ export function ProjectPicker() {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [draftPath, setDraftPath] = useState("");
+  const [pendingProjectId, setPendingProjectId] = useState<string | null | undefined>(undefined);
+  const pickerButtonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const selectionPendingRef = useRef(false);
+  const restorePickerFocusRef = useRef(false);
   const ref = useDismiss(() => {
     setOpen(false);
     setAdding(false);
   });
 
+  useEffect(() => {
+    if (pendingProjectId !== undefined || !restorePickerFocusRef.current) return;
+    restorePickerFocusRef.current = false;
+    pickerButtonRef.current?.focus();
+  }, [pendingProjectId]);
+
+  useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      const currentItem = popover?.querySelector<HTMLElement>(
+        '[data-project-choice][aria-pressed="true"]',
+      );
+      const firstItem = popover?.querySelector<HTMLElement>(
+        "[data-project-picker-nav]:not(:disabled)",
+      );
+      (currentItem ?? firstItem)?.focus();
+    });
+  }, [open]);
+
   const enabled = projects.filter((project) => project.enabled !== false);
   const current = currentProjectId ? enabled.find((p) => p.id === currentProjectId) : undefined;
 
   const pick = async (projectId: string | null): Promise<void> => {
+    // State disables the rendered controls; the ref also blocks two activation
+    // events delivered before React commits that state.
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
+    setPendingProjectId(projectId);
     setOpen(false);
-    await switchToProject(projectId);
+    try {
+      await switchToProject(projectId);
+    } finally {
+      selectionPendingRef.current = false;
+      restorePickerFocusRef.current = true;
+      setPendingProjectId(undefined);
+    }
+  };
+
+  const navigatePopover = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (
+      !(event.target instanceof HTMLElement) ||
+      !event.target.hasAttribute("data-project-picker-nav")
+    ) {
+      return;
+    }
+    const items = [
+      ...(popoverRef.current?.querySelectorAll<HTMLElement>(
+        "[data-project-picker-nav]:not(:disabled)",
+      ) ?? []),
+    ];
+    const currentIndex = items.indexOf(event.target);
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % items.length;
+    if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + items.length) % items.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = items.length - 1;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      pickerButtonRef.current?.focus();
+      return;
+    }
+    if (nextIndex !== undefined && items.length > 0) {
+      event.preventDefault();
+      items[nextIndex]?.focus();
+    }
   };
 
   const submitPath = async (): Promise<void> => {
@@ -84,6 +151,7 @@ export function ProjectPicker() {
   return (
     <div className="relative [-webkit-app-region:no-drag]" ref={ref}>
       <ControlButton
+        ref={pickerButtonRef}
         data-testid="project-picker"
         className={cn(
           "flex items-center gap-2 rounded-capsule border px-2.5 py-1 text-label font-medium transition-colors",
@@ -92,9 +160,14 @@ export function ProjectPicker() {
             : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary",
         )}
         title="Project"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-busy={pendingProjectId !== undefined}
+        disabled={pendingProjectId !== undefined}
+        data-pending-project={pendingProjectId ?? undefined}
+        onClick={() => {
+          if (pendingProjectId === undefined) setOpen((v) => !v);
+        }}
       >
         {current ? (
           <ProjectTypeIcon type={current.type} size={14} />
@@ -109,13 +182,17 @@ export function ProjectPicker() {
 
       {open ? (
         <div
+          ref={popoverRef}
           data-testid="project-menu"
-          role="menu"
-          aria-label="Project"
+          role="dialog"
+          aria-label="Choose a project"
+          onKeyDown={navigatePopover}
           className="absolute left-0 top-full z-30 mt-1.5 max-h-[70vh] w-72 overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
           <ControlButton
-            role="menuitem"
+            aria-pressed={currentProjectId === null}
+            data-project-choice
+            data-project-picker-nav
             data-testid="project-all-projects"
             className={cn(
               "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-label",
@@ -144,7 +221,9 @@ export function ProjectPicker() {
           {enabled.map((project) => (
             <ControlButton
               key={project.id}
-              role="menuitem"
+              aria-pressed={currentProjectId === project.id}
+              data-project-choice
+              data-project-picker-nav
               data-testid={`project-${project.name}`}
               title={project.path}
               className={cn(
@@ -193,7 +272,7 @@ export function ProjectPicker() {
             </div>
           ) : (
             <ControlButton
-              role="menuitem"
+              data-project-picker-nav
               data-testid="add-project"
               className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-label text-text-muted hover:bg-hover"
               onClick={() => void startAddProject()}

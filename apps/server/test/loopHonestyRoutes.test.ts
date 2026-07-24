@@ -10,10 +10,16 @@ import type { ServerContext } from "../src/context.ts";
 vi.mock("../src/git.ts", () => ({
   createSessionWorktree: vi.fn(),
   gitWorktreeRemove: vi.fn(),
+  gitDeleteOwnedWorktreeBranch: vi.fn(),
 }));
 
-import { createSessionWorktree } from "../src/git.ts";
+import {
+  createSessionWorktree,
+  gitDeleteOwnedWorktreeBranch,
+  gitWorktreeRemove,
+} from "../src/git.ts";
 import { registerLoopRoutes } from "../src/routes/loops.ts";
+import { SessionCreationError } from "../src/SessionManager.ts";
 
 const unsupportedStructures: LoopStructure[] = [
   "makerChecker",
@@ -34,20 +40,54 @@ function makeRoutes(home: string, rootsFor: () => { home: string } = () => ({ ho
   const fastify = Fastify();
   servers.push(fastify);
   const createSession = vi.fn();
+  const destroySession = vi.fn();
+  const announceCreated = vi.fn();
   const startEngine = vi.fn();
+  const stopEngine = vi.fn();
+  const settledEngine = vi.fn();
   const broadcast = vi.fn();
+  const indexRows = new Map<
+    string,
+    { id: string; cwd: string; createdAt: string; projectId?: string }
+  >();
+  const bridgeTokens = new Map<string, string>();
   registerLoopRoutes({
     fastify,
-    sessions: { create: createSession },
-    index: {},
+    sessions: {
+      create: createSession,
+      destroy: destroySession,
+      announceCreated,
+    },
+    index: {
+      find: (
+        predicate: (meta: {
+          id: string;
+          cwd: string;
+          createdAt: string;
+          projectId?: string;
+        }) => boolean,
+      ) => [...indexRows.values()].find(predicate),
+      remove: (id: string) => indexRows.delete(id),
+    },
     projects: { find: () => ({ id: "project", path: home }) },
-    loopEngine: { start: startEngine },
-    bridgeTokens: new Map(),
+    loopEngine: { start: startEngine, stop: stopEngine, settled: settledEngine },
+    bridgeTokens,
     broadcast,
     rootsFor,
     enabledExtensionPaths: () => [],
   } as unknown as ServerContext);
-  return { fastify, createSession, startEngine, broadcast };
+  return {
+    fastify,
+    createSession,
+    destroySession,
+    announceCreated,
+    startEngine,
+    stopEngine,
+    settledEngine,
+    broadcast,
+    indexRows,
+    bridgeTokens,
+  };
 }
 
 function writeExternalLoop(
@@ -186,6 +226,143 @@ describe("loop route honesty gate", () => {
     expect(broadcast).not.toHaveBeenCalled();
     expect(readFileSync(supportedPath, "utf8")).toBe(supportedOriginal);
     expect(readFileSync(unsupportedPath, "utf8")).toBe(unsupportedOriginal);
+  });
+
+  it("rolls back a post-allocation parent create failure before deleting the owned Loop branch", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-start-rollback-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Rollback Loop",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        writeTarget: "newWorktree",
+      },
+    );
+    const { fastify, createSession, startEngine, broadcast, bridgeTokens, indexRows } =
+      makeRoutes(home);
+    const order: string[] = [];
+    vi.mocked(createSessionWorktree).mockResolvedValue({
+      path: path.join(home, "worktree"),
+      branch: "agent-deck/loop-Rollback-abc123",
+      sourceBranch: "main",
+      branchOwned: true,
+    });
+    vi.mocked(gitWorktreeRemove).mockImplementation(async () => {
+      order.push("worktree");
+    });
+    vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
+      order.push("branch");
+    });
+    createSession.mockImplementation(() => {
+      bridgeTokens.set("failed-parent", "secret");
+      throw new SessionCreationError(
+        "failed-parent",
+        new Error("Pi startup failed"),
+        Promise.resolve().then(() => {
+          order.push("pi");
+        }),
+      );
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/loops/Rollback%20Loop/run",
+      payload: { projectId: "project" },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        code: "loop_start_failed",
+        error: expect.stringContaining("Pi startup failed"),
+      }),
+    );
+    expect(order).toEqual(["pi", "worktree", "branch"]);
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(bridgeTokens.size).toBe(0);
+    expect(indexRows.size).toBe(0);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("stops and settles an accepted run before destroying startup resources when announcement fails", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-announce-rollback-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Announce Rollback Loop",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        writeTarget: "newWorktree",
+      },
+    );
+    const {
+      fastify,
+      createSession,
+      destroySession,
+      announceCreated,
+      startEngine,
+      stopEngine,
+      settledEngine,
+    } = makeRoutes(home);
+    const order: string[] = [];
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = () => {
+        order.push("settled");
+        resolve();
+      };
+    });
+    const parent = {
+      meta: {
+        id: "accepted-parent",
+        cwd: path.join(home, "worktree"),
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    };
+    vi.mocked(createSessionWorktree).mockResolvedValue({
+      path: parent.meta.cwd,
+      branch: "agent-deck/loop-Announce-Rollback-abc123",
+      sourceBranch: "main",
+      branchOwned: true,
+    });
+    createSession.mockReturnValue(parent);
+    startEngine.mockReturnValue({ id: "run-in-flight" });
+    announceCreated.mockImplementation(() => {
+      throw new Error("announcement failed");
+    });
+    stopEngine.mockImplementation(() => {
+      order.push("stop");
+    });
+    settledEngine.mockReturnValue(settled);
+    destroySession.mockImplementation(async () => {
+      order.push("destroy");
+    });
+    vi.mocked(gitWorktreeRemove).mockImplementation(async () => {
+      order.push("worktree");
+    });
+    vi.mocked(gitDeleteOwnedWorktreeBranch).mockImplementation(async () => {
+      order.push("branch");
+    });
+
+    const responsePromise = fastify.inject({
+      method: "POST",
+      url: "/loops/Announce%20Rollback%20Loop/run",
+      payload: { projectId: "project" },
+    });
+    await vi.waitFor(() => expect(order).toEqual(["stop"]));
+    expect(destroySession).not.toHaveBeenCalled();
+    resolveSettled();
+    const response = await responsePromise;
+
+    expect(response.statusCode).toBe(500);
+    expect(order).toEqual(["stop", "settled", "destroy", "worktree", "branch"]);
+    expect(stopEngine).toHaveBeenCalledOnce();
+    expect(settledEngine).toHaveBeenCalledOnce();
+    expect(destroySession).toHaveBeenCalledOnce();
+    expect(gitWorktreeRemove).toHaveBeenCalledOnce();
+    expect(gitDeleteOwnedWorktreeBranch).toHaveBeenCalledOnce();
   });
 
   it("keeps supported single-agent creation and duplication working", async () => {

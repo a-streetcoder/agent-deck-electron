@@ -415,6 +415,11 @@ export async function fetchFileWrite(
 /** (Re)connect subscribed to `sessionId` — the single entry point that keeps
  * `currentSessionId` (which gates handleMessage's per-session filtering) in sync
  * with the transport's subscription. */
+function disconnect(): void {
+  currentSessionId = null;
+  transport.disconnect();
+}
+
 function connect(sessionId: string): void {
   currentSessionId = sessionId;
   // The old session's changed-file set + checkpoint list must not bleed into the
@@ -474,7 +479,17 @@ function handleMessage(message: ServerMessage): void {
 
 async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
-  if (!response.ok) throw new Error(`${input}: ${await response.text()}`);
+  if (!response.ok) {
+    const text = await response.text();
+    let practicalError: string | undefined;
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.trim()) practicalError = body.error;
+    } catch {
+      // Non-JSON failures retain the existing plain-text fallback.
+    }
+    throw new Error(practicalError ?? (text || `Request failed (${response.status}).`));
+  }
   return (await response.json()) as T;
 }
 
@@ -517,6 +532,7 @@ async function activateSession(projectId: string | null, agentName: string | nul
   // call is in flight, the stale result must never win.
   const token = ++activationToken;
   const store = useAppStore.getState();
+  disconnect();
   try {
     store.setError(null);
     store.setCurrentProject(projectId);
@@ -538,6 +554,7 @@ async function activateSession(projectId: string | null, agentName: string | nul
 export async function switchToSession(target: SessionMeta): Promise<void> {
   const token = ++activationToken;
   const store = useAppStore.getState();
+  disconnect();
   try {
     store.setError(null);
     store.setCurrentProject(target.projectId ?? null);
@@ -563,6 +580,7 @@ export async function newChat(): Promise<void> {
   const token = ++activationToken;
   const store = useAppStore.getState();
   const { currentProjectId, currentAgentName } = store;
+  disconnect();
   try {
     store.setError(null);
     store.resetTranscript();

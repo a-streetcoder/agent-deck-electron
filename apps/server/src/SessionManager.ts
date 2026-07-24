@@ -42,6 +42,18 @@ export type { ChildBridgeFactory, AgentResolver } from "./services/sessionManage
  * `pushBus.ts` used for the bus in Slice 3.
  */
 
+export class SessionCreationError extends Error {
+  constructor(
+    readonly sessionId: string,
+    cause: unknown,
+    /** Settles only after any spawned Pi scope has closed and exit handling ran. */
+    readonly cleanup: Promise<void> = Promise.resolve(),
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "SessionCreationError";
+  }
+}
+
 export interface CreateSessionOptions {
   cwd: string;
   plan: LaunchPlan;
@@ -52,6 +64,9 @@ export interface CreateSessionOptions {
   /** Set when this session runs in an isolated git worktree (cwd IS the worktree)
    *  so the fields persist WITH the initial meta — no orphan window. */
   worktree?: { path: string; branch: string; sourceBranch: string };
+  /** Route transaction seam: delay persistence/broadcast/receipt until the
+   * caller has completed immediate setup and explicitly commits creation. */
+  deferAnnouncement?: boolean;
 }
 
 /** A synchronous view of one session's push bus, for the (still class-based)
@@ -320,9 +335,26 @@ export class SessionManager {
           }
         : {}),
     };
-    const session = this.launch(meta, options.plan, options.env);
-    session.startIngestion();
-    return session;
+    try {
+      const session = this.launch(meta, options.plan, options.env, options.deferAnnouncement);
+      try {
+        session.startIngestion();
+        return session;
+      } catch (error) {
+        // startIngestion is normally non-throwing, but an injected/runtime defect
+        // after registration must still expose an awaitable, exactly-once close.
+        throw new SessionCreationError(
+          meta.id,
+          error,
+          this.destroy(meta.id).catch(() => {}),
+        );
+      }
+    } catch (error) {
+      // launch() supplies its own cleanup when a Scope already exists. Failures
+      // before then still carry the identity needed to remove the bridge token.
+      if (error instanceof SessionCreationError) throw error;
+      throw new SessionCreationError(meta.id, error);
+    }
   }
 
   /**
@@ -407,6 +439,7 @@ export class SessionManager {
     meta: SessionMeta,
     plan: LaunchPlan,
     env?: Record<string, string | undefined>,
+    deferAnnouncement = false,
   ): ManagedSession {
     const tempDirs: string[] = [];
     // A throw before the session owns tempDirs would leak them; clean up on any
@@ -424,17 +457,23 @@ export class SessionManager {
           ),
         );
       } catch (error) {
-        // Spawn failed after the Scope existed — close it so no resource leaks.
-        this.runtime.runFork(Scope.close(scope, Exit.void));
-        throw error;
+        // Spawn failed after the Scope existed. Start closing immediately, but
+        // return its completion to the route so Windows cwd handles are released
+        // before worktree removal begins.
+        const cleanup = this.runtime.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
+        throw new SessionCreationError(meta.id, error, cleanup);
       }
       // The session now owns tempDirs cleanup (via its exit handling).
       owned = true;
       try {
         const session = new ManagedSession(rt, this.runtime, scope);
         this.sessions.set(meta.id, session);
-        this.receipts.emit("session_created", meta.id);
-        this.onMetaChange(meta);
+        if (!deferAnnouncement) {
+          // Preserve the established non-deferred ordering used by Loop/direct
+          // callers. The deferred HTTP transaction commits in announceCreated().
+          this.receipts.emit("session_created", meta.id);
+          this.onMetaChange(meta);
+        }
         return session;
       } catch (error) {
         // A throw AFTER a successful spawn (ManagedSession ctor, receipts, the
@@ -444,10 +483,10 @@ export class SessionManager {
         // listeners) — ingestion was never forked on this path, so nothing
         // else would ever run it.
         this.sessions.delete(meta.id);
-        this.runtime.runFork(
-          Scope.close(scope, Exit.void).pipe(Effect.andThen(rt.ensureExitHandled)),
-        );
-        throw error;
+        const cleanup = this.runtime
+          .runPromise(Scope.close(scope, Exit.void).pipe(Effect.andThen(rt.ensureExitHandled)))
+          .catch(() => {});
+        throw new SessionCreationError(meta.id, error, cleanup);
       }
     } catch (error) {
       if (!owned) {
@@ -561,6 +600,14 @@ export class SessionManager {
           }
         : {}),
     };
+  }
+
+  /** Commit a successfully prepared session to persistence/broadcast, then
+   * expose the test milestone. The route uses this after worktree + spawn setup;
+   * other creation paths retain their immediate announcement behavior. */
+  announceCreated(session: ManagedSession): void {
+    this.onMetaChange(session.meta);
+    this.receipts.emit("session_created", session.meta.id);
   }
 
   get(id: string): ManagedSession | undefined {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { DomainEvent, SessionMeta } from "@agent-deck/domain";
 import { Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { SessionManager } from "../src/SessionManager.ts";
+import { SessionCreationError, SessionManager } from "../src/SessionManager.ts";
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { PiHostLive, spawnPiProcess, type PiHostShape } from "../src/services/piHost.ts";
@@ -378,7 +378,7 @@ describe("SessionManager Effect service (services/sessionManager.ts)", () => {
   }, 20_000);
 });
 
-describe("SessionManager facade cleanup on a seed failure (resume/fork)", () => {
+describe("SessionManager facade cleanup on create/resume/fork failures", () => {
   /**
    * A ServerRuntime whose SessionManagerService hands out a session runtime that
    * FAILS history seeding as a defect (exactly like the real `seedFromHistory`,
@@ -415,6 +415,72 @@ describe("SessionManager facade cleanup on a seed failure (resume/fork)", () => 
     const runtime = ManagedRuntime.make(layers) as ServerRuntime;
     return { runtime, exitHandledCalls: () => calls };
   }
+
+  it("exposes cleanup completion after a post-spawn create failure", async () => {
+    let released = false;
+    let exitHandled = 0;
+    const fakeBus: SessionPushBusHandle = {
+      lastSeq: Effect.succeed(0),
+      append: () => Effect.succeed({ seq: 0, event: {} as DomainEvent }),
+      replayFrom: () => Effect.succeed(null),
+      subscribe: () => Effect.succeed(Effect.void),
+      unsafeAppend: () => ({ seq: 0, event: {} as DomainEvent }),
+      unsafeLastSeq: () => 0,
+    };
+    const fakeSpawn = (
+      params: SpawnSessionParams,
+    ): Effect.Effect<ManagedSessionRuntime, never, Scope.Scope> =>
+      Effect.acquireRelease(
+        Effect.succeed({
+          meta: params.meta,
+          bus: fakeBus,
+          ingest: Effect.void,
+          ensureExitHandled: Effect.sync(() => {
+            exitHandled += 1;
+          }),
+        } as unknown as ManagedSessionRuntime),
+        () =>
+          Effect.promise(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            released = true;
+          }),
+      );
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(
+        Layer.succeed(SessionManagerService, { spawn: fakeSpawn }),
+        SessionPushBusesLive,
+        PiHostLive,
+      ),
+    ) as ServerRuntime;
+    try {
+      const ordering: string[] = [];
+      class OrderingReceipts extends ReceiptBus {
+        override emit(name: ReceiptName, sessionId: string): void {
+          ordering.push("receipt");
+          super.emit(name, sessionId);
+        }
+      }
+      const sm = new SessionManager(runtime, new OrderingReceipts(false), () => {
+        ordering.push("meta");
+        throw new Error("persistence failed");
+      });
+      let failure: SessionCreationError | undefined;
+      try {
+        sm.create({ cwd: process.cwd(), plan: { kind: "parent" } });
+      } catch (error) {
+        expect(error).toBeInstanceOf(SessionCreationError);
+        failure = error as SessionCreationError;
+      }
+      expect(released).toBe(false);
+      await failure?.cleanup;
+      expect(released).toBe(true);
+      expect(exitHandled).toBe(1);
+      expect(ordering).toEqual(["receipt", "meta"]);
+      expect(sm.list()).toEqual([]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
 
   it("resume() destroys the half-built session when history seeding fails", async () => {
     const { runtime, exitHandledCalls } = makeFakeRuntime();

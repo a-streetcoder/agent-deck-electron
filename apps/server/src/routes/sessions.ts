@@ -10,13 +10,13 @@ import {
   createSessionWorktree,
   gitCommitAll,
   gitCommitsAhead,
+  gitDeleteOwnedWorktreeBranch,
   gitErrorText,
   gitMerge,
   gitWorktreeRemove,
-  isGitRepo,
   type GitWorktree,
 } from "../git.ts";
-import type { LaunchPlan } from "../SessionManager.ts";
+import { SessionCreationError, type LaunchPlan } from "../SessionManager.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 
@@ -354,28 +354,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       cwd = project.path;
     }
 
-    // Worktree isolation (native piAgentSessionsUseWorktree): when on and the
-    // project is a git repo, run this session in its own worktree on a fresh
-    // `agent-deck/session-<id>` branch so its work never touches the main
-    // checkout — the Merge action brings it back. Best-effort: any failure (not
-    // a repo, detached HEAD, git error) falls back to the project root.
+    // Resolve every non-mutating launch input before allocating a worktree. Once
+    // isolation is requested for a registered project it is mandatory: no
+    // validation failure may leave a branch/worktree behind, and no Git failure
+    // may silently redirect Pi into the primary checkout.
     let worktree: GitWorktree | null = null;
-    if (settings.get().worktreeIsolation && project && (await isGitRepo(project.path))) {
-      const suffix = randomUUID().slice(0, 8);
-      const target = nodePath.join(worktreesRoot, suffix);
-      try {
-        mkdirSync(worktreesRoot, { recursive: true }); // git worktree add won't create missing parents
-        worktree = await createSessionWorktree(
-          project.path,
-          target,
-          `agent-deck/session-${suffix}`,
-        );
-        cwd = target;
-      } catch {
-        // NEVER let a worktree failure (detached HEAD, not a branch, git error)
-        // fail the request — fall back to the project root (worktree stays null).
-      }
-    }
 
     // Resolve provider + model. Precedence: explicit request → the user's default
     // model (native onboarding preference) → env default. The default model is
@@ -497,18 +480,93 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       };
     }
 
-    const session = sessions.create({
-      cwd,
-      projectId: body.projectId,
-      agentName: body.agentName,
-      env: { ...defaults.env, ...body.env },
-      plan,
-      // Passed INTO create so the worktree fields land on the initial meta (and
-      // its first persist) atomically with cwd — no window where cwd points at a
-      // worktree that meta doesn't record.
-      ...(worktree ? { worktree } : {}),
-    });
-    index.upsert(session.meta);
-    return reply.status(201).send({ session: session.meta });
+    if (settings.get().worktreeIsolation && project) {
+      const suffix = randomUUID().slice(0, 8);
+      const target = nodePath.join(worktreesRoot, suffix);
+      try {
+        mkdirSync(worktreesRoot, { recursive: true }); // git worktree add won't create missing parents
+        // Deliberately attempt the operation directly. A repo precheck would
+        // collapse unavailable Git/non-repo into a silent primary-cwd fallback.
+        worktree = await createSessionWorktree(
+          project.path,
+          target,
+          `agent-deck/session-${suffix}`,
+        );
+        cwd = target;
+      } catch (error) {
+        return reply.status(409).send({
+          code: "worktree_isolation_failed",
+          error: `Session creation stopped because an isolated worktree couldn't be created: ${gitErrorText(error)} — Fix the project's Git state or disable worktree isolation, then try again.`,
+        });
+      }
+    }
+
+    let createdSession: ReturnType<typeof sessions.create> | undefined;
+    let announcementAttempted = false;
+    try {
+      const session = sessions.create({
+        cwd,
+        projectId: body.projectId,
+        agentName: body.agentName,
+        env: { ...defaults.env, ...body.env },
+        plan,
+        // Defer persistence/broadcast/receipt until create + immediate setup has
+        // completed. This gives the route a real commit point for the allocation.
+        deferAnnouncement: true,
+        ...(worktree ? { worktree } : {}),
+      });
+      createdSession = session;
+      announcementAttempted = true;
+      sessions.announceCreated(session);
+      return reply.status(201).send({ session: session.meta });
+    } catch (error) {
+      const partialId =
+        createdSession?.meta.id ??
+        (error instanceof SessionCreationError ? error.sessionId : undefined);
+      // A pre-return SessionCreationError owns its close promise; awaiting it is
+      // stronger than destroy(id), because launch may already have removed the
+      // map entry. Once create returned, this route owns the live session and
+      // destroy performs the exactly-once awaited close.
+      if (createdSession) await sessions.destroy(createdSession.meta.id).catch(() => {});
+      else if (error instanceof SessionCreationError) await error.cleanup;
+      if (partialId) bridgeTokens.delete(partialId);
+
+      // Only announcement can make this route own an index row. Never erase a
+      // stale/unrelated collision on a pre-return launch failure.
+      if (announcementAttempted && createdSession) {
+        const owned = createdSession.meta;
+        const indexed = index.find((meta) => meta.id === owned.id);
+        if (
+          indexed &&
+          indexed.createdAt === owned.createdAt &&
+          indexed.cwd === owned.cwd &&
+          indexed.projectId === owned.projectId
+        ) {
+          index.remove(owned.id);
+        }
+      }
+
+      // Pi cleanup must settle before worktree removal on Windows. The generated
+      // branch is then safe to delete; cleanup failures are logged but never
+      // replace the typed fail-closed response.
+      if (worktree && project) {
+        await gitWorktreeRemove(project.path, worktree.path).catch((cleanupError) => {
+          fastify.log.warn(
+            { err: cleanupError },
+            "failed to remove session worktree after startup",
+          );
+        });
+        await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
+          fastify.log.warn(
+            { err: cleanupError, branch: worktree?.branch },
+            "failed to remove generated session branch after startup",
+          );
+        });
+      }
+      return reply.status(500).send({
+        code: "session_creation_failed",
+        error: `The session couldn't be started or activated. Fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   });
 }

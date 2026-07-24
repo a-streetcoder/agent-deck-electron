@@ -1,5 +1,28 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseStatus } from "../src/git.ts";
+import { createSessionWorktree, parseStatus } from "../src/git.ts";
+
+function makeRepo(): string {
+  const repo = mkdtempSync(path.join(tmpdir(), "agent-deck-git-test-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  writeFileSync(path.join(repo, "README.md"), "test\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+  return repo;
+}
+
+function branches(repo: string): string[] {
+  return execFileSync("git", ["branch", "--format=%(refname:short)"], { cwd: repo })
+    .toString()
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+}
 
 describe("git porcelain parsing", () => {
   it("parses the branch and file changes", () => {
@@ -31,5 +54,32 @@ describe("git porcelain parsing", () => {
   it("a clean tree yields no files", () => {
     const out = parseStatus("## main...origin/main\n");
     expect(out.files).toEqual([]);
+  });
+});
+
+describe("session worktree branch ownership", () => {
+  it("removes the branch it created when worktree add fails", async () => {
+    const repo = makeRepo();
+    const target = path.join(repo, "occupied-target");
+    writeFileSync(target, "occupied\n");
+
+    await expect(
+      createSessionWorktree(repo, target, "agent-deck/session-failed-add"),
+    ).rejects.toThrow();
+
+    expect(branches(repo)).toEqual(["main"]);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("never deletes a pre-existing same-named branch", async () => {
+    const repo = makeRepo();
+    const branch = "agent-deck/session-existing";
+    execFileSync("git", ["branch", branch, "main"], { cwd: repo });
+    const target = path.join(repo, "target");
+
+    await expect(createSessionWorktree(repo, target, branch)).rejects.toThrow();
+
+    expect(branches(repo)).toEqual([branch, "main"]);
+    expect(existsSync(target)).toBe(false);
   });
 });

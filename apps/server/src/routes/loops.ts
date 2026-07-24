@@ -15,7 +15,13 @@ import {
   writeLoopFile,
 } from "@agent-deck/resources";
 import { z } from "zod";
-import { createSessionWorktree, gitWorktreeRemove, type GitWorktree } from "../git.ts";
+import {
+  createSessionWorktree,
+  gitDeleteOwnedWorktreeBranch,
+  gitWorktreeRemove,
+  type GitWorktree,
+} from "../git.ts";
+import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 
@@ -195,22 +201,76 @@ export function registerLoopRoutes(ctx: ServerContext): void {
       ...baseExtensions,
       ...enabledExtensionPaths(body.projectId),
     ]);
-    const parent = sessions.create({
-      cwd,
-      projectId: body.projectId,
-      env: { ...defaults.env, ...body.env },
-      plan: {
-        kind: "parent",
-        provider: body.provider ?? defaults.provider,
-        model: body.model ?? defaults.model,
-        extensions: finalizedBase.length > 0 ? finalizedBase : undefined,
-      },
-    });
-    const run = loopEngine.start(loop, cwd, {
-      projectId: body.projectId,
-      executeAgent: (definition) =>
-        sessions.runSubagent(parent.meta.id, definition.goal, definition.agentName || undefined),
-    });
+    let parent: ReturnType<typeof sessions.create> | undefined;
+    let run: ReturnType<typeof loopEngine.start> | undefined;
+    let announcementAttempted = false;
+    try {
+      parent = sessions.create({
+        cwd,
+        projectId: body.projectId,
+        env: { ...defaults.env, ...body.env },
+        plan: {
+          kind: "parent",
+          provider: body.provider ?? defaults.provider,
+          model: body.model ?? defaults.model,
+          extensions: finalizedBase.length > 0 ? finalizedBase : undefined,
+        },
+        // The transient parent becomes externally visible only after the engine
+        // has accepted the run, giving startup a rollback-safe commit point.
+        deferAnnouncement: true,
+      });
+      run = loopEngine.start(loop, cwd, {
+        projectId: body.projectId,
+        executeAgent: (definition) =>
+          sessions.runSubagent(parent!.meta.id, definition.goal, definition.agentName || undefined),
+      });
+      announcementAttempted = true;
+      sessions.announceCreated(parent);
+    } catch (error) {
+      if (run) {
+        loopEngine.stop(run.id);
+        // start() may already have dispatched executeAgent. Wait for that run to
+        // reach its terminal state before closing the parent/worktree it owns.
+        // The normal settled-finally path is installed only after announcement
+        // succeeds below, so rollback remains exactly once.
+        await loopEngine.settled(run.id).catch((cleanupError) => {
+          fastify.log.warn({ err: cleanupError }, "failed waiting for Loop startup rollback");
+        });
+      }
+      if (parent) await sessions.destroy(parent.meta.id).catch(() => {});
+      else if (error instanceof SessionCreationError) await error.cleanup;
+      const partialId =
+        parent?.meta.id ?? (error instanceof SessionCreationError ? error.sessionId : undefined);
+      if (partialId) bridgeTokens.delete(partialId);
+      if (announcementAttempted && parent) {
+        const owned = parent.meta;
+        const indexed = index.find((meta) => meta.id === owned.id);
+        if (
+          indexed &&
+          indexed.createdAt === owned.createdAt &&
+          indexed.cwd === owned.cwd &&
+          indexed.projectId === owned.projectId
+        ) {
+          index.remove(owned.id);
+          broadcast({ type: "session_removed", sessionId: owned.id });
+        }
+      }
+      if (worktree) {
+        await gitWorktreeRemove(project.path, worktree.path).catch((cleanupError) => {
+          fastify.log.warn({ err: cleanupError }, "failed to remove Loop worktree after startup");
+        });
+        await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
+          fastify.log.warn(
+            { err: cleanupError, branch: worktree?.branch },
+            "failed to remove generated Loop branch after startup",
+          );
+        });
+      }
+      return reply.status(500).send({
+        code: "loop_start_failed",
+        error: `The Loop couldn't be started safely. Transient cleanup was attempted; fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
     // Tear down the transient parent session once the run reaches a terminal
     // state (whatever the outcome): stop the pi process AND drop it from the
     // session index/list so this internal helper never surfaces in the UI.

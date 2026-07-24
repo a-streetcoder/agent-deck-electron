@@ -40,11 +40,11 @@ Electron has a real and broad cross-platform product. Core Pi sessions stream in
 It is **not at full native functional parity**.
 
 - **Five P0 gaps, safely gated:** saved Maker+Checker, Agent Pipeline, Parallel Agents, Discovery/Triage, and Human Approval definitions remain readable, editable only through an explicit conversion, and deletable, but cannot be created, duplicated, or run. New definitions offer only Single agent. Their engines are still missing; the gate prevents silent single-agent misexecution but does not resolve LOOP-01..05.
-- **P1 safety risks:** resource writes can follow symlinks; **legacy copy-mode** skill updates can overwrite locally edited non-`SKILL.md` files; collection-root checks are only lexical; requested session worktree isolation can silently fall back; release preflight lacks remote synchronization checks. New `collection-v1` imports instead fail closed whenever `git status --porcelain` is dirty, protecting tracked and untracked collection changes.
+- **P1 safety risks:** resource writes can follow symlinks; **legacy copy-mode** skill updates can overwrite locally edited non-`SKILL.md` files; collection-root checks are only lexical; release preflight lacks remote synchronization checks. New `collection-v1` imports and requested project-session worktree isolation now fail closed when their safety boundary cannot be established.
 - **P1 workflow gaps:** running-turn steering is unavailable in the renderer; transcript attachment fidelity is incomplete; per-message fork/rerun is absent; durable child/Loop records and reviewable Loop worktrees are absent.
 - **Distribution is only partly cross-platform:** the macOS DMG and bundled Pi are real. App updates, independent Pi updates, and Windows/Linux release/sign/update pipelines remain absent.
 
-The honest release sequence is: implement the five safely gated Loop structures, close data and isolation hazards, add durable orchestration/session records, then complete portable update and catalog depth.
+The honest release sequence is: implement the five safely gated Loop structures, close the remaining data and release hazards, add durable orchestration/session records, then complete portable update and catalog depth.
 
 ## Gaps closed or aligned by current working-tree changes
 
@@ -360,7 +360,6 @@ Each row is one distinct user behavior or safety difference. “Plain English”
 
 | ID     | Priority | Status    | Difference                           | Plain English                                                                      | Why it matters                                                                 | Evidence                                                                |
 | ------ | -------- | --------- | ------------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| GIT-01 | **P1**   | Unsafe    | Silent session isolation fallback    | If worktree creation fails, Electron runs in the main project folder.              | A user who asked for isolation may unknowingly expose the primary checkout.    | **E:** `routes/sessions.ts`. **N:** worktree service.                   |
 | GIT-02 | **P2**   | Partial   | Branch uniqueness/fallback reporting | Electron generates a short unique branch suffix but hides fallback/failure detail. | Users cannot tell whether isolation really succeeded or why it did not.        | **E:** session worktree route/helpers. **N:** worktree service.         |
 | GIT-03 | **P1**   | Partial   | Parent worktree preflight            | Merge does not explicitly block every dirty-parent state before mutation.          | A merge can fail late or mix with unrelated work.                              | **E:** merge route/git helper. **N:** worktree/merge service.           |
 | GIT-04 | **P1**   | Partial   | Source branch preflight              | Source existence/current-state checks are thinner.                                 | A stale or missing source branch can produce confusing failure.                | Same as GIT-03.                                                         |
