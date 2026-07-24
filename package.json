@@ -12,9 +12,10 @@
   "scripts": {
     "dev": "pnpm --filter @agent-deck/desktop dev",
     "dev:onboarding-empty": "node scripts/dev-onboarding-empty.mjs",
-    "build": "pnpm build:web && pnpm build:backend",
+    "build": "pnpm build:web && pnpm build:backend && pnpm build:pi-runtime",
     "build:web": "pnpm --filter @agent-deck/web build",
     "build:backend": "node scripts/build-backend.mjs",
+    "build:pi-runtime": "node scripts/build-pi-runtime.mjs",
     "generate:icons": "bash scripts/generate-icons.sh",
     "pack:mac": "pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.hardenedRuntime=false",
     "release:mac": "pnpm build && electron-builder --mac dmg --arm64",

@@ -115,15 +115,15 @@ interface HealthCheck {
 }
 
 const EMPTY_SETUP_CHECKS: HealthCheck[] = [
+  { id: "pi-binary", label: "Pi", status: "ok", detail: "Included with Agent Deck" },
+  { id: "pi-version", label: "Pi version", status: "ok", detail: "0.80.3" },
   {
-    id: "pi-binary",
-    label: "Pi",
-    status: "error",
-    detail: "Pi needs to be installed",
-    fixCommand: "npm install -g @earendil-works/pi-coding-agent",
+    id: "node",
+    label: "Built-in runtime",
+    status: "ok",
+    detail: "Included with Agent Deck",
   },
-  { id: "node", label: "Built-in runtime", status: "error", detail: "Runtime unavailable" },
-  { id: "bash", label: "Shell tools", status: "error", detail: "Shell tools unavailable" },
+  { id: "bash", label: "Shell tools", status: "ok", detail: "Ready" },
   { id: "git", label: "Git", status: "warn", detail: "Git is not installed" },
   { id: "github", label: "GitHub", status: "warn", detail: "GitHub is not connected" },
   {
@@ -518,7 +518,11 @@ export function OnboardingOverlay() {
                     ) : (
                       <Stethoscope size={15} />
                     )}
-                    {checksLoading ? "Checking your setup…" : "Automatic setup check"}
+                    {checksLoading
+                      ? "Initializing Agent Deck…"
+                      : setupReady
+                        ? "Agent Deck is ready"
+                        : "Almost ready"}
                   </div>
                   <p className="mt-1 text-xs text-text-muted">
                     {setupReady
@@ -557,6 +561,10 @@ export function OnboardingOverlay() {
                   )
                   .map((check) => {
                     const { label, Icon, color } = STATUS_META[check.status];
+                    const statusLabel =
+                      requiredSetupIds.includes(check.id) && check.status !== "ok"
+                        ? "Needs setup"
+                        : label;
                     return (
                       <div
                         key={check.id}
@@ -569,7 +577,7 @@ export function OnboardingOverlay() {
                               {summaryCheckLabel(check.id)}
                             </span>
                             <span className="text-[9px] uppercase tracking-wide" style={{ color }}>
-                              {label}
+                              {statusLabel}
                             </span>
                           </div>
                           <div
@@ -721,7 +729,12 @@ export function OnboardingOverlay() {
                 Connect an AI model provider, then return to re-check setup.
               </span>
             </div>
-            <ProvidersScreen />
+            <ProvidersScreen
+              onProviderConnected={() => {
+                runChecks();
+                setPhase("tour");
+              }}
+            />
           </div>
         ) : null}
 

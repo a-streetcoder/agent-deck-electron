@@ -20,6 +20,13 @@ asarUnpack:
 extraResources:
   - from: packages/resources/builtin-agents
     to: builtin-agents
+  - from: build/pi-runtime/node_modules
+    to: pi-runtime/node_modules
+    filter:
+      - "**/*"
+      - "!.pnpm/**"
+  - from: build/pi-runtime/node_modules/.pnpm
+    to: pi-runtime/node_modules/.pnpm
 
 mac:
   category: public.app-category.developer-tools

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 release/
+build/pi-runtime/
 coverage/
 *.tsbuildinfo
 .eslintcache

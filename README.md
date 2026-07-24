@@ -71,9 +71,9 @@ pnpm pack:mac
 ```
 
 The result is `release/mac-arm64/Agent Deck.app`. It contains the compiled web
-interface, a bundled backend, immutable built-in agents, and the Electron-rebuilt
-`node-pty` native module. The separately installed `pi` CLI is discovered from
-the user's environment and standard Homebrew/npm locations.
+interface, a bundled backend, immutable built-in agents, the pinned Pi runtime,
+and the Electron-rebuilt `node-pty` native module. Packaged builds run Pi with
+Electron's embedded Node runtime, so users do not need to install Node, npm, or Pi separately.
 
 The manually triggered **Release macOS** GitHub workflow builds either an arm64
 or x64 DMG, signs the application with Developer ID, notarizes both the

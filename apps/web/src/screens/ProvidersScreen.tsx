@@ -23,7 +23,9 @@ interface ProviderEntry {
   signedIn: boolean;
 }
 
-export function ProvidersScreen() {
+export function ProvidersScreen({
+  onProviderConnected,
+}: { onProviderConnected?: () => void } = {}) {
   const setError = useAppStore((state) => state.setError);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
@@ -69,12 +71,12 @@ export function ProvidersScreen() {
             className="text-base font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
-            Providers
+            Connect an AI model
           </h2>
         </div>
         <p className="pb-3 text-xs text-text-muted">
-          Model-provider sign-in status, read from your global auth. Set an API key on the
-          Environment screen; interactive browser sign-in is coming to the app.
+          Choose a service you already use. Agent Deck will guide you through its secure sign-in
+          flow without exposing your credentials.
         </p>
 
         <div className="space-y-1.5" data-testid="provider-list">
@@ -153,7 +155,10 @@ export function ProvidersScreen() {
         <ProviderLoginSheet
           provider={loginProvider}
           onClose={() => setLoginProvider(null)}
-          onDone={() => void load()}
+          onDone={() => {
+            void load();
+            onProviderConnected?.();
+          }}
         />
       ) : null}
     </div>

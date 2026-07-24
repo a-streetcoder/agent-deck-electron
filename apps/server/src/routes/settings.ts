@@ -88,7 +88,21 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
-  fastify.get("/runtime/doctor", async () => ({ report: await runDoctor(resourceHome()) }));
+  fastify.get("/runtime/doctor", async () => {
+    const report = await runDoctor(resourceHome());
+    const connectedProviders = listProviders(rootsFor()).filter(
+      (provider) => provider.signedIn || provider.configured,
+    );
+    const authCheck = report.checks.find((check) => check.id === "auth");
+    if (authCheck && connectedProviders.length > 0) {
+      authCheck.status = "ok";
+      authCheck.detail = `${connectedProviders.length} connected: ${connectedProviders
+        .map((provider) => provider.name)
+        .join(", ")}`;
+      delete authCheck.fixCommand;
+    }
+    return { report };
+  });
 
   // Provider auth (native provider-login surface): the OAuth-capable model
   // providers pi knows about, plus each one's sign-in status read from the

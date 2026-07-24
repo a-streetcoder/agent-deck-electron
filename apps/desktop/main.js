@@ -6,6 +6,7 @@
 // serve the renderer same-origin.
 
 import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
@@ -39,6 +40,45 @@ function pnpmCommand() {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
+/**
+ * Create a tiny platform launcher for the pinned Pi bundled in the app. Pi is a
+ * Node CLI, so packaged builds execute it with Electron's embedded Node runtime
+ * instead of depending on a system Node/npm installation.
+ */
+function bundledPiLauncher() {
+  const cli = path.join(
+    process.resourcesPath,
+    "pi-runtime",
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+    "cli.js",
+  );
+  const launcherDir = path.join(app.getPath("userData"), "runtime");
+  mkdirSync(launcherDir, { recursive: true });
+
+  if (process.platform === "win32") {
+    const launcher = path.join(launcherDir, "pi.cmd");
+    writeFileSync(
+      launcher,
+      `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${cli}" %*\r\n`,
+      "utf8",
+    );
+    return launcher;
+  }
+
+  const launcher = path.join(launcherDir, "pi");
+  const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+  writeFileSync(
+    launcher,
+    `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${quote(process.execPath)} ${quote(cli)} "$@"\n`,
+    "utf8",
+  );
+  chmodSync(launcher, 0o755);
+  return launcher;
+}
+
 /** The command and environment used by the backend owned by this Electron process. */
 function ownedServerLaunch() {
   if (!app.isPackaged) {
@@ -60,6 +100,7 @@ function ownedServerLaunch() {
       ELECTRON_RUN_AS_NODE: "1",
       PORT: "0",
       AGENT_DECK_DATA_DIR: app.getPath("userData"),
+      AGENT_DECK_PI_PATH: bundledPiLauncher(),
       AGENT_DECK_WEB_DIST: path.join(app.getAppPath(), "apps", "web", "dist"),
       AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(process.resourcesPath, "builtin-agents"),
     },
