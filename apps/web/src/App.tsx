@@ -177,9 +177,13 @@ export function App() {
         onToggleSidebar={() => setSidebarVisible((visible) => !visible)}
       />
       <div
-        className={cn("flex min-h-0 flex-1", integratedDesktopChrome && "bg-surface-elevated")}
+        className={cn(
+          "relative flex min-h-0 flex-1",
+          integratedDesktopChrome && "bg-surface-elevated",
+        )}
         data-testid="workspace-row"
       >
+        <OnboardingOverlay />
         {sidebarVisible ? (
           <>
             <Sidebar width={sidebar.width} />
@@ -392,7 +396,6 @@ export function App() {
           ) : null}
 
           <main className="relative min-h-0 flex-1">
-            <OnboardingOverlay />
             {/* Chat layer: always mounted. */}
             <div
               className="absolute inset-0"

@@ -29,6 +29,11 @@ test("walks the tour, runs the setup check, and finishes from the final step", a
   await expect(overlay).toBeVisible();
   await expect(overlay).not.toHaveAttribute("role", "dialog");
   await expect(page.getByTestId("onboarding-setup-summary")).toBeVisible();
+  const [onboardingBox, workspaceBox] = await Promise.all([
+    overlay.boundingBox(),
+    page.getByTestId("workspace-row").boundingBox(),
+  ]);
+  expect(onboardingBox).toEqual(workspaceBox);
 
   // Tour: the native illustration + title, advancing through the pages.
   await expect(page.getByTestId("onboarding-image")).toBeVisible();

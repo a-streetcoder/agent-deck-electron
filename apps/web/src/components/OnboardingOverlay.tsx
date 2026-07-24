@@ -326,7 +326,7 @@ export function OnboardingOverlay() {
 
   return (
     <section
-      className="absolute inset-0 z-20 overflow-y-auto bg-surface"
+      className="absolute inset-0 z-[100] overflow-y-auto bg-surface"
       data-testid="onboarding"
       aria-label="Welcome to Agent Deck"
     >
