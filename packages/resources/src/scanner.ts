@@ -68,19 +68,33 @@ export function parseAgentFile(
   };
 }
 
+function agentMarkdownFiles(dir: string): string[] {
+  const files: string[] = [];
+  const walk = (current: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      // Native excludes every markdown file under a `skills` path component.
+      if (entry.isDirectory()) {
+        if (entry.name !== "skills") walk(path.join(current, entry.name));
+      } else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "SKILL.md") {
+        files.push(path.join(current, entry.name));
+      }
+    }
+  };
+  walk(dir);
+  return files;
+}
+
 export function scanAgents(roots: ResourceRoots): AgentInfo[] {
   const overrides = readAgentOverrides(roots);
   const raw: Omit<AgentInfo, "shadowed" | "replacesBuiltin">[] = [];
   for (const { dir, scope } of agentCatalogDirs(roots)) {
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue; // catalog dir doesn't exist
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith(".md")) continue;
-      const filePath = path.join(dir, entry);
+    for (const filePath of agentMarkdownFiles(dir)) {
       try {
         let agent = parseAgentFile(filePath, readFileSync(filePath, "utf8"), scope);
         // Builtin edits live as diff-shaped overrides — the file is pristine.
@@ -137,27 +151,52 @@ export function scanPrompts(roots: ResourceRoots): PromptInfo[] {
   return prompts.sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope));
 }
 
-export function scanSkills(roots: ResourceRoots): SkillInfo[] {
+function toSkillInfo(
+  skill: ReturnType<typeof loadSkillsFromDir>["skills"][number],
+  scope: ResourceScope,
+): SkillInfo {
+  let body = "";
+  try {
+    body = parseFrontmatter(readFileSync(skill.filePath, "utf8")).body.trim();
+  } catch {
+    // Unreadable — leave the body empty.
+  }
+  return {
+    name: skill.name,
+    description: skill.description,
+    scope,
+    filePath: skill.filePath,
+    baseDir: skill.baseDir,
+    disableModelInvocation: skill.disableModelInvocation,
+    body,
+  };
+}
+
+/** Standard catalogs followed by selected in-place collection roots. The first
+ * name wins, so a standard catalog deterministically shadows a collection. */
+export function scanSkills(
+  roots: ResourceRoots,
+  collectionRoots: readonly string[] = [],
+): SkillInfo[] {
   const skills: SkillInfo[] = [];
+  const names = new Set<string>();
   for (const { dir, scope } of skillCatalogDirs(roots)) {
     const result = loadSkillsFromDir({ dir, source: scope });
     for (const skill of result.skills) {
-      let body = "";
-      try {
-        body = parseFrontmatter(readFileSync(skill.filePath, "utf8")).body.trim();
-      } catch {
-        // Unreadable — leave the body empty.
-      }
-      skills.push({
-        name: skill.name,
-        description: skill.description,
-        scope,
-        filePath: skill.filePath,
-        baseDir: skill.baseDir,
-        disableModelInvocation: skill.disableModelInvocation,
-        body,
-      });
+      if (names.has(skill.name)) continue;
+      names.add(skill.name);
+      skills.push(toSkillInfo(skill, scope));
     }
+  }
+  for (const root of collectionRoots) {
+    const resolvedRoot = path.resolve(root);
+    const result = loadSkillsFromDir({ dir: path.dirname(resolvedRoot), source: "library" });
+    const skill = result.skills.find(
+      (candidate) => path.resolve(candidate.baseDir) === resolvedRoot,
+    );
+    if (!skill || names.has(skill.name)) continue;
+    names.add(skill.name);
+    skills.push(toSkillInfo(skill, "library"));
   }
   return skills;
 }

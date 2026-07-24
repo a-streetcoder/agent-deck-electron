@@ -5,11 +5,13 @@ import nodePath from "node:path";
 import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
 import { extensionBridgeConflict } from "@agent-deck/domain";
 import {
+  addResourceWatchPaths,
   appendSystemPromptPath,
   defaultRoots,
   ensureDirs,
   projectWatchDirs,
   readMcpServers,
+  removeResourceWatchPaths,
   scanAgents,
   scanExtensions,
   scanSkills,
@@ -68,6 +70,11 @@ import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
+import {
+  resolveManagedPath,
+  resolveManagedSkillRoot,
+  skillRepositoriesRoot as defaultSkillRepositoriesRoot,
+} from "./skillRepositories.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
 import { setupWebSocket } from "./wsHandler.ts";
@@ -147,6 +154,8 @@ export interface StartServerOptions {
    * on-device embedder; absent both, recall stays lexical+fuzzy (the default).
    */
   memoryEmbedder?: Embedder;
+  /** Fixed-root override for hermetic tests only; never exposed as a user setting. */
+  skillRepositoriesRoot?: string;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -213,9 +222,10 @@ async function initServer(
   // the data dir, NOT tmp, so a live session's isolated checkout survives + is
   // never swept by an OS temp cleanup.
   const worktreesRoot = nodePath.join(options.dataDir ?? defaultDataDir(), "session-worktrees");
-  // Persistent clones of git-imported skill repos, kept for re-sync (native
-  // SkillRepositorySyncService keeps the clone; the copy lands in the catalog).
-  const skillReposRoot = nodePath.join(options.dataDir ?? defaultDataDir(), "skill-repos");
+  // Native-compatible app-managed in-place skill collections. Existing legacy
+  // records keep their historical clone paths; only new imports use this root.
+  const skillReposRoot =
+    options.skillRepositoriesRoot ?? defaultSkillRepositoriesRoot({ home: homedir() });
 
   // Recall engine. Lexical+fuzzy is the always-on default; SEMANTIC recall is
   // opt-in — an injected embedder (tests) or AGENT_DECK_SEMANTIC_MEMORY=1 (which
@@ -452,7 +462,7 @@ async function initServer(
     const agent = scanAgents(roots).find((a) => a.name === name && !a.shadowed);
     if (!agent) return { status: "not_found" };
     if (agent.disabled) return { status: "disabled" };
-    const skillsByName = new Map(scanSkills(roots).map((s) => [s.name, s]));
+    const skillsByName = new Map(scanSkillsFor(projectId).map((s) => [s.name, s]));
     const disabledSkills = new Set(settings.get().disabledSkills);
     const skillDirs = (agent.skills ?? [])
       .filter((skillName) => !disabledSkills.has(skillName)) // disabled skills never inject
@@ -576,6 +586,20 @@ async function initServer(
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
+  const persistedCollectionSkillRoots = (): string[] =>
+    settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths);
+  const collectionSkillRootsForScan = (): string[] =>
+    persistedCollectionSkillRoots().flatMap((root) => {
+      const safe = resolveManagedSkillRoot(skillReposRoot, root);
+      return safe ? [safe] : [];
+    });
+  const collectionSkillRootsForWatch = (): string[] =>
+    persistedCollectionSkillRoots().flatMap((root) => {
+      const safe = resolveManagedPath(skillReposRoot, root, { allowMissing: true });
+      return safe ? [safe] : [];
+    });
+  const scanSkillsFor = (projectId?: string) =>
+    scanSkills(rootsFor(projectId), collectionSkillRootsForScan());
 
   // The MCP-server allowlist for a session (native explicit-assignment model):
   // a PLAIN session (no agent) is unrestricted — undefined → all configured
@@ -653,11 +677,13 @@ async function initServer(
   const resourceWatcher = watchResources({ home: resourceHome() }, () =>
     broadcast({ type: "resources_changed" }),
   );
+  addResourceWatchPaths(resourceWatcher, collectionSkillRootsForWatch());
   const watchedProjects = new Set<string>();
   const watchProject = (projectPath: string): void => {
     if (watchedProjects.has(projectPath)) return;
     watchedProjects.add(projectPath);
-    resourceWatcher.add(ensureDirs(projectWatchDirs(projectPath)));
+    const dirs = projectWatchDirs(projectPath);
+    if (dirs.length > 0) resourceWatcher.add(ensureDirs(dirs));
   };
   for (const project of projects.list()) watchProject(project.path);
 
@@ -689,6 +715,9 @@ async function initServer(
     enabledExtensionPaths,
     resourceHome,
     rootsFor,
+    scanSkillsFor,
+    watchSkillRoots: (paths) => addResourceWatchPaths(resourceWatcher, paths),
+    unwatchSkillRoots: (paths) => removeResourceWatchPaths(resourceWatcher, paths),
     broadcast,
     watchProject,
     dropDiffCache: (sessionId) => diffs.drop(sessionId),

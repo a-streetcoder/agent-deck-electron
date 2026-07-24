@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { PromptInfo } from "@agent-deck/domain";
-import { listProjectFiles, scanPrompts, scanSkills } from "@agent-deck/resources";
+import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
 import { z } from "zod";
 import {
   createSessionWorktree,
@@ -49,6 +49,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     worktreesRoot,
     broadcast,
     rootsFor,
+    scanSkillsFor,
     resolveNamedAgent,
     enabledExtensionPaths,
     dropDiffCache,
@@ -417,10 +418,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         (name) => !disabledSkills.has(name), // disabled skills are never injected
       );
       if (names.length > 0) {
-        // scanSkills lists global catalogs first and the project catalog
-        // last; the Map keeps the LAST entry per name, so a project skill
-        // deliberately wins a name collision with a global one.
-        const skillsByName = new Map(scanSkills(rootsFor(body.projectId)).map((s) => [s.name, s]));
+        // Combined discovery is already deterministic: standard catalogs win
+        // same-name collisions over read-only in-place collections.
+        const skillsByName = new Map(scanSkillsFor(body.projectId).map((s) => [s.name, s]));
         const missing = [...new Set(names)].filter((name) => !skillsByName.has(name));
         if (missing.length > 0) {
           fastify.log.warn({ missing }, "assigned skills not found in catalog");

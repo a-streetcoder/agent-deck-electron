@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -23,17 +24,31 @@ import {
 } from "./paths.ts";
 
 /**
- * File writers for global/project agents and skills. Existing files keep
+ * File writers for global/library agents and prompts, plus global skills. Existing files keep
  * their unknown frontmatter fields: we parse, merge only the edited keys,
  * and re-serialize. Builtins are handled by overrides.ts, never here.
  */
 
-export type WritableScope = "global" | "project";
+export type WritableScope = "global" | "library" | "project";
 
 function agentDirFor(roots: ResourceRoots, scope: WritableScope): string {
-  const dir = agentCatalogDirs(roots).find((d) => d.scope === scope && !d.legacy)?.dir;
-  if (!dir) throw new Error(`no ${scope} agent directory (is a project selected?)`);
-  return dir;
+  const catalogs = agentCatalogDirs(roots).filter((d) => d.scope === scope);
+  if (scope === "global") {
+    const legacy = catalogs.find((d) => d.legacy)?.dir;
+    if (legacy) {
+      try {
+        if (statSync(legacy).isDirectory()) return legacy;
+      } catch {
+        // A missing legacy catalog must not be created just to hold a new agent.
+      }
+    }
+    const modern = catalogs.find((d) => !d.legacy)?.dir;
+    if (modern) return modern;
+  } else {
+    const dir = catalogs[0]?.dir;
+    if (dir) return dir;
+  }
+  throw new Error(`no ${scope} agent directory`);
 }
 
 function skillDirFor(roots: ResourceRoots, scope: WritableScope): string {
@@ -42,14 +57,53 @@ function skillDirFor(roots: ResourceRoots, scope: WritableScope): string {
   return dir;
 }
 
-/** Defense-in-depth: the resolved .md must stay inside the agent catalog. */
-function agentFilePath(roots: ResourceRoots, scope: WritableScope, name: string): string {
-  const dir = agentDirFor(roots, scope);
+function safeAgentPath(dir: string, name: string): string {
   const filePath = path.join(dir, `${name}.md`);
   if (!path.resolve(filePath).startsWith(path.resolve(dir) + path.sep)) {
     throw new Error("refusing to write outside the agent catalog");
   }
   return filePath;
+}
+
+function existingAgentSources(dir: string, name: string): string[] {
+  const found: string[] = [];
+  const walk = (current: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "skills") walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "SKILL.md") {
+        try {
+          const parsed = parseFrontmatter(readFileSync(full, "utf8"));
+          const parsedName =
+            typeof parsed.frontmatter.name === "string" && parsed.frontmatter.name.trim()
+              ? parsed.frontmatter.name.trim()
+              : path.basename(entry.name, ".md");
+          if (parsedName === name) found.push(full);
+        } catch {
+          // A malformed file is not a managed agent source.
+        }
+      }
+    }
+  };
+  walk(dir);
+  return found;
+}
+
+/** Resolve an existing source before applying the catalog's new-file destination. */
+function agentFilePath(roots: ResourceRoots, scope: WritableScope, name: string): string {
+  if (scope === "project") return safeAgentPath(agentDirFor(roots, scope), name);
+  const existing = agentCatalogDirs(roots)
+    .filter((catalog) => catalog.scope === scope)
+    .flatMap((catalog) => existingAgentSources(catalog.dir, name));
+  if (existing.length > 1) throw new Error("agent_ambiguous");
+  return existing[0] ?? safeAgentPath(agentDirFor(roots, scope), name);
 }
 
 function promptDirFor(roots: ResourceRoots, scope: WritableScope): string {
@@ -96,7 +150,7 @@ export function writePromptFile(
   return filePath;
 }
 
-/** Delete a global/project prompt-template .md file. */
+/** Delete a global/library prompt-template .md file. */
 export function deletePromptFile(roots: ResourceRoots, scope: WritableScope, name: string): void {
   rmSync(promptFilePath(roots, scope, name), { force: true });
 }
@@ -209,8 +263,8 @@ export function writeAgentFile(
   name: string,
   edit: AgentEdit,
 ): string {
-  const dir = agentDirFor(roots, scope);
-  const filePath = path.join(dir, `${name}.md`);
+  const filePath = agentFilePath(roots, scope, name);
+  const dir = path.dirname(filePath);
 
   let frontmatter: Record<string, unknown> = {};
   let body = "";
@@ -285,14 +339,13 @@ export function writeSkillFile(
   return filePath;
 }
 
-/** Delete a global/project agent's .md file. Builtins are never touched here. */
+/** Delete a global/library agent's .md file. Builtins are never touched here. */
 export function deleteAgentFile(roots: ResourceRoots, scope: WritableScope, name: string): void {
-  const filePath = path.join(agentDirFor(roots, scope), `${name}.md`);
-  rmSync(filePath, { force: true });
+  rmSync(agentFilePath(roots, scope, name), { force: true });
 }
 
 /**
- * Rename a global/project agent's .md file, preserving its body + frontmatter
+ * Rename a global/library agent's .md file, preserving its body + frontmatter
  * and syncing the `name` field. Builtins can't be renamed (their name is the
  * override key). Throws "agent_not_found" / "agent_exists" (→ 404 / 409); the
  * caller is responsible for re-pointing any project defaults at the new name.
@@ -303,23 +356,27 @@ export function renameAgentFile(
   name: string,
   newName: string,
 ): string {
-  return renameMarkdownFile(
-    agentFilePath(roots, scope, name),
-    agentFilePath(roots, scope, newName),
-    agentDirFor(roots, scope),
-    "agent",
-    newName,
-  );
+  const from = agentFilePath(roots, scope, name);
+  const dir = path.dirname(from);
+  const to = safeAgentPath(dir, newName);
+  if (scope === "global" || scope === "library") {
+    const conflict = agentCatalogDirs(roots)
+      .filter((catalog) => catalog.scope === scope)
+      .flatMap((catalog) => existingAgentSources(catalog.dir, newName))
+      .find((candidate) => candidate !== from);
+    if (conflict && !isSameFile(conflict, from)) throw new Error("agent_exists");
+  }
+  return renameMarkdownFile(from, to, dir, "agent", newName);
 }
 
-/** Set the `disabled` frontmatter flag on a global/project agent file. */
+/** Set the `disabled` frontmatter flag on a global/library agent file. */
 export function setAgentDisabledFile(
   roots: ResourceRoots,
   scope: WritableScope,
   name: string,
   disabled: boolean,
 ): void {
-  const filePath = path.join(agentDirFor(roots, scope), `${name}.md`);
+  const filePath = agentFilePath(roots, scope, name);
   const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
   const frontmatter: Record<string, unknown> = { ...existing.frontmatter };
   if (disabled) frontmatter.disabled = true;
@@ -421,7 +478,8 @@ function rawBodyAfterFrontmatter(content: string): string {
   return match ? content.slice(match[0].length) : content;
 }
 
-/** Recursively find directories that contain a SKILL.md (skipping .git / node_modules). */
+/** Recursively find top-level skill roots (nested SKILL.md files belong to
+ * their containing skill), skipping symlinks and dependency metadata. */
 function findSkillDirs(root: string): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
@@ -431,13 +489,14 @@ function findSkillDirs(root: string): string[] {
     } catch {
       return;
     }
-    if (entries.includes("SKILL.md")) found.push(dir);
+    if (entries.includes("SKILL.md")) {
+      found.push(dir);
+      return;
+    }
     for (const entry of entries) {
       if (entry === ".git" || entry === "node_modules") continue;
       const full = path.join(dir, entry);
       try {
-        // lstat (not stat): a symlinked directory returns false for isDirectory,
-        // so we never follow a symlink out of the clone or into a symlink cycle.
         if (lstatSync(full).isDirectory()) walk(full);
       } catch {
         // Unreadable entry — skip.
@@ -446,6 +505,36 @@ function findSkillDirs(root: string): string[] {
   };
   walk(root);
   return found;
+}
+
+export interface DiscoveredSkillRoot {
+  name: string;
+  relativePath: string;
+  rootPath: string;
+}
+
+/** Import-all discovery for an in-place cloned collection. */
+export function discoverSkillRoots(
+  cloneDir: string,
+  acceptRoot: (rootPath: string) => boolean = () => true,
+): DiscoveredSkillRoot[] {
+  return findSkillDirs(cloneDir)
+    .filter(acceptRoot)
+    .map((rootPath) => {
+      const relativePath = path.relative(cloneDir, rootPath);
+      let name = path.basename(rootPath);
+      try {
+        const frontmatter = parseFrontmatter(
+          readFileSync(path.join(rootPath, "SKILL.md"), "utf8"),
+        ).frontmatter;
+        if (typeof frontmatter.name === "string" && frontmatter.name.trim()) {
+          name = frontmatter.name.trim();
+        }
+      } catch {
+        // Directory basename fallback.
+      }
+      return { name, relativePath: relativePath === "" ? "" : relativePath, rootPath };
+    });
 }
 
 export interface SkillImportResult {

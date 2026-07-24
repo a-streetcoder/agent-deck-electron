@@ -36,7 +36,12 @@ export {
   scanSkills,
   type DiscoveredExtension,
 } from "./scanner.ts";
-export { ensureDirs, watchResources } from "./watcher.ts";
+export {
+  addResourceWatchPaths,
+  ensureDirs,
+  removeResourceWatchPaths,
+  watchResources,
+} from "./watcher.ts";
 export {
   applyAgentOverride,
   computeBuiltinOverride,
@@ -60,7 +65,9 @@ export {
   renameSkillDir,
   importSkillFile,
   importSkillsFromClone,
+  discoverSkillRoots,
   skillMdHash,
+  type DiscoveredSkillRoot,
   type SkillImportResult,
   type WritableScope,
 } from "./writer.ts";

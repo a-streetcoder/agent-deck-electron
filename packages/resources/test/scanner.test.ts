@@ -28,54 +28,125 @@ describe("scanAgents", () => {
     expect(names).toEqual(expect.arrayContaining(["coder", "explorer", "planner", "reviewer"]));
   });
 
-  it("scans global and project catalogs with correct scopes", () => {
+  it("scans only global catalogs and gives legacy same-name agents precedence", () => {
     const home = makeHome();
     const project = makeProject();
-    writeAgent(path.join(home, ".pi", "agent", "agents"), "globby");
-    writeAgent(path.join(project, ".pi", "agents"), "projy");
+    writeAgent(path.join(home, ".agents"), "shared", "tools: read\n");
+    writeAgent(path.join(home, ".pi", "agent", "agents"), "shared", "tools: grep\n");
+    writeAgent(path.join(project, ".pi", "agents"), "project-pi");
+    writeAgent(path.join(project, ".agents"), "project-legacy");
+
     const agents = scanAgents({ home, projectPath: project });
-    expect(agents.find((a) => a.name === "globby")).toMatchObject({ scope: "global" });
-    expect(agents.find((a) => a.name === "projy")).toMatchObject({ scope: "project" });
+    const shared = agents.filter((a) => a.name === "shared");
+    expect(shared).toHaveLength(2);
+    expect(shared[0]).toMatchObject({ scope: "global", tools: ["read"], shadowed: false });
+    expect(shared[1]).toMatchObject({ scope: "global", tools: ["grep"], shadowed: true });
+    expect(agents.some((a) => a.name === "project-pi")).toBe(false);
+    expect(agents.some((a) => a.name === "project-legacy")).toBe(false);
   });
 
-  it("parses comma-separated tools and marks shadowing (project > builtin)", () => {
+  it("discovers nested agents while excluding skills content", () => {
     const home = makeHome();
-    const project = makeProject();
-    writeAgent(path.join(project, ".pi", "agents"), "reviewer", "tools: read, grep\n");
-    const agents = scanAgents({ home, projectPath: project });
-    const projectReviewer = agents.find((a) => a.name === "reviewer" && a.scope === "project")!;
+    writeAgent(path.join(home, ".pi", "agent", "agents", "team", "backend"), "nested");
+    writeAgent(path.join(home, ".pi", "agent", "agents", "skills", "not-an-agent"), "hidden");
+    writeAgent(path.join(home, ".pi", "agent", "agents", "team"), "SKILL");
+
+    const agents = scanAgents({ home });
+    expect(agents.find((agent) => agent.name === "nested")?.filePath).toContain(
+      path.join("team", "backend", "nested.md"),
+    );
+    expect(agents.some((agent) => agent.name === "hidden")).toBe(false);
+    expect(agents.some((agent) => agent.filePath.endsWith("SKILL.md"))).toBe(false);
+  });
+
+  it("keeps same-name library agents separate from active builtin/global agents", () => {
+    const home = makeHome();
+    writeAgent(path.join(home, ".pi", "agent", "agent-library", "agents"), "reviewer");
+    writeAgent(path.join(home, ".pi", "agent", "agent-library", "agents"), "shared");
+    writeAgent(path.join(home, ".pi", "agent", "agents"), "shared");
+    writeAgent(path.join(home, ".pi", "agent", "agent-library", "agents"), "library-only");
+    const agents = scanAgents({ home });
+    const builtin = agents.find((agent) => agent.name === "reviewer" && agent.scope === "builtin")!;
+    const library = agents.find((agent) => agent.name === "reviewer" && agent.scope === "library")!;
+    expect(builtin.shadowed).toBe(false);
+    expect(library).toMatchObject({ shadowed: true, replacesBuiltin: false });
+    expect(
+      agents.find((agent) => agent.name === "shared" && agent.scope === "global"),
+    ).toMatchObject({ shadowed: false });
+    expect(
+      agents.find((agent) => agent.name === "shared" && agent.scope === "library"),
+    ).toMatchObject({ shadowed: true, replacesBuiltin: false });
+    expect(agents.find((agent) => agent.name === "library-only")).toMatchObject({
+      scope: "library",
+      shadowed: false,
+    });
+  });
+
+  it("parses comma-separated tools and marks a global replacement of a builtin", () => {
+    const home = makeHome();
+    writeAgent(path.join(home, ".agents"), "reviewer", "tools: read, grep\n");
+    const agents = scanAgents({ home });
+    const globalReviewer = agents.find((a) => a.name === "reviewer" && a.scope === "global")!;
     const builtinReviewer = agents.find((a) => a.name === "reviewer" && a.scope === "builtin")!;
-    expect(projectReviewer.tools).toEqual(["read", "grep"]);
-    expect(projectReviewer.shadowed).toBe(false);
-    expect(projectReviewer.replacesBuiltin).toBe(true);
+    expect(globalReviewer.tools).toEqual(["read", "grep"]);
+    expect(globalReviewer.shadowed).toBe(false);
+    expect(globalReviewer.replacesBuiltin).toBe(true);
     expect(builtinReviewer.shadowed).toBe(true);
-    // Filter semantics: "replaced" surfaces both sides of the shadowing.
-    expect(agentMatchesFilter(projectReviewer, "replaced")).toBe(true);
+    expect(agentMatchesFilter(globalReviewer, "replaced")).toBe(true);
     expect(agentMatchesFilter(builtinReviewer, "replaced")).toBe(true);
-    expect(agentMatchesFilter(projectReviewer, "custom")).toBe(true);
-    expect(agentMatchesFilter(builtinReviewer, "custom")).toBe(false);
   });
 });
 
 describe("scanSkills", () => {
-  it("discovers SKILL.md skills in global and project scopes via pi's loader", () => {
+  it("discovers modern and legacy global skills but not project skills", () => {
     const home = makeHome();
     const project = makeProject();
-    const globalSkill = path.join(home, ".pi", "agent", "skills", "web-research");
-    mkdirSync(globalSkill, { recursive: true });
-    writeFileSync(
-      path.join(globalSkill, "SKILL.md"),
-      "---\nname: web-research\ndescription: Research the web\n---\n\nHow to research.\n",
-    );
-    const projectSkill = path.join(project, ".pi", "skills", "deploy");
-    mkdirSync(projectSkill, { recursive: true });
-    writeFileSync(
-      path.join(projectSkill, "SKILL.md"),
-      "---\nname: deploy\ndescription: Deploy this project\n---\n\nHow to deploy.\n",
-    );
+    for (const [dir, name] of [
+      [path.join(home, ".pi", "agent", "skills"), "web-research"],
+      [path.join(home, ".agents", "skills"), "legacy-skill"],
+      [path.join(project, ".pi", "skills"), "project-skill"],
+    ] as const) {
+      const skillDir = path.join(dir, name);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Test skill\n---\n\nBody.\n`,
+      );
+    }
     const skills = scanSkills({ home, projectPath: project });
     expect(skills.find((s) => s.name === "web-research")).toMatchObject({ scope: "global" });
-    expect(skills.find((s) => s.name === "deploy")).toMatchObject({ scope: "project" });
+    expect(skills.find((s) => s.name === "legacy-skill")).toMatchObject({ scope: "global" });
+    expect(skills.some((s) => s.name === "project-skill")).toBe(false);
+  });
+
+  it("discovers in-place collection roots with standard same-name precedence", () => {
+    const home = makeHome();
+    const standard = path.join(home, ".pi", "agent", "skills", "shared");
+    const collection = path.join(makeProject(), "shared");
+    for (const [dir, description] of [
+      [standard, "Standard"],
+      [collection, "Collection"],
+    ] as const) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---\nname: shared\ndescription: ${description}\n---\n\nBody.\n`,
+      );
+    }
+    const unique = path.join(path.dirname(collection), "collection-only");
+    mkdirSync(unique);
+    writeFileSync(
+      path.join(unique, "SKILL.md"),
+      "---\nname: collection-only\ndescription: Collection only\n---\n\nBody.\n",
+    );
+
+    const skills = scanSkills({ home }, [collection, unique]);
+    expect(skills.filter((skill) => skill.name === "shared")).toEqual([
+      expect.objectContaining({ scope: "global", description: "Standard" }),
+    ]);
+    expect(skills).toContainEqual(
+      expect.objectContaining({ name: "collection-only", scope: "library", baseDir: unique }),
+    );
   });
 
   it("reflects pi's disable-model-invocation frontmatter (native 7.6 detail)", () => {
@@ -147,25 +218,22 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     expect(scanPrompts({ home }).find((p) => p.name === "note")!.argumentHint).toBeUndefined();
   });
 
-  it("orders a same-named collision GLOBAL before project (default resolution is first-wins)", () => {
-    // The launch plan resolves a default prompt-template name first-wins over
-    // this order, so a default must pick the GLOBAL file — matching pi's own
-    // loader (global before project, keep first).
+  it("discovers prompt-library as library and ignores project prompts", () => {
     const home = makeHome();
     const project = makeProject();
     writePrompt(
-      path.join(home, ".pi", "agent", "prompts"),
-      "review.md",
-      "---\ndescription: Global review\n---\n\nglobal body\n",
+      path.join(home, ".pi", "agent", "prompt-library"),
+      "catalog.md",
+      "---\ndescription: Catalog prompt\n---\n\nlibrary body\n",
     );
     writePrompt(
       path.join(project, ".pi", "prompts"),
-      "review.md",
-      "---\ndescription: Project review\n---\n\nproject body\n",
+      "project-only.md",
+      "---\ndescription: Project prompt\n---\n\nproject body\n",
     );
 
-    const reviews = scanPrompts({ home, projectPath: project }).filter((p) => p.name === "review");
-    expect(reviews.map((p) => p.scope)).toEqual(["global", "project"]);
-    expect(reviews[0]!.filePath).toContain(path.join(".pi", "agent", "prompts"));
+    const prompts = scanPrompts({ home, projectPath: project });
+    expect(prompts.find((p) => p.name === "catalog")).toMatchObject({ scope: "library" });
+    expect(prompts.some((p) => p.name === "project-only")).toBe(false);
   });
 });

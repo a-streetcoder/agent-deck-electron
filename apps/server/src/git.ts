@@ -132,6 +132,29 @@ export async function gitHead(dir: string): Promise<string> {
   return (await runGit(dir, ["rev-parse", "HEAD"])).trim();
 }
 
+/** Read origin without fetching or changing the existing checkout. */
+export async function gitOriginRemote(dir: string): Promise<string> {
+  return (await runGit(dir, ["remote", "get-url", "origin"])).trim();
+}
+
+/**
+ * Adoption may not checkout/reset an existing native clone, so a requested ref
+ * is compatible only when it resolves locally to the clone's current HEAD.
+ */
+export async function gitHeadMatchesRef(dir: string, ref?: string): Promise<boolean> {
+  if (!ref) return true;
+  const head = await gitHead(dir);
+  for (const candidate of [ref, `refs/heads/${ref}`, `refs/remotes/origin/${ref}`]) {
+    try {
+      const commit = (await runGit(dir, ["rev-parse", "--verify", `${candidate}^{commit}`])).trim();
+      if (commit === head) return true;
+    } catch {
+      // Try the next unambiguous local spelling without fetching.
+    }
+  }
+  return false;
+}
+
 /**
  * The remote tip sha for `ref` (default HEAD) WITHOUT downloading (native
  * checkForUpdate: `git ls-remote`). Returns null on any error / no match, so a

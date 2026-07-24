@@ -272,7 +272,7 @@ export function AgentEditSheet({
                       onChange={(e) => setScope(e.target.value as ResourceScope)}
                     >
                       <option value="global">global</option>
-                      {currentProjectId ? <option value="project">project</option> : null}
+                      <option value="library">library</option>
                     </ControlSelect>
                   </label>
                 </div>

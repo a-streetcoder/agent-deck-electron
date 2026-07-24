@@ -27,6 +27,7 @@ interface SkillRepo {
   id: string;
   remoteUrl: string;
   ref?: string;
+  storageMode?: "collection-v1";
   skillNames: string[];
   lastSyncedCommit: string;
   importedAt: string;
@@ -556,7 +557,11 @@ export function SkillsScreen() {
   const forgetRepo = async (id: string): Promise<void> => {
     setRepoBusy(id);
     try {
-      await fetch(`/resources/skill-repos/${id}`, { method: "DELETE" });
+      const response = await fetch(`/resources/skill-repos/${id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `Couldn't forget the repository (${response.status}).`);
+      }
       setRepos((prev) => prev.filter((r) => r.id !== id));
     } catch (err) {
       setGlobalError(String(err));
@@ -756,7 +761,11 @@ export function SkillsScreen() {
                   <ControlButton
                     data-testid={`skill-repo-forget-${repo.id}`}
                     className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
-                    title="Forget this repository (keeps the imported skills)"
+                    title={
+                      repo.storageMode === "collection-v1"
+                        ? "Forget this repository and remove its managed skill collection"
+                        : "Forget this repository (keeps the imported skills)"
+                    }
                     disabled={repoBusy === repo.id}
                     onClick={() => void forgetRepo(repo.id)}
                   >
@@ -860,15 +869,17 @@ export function SkillsScreen() {
                   }
                 }}
               >
-                <ControlInput
-                  type="checkbox"
-                  data-testid={`skill-check-${skill.name}`}
-                  aria-label={`Select ${skill.name}`}
-                  className="shrink-0 accent-[var(--color-brand-accent)]"
-                  checked={checked.has(skill.filePath)}
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={() => toggleCheck(skill.filePath)}
-                />
+                {skill.scope !== "library" ? (
+                  <ControlInput
+                    type="checkbox"
+                    data-testid={`skill-check-${skill.name}`}
+                    aria-label={`Select ${skill.name}`}
+                    className="shrink-0 accent-[var(--color-brand-accent)]"
+                    checked={checked.has(skill.filePath)}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={() => toggleCheck(skill.filePath)}
+                  />
+                ) : null}
                 <WandSparkles
                   size={17}
                   className="shrink-0"
@@ -900,16 +911,18 @@ export function SkillsScreen() {
                   </div>
                   <div className="truncate text-xs text-text-secondary">{skill.description}</div>
                 </div>
-                <ControlButton
-                  className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    selectSkill(skill.filePath);
-                    setEditing(editDraft(skill));
-                  }}
-                >
-                  Edit
-                </ControlButton>
+                {skill.scope !== "library" ? (
+                  <ControlButton
+                    className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      selectSkill(skill.filePath);
+                      setEditing(editDraft(skill));
+                    }}
+                  >
+                    Edit
+                  </ControlButton>
+                ) : null}
               </div>
             );
           })}
@@ -997,14 +1010,16 @@ export function SkillsScreen() {
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <ControlButton
-                data-testid="skill-rename"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => setRenameValue(selected.name)}
-              >
-                <Tag size={12} />
-                Rename
-              </ControlButton>
+              {selected.scope !== "library" ? (
+                <ControlButton
+                  data-testid="skill-rename"
+                  className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  onClick={() => setRenameValue(selected.name)}
+                >
+                  <Tag size={12} />
+                  Rename
+                </ControlButton>
+              ) : null}
               <ControlButton
                 data-testid="skill-disable"
                 className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
@@ -1013,31 +1028,35 @@ export function SkillsScreen() {
                 {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 {selected.disabled ? "Enable" : "Disable"}
               </ControlButton>
-              <ControlButton
-                data-testid="skill-edit"
-                className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
-                onClick={() => setEditing(editDraft(selected))}
-              >
-                <Pencil size={12} />
-                Edit SKILL.md
-              </ControlButton>
-              <ControlButton
-                data-testid="skill-delete"
-                className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
-                title="Delete skill"
-                onClick={() => {
-                  if (confirm(`Delete skill "${selected.name}"? This removes its SKILL.md.`)) {
-                    void deleteSkill(selected.scope, selected.name);
-                  }
-                }}
-              >
-                <Trash2 size={13} />
-              </ControlButton>
+              {selected.scope !== "library" ? (
+                <>
+                  <ControlButton
+                    data-testid="skill-edit"
+                    className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+                    style={{
+                      background:
+                        "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                      color: "var(--color-accent-foreground)",
+                    }}
+                    onClick={() => setEditing(editDraft(selected))}
+                  >
+                    <Pencil size={12} />
+                    Edit SKILL.md
+                  </ControlButton>
+                  <ControlButton
+                    data-testid="skill-delete"
+                    className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
+                    title="Delete skill"
+                    onClick={() => {
+                      if (confirm(`Delete skill "${selected.name}"? This removes its SKILL.md.`)) {
+                        void deleteSkill(selected.scope, selected.name);
+                      }
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </ControlButton>
+                </>
+              ) : null}
             </div>
           </div>
 

@@ -2,7 +2,8 @@
  * Resource model shared by server and UI: agents and skills with the scope /
  * shadowing / filter semantics ported from the native app (SidebarModels.swift).
  *
- * Scope priority for same-name shadowing: project > global > library > builtin.
+ * Scope priority for same-name shadowing: project > global > builtin > library.
+ * Library agents remain catalog entries but never replace active agents.
  */
 
 export type ResourceScope = "builtin" | "global" | "library" | "project";
@@ -10,8 +11,10 @@ export type ResourceScope = "builtin" | "global" | "library" | "project";
 const SCOPE_PRIORITY: Record<ResourceScope, number> = {
   project: 3,
   global: 2,
-  library: 1,
-  builtin: 0,
+  builtin: 1,
+  // Native keeps the library outside effective-agent resolution. Electron still
+  // exposes unique library entries, but an active builtin/global always wins.
+  library: 0,
 };
 
 export interface AgentInfo {
@@ -117,21 +120,25 @@ export function agentMatchesFilter(agent: AgentInfo, filter: AgentFilter): boole
   }
 }
 
-/** Compute shadowing flags across all scanned agents (pure; stable order). */
+/** Compute shadowing flags across all scanned agents (pure; stable order).
+ * Within one scope, the first catalog entry wins; this preserves native's
+ * legacy-before-modern global agent precedence. */
 export function applyShadowing(
   agents: Omit<AgentInfo, "shadowed" | "replacesBuiltin">[],
 ): AgentInfo[] {
-  const best = new Map<string, number>();
+  const best = new Map<string, { priority: number; index: number }>();
   const hasBuiltin = new Set<string>();
-  for (const agent of agents) {
+  agents.forEach((agent, index) => {
     const priority = SCOPE_PRIORITY[agent.scope];
     if (agent.scope === "builtin") hasBuiltin.add(agent.name);
     const current = best.get(agent.name);
-    if (current === undefined || priority > current) best.set(agent.name, priority);
-  }
-  return agents.map((agent) => {
-    const priority = SCOPE_PRIORITY[agent.scope];
-    const shadowed = best.get(agent.name)! > priority;
+    if (current === undefined || priority > current.priority) {
+      best.set(agent.name, { priority, index });
+    }
+  });
+  return agents.map((agent, index) => {
+    const winner = best.get(agent.name)!;
+    const shadowed = winner.priority > SCOPE_PRIORITY[agent.scope] || winner.index !== index;
     return {
       ...agent,
       shadowed,

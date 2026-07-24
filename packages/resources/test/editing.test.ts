@@ -11,7 +11,15 @@ import {
   writeBuiltinAgentOverride,
 } from "../src/overrides.ts";
 import { scanAgents } from "../src/scanner.ts";
-import { importSkillsFromClone, writeAgentFile, writeSkillFile } from "../src/writer.ts";
+import {
+  deleteAgentFile,
+  importSkillsFromClone,
+  renameAgentFile,
+  setAgentDisabledFile,
+  writeAgentFile,
+  writePromptFile,
+  writeSkillFile,
+} from "../src/writer.ts";
 
 function makeHome(): string {
   return mkdtempSync(path.join(tmpdir(), "edit-home-"));
@@ -95,12 +103,92 @@ describe("builtin override edit safety", () => {
 });
 
 describe("agent/skill file writer", () => {
-  it("creates and round-trips a project agent, preserving unknown frontmatter", () => {
-    const home = makeHome();
-    const project = mkdtempSync(path.join(tmpdir(), "edit-proj-"));
-    const roots = { home, projectPath: project };
+  it("writes a new global agent to existing ~/.agents, otherwise the modern catalog", () => {
+    const modernHome = makeHome();
+    expect(writeAgentFile({ home: modernHome }, "global", "modern", { body: "Modern." })).toBe(
+      path.join(modernHome, ".pi", "agent", "agents", "modern.md"),
+    );
+    expect(existsSync(path.join(modernHome, ".agents"))).toBe(false);
 
-    const filePath = writeAgentFile(roots, "project", "helper", {
+    const legacyHome = makeHome();
+    mkdirSync(path.join(legacyHome, ".agents"));
+    expect(writeAgentFile({ home: legacyHome }, "global", "legacy", { body: "Legacy." })).toBe(
+      path.join(legacyHome, ".agents", "legacy.md"),
+    );
+  });
+
+  it("edits an existing modern agent in place even when ~/.agents exists", () => {
+    const home = makeHome();
+    const modernDir = path.join(home, ".pi", "agent", "agents");
+    mkdirSync(modernDir, { recursive: true });
+    mkdirSync(path.join(home, ".agents"));
+    const modernFile = path.join(modernDir, "modern.md");
+    writeFileSync(modernFile, "---\nname: modern\ndescription: Before\n---\n\nBody.\n");
+
+    expect(writeAgentFile({ home }, "global", "modern", { description: "After" })).toBe(modernFile);
+    expect(readFileSync(modernFile, "utf8")).toContain("description: After");
+    expect(existsSync(path.join(home, ".agents", "modern.md"))).toBe(false);
+
+    setAgentDisabledFile({ home }, "global", "modern", true);
+    expect(readFileSync(modernFile, "utf8")).toContain("disabled: true");
+    expect(renameAgentFile({ home }, "global", "modern", "renamed")).toBe(
+      path.join(modernDir, "renamed.md"),
+    );
+    deleteAgentFile({ home }, "global", "renamed");
+    expect(existsSync(path.join(modernDir, "renamed.md"))).toBe(false);
+  });
+
+  it("rejects ambiguous same-name legacy/modern agent mutations", () => {
+    const home = makeHome();
+    for (const dir of [path.join(home, ".agents"), path.join(home, ".pi", "agent", "agents")]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "duplicate.md"), "---\nname: duplicate\n---\n\nBody.\n");
+    }
+    expect(() => writeAgentFile({ home }, "global", "duplicate", { body: "Changed." })).toThrow(
+      "agent_ambiguous",
+    );
+    expect(() => setAgentDisabledFile({ home }, "global", "duplicate", true)).toThrow(
+      "agent_ambiguous",
+    );
+    expect(() => renameAgentFile({ home }, "global", "duplicate", "renamed")).toThrow(
+      "agent_ambiguous",
+    );
+    expect(() => deleteAgentFile({ home }, "global", "duplicate")).toThrow("agent_ambiguous");
+    expect(readFileSync(path.join(home, ".agents", "duplicate.md"), "utf8")).toContain("Body.");
+    expect(
+      readFileSync(path.join(home, ".pi", "agent", "agents", "duplicate.md"), "utf8"),
+    ).toContain("Body.");
+  });
+
+  it("writes native agent and prompt libraries", () => {
+    const home = makeHome();
+    expect(writeAgentFile({ home }, "library", "catalog-agent", { body: "Library." })).toBe(
+      path.join(home, ".pi", "agent", "agent-library", "agents", "catalog-agent.md"),
+    );
+    expect(writePromptFile({ home }, "library", "catalog-prompt", { body: "Library." })).toBe(
+      path.join(home, ".pi", "agent", "prompt-library", "catalog-prompt.md"),
+    );
+  });
+
+  it("rejects project agent, skill, and prompt writes", () => {
+    const roots = { home: makeHome(), projectPath: mkdtempSync(path.join(tmpdir(), "edit-proj-")) };
+    expect(() => writeAgentFile(roots, "project", "agent", { body: "No." })).toThrow(
+      "no project agent directory",
+    );
+    expect(() => writeSkillFile(roots, "project", "skill", { body: "No." })).toThrow(
+      "no project skill directory",
+    );
+    expect(() => writePromptFile(roots, "project", "prompt", { body: "No." })).toThrow(
+      "no project prompt directory",
+    );
+    expect(existsSync(path.join(roots.projectPath, ".pi"))).toBe(false);
+  });
+
+  it("creates and round-trips a global agent, preserving unknown frontmatter", () => {
+    const home = makeHome();
+    const roots = { home };
+
+    const filePath = writeAgentFile(roots, "global", "helper", {
       description: "Helps out",
       tools: ["read"],
       body: "You are helper.",
@@ -112,7 +200,7 @@ describe("agent/skill file writer", () => {
     );
     writeFileSync(filePath, withUnknown);
 
-    writeAgentFile(roots, "project", "helper", { description: "Helps out more" });
+    writeAgentFile(roots, "global", "helper", { description: "Helps out more" });
     const content = readFileSync(filePath, "utf8");
     expect(content).toContain("customField: keep-me");
     expect(content).toContain("Helps out more");
@@ -120,7 +208,7 @@ describe("agent/skill file writer", () => {
 
     const helper = scanAgents(roots).find((a) => a.name === "helper")!;
     expect(helper).toMatchObject({
-      scope: "project",
+      scope: "global",
       description: "Helps out more",
       tools: ["read"],
       body: "You are helper.",
@@ -129,10 +217,9 @@ describe("agent/skill file writer", () => {
 
   it("round-trips an agent's declared mcpServers through write + scan", () => {
     const home = makeHome();
-    const project = mkdtempSync(path.join(tmpdir(), "edit-proj-"));
-    const roots = { home, projectPath: project };
+    const roots = { home };
 
-    const filePath = writeAgentFile(roots, "project", "researcher", {
+    const filePath = writeAgentFile(roots, "global", "researcher", {
       description: "Researches",
       mcpServers: ["github", "linear"],
       body: "You research.",
@@ -144,7 +231,7 @@ describe("agent/skill file writer", () => {
     expect(agent.mcpServers).toEqual(["github", "linear"]);
 
     // Clearing removes the field.
-    writeAgentFile(roots, "project", "researcher", { mcpServers: [] });
+    writeAgentFile(roots, "global", "researcher", { mcpServers: [] });
     expect(readFileSync(filePath, "utf8")).not.toContain("mcpServers:");
     expect(scanAgents(roots).find((a) => a.name === "researcher")!.mcpServers).toBeUndefined();
   });
@@ -175,10 +262,9 @@ describe("agent/skill file writer", () => {
 
   it("round-trips an agent's fallbackModels through write + scan (no silent loss)", () => {
     const home = makeHome();
-    const project = mkdtempSync(path.join(tmpdir(), "edit-proj-"));
-    const roots = { home, projectPath: project };
+    const roots = { home };
 
-    const filePath = writeAgentFile(roots, "project", "sequencer", {
+    const filePath = writeAgentFile(roots, "global", "sequencer", {
       description: "Plans",
       model: "anthropic/claude-opus-4",
       fallbackModels: ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
@@ -193,7 +279,7 @@ describe("agent/skill file writer", () => {
     expect(agent.fallbackModels).toEqual(["anthropic/claude-sonnet-4", "openai/gpt-4o"]);
 
     // A later unrelated edit (the exact silent-loss bug) preserves fallbackModels.
-    writeAgentFile(roots, "project", "sequencer", { description: "Plans better" });
+    writeAgentFile(roots, "global", "sequencer", { description: "Plans better" });
     expect(readFileSync(filePath, "utf8")).toContain(
       "fallbackModels: anthropic/claude-sonnet-4, openai/gpt-4o",
     );
@@ -203,7 +289,7 @@ describe("agent/skill file writer", () => {
     ]);
 
     // Clearing removes the field.
-    writeAgentFile(roots, "project", "sequencer", { fallbackModels: [] });
+    writeAgentFile(roots, "global", "sequencer", { fallbackModels: [] });
     expect(readFileSync(filePath, "utf8")).not.toContain("fallbackModels:");
     expect(scanAgents(roots).find((a) => a.name === "sequencer")!.fallbackModels).toBeUndefined();
   });

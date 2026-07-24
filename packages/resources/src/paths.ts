@@ -63,37 +63,33 @@ export const BUILTIN_AGENTS_DIR =
 export interface AgentCatalogDir {
   dir: string;
   scope: ResourceScope;
-  /** Legacy locations are scanned but never watched or created. */
+  /** Legacy locations are scanned and watched without ever being auto-created. */
   legacy?: boolean;
 }
 
 export function agentCatalogDirs(roots: ResourceRoots): AgentCatalogDir[] {
-  const dirs: AgentCatalogDir[] = [
-    { dir: BUILTIN_AGENTS_DIR, scope: "builtin" },
-    { dir: path.join(piAgentHome(roots), "agents"), scope: "global" },
+  return [
+    // Native resolves the legacy global catalog before the modern one, so scan
+    // it first. Merely describing this path must never create it.
     { dir: path.join(roots.home, ".agents"), scope: "global", legacy: true },
+    { dir: path.join(piAgentHome(roots), "agents"), scope: "global" },
     { dir: path.join(piAgentHome(roots), "agent-library", "agents"), scope: "library" },
+    { dir: BUILTIN_AGENTS_DIR, scope: "builtin" },
   ];
-  if (roots.projectPath) {
-    dirs.push({ dir: path.join(roots.projectPath, ".pi", "agents"), scope: "project" });
-    dirs.push({ dir: path.join(roots.projectPath, ".agents"), scope: "project", legacy: true });
-  }
-  return dirs;
 }
 
 export interface SkillCatalogDir {
   dir: string;
   scope: ResourceScope;
+  /** A compatibility catalog that must not be created by discovery/watching. */
+  legacy?: boolean;
 }
 
 export function skillCatalogDirs(roots: ResourceRoots): SkillCatalogDir[] {
-  const dirs: SkillCatalogDir[] = [
+  return [
     { dir: path.join(piAgentHome(roots), "skills"), scope: "global" },
+    { dir: path.join(roots.home, ".agents", "skills"), scope: "global", legacy: true },
   ];
-  if (roots.projectPath) {
-    dirs.push({ dir: path.join(roots.projectPath, ".pi", "skills"), scope: "project" });
-  }
-  return dirs;
 }
 
 export interface ExtensionCatalogDir {
@@ -122,34 +118,27 @@ export interface PromptCatalogDir {
 
 /** Prompt-template catalog dirs — single .md files, pi's `/prompt:<name>`. */
 export function promptCatalogDirs(roots: ResourceRoots): PromptCatalogDir[] {
-  const dirs: PromptCatalogDir[] = [
+  return [
     { dir: path.join(piAgentHome(roots), "prompts"), scope: "global" },
+    { dir: path.join(piAgentHome(roots), "prompt-library"), scope: "library" },
   ];
-  if (roots.projectPath) {
-    dirs.push({ dir: path.join(roots.projectPath, ".pi", "prompts"), scope: "project" });
-  }
-  return dirs;
 }
 
 /**
- * Directories the file watcher observes. Builtins never change and legacy
- * locations are excluded so they are never auto-created in user projects.
+ * Directories the file watcher observes. Builtins never change; missing targets
+ * are passed to chokidar so their later creation is observed without creating them.
  */
 export function watchDirs(roots: ResourceRoots): string[] {
   return [
     ...agentCatalogDirs(roots)
-      .filter((d) => d.scope !== "builtin" && !d.legacy)
+      .filter((d) => d.scope !== "builtin")
       .map((d) => d.dir),
     ...skillCatalogDirs(roots).map((d) => d.dir),
     ...promptCatalogDirs(roots).map((d) => d.dir),
   ];
 }
 
-/** The project-scoped watch dirs alone — for FSWatcher.add() when a project registers. */
-export function projectWatchDirs(projectPath: string): string[] {
-  return [
-    path.join(projectPath, ".pi", "agents"),
-    path.join(projectPath, ".pi", "skills"),
-    path.join(projectPath, ".pi", "prompts"),
-  ];
+/** Native refresh watching has no project resource catalog directories. */
+export function projectWatchDirs(_projectPath: string): string[] {
+  return [];
 }

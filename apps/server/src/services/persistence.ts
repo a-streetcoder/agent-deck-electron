@@ -86,8 +86,18 @@ export type ProjectIndexHandle = JsonArrayStoreHandle<ProjectMeta>;
  * from it and the commit they're at. There is no on-disk lockfile — this record
  * (persisted in AppSettings) IS the manifest.
  */
+export interface SkillCollection {
+  id: string;
+  name: string;
+  repositoryId: string;
+  /** Exact absolute selected skill roots inside the managed clone. */
+  skillRootPaths: string[];
+}
+
 export interface ImportedSkillRepository {
   id: string;
+  /** Absent on legacy copy-based Electron records. */
+  storageMode?: "collection-v1";
   /** The clone URL (for ls-remote update checks). */
   remoteUrl: string;
   /** The tracked branch, when the import pinned one. */
@@ -102,6 +112,14 @@ export interface ImportedSkillRepository {
   clonePath: string;
   /** The catalog skill names imported from this repo. */
   skillNames: string[];
+  /** Selected intent for collection-v1 records; retained when upstream removes a root. */
+  selectedSkillRelativePaths?: string[];
+  /** Selected roots currently present and synced at the recorded commit. */
+  syncedSkillRelativePaths?: string[];
+  /** Exact absolute selected roots, mirrored by the associated collection. */
+  skillRootPaths?: string[];
+  /** Associated collection id for collection-v1 records. */
+  collectionId?: string;
   /**
    * The as-written SKILL.md fingerprint per skill name (native conflict
    * detection): if the catalog copy's current hash differs on update, the user
@@ -155,6 +173,8 @@ export interface AppSettings {
   extensionLoadingMode: "useMyExtensions" | "agentDeckManaged";
   /** Provenance for git-imported skill repos (native importedSkillRepositories). */
   importedSkillRepositories: ImportedSkillRepository[];
+  /** In-place skill collections. Legacy copy-based records have no collection. */
+  skillCollections: SkillCollection[];
   /**
    * The remembered open-in-editor choice (Slice 11): the editor id last picked
    * from the diff panel's picker, so the next open is one click. An id, never
@@ -202,6 +222,14 @@ export interface SettingsStoreHandle {
     repo: ImportedSkillRepository,
   ) => Effect.Effect<AppSettings>;
   readonly removeImportedSkillRepository: (id: string) => Effect.Effect<AppSettings>;
+  readonly upsertSkillRepositoryCollection: (
+    repo: ImportedSkillRepository,
+    collection: SkillCollection,
+  ) => Effect.Effect<AppSettings>;
+  readonly removeSkillRepositoryCollection: (
+    repoId: string,
+    collectionId: string,
+  ) => Effect.Effect<AppSettings>;
   readonly setModelDisabled: (key: string, disabled: boolean) => Effect.Effect<AppSettings>;
   readonly enabledExtensions: Effect.Effect<string[]>;
   readonly forgetSkill: (name: string) => Effect.Effect<AppSettings>;
@@ -360,6 +388,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       defaultThinking: null,
       extensionLoadingMode: "useMyExtensions", // port default: load discovered extensions
       importedSkillRepositories: [],
+      skillCollections: [],
       preferredEditor: null,
       keybindings: [],
     };
@@ -404,6 +433,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           importedSkillRepositories: Array.isArray(record.importedSkillRepositories)
             ? (record.importedSkillRepositories as ImportedSkillRepository[])
             : [],
+          skillCollections: Array.isArray(record.skillCollections)
+            ? (record.skillCollections as SkillCollection[])
+            : [],
           preferredEditor:
             typeof record.preferredEditor === "string" ? record.preferredEditor : null,
           keybindings: coerceKeybindings(record.keybindings),
@@ -415,7 +447,11 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
 
     const flush = (): void => {
       const tmp = `${file}.tmp`;
-      writeFileSync(tmp, JSON.stringify(settings, null, 2));
+      // Preserve byte-compatible legacy files: the collection field did not
+      // exist before collection-v1 and an empty list has identical semantics.
+      const persisted: Partial<AppSettings> = { ...settings };
+      if (settings.skillCollections.length === 0) delete persisted.skillCollections;
+      writeFileSync(tmp, JSON.stringify(persisted, null, 2));
       renameSync(tmp, file);
     };
 
@@ -512,6 +548,34 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             importedSkillRepositories: settings.importedSkillRepositories.filter(
               (r) => r.id !== id,
             ),
+          };
+          flush();
+          return settings;
+        }),
+      upsertSkillRepositoryCollection: (repo, collection) =>
+        Effect.sync(() => {
+          settings = {
+            ...settings,
+            importedSkillRepositories: [
+              ...settings.importedSkillRepositories.filter((item) => item.id !== repo.id),
+              repo,
+            ],
+            skillCollections: [
+              ...settings.skillCollections.filter((item) => item.id !== collection.id),
+              collection,
+            ],
+          };
+          flush();
+          return settings;
+        }),
+      removeSkillRepositoryCollection: (repoId, collectionId) =>
+        Effect.sync(() => {
+          settings = {
+            ...settings,
+            importedSkillRepositories: settings.importedSkillRepositories.filter(
+              (item) => item.id !== repoId,
+            ),
+            skillCollections: settings.skillCollections.filter((item) => item.id !== collectionId),
           };
           flush();
           return settings;

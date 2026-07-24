@@ -6,6 +6,7 @@ import type { SkillInfo } from "@agent-deck/domain";
 import {
   BUILTIN_AGENTS_DIR,
   computeBuiltinOverride,
+  discoverSkillRoots,
   deleteAgentFile,
   deletePromptFile,
   deleteSkillDir,
@@ -21,7 +22,6 @@ import {
   scanAgents,
   scanExtensions,
   scanPrompts,
-  scanSkills,
   setAgentDisabledFile,
   skillMdHash,
   writeAgentFile,
@@ -31,8 +31,23 @@ import {
   type ResourceRoots,
 } from "@agent-deck/resources";
 import { z } from "zod";
-import { gitClonePersistent, gitHead, gitLsRemote, gitPullFfInto } from "../git.ts";
+import {
+  gitClonePersistent,
+  gitHead,
+  gitHeadMatchesRef,
+  gitLsRemote,
+  gitOriginRemote,
+  gitPullFfInto,
+  gitStatus,
+} from "../git.ts";
 import type { ImportedSkillRepository } from "../persistence.ts";
+import {
+  isPathInside,
+  normalizeGitRemote,
+  resolveManagedPath,
+  resolveManagedSkillRoot,
+  sanitizedRepositoryFolder,
+} from "../skillRepositories.ts";
 import type { ServerContext } from "../context.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
@@ -49,16 +64,26 @@ const agentEditFields = z.object({
   body: z.string().optional(),
 });
 
+const writableCatalogScope = z
+  .enum(["global", "project"])
+  .refine((scope): boolean => scope === "global", "project resource catalogs are not supported");
+const writableLibraryScope = z
+  .enum(["global", "library", "project"])
+  .refine((scope): boolean => scope !== "project", "project resource catalogs are not supported");
+const writableAgentScope = z
+  .enum(["builtin", "global", "library", "project"])
+  .refine((scope): boolean => scope !== "project", "project agent catalogs are not supported");
+
 const agentEditBody = z.object({
   projectId: z.string().optional(),
-  scope: z.enum(["builtin", "global", "project"]),
+  scope: writableAgentScope,
   name: RESOURCE_NAME,
   edit: agentEditFields,
 });
 
 const skillEditBody = z.object({
   projectId: z.string().optional(),
-  scope: z.enum(["global", "project"]),
+  scope: writableCatalogScope,
   name: RESOURCE_NAME,
   edit: z.object({
     description: z.string().optional(),
@@ -109,8 +134,49 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     broadcast,
     resourceHome,
     rootsFor,
+    scanSkillsFor,
+    watchSkillRoots,
+    unwatchSkillRoots,
     extensionBridgeConflictAt,
   } = ctx;
+
+  const repositoryOperations = new Set<string>();
+  const withRepositoryLock = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
+    if (repositoryOperations.has(key)) throw new Error("repository_busy");
+    repositoryOperations.add(key);
+    try {
+      return await operation();
+    } finally {
+      repositoryOperations.delete(key);
+    }
+  };
+  const managedRepositoryPath = (candidate: string): string | undefined => {
+    const clone = resolveManagedPath(skillReposRoot, candidate);
+    if (!clone) return undefined;
+    const gitMetadata = resolveManagedPath(skillReposRoot, nodePath.join(clone, ".git"));
+    if (!gitMetadata || !isPathInside(clone, gitMetadata)) return undefined;
+    try {
+      return statSync(gitMetadata).isDirectory() ? clone : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const managedClonePath = (
+    record: ImportedSkillRepository,
+    options: { allowMissing?: boolean } = {},
+  ): string | undefined =>
+    options.allowMissing
+      ? resolveManagedPath(skillReposRoot, record.clonePath, options)
+      : managedRepositoryPath(record.clonePath);
+  const managedCloneSkillRoot = (clonePath: string, candidate: string): string | undefined => {
+    const safe = resolveManagedSkillRoot(skillReposRoot, candidate);
+    return safe && isPathInside(clonePath, safe) ? safe : undefined;
+  };
+  const collectionRootsFor = (clonePath: string, relativePaths: readonly string[]): string[] =>
+    relativePaths.flatMap((relative) => {
+      const safe = managedCloneSkillRoot(clonePath, nodePath.resolve(clonePath, relative));
+      return safe ? [safe] : [];
+    });
 
   /**
    * Catalog roots for a repo record's scope. Null when the project it was
@@ -137,7 +203,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   fastify.get("/resources/skills", async (request) => {
     const { projectId } = request.query as { projectId?: string };
-    return { skills: enrichSkills(scanSkills(rootsFor(projectId))) };
+    return { skills: enrichSkills(scanSkillsFor(projectId)) };
   });
 
   // Delete a global/project skill (its SKILL.md dir) and forget it everywhere.
@@ -145,7 +211,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableCatalogScope,
         name: RESOURCE_NAME,
       })
       .safeParse(request.body);
@@ -179,7 +245,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableCatalogScope,
         name: RESOURCE_NAME,
         newName: RESOURCE_NAME,
       })
@@ -239,7 +305,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableCatalogScope,
         sourcePath: z.string().min(1),
       })
       .safeParse(request.body);
@@ -278,7 +344,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableCatalogScope,
         url: z.string().trim().min(1).max(2000),
       })
       .safeParse(request.body);
@@ -296,47 +362,126 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "Couldn't understand that repository reference." });
     }
     const repoName = skillRepoName(source.cloneUrl);
-    // Clone into a PERSISTENT dir kept for re-sync (native keeps the clone; the
-    // copy lands in the catalog). The clone is removed only on failure below or
-    // when the repo is later forgotten.
     const repoId = randomUUID();
-    const clonePath = nodePath.join(skillReposRoot, repoId);
+    const collectionId = randomUUID();
+    const clonePath = nodePath.join(skillReposRoot, sanitizedRepositoryFolder(source.cloneUrl));
     const cleanupClone = (): void => {
       try {
         rmSync(clonePath, { recursive: true, force: true, maxRetries: 5 });
       } catch {
-        // Best-effort — a leftover clone dir is harmless.
+        // Best-effort cleanup after a failed fresh import.
       }
     };
     mkdirSync(skillReposRoot, { recursive: true });
+    let clonedFresh = false;
     try {
-      await gitClonePersistent(source.cloneUrl, clonePath, source.ref);
-      // A subdir (from a deep link) scopes discovery to that subtree.
-      const scanDir = subdirScanPath(clonePath, source.subdir);
-      const result = importSkillsFromClone(roots, scope, scanDir, repoName);
-      if (result.imported.length === 0 && result.skipped.length === 0) {
-        cleanupClone();
-        return reply.status(400).send({ error: "No SKILL.md found in that repository." });
-      }
-      // Record provenance so the repo can be checked for + pulled updates later.
-      settings.upsertImportedSkillRepository({
-        id: repoId,
-        remoteUrl: source.cloneUrl,
-        ref: source.ref,
-        subdir: source.subdir,
-        scope,
-        projectPath: roots.projectPath,
-        clonePath,
-        skillNames: result.imported,
-        skillHashes: result.hashes,
-        lastSyncedCommit: await gitHead(clonePath).catch(() => ""),
-        importedAt: new Date().toISOString(),
+      const result = await withRepositoryLock(clonePath, async () => {
+        let safeClonePath: string;
+        if (existsSync(clonePath)) {
+          const existing = managedRepositoryPath(clonePath);
+          if (!existing) throw new Error("existing_repository_invalid");
+          const alreadyRegistered = settings
+            .get()
+            .importedSkillRepositories.some(
+              (record) =>
+                record.storageMode === "collection-v1" &&
+                resolveManagedPath(skillReposRoot, record.clonePath, { allowMissing: true }) ===
+                  existing,
+            );
+          if (alreadyRegistered) throw new Error("repository_exists");
+          let origin: string;
+          let compatibleRef: boolean;
+          try {
+            origin = await gitOriginRemote(existing);
+            await gitHead(existing);
+            compatibleRef = await gitHeadMatchesRef(existing, source.ref);
+          } catch {
+            throw new Error("existing_repository_invalid");
+          }
+          const requestedRemote = normalizeGitRemote(source.cloneUrl);
+          const existingRemote = normalizeGitRemote(origin, existing);
+          if (!requestedRemote || !existingRemote || requestedRemote !== existingRemote) {
+            throw new Error("existing_repository_origin_mismatch");
+          }
+          if (!compatibleRef) throw new Error("existing_repository_ref_mismatch");
+          safeClonePath = existing;
+        } else {
+          clonedFresh = true;
+          await gitClonePersistent(source.cloneUrl, clonePath, source.ref);
+          const cloned = managedRepositoryPath(clonePath);
+          if (!cloned) throw new Error("unsafe_collection_path");
+          safeClonePath = cloned;
+        }
+        const lexicalScanDir = subdirScanPath(clonePath, source.subdir);
+        const scanDir = resolveManagedPath(skillReposRoot, lexicalScanDir);
+        if (!scanDir || !isPathInside(safeClonePath, scanDir)) {
+          throw new Error("unsafe_collection_path");
+        }
+        const selected = discoverSkillRoots(scanDir, (root) =>
+          Boolean(managedCloneSkillRoot(safeClonePath, root)),
+        ).map((skill) => ({
+          ...skill,
+          relativePath: nodePath.relative(safeClonePath, skill.rootPath),
+        }));
+        if (selected.length === 0) throw new Error("no_skills");
+        const safeSelected = selected.flatMap((skill) => {
+          const safeRoot = managedCloneSkillRoot(safeClonePath, skill.rootPath);
+          return safeRoot ? [{ ...skill, rootPath: safeRoot }] : [];
+        });
+        if (safeSelected.length !== selected.length) throw new Error("unsafe_collection_path");
+        const skillRootPaths = safeSelected.map((skill) => skill.rootPath);
+        const imported = safeSelected.map((skill) => skill.name);
+        const repoRecord: ImportedSkillRepository = {
+          id: repoId,
+          storageMode: "collection-v1",
+          remoteUrl: source.cloneUrl,
+          ref: source.ref,
+          subdir: source.subdir,
+          scope,
+          clonePath: safeClonePath,
+          skillNames: imported,
+          selectedSkillRelativePaths: safeSelected.map((skill) => skill.relativePath),
+          syncedSkillRelativePaths: safeSelected.map((skill) => skill.relativePath),
+          skillRootPaths,
+          collectionId,
+          lastSyncedCommit: await gitHead(safeClonePath),
+          importedAt: new Date().toISOString(),
+        };
+        settings.upsertSkillRepositoryCollection(repoRecord, {
+          id: collectionId,
+          name: repoName,
+          repositoryId: repoId,
+          skillRootPaths,
+        });
+        watchSkillRoots(skillRootPaths);
+        return { imported, skipped: [] as string[], repoId };
       });
       broadcast({ type: "resources_changed" });
-      return { ...result, repoId };
+      return result;
     } catch (error) {
-      cleanupClone();
       const message = error instanceof Error ? error.message : String(error);
+      if (clonedFresh) cleanupClone();
+      if (message === "repository_exists" || message === "repository_busy") {
+        return reply.status(409).send({ error: "That skill repository is already being managed." });
+      }
+      if (message === "existing_repository_invalid") {
+        return reply.status(409).send({
+          error: "The existing managed directory is not a valid Git clone with an origin remote.",
+        });
+      }
+      if (message === "existing_repository_origin_mismatch") {
+        return reply.status(409).send({
+          error: "The existing managed clone belongs to a different origin remote.",
+        });
+      }
+      if (message === "existing_repository_ref_mismatch") {
+        return reply.status(409).send({
+          error: "The requested ref does not resolve to the existing managed clone's HEAD.",
+        });
+      }
+      if (message === "no_skills") {
+        return reply.status(400).send({ error: "No SKILL.md found in that repository." });
+      }
       if (message === "clone_failed") {
         return reply.status(400).send({
           error:
@@ -356,7 +501,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         remoteUrl: r.remoteUrl,
         ref: r.ref,
         scope: r.scope,
+        storageMode: r.storageMode,
         skillNames: r.skillNames,
+        skillRootPaths: r.skillRootPaths,
+        selectedSkillRelativePaths: r.selectedSkillRelativePaths,
+        syncedSkillRelativePaths: r.syncedSkillRelativePaths,
         lastSyncedCommit: r.lastSyncedCommit,
         importedAt: r.importedAt,
       })),
@@ -386,6 +535,97 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const record = settings.get().importedSkillRepositories.find((r) => r.id === id);
     if (!record) return reply.status(404).send({ error: "unknown skill repository" });
+    if (record.scope === "project") {
+      return reply
+        .status(400)
+        .send({ error: "Project-scoped skill repository catalogs are no longer writable." });
+    }
+    if (record.storageMode === "collection-v1") {
+      const safeClonePath = managedClonePath(record);
+      if (!safeClonePath) {
+        return reply.status(400).send({
+          error: "The persisted clone path is outside the managed repository root or missing.",
+        });
+      }
+      try {
+        const result = await withRepositoryLock(record.id, async () => {
+          const status = await gitStatus(safeClonePath);
+          if (!status.repo || !status.clean) throw new Error("repository_dirty");
+          const newCommit = await gitPullFfInto(safeClonePath, record.ref);
+          if (newCommit === record.lastSyncedCommit) {
+            return {
+              updated: false,
+              commit: newCommit,
+              imported: record.skillNames,
+              conflicts: [],
+            };
+          }
+          const selectedIntent = new Set(
+            record.selectedSkillRelativePaths ?? record.syncedSkillRelativePaths ?? [],
+          );
+          const discovered = discoverSkillRoots(safeClonePath, (root) =>
+            Boolean(managedCloneSkillRoot(safeClonePath, root)),
+          ).flatMap((skill) => {
+            const safeRoot = managedCloneSkillRoot(safeClonePath, skill.rootPath);
+            return safeRoot
+              ? [
+                  {
+                    ...skill,
+                    rootPath: safeRoot,
+                    relativePath: nodePath.relative(safeClonePath, safeRoot),
+                  },
+                ]
+              : [];
+          });
+          const selected = discovered.filter((skill) => selectedIntent.has(skill.relativePath));
+          const syncedSkillRelativePaths = selected.map((skill) => skill.relativePath);
+          const skillRootPaths = collectionRootsFor(safeClonePath, syncedSkillRelativePaths);
+          const next: ImportedSkillRepository = {
+            ...record,
+            selectedSkillRelativePaths: [...selectedIntent],
+            syncedSkillRelativePaths,
+            skillNames: selected.map((skill) => skill.name),
+            skillRootPaths,
+            lastSyncedCommit: newCommit,
+          };
+          const collectionId = record.collectionId;
+          if (!collectionId) throw new Error("collection_missing");
+          settings.upsertSkillRepositoryCollection(next, {
+            id: collectionId,
+            name: skillRepoName(record.remoteUrl),
+            repositoryId: record.id,
+            skillRootPaths,
+          });
+          const stillWatched = new Set(
+            settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths),
+          );
+          await unwatchSkillRoots(
+            (record.skillRootPaths ?? []).filter((root) => !stillWatched.has(root)),
+          );
+          watchSkillRoots(skillRootPaths);
+          return {
+            updated: true,
+            commit: newCommit,
+            imported: next.skillNames,
+            conflicts: [] as string[],
+          };
+        });
+        broadcast({ type: "resources_changed" });
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "repository_busy") {
+          return reply.status(409).send({ error: "That repository operation is already running." });
+        }
+        if (message === "repository_dirty") {
+          return reply.status(409).send({
+            error:
+              "The managed skill collection has local changes. Commit or discard them before updating.",
+          });
+        }
+        return reply.status(500).send({ error: message });
+      }
+    }
     if (!existsSync(record.clonePath)) {
       return reply.status(400).send({ error: "The clone is missing — re-import the repository." });
     }
@@ -482,8 +722,19 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const record = settings.get().importedSkillRepositories.find((r) => r.id === id);
     if (!record) return reply.status(404).send({ error: "unknown skill repository" });
+    if (record.storageMode === "collection-v1") {
+      return reply.status(400).send({ error: "In-place collections must be clean before update." });
+    }
+    if (record.scope === "project") {
+      return reply
+        .status(400)
+        .send({ error: "Project-scoped skill repository catalogs are no longer writable." });
+    }
     const roots = rootsForRepoRecord(record);
     if (!roots) return reply.status(400).send({ error: "That project is no longer registered." });
+    if (!existsSync(record.clonePath)) {
+      return reply.status(400).send({ error: "The clone is missing — re-import the repository." });
+    }
     const { name, resolution } = parsed.data;
     const skillHashes = { ...(record.skillHashes ?? {}) };
     let skillNames = record.skillNames;
@@ -526,10 +777,35 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const record = settings.get().importedSkillRepositories.find((r) => r.id === id);
     if (!record) return reply.status(404).send({ error: "unknown skill repository" });
+    if (record.storageMode === "collection-v1") {
+      try {
+        await withRepositoryLock(record.id, async () => {
+          const safeClonePath = managedClonePath(record, { allowMissing: true });
+          if (!safeClonePath) throw new Error("unsafe_collection_path");
+          if (!record.collectionId) throw new Error("collection_missing");
+          rmSync(safeClonePath, { recursive: true, force: true, maxRetries: 5 });
+          settings.removeSkillRepositoryCollection(record.id, record.collectionId);
+          const stillWatched = new Set(
+            settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths),
+          );
+          await unwatchSkillRoots(
+            (record.skillRootPaths ?? []).filter((root) => !stillWatched.has(root)),
+          );
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "repository_busy") {
+          return reply.status(409).send({ error: "That repository operation is already running." });
+        }
+        return reply.status(500).send({ error: message });
+      }
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    }
     try {
       rmSync(record.clonePath, { recursive: true, force: true, maxRetries: 5 });
     } catch {
-      // Best-effort — a leftover clone dir is harmless.
+      // Legacy semantics: clone removal is best-effort and copied skills stay.
     }
     settings.removeImportedSkillRepository(id);
     return { ok: true };
@@ -543,7 +819,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   const promptWriteBody = z.object({
     projectId: z.string().optional(),
-    scope: z.enum(["global", "project"]),
+    scope: writableLibraryScope,
     name: RESOURCE_NAME,
     edit: z.object({ description: z.string().max(500).optional(), body: z.string().max(100_000) }),
   });
@@ -568,7 +844,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableLibraryScope,
         name: RESOURCE_NAME,
       })
       .safeParse(request.body);
@@ -616,7 +892,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableLibraryScope,
         name: RESOURCE_NAME,
         newName: RESOURCE_NAME,
       })
@@ -657,12 +933,16 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         ],
       });
     };
-    if (scope === "global") {
-      // Defaults are a global concept, and every project assignment resolved to
-      // this (now-renamed) global first.
-      settings.renameDefaultPromptTemplate(name, newName);
-      for (const project of projects.list()) {
-        if (project.assignedPrompts?.includes(name)) rewriteAssignment(project);
+    if (scope === "global" || scope === "library") {
+      // A library prompt is effective by name only when no global prompt shadows
+      // it. Re-point references only when this rename changed that resolution.
+      const globalShadowsLibrary =
+        scope === "library" && existsSync(nodePath.join(globalPromptDir, `${name}.md`));
+      if (!globalShadowsLibrary) {
+        settings.renameDefaultPromptTemplate(name, newName);
+        for (const project of projects.list()) {
+          if (project.assignedPrompts?.includes(name)) rewriteAssignment(project);
+        }
       }
     } else {
       // Project rename: the global (if any) is untouched and would have shadowed
@@ -824,6 +1104,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         writeAgentFile(roots, scope, name, edit);
       }
     } catch (error) {
+      if (error instanceof Error && error.message === "agent_ambiguous") {
+        return reply.status(409).send({
+          error: `Both legacy and modern global agents are named "${name}"; choose a unique name before editing.`,
+        });
+      }
       return reply.status(500).send({ error: String(error) });
     }
     // settings.json isn't under the resource watcher — notify clients directly.
@@ -832,12 +1117,12 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   });
 
   // Toggle an agent's disabled flag: override for builtins, frontmatter for
-  // global/project. Library agents are read-only.
+  // global/library agents.
   fastify.post("/resources/agents/disabled", async (request, reply) => {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["builtin", "global", "project"]),
+        scope: writableAgentScope,
         name: RESOURCE_NAME,
         disabled: z.boolean(),
       })
@@ -862,19 +1147,22 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         setAgentDisabledFile(roots, scope, name, disabled);
       }
     } catch (error) {
+      if (error instanceof Error && error.message === "agent_ambiguous") {
+        return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
+      }
       return reply.status(500).send({ error: String(error) });
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
   });
 
-  // Delete a custom (global/project) agent's file. Builtins can't be deleted;
+  // Delete a custom global/library agent's file. Builtins can't be deleted;
   // "delete" for a builtin means removing its override (reset to pristine).
   fastify.delete("/resources/agents", async (request, reply) => {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["builtin", "global", "project"]),
+        scope: writableAgentScope,
         name: RESOURCE_NAME,
       })
       .safeParse(request.body);
@@ -895,28 +1183,37 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           return reply.status(400).send({ error: "projectId required for project scope" });
         }
         deleteAgentFile(roots, scope, name);
-        // A deleted agent can no longer be a project default.
-        for (const project of projects.list()) {
-          if (project.defaultAgentName === name) {
-            projects.upsert({ ...project, defaultAgentName: undefined });
+        // A shadowed library copy is not the active source for a bare-name
+        // default, so deleting it must not clear that still-valid reference.
+        const stillActive =
+          scope === "library" &&
+          scanAgents(roots).some((agent) => agent.name === name && !agent.shadowed);
+        if (!stillActive) {
+          for (const project of projects.list()) {
+            if (project.defaultAgentName === name) {
+              projects.upsert({ ...project, defaultAgentName: undefined });
+            }
           }
         }
       }
     } catch (error) {
+      if (error instanceof Error && error.message === "agent_ambiguous") {
+        return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
+      }
       return reply.status(500).send({ error: String(error) });
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
   });
 
-  // Rename a global/project agent on disk (native RenameResourceSheet 6.5).
+  // Rename a global/library agent on disk (native RenameResourceSheet 6.5).
   // Builtins can't be renamed (their name is the override key). Any project
   // whose default pointed at the old name is re-pointed at the new one.
   fastify.post("/resources/agents/rename", async (request, reply) => {
     const parsed = z
       .object({
         projectId: z.string().optional(),
-        scope: z.enum(["global", "project"]),
+        scope: writableLibraryScope,
         name: RESOURCE_NAME,
         newName: RESOURCE_NAME,
       })
@@ -936,6 +1233,9 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           .status(409)
           .send({ error: `A ${scope} agent named "${newName}" already exists.` });
       }
+      if (message === "agent_ambiguous") {
+        return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
+      }
       if (message === "agent_not_found") {
         return reply.status(404).send({ error: `No ${scope} agent named "${name}".` });
       }
@@ -948,8 +1248,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const hasProjectAgent = (projectPath: string): boolean =>
       existsSync(nodePath.join(projectPath, ".pi", "agents", `${name}.md`)) ||
       existsSync(nodePath.join(projectPath, ".agents", `${name}.md`));
+    const libraryWasShadowed =
+      scope === "library" &&
+      scanAgents(roots).some(
+        (agent) => agent.name === name && agent.scope !== "library" && !agent.shadowed,
+      );
     for (const project of projects.list()) {
-      if (project.defaultAgentName !== name) continue;
+      if (project.defaultAgentName !== name || libraryWasShadowed) continue;
       if (scope === "project") {
         // A project agent is visible only to its own project.
         if (project.path === roots.projectPath) {

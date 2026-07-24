@@ -98,20 +98,16 @@ function AgentRow({
           <div className="line-clamp-2 text-xs text-text-secondary">{agent.description}</div>
         ) : null}
       </div>
-      {/* Hover-reveal Edit pill (native AgentListRow). Library agents are
-          read-only catalog entries — no writable target exists for them. */}
-      {agent.scope !== "library" ? (
-        <ControlButton
-          data-testid={`agent-row-edit-${agent.name}`}
-          className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit();
-          }}
-        >
-          Edit
-        </ControlButton>
-      ) : null}
+      <ControlButton
+        data-testid={`agent-row-edit-${agent.name}`}
+        className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+        onClick={(event) => {
+          event.stopPropagation();
+          onEdit();
+        }}
+      >
+        Edit
+      </ControlButton>
     </div>
   );
 }
@@ -229,75 +225,73 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
               {isDefault ? "project default" : "make default"}
             </ControlButton>
           ) : null}
-          {agent.scope !== "library" ? (
-            <>
-              <ControlButton
-                data-testid="agent-disable"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
-              >
-                {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
-                {agent.disabled ? "Enable" : "Disable"}
-              </ControlButton>
-              <ControlButton
-                data-testid="agent-edit"
-                className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
-                onClick={onEdit}
-              >
-                <Pencil size={12} />
-                Edit
-              </ControlButton>
-              {/* Rename moves a custom agent's file and re-points project
+          <>
+            <ControlButton
+              data-testid="agent-disable"
+              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
+            >
+              {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
+              {agent.disabled ? "Enable" : "Disable"}
+            </ControlButton>
+            <ControlButton
+              data-testid="agent-edit"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
+              }}
+              onClick={onEdit}
+            >
+              <Pencil size={12} />
+              Edit
+            </ControlButton>
+            {/* Rename moves a custom agent's file and re-points project
                   defaults. Builtins keep their name (it's the override key). */}
-              {agent.scope !== "builtin" ? (
-                <ControlButton
-                  data-testid="agent-rename"
-                  className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                  onClick={() => setRenameValue(agent.name)}
-                >
-                  <Tag size={12} />
-                  Rename
-                </ControlButton>
-              ) : null}
-              {/* Delete removes a custom agent's file. Builtins are bundled
+            {agent.scope !== "builtin" ? (
+              <ControlButton
+                data-testid="agent-rename"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                onClick={() => setRenameValue(agent.name)}
+              >
+                <Tag size={12} />
+                Rename
+              </ControlButton>
+            ) : null}
+            {/* Delete removes a custom agent's file. Builtins are bundled
                   and can only be reset — offered just when overridden, so its
                   effect ("clear all overrides") is unambiguous. */}
-              {agent.scope !== "builtin" ? (
-                <ControlButton
-                  data-testid="agent-delete"
-                  className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
-                  title="Delete agent"
-                  onClick={() => {
-                    if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
-                      void deleteAgent(agent.scope, agent.name);
-                    }
-                  }}
-                >
-                  <Trash2 size={13} />
-                </ControlButton>
-              ) : agent.overridden ? (
-                <ControlButton
-                  data-testid="agent-reset"
-                  className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-danger"
-                  title="Clear all overrides and restore the bundled defaults"
-                  onClick={() => {
-                    if (
-                      confirm(`Reset "${agent.name}" — clear all overrides and restore defaults?`)
-                    ) {
-                      void deleteAgent(agent.scope, agent.name);
-                    }
-                  }}
-                >
-                  Reset
-                </ControlButton>
-              ) : null}
-            </>
-          ) : null}
+            {agent.scope !== "builtin" ? (
+              <ControlButton
+                data-testid="agent-delete"
+                className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
+                title="Delete agent"
+                onClick={() => {
+                  if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
+                    void deleteAgent(agent.scope, agent.name);
+                  }
+                }}
+              >
+                <Trash2 size={13} />
+              </ControlButton>
+            ) : agent.overridden ? (
+              <ControlButton
+                data-testid="agent-reset"
+                className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-danger"
+                title="Clear all overrides and restore the bundled defaults"
+                onClick={() => {
+                  if (
+                    confirm(`Reset "${agent.name}" — clear all overrides and restore defaults?`)
+                  ) {
+                    void deleteAgent(agent.scope, agent.name);
+                  }
+                }}
+              >
+                Reset
+              </ControlButton>
+            ) : null}
+          </>
         </div>
       </div>
 

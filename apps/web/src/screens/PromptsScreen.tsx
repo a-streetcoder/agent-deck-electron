@@ -21,7 +21,7 @@ interface Draft {
   name: string;
   description: string;
   body: string;
-  scope: "global" | "project";
+  scope: "global" | "library";
   /** The project this edit targets, captured when the editor opened. */
   projectId: string | null;
   original?: string; // set when editing an existing prompt (its name)
@@ -125,7 +125,7 @@ export function PromptsScreen() {
       name: "",
       description: "",
       body: "",
-      scope: currentProjectId ? "project" : "global",
+      scope: "library",
       projectId: currentProjectId,
     });
 
@@ -134,7 +134,7 @@ export function PromptsScreen() {
       name: prompt.name,
       description: prompt.description ?? "",
       body: prompt.body,
-      scope: prompt.scope === "project" ? "project" : "global",
+      scope: prompt.scope === "library" ? "library" : "global",
       projectId: currentProjectId,
       original: prompt.name,
       filePath: prompt.filePath,
@@ -197,7 +197,7 @@ export function PromptsScreen() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           projectId: currentProjectId ?? undefined,
-          scope: prompt.scope === "project" ? "project" : "global",
+          scope: prompt.scope === "library" ? "library" : "global",
           name: prompt.name,
         }),
       });
@@ -411,7 +411,7 @@ export function PromptsScreen() {
                       data-scope={prompt.scope}
                       className={cn(
                         "rounded-capsule border px-1.5 text-micro",
-                        prompt.scope === "project"
+                        prompt.scope === "library"
                           ? "border-border-strong text-text-secondary"
                           : "border-border-subtle text-text-muted",
                       )}

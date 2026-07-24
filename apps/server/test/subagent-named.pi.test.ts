@@ -16,7 +16,7 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * Named subagents: `managed_subagent{task, agent}` delegates to one of the
- * project's installed agents. The child adopts that agent's persona (its body is
+ * globally installed agents. The child adopts that agent's persona (its body is
  * COMPOSED into the subagent operating prompt, never replacing it), and the
  * Subagent cell records the agent name. An unknown agent fails cleanly.
  */
@@ -59,27 +59,28 @@ beforeAll(async () => {
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
 
-  // A project skill the agent will carry into its delegated child. Its
+  // A global skill the agent will carry into its delegated child. Its
   // description is injected into the base system prompt (pi buildSystemPrompt
   // gets loadedSkills), so a distinctive sentinel proves it reached the child.
-  const skillDir = path.join(project, ".pi", "skills", "review-checklist");
+  const skillDir = path.join(tmpHome, ".pi", "agent", "skills", "review-checklist");
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
     path.join(skillDir, "SKILL.md"),
     `---\nname: review-checklist\ndescription: ${SKILL_SENTINEL} — run each review step in order\n---\n\nWork through the checklist strictly.\n`,
   );
 
-  // A named project agent with a distinctive persona body, a declared model
+  // A named global agent with a distinctive persona body, a declared model
   // distinct from the session default (proves the child runs on the AGENT's
   // model), an assigned skill, and a thinking level — all of which the child
   // must adopt via the shared named-agent resolver.
-  const agentsDir = path.join(project, ".pi", "agents");
+  const agentsDir = path.join(tmpHome, ".pi", "agent", "agents");
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
     `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read\nskills: review-checklist\n---\n\n${PERSONA_SENTINEL}\n`,
   );
 
+  process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: tmpHome });
   server = await startServer({ dataDir });
   const created = (await (
     await fetch(`http://127.0.0.1:${server.port}/projects`, {
@@ -95,6 +96,7 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  delete process.env.AGENT_DECK_PI_ENV;
 });
 
 async function startSession(): Promise<string> {

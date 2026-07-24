@@ -67,14 +67,15 @@ beforeAll(async () => {
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
 
-  // A named project agent the BETA task delegates to.
-  const agentsDir = path.join(project, ".pi", "agents");
+  // A named global agent the BETA task delegates to.
+  const agentsDir = path.join(tmpHome, ".pi", "agent", "agents");
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
     `---\nname: reviewer-bot\ndescription: Reviewer\n---\n\n${PERSONA_SENTINEL}\n`,
   );
 
+  process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: tmpHome });
   server = await startServer({ dataDir });
   const created = (await (
     await fetch(`http://127.0.0.1:${server.port}/projects`, {
@@ -90,6 +91,7 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  delete process.env.AGENT_DECK_PI_ENV;
 });
 
 describe("managed_parallel: fan out subagents and combine results", () => {

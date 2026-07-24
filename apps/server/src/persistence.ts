@@ -31,7 +31,11 @@ import {
  */
 
 export { defaultDataDir };
-export type { AppSettings, ImportedSkillRepository } from "./services/persistence.ts";
+export type {
+  AppSettings,
+  ImportedSkillRepository,
+  SkillCollection,
+} from "./services/persistence.ts";
 
 /** Thin synchronous facade over a {@link JsonArrayStoreHandle}. */
 class JsonArrayStore<T extends { id: string }> {
@@ -130,6 +134,17 @@ export class SettingsStore {
 
   removeImportedSkillRepository(id: string): AppSettings {
     return runSyncUnwrapped(this.handle.removeImportedSkillRepository(id));
+  }
+
+  upsertSkillRepositoryCollection(
+    repo: AppSettings["importedSkillRepositories"][number],
+    collection: AppSettings["skillCollections"][number],
+  ): AppSettings {
+    return runSyncUnwrapped(this.handle.upsertSkillRepositoryCollection(repo, collection));
+  }
+
+  removeSkillRepositoryCollection(repoId: string, collectionId: string): AppSettings {
+    return runSyncUnwrapped(this.handle.removeSkillRepositoryCollection(repoId, collectionId));
   }
 
   /** Hide/show a model in the picker, by its "<provider>:<id>" key. */

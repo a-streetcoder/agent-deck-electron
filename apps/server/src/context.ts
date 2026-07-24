@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
+import type { SkillInfo } from "@agent-deck/domain";
 import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
 import type { ProviderLoginManager, ResourceRoots } from "@agent-deck/resources";
 import type { FastifyInstance } from "fastify";
@@ -114,6 +115,9 @@ export interface ServerContext {
   enabledExtensionPaths(projectId?: string): string[];
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
+  scanSkillsFor(projectId?: string): SkillInfo[];
+  watchSkillRoots(paths: readonly string[]): void;
+  unwatchSkillRoots(paths: readonly string[]): Promise<void>;
   broadcast(message: ServerMessage): void;
   watchProject(projectPath: string): void;
   /**
