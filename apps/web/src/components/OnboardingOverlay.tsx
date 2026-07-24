@@ -135,6 +135,13 @@ const EMPTY_SETUP_CHECKS: HealthCheck[] = [
   { id: "settings", label: "Pi settings", status: "ok", detail: "Fresh defaults" },
 ];
 
+function emptyPreviewChecks(providerConnected: boolean): HealthCheck[] {
+  if (!providerConnected) return EMPTY_SETUP_CHECKS;
+  return EMPTY_SETUP_CHECKS.map((check) =>
+    check.id === "auth" ? { ...check, status: "ok", detail: "1 connected: AI provider" } : check,
+  );
+}
+
 /** The onboarding-preferences slice of AppSettings (native OnboardingPreferences). */
 interface Prefs {
   autoTitle: boolean;
@@ -268,6 +275,8 @@ export function OnboardingOverlay() {
   // Monotonic request id: a slow earlier /runtime/doctor response must not
   // overwrite a newer one (rapid Re-check, or the setup→final refetch).
   const checksReq = useRef(0);
+  // Credentials in the empty preview are real but isolated in its temporary home.
+  const previewProviderConnected = useRef(false);
   // Serializes preference PATCHes so two writes to the same key can't land out
   // of order (last click must win on the server, not last-to-arrive).
   const patchChain = useRef<Promise<unknown>>(Promise.resolve());
@@ -280,7 +289,7 @@ export function OnboardingOverlay() {
     if (EMPTY_SETUP_PREVIEW) {
       const timer = window.setTimeout(() => {
         if (req === checksReq.current) {
-          setChecks(EMPTY_SETUP_CHECKS);
+          setChecks(emptyPreviewChecks(previewProviderConnected.current));
           setChecksLoading(false);
         }
       }, 1_200);
@@ -335,7 +344,7 @@ export function OnboardingOverlay() {
     if (EMPTY_SETUP_PREVIEW) {
       window.setTimeout(() => {
         if (req === checksReq.current) {
-          setChecks(EMPTY_SETUP_CHECKS);
+          setChecks(emptyPreviewChecks(previewProviderConnected.current));
           setChecksLoading(false);
         }
       }, 1_200);
@@ -717,6 +726,7 @@ export function OnboardingOverlay() {
           <div className="flex min-h-0 flex-1 flex-col" data-testid="onboarding-provider">
             <ProvidersScreen
               onProviderConnected={() => {
+                previewProviderConnected.current = true;
                 runChecks();
                 setPhase("tour");
               }}

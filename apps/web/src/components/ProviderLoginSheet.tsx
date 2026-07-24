@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, Loader2, XCircle } from "lucide-react";
+import { openExternal } from "../lib/native.ts";
 import { useAppStore } from "../state/store.ts";
 
 /**
@@ -41,6 +42,7 @@ export function ProviderLoginSheet({
   const loginIdRef = useRef<string | null>(null);
   const cursorRef = useRef(0);
   const notifiedRef = useRef(false);
+  const openedAuthUrlRef = useRef<string | null>(null);
 
   const poll = useCallback(async (): Promise<void> => {
     const loginId = loginIdRef.current;
@@ -99,6 +101,15 @@ export function ProviderLoginSheet({
     const timer = setInterval(() => void poll(), 1000);
     return () => clearInterval(timer);
   }, [status, poll]);
+
+  // Match native Agent Deck: launch browser auth as soon as Pi advertises it.
+  // The ref prevents poll re-renders from opening duplicate tabs.
+  useEffect(() => {
+    const auth = events.findLast((event) => event.type === "auth_url");
+    if (!auth || openedAuthUrlRef.current === auth.url) return;
+    openedAuthUrlRef.current = auth.url;
+    void openExternal(auth.url);
+  }, [events]);
 
   // On success (once), toast + let the parent refresh its list. The sheet stays
   // open showing "Signed in" until the user closes it.
@@ -246,15 +257,13 @@ function LoginStep({ event }: { event: LoginEvent }) {
           <div className="mt-1 text-xs leading-relaxed text-text-muted">
             Sign in securely with the provider, then return to Agent Deck.
           </div>
-          <a
-            href={event.url}
-            target="_blank"
-            rel="noreferrer"
+          <button
             className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent"
             data-testid="login-auth-url"
+            onClick={() => void openExternal(event.url)}
           >
-            <ExternalLink size={12} /> Open browser
-          </a>
+            <ExternalLink size={12} /> Open browser again
+          </button>
           {event.instructions ? (
             <div className="mt-2 text-[11px] text-text-muted">{event.instructions}</div>
           ) : null}

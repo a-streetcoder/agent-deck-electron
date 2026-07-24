@@ -20,6 +20,7 @@ export interface AgentDeckBridge {
     buttonLabel?: string;
     multiple?: boolean;
   }): Promise<string[]>;
+  openExternal?(url: string): Promise<boolean>;
   openAppMenu?(
     name: "file" | "edit" | "view" | "help",
     anchor: { x: number; y: number },
@@ -50,6 +51,20 @@ export function nativeBridge(): AgentDeckBridge | undefined {
 /** True when running inside the Electron shell (native folder picker available). */
 export function isElectron(): boolean {
   return nativeBridge()?.isElectron === true;
+}
+
+/** Open an http(s) URL in the user's default browser through Electron. */
+export async function openExternal(url: string): Promise<boolean> {
+  const bridge = nativeBridge();
+  if (bridge?.openExternal) {
+    try {
+      return (await bridge.openExternal(url)) === true;
+    } catch {
+      return false;
+    }
+  }
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  return opened !== null;
 }
 
 /**

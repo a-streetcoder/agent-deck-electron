@@ -425,6 +425,17 @@ function buildAppMenu() {
 }
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
+ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    await shell.openExternal(url.toString());
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
   const properties = ["openDirectory", "createDirectory"];
   if (options.multiple) properties.push("multiSelections");

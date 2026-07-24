@@ -83,7 +83,7 @@ export function ProvidersScreen({
           />
         </label>
 
-        <AppScrollView className="flex-1" contentClassName="pr-3" testId="provider-scroll-area">
+        <AppScrollView className="flex-1" testId="provider-scroll-area">
           {!loaded ? <SkeletonRows count={5} /> : null}
           <ProviderGroup
             title="Subscriptions"

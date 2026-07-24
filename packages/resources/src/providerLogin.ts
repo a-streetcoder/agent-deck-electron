@@ -25,9 +25,14 @@ const realLoginFn: ProviderLoginFn = async (authPath, providerId, authType, inte
   await runtime.login(providerId, authType, interaction);
 };
 
+interface PendingPrompt {
+  resolve: (value: string) => void;
+  reject: (error: Error) => void;
+}
+
 interface LoginState {
   events: LoginEvent[];
-  pending: ((value: string | undefined) => void) | null;
+  pending: PendingPrompt | null;
   status: LoginStatus;
   abort: AbortController;
   finishedAt?: number;
@@ -57,7 +62,12 @@ export class ProviderLoginManager {
         }
       },
       prompt: (prompt) =>
-        new Promise<string>((resolve) => {
+        new Promise<string>((resolve, reject) => {
+          if (state.pending) state.pending.reject(new Error("A newer provider prompt replaced it"));
+          if (prompt.signal?.aborted || abort.signal.aborted) {
+            reject(new Error("Provider sign-in was cancelled"));
+            return;
+          }
           if (prompt.type === "select") {
             state.events.push({
               type: "select",
@@ -72,7 +82,15 @@ export class ProviderLoginManager {
               secret: prompt.type === "secret",
             });
           }
-          state.pending = (value) => resolve(value ?? "");
+          const pending: PendingPrompt = { resolve, reject };
+          state.pending = pending;
+          const cancel = () => {
+            if (state.pending !== pending) return;
+            state.pending = null;
+            reject(new Error("Provider sign-in was cancelled"));
+          };
+          prompt.signal?.addEventListener("abort", cancel, { once: true });
+          abort.signal.addEventListener("abort", cancel, { once: true });
         }),
     };
 
@@ -108,9 +126,9 @@ export class ProviderLoginManager {
   respond(loginId: string, value: string | undefined): boolean {
     const state = this.sessions.get(loginId);
     if (!state?.pending) return false;
-    const resolve = state.pending;
+    const pending = state.pending;
     state.pending = null;
-    resolve(value);
+    pending.resolve(value ?? "");
     return true;
   }
 
@@ -119,9 +137,9 @@ export class ProviderLoginManager {
     if (!state) return;
     state.abort.abort();
     if (state.pending) {
-      const resolve = state.pending;
+      const pending = state.pending;
       state.pending = null;
-      resolve(undefined);
+      pending.reject(new Error("Provider sign-in was cancelled"));
     }
   }
 

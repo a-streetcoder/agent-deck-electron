@@ -67,6 +67,23 @@ describe("provider login relay", () => {
     expect(chosen).toBe("personal");
   });
 
+  it("honors per-prompt cancellation when an OAuth callback wins the race", async () => {
+    const manager = new ProviderLoginManager(async (_path, _provider, _type, interaction) => {
+      const controller = new AbortController();
+      const manualEntry = interaction.prompt({
+        type: "manual_code",
+        message: "Paste a redirect URL",
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(manualEntry).rejects.toThrow("cancelled");
+      // The provider continues with the callback result after cancelling manual entry.
+    });
+    const id = manager.start(roots(), "openai-codex", "oauth");
+    await tick();
+    expect(manager.poll(id, 0)!.status).toBe("done");
+  });
+
   it("ignores responses when nothing is pending", () => {
     const manager = new ProviderLoginManager(async () => {});
     expect(manager.poll("nope", 0)).toBeUndefined();

@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("agentDeck", {
   chooseDirectory: (options) => ipcRenderer.invoke("dialog:openDirectory", options),
   /** Open a native menu at a renderer-provided titlebar anchor. */
   openAppMenu: (name, anchor) => ipcRenderer.invoke("app-menu:open", name, anchor),
+  /** Open an allow-listed http(s) URL in the user's default browser. */
+  openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /**
    * Forward a semantic attention event to the shell (Slice 22a). Fire-and-forget
    * (send, not invoke): the MAIN process owns the focus gate and the OS surface —
