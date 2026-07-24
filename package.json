@@ -25,7 +25,8 @@
     "test": "pnpm -r test",
     "test:pi": "pnpm -r --filter '!@agent-deck/e2e' test:pi",
     "test:e2e": "pnpm --filter @agent-deck/e2e test:pi",
-    "lint": "eslint .",
+    "check:design-system": "node scripts/check-design-system.mjs",
+    "lint": "pnpm check:design-system && eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

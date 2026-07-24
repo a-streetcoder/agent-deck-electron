@@ -217,14 +217,14 @@ export function ResizeHandle(props: {
       data-dragging={isDragging}
       className={cn(
         "relative z-20 w-0 shrink-0 self-stretch outline-none",
-        "focus-visible:ring-2 focus-visible:ring-[var(--color-brand-accent)]",
+        "focus-visible:ring-2 focus-visible:ring-focus",
         className,
       )}
     >
       <div
         className={cn(
           "absolute inset-y-0 left-1/2 w-2 -translate-x-1/2 cursor-col-resize transition-colors",
-          isDragging ? "bg-[var(--color-selection-fill)]" : "hover:bg-[var(--color-hover-fill)]",
+          isDragging ? "bg-selection" : "hover:bg-hover",
         )}
         {...pointerProps}
       />

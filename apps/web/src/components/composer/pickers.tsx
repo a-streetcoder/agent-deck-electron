@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Brain, ChevronDown, Cpu, Square } from "lucide-react";
 import { THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
@@ -27,7 +28,7 @@ export function chipClass(active = false): string {
   return cn(
     "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "border-[var(--color-selection-stroke)] bg-[var(--color-selection-fill)] text-text-primary"
+      ? "border-selection-stroke bg-selection text-text-primary"
       : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary",
   );
 }
@@ -74,7 +75,7 @@ export function ModelChip({
 
   return (
     <div className="relative" ref={ref}>
-      <button
+      <ControlButton
         data-testid="model-chip"
         className={chipClass(open)}
         title="Model"
@@ -91,7 +92,7 @@ export function ModelChip({
           {state?.modelId ?? "model"}
         </span>
         <ChevronDown size={11} className="opacity-60" />
-      </button>
+      </ControlButton>
       {open ? (
         <div
           data-testid="model-menu"
@@ -101,19 +102,19 @@ export function ModelChip({
         >
           {[...byProvider.entries()].map(([provider, providerModels]) => (
             <div key={provider}>
-              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
                 <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
                 {provider}
               </div>
               {providerModels.map((model) => (
-                <button
+                <ControlButton
                   key={`${model.provider}/${model.id}`}
                   data-testid={`model-option-${model.id}`}
                   className={cn(
                     "block w-full truncate rounded-md px-2 py-1 text-left text-xs",
                     model.id === state?.modelId && model.provider === state?.provider
-                      ? "bg-[var(--color-selection-fill)] text-text-primary"
-                      : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+                      ? "bg-selection text-text-primary"
+                      : "text-text-secondary hover:bg-hover",
                   )}
                   onClick={() => {
                     setOpen(false);
@@ -121,7 +122,7 @@ export function ModelChip({
                   }}
                 >
                   {model.id}
-                </button>
+                </ControlButton>
               ))}
             </div>
           ))}
@@ -160,7 +161,7 @@ export function ThinkingChip({
 
   return (
     <div className="relative" ref={ref}>
-      <button
+      <ControlButton
         data-testid="thinking-chip"
         className={chipClass(open)}
         title="Thinking level"
@@ -171,7 +172,7 @@ export function ThinkingChip({
         <Brain size={12} />
         <span data-testid="thinking-chip-label">{label}</span>
         <ChevronDown size={11} className="opacity-60" />
-      </button>
+      </ControlButton>
       {open ? (
         <div
           data-testid="thinking-menu"
@@ -180,14 +181,14 @@ export function ThinkingChip({
           className="absolute bottom-full left-0 z-20 mb-1.5 w-36 rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
           {levels.map((level) => (
-            <button
+            <ControlButton
               key={level}
               data-testid={`thinking-option-${level}`}
               className={cn(
                 "block w-full rounded-md px-2 py-1 text-left text-xs",
                 level === state?.thinkingLevel
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-secondary hover:bg-hover",
               )}
               onClick={() => {
                 setOpen(false);
@@ -195,7 +196,7 @@ export function ThinkingChip({
               }}
             >
               {level}
-            </button>
+            </ControlButton>
           ))}
         </div>
       ) : null}
@@ -215,7 +216,7 @@ export function SendStopButton({
   onStop: () => void;
 }) {
   return (
-    <button
+    <ControlButton
       data-testid={running ? "abort-button" : "send-button"}
       className={cn(
         "flex h-9 w-9 items-center justify-center rounded-full shadow-capsule transition-all",
@@ -225,13 +226,13 @@ export function SendStopButton({
         background: running
           ? "var(--color-role-error)"
           : "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-        color: running ? "#fff" : "var(--color-accent-foreground)",
+        color: running ? "var(--color-text-inverse)" : "var(--color-text-on-accent)",
       }}
       disabled={!running && disabled}
       title={running ? "Stop" : "Send"}
       onClick={running ? onStop : onSend}
     >
       {running ? <Square size={13} fill="currentColor" /> : <ArrowUp size={16} strokeWidth={2.5} />}
-    </button>
+    </ControlButton>
   );
 }

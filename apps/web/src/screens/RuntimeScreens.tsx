@@ -1,3 +1,8 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
@@ -86,7 +91,7 @@ export function EnvironmentScreen() {
               Environment
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="env-add"
             className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
             style={{
@@ -101,7 +106,7 @@ export function EnvironmentScreen() {
             }}
           >
             <Plus size={14} />
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           Variables from ~/.pi/agent/.env and this project's .pi/.env. Values are masked; editing
@@ -110,21 +115,21 @@ export function EnvironmentScreen() {
 
         {adding ? (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border-strong bg-surface p-2">
-            <input
+            <ControlInput
               data-testid="env-new-key"
               className="min-w-[10ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
               placeholder="KEY"
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
             />
-            <input
+            <ControlInput
               data-testid="env-new-value"
               className="min-w-[12ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
               placeholder="value"
               value={newValue}
               onChange={(e) => setNewValue(e.target.value)}
             />
-            <select
+            <ControlSelect
               data-testid="env-new-scope"
               className="rounded border border-border-strong bg-surface px-2 py-1 text-xs text-text-primary"
               value={newScope}
@@ -132,8 +137,8 @@ export function EnvironmentScreen() {
             >
               <option value="global">global</option>
               {currentProjectId ? <option value="project">project</option> : null}
-            </select>
-            <button
+            </ControlSelect>
+            <ControlButton
               data-testid="env-new-save"
               className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -151,7 +156,7 @@ export function EnvironmentScreen() {
               }
             >
               Add
-            </button>
+            </ControlButton>
           </div>
         ) : null}
 
@@ -172,7 +177,7 @@ export function EnvironmentScreen() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-sm text-text-primary">{entry.key}</div>
                   <div
-                    className="truncate font-mono text-[10px] text-text-muted"
+                    className="truncate font-mono text-micro text-text-muted"
                     data-testid="env-source"
                     title={entry.source}
                   >
@@ -180,7 +185,7 @@ export function EnvironmentScreen() {
                   </div>
                 </div>
                 {isEditing ? (
-                  <input
+                  <ControlInput
                     autoFocus
                     data-testid={`env-edit-input-${entry.key}`}
                     className="w-40 rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
@@ -204,9 +209,9 @@ export function EnvironmentScreen() {
                 )}
                 <ScopeChip scope={entry.scope} />
                 {entry.overridden ? (
-                  <span className="text-[10px] text-text-muted">overridden</span>
+                  <span className="text-micro text-text-muted">overridden</span>
                 ) : null}
-                <button
+                <ControlButton
                   data-testid={`env-edit-${entry.key}`}
                   className="rounded p-1 text-text-muted hover:text-text-primary"
                   title="Set value"
@@ -216,10 +221,10 @@ export function EnvironmentScreen() {
                   }}
                 >
                   <Pencil size={12} />
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   data-testid={`env-delete-${entry.key}`}
-                  className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                  className="rounded p-1 text-text-muted hover:text-danger"
                   title="Delete"
                   onClick={() => {
                     if (confirm(`Delete environment key "${entry.key}"?`)) {
@@ -228,7 +233,7 @@ export function EnvironmentScreen() {
                   }}
                 >
                   <Trash2 size={12} />
-                </button>
+                </ControlButton>
               </div>
             );
           })}
@@ -281,16 +286,16 @@ function CopyFixButton({ command }: { command: string }) {
   };
 
   return (
-    <button
+    <ControlButton
       data-testid="doctor-fix-copy"
       data-fix-command={command}
       title={`Copy: ${command}`}
-      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-[10px] text-text-secondary hover:text-text-primary"
+      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary"
       onClick={copy}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
       {copied ? "Copied" : "Copy fix"}
-    </button>
+    </ControlButton>
   );
 }
 
@@ -327,14 +332,14 @@ export function DoctorScreen() {
               Doctor
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="doctor-refresh"
             className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
             disabled={loading}
             onClick={refresh}
           >
             {loading ? "Checking…" : "Re-check"}
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           Environment health for the pi runtime this app drives.

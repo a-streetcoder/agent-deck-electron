@@ -39,18 +39,18 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
       data-testid="question-card"
       data-entry-id={id}
       className={cn(
-        "rounded-xl border border-[var(--color-role-user)]/25",
-        "bg-[var(--color-role-user)]/8",
+        "rounded-xl border border-role-user/25",
+        "bg-role-user/8",
         "px-4 py-3 flex flex-col gap-2",
-        "text-[13px] leading-relaxed",
+        "text-label leading-relaxed",
         className,
       )}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-role-user)]">
+        <span className="text-detail font-semibold uppercase tracking-wide text-role-user">
           {askedBy}
         </span>
-        <span className="flex items-center gap-2 text-[11px] text-text-muted">
+        <span className="flex items-center gap-2 text-detail text-text-muted">
           {timestamp ? <span>{timestamp}</span> : null}
           {trailing}
         </span>
@@ -64,7 +64,7 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
               data-kind={attachment.kind}
               className={cn(
                 "inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-elevated",
-                "px-2 py-0.5 text-[11px] font-medium text-text-secondary",
+                "px-2 py-0.5 text-detail font-medium text-text-secondary",
               )}
             >
               {attachment.label}
@@ -73,7 +73,7 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
         </ul>
       ) : null}
 
-      <MarkdownDocument source={text} className="text-[13px]" />
+      <MarkdownDocument source={text} className="text-label" />
     </div>
   );
 });

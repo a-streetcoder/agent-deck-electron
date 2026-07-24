@@ -1,13 +1,11 @@
 /*
- * Design tokens as CSS custom properties.
- * Tailwind (see tailwind.config.ts) references these by var(--*).
+ * Agent Deck design tokens.
  *
- * Default :root is the dark theme (matches the macOS app default). A light
- * variant is exposed via [data-theme="light"]; ThemeProvider sets
- * data-theme on <html>.
+ * This is the renderer's canonical source of visual values. Components and
+ * feature views consume the semantic names directly or through Tailwind.
+ * Dark is the fallback theme; systemTheme.ts applies an explicit data-theme.
  */
 
-/* Fonts */
 @font-face {
   font-family: "Kemco Pixel Bold";
   src: url("/fonts/KemcoPixelBold.ttf") format("truetype");
@@ -17,7 +15,7 @@
 
 :root,
 [data-theme="dark"] {
-  /* Brand accent palette (from design_tokens) */
+  /* Brand */
   --color-brand-accent: #64d2ff;
   --color-brand-accent-bright: #9fe2ff;
   --color-brand-accent-deep: #43a0c7;
@@ -28,90 +26,185 @@
   --color-surface-elevated: #28282b;
   --color-surface-subtle: #33333a;
   --color-surface-stroke: #5c5c63;
+  --color-surface-overlay: rgba(0, 0, 0, 0.58);
+  --color-media-overlay: rgba(0, 0, 0, 0.4);
+  --color-media-overlay-strong: rgba(0, 0, 0, 0.75);
 
-  /* Semantic aliases used by tailwind.config.ts */
-  --color-primary: var(--color-brand-accent);
-  --color-primary-hover: var(--color-brand-accent-bright);
-  --color-accent: var(--color-brand-accent);
-  /*
-   * Foreground color guaranteed to be readable on top of the accent
-   * fills used by primary buttons, prominent circle buttons, etc.
-   * Dark theme: accent is bright cyan, so we render glyphs/text in
-   * white. The light theme block overrides this with the deepest
-   * variant so we stay legible on the same cyan fill.
-   */
-  --color-accent-foreground: #ffffff;
-
-  /* Text */
+  /* Content */
   --color-text-primary: #f5f5f7;
   --color-text-secondary: #c4c4c8;
   --color-text-muted: #8e8e93;
+  --color-text-disabled: #696970;
+  --color-text-inverse: #18181b;
+  --color-text-on-accent: #ffffff;
 
-  /* Borders */
+  /* Borders and interaction */
   --color-border-subtle: rgba(255, 255, 255, 0.06);
   --color-border-strong: rgba(255, 255, 255, 0.12);
+  --color-hover-fill: rgba(255, 255, 255, 0.06);
+  --color-pressed-fill: rgba(255, 255, 255, 0.1);
+  --color-selection-fill: rgba(100, 210, 255, 0.22);
+  --color-selection-stroke: rgba(100, 210, 255, 0.32);
+  --color-focus-ring: var(--color-brand-accent);
+  --color-accent-surface: color-mix(
+    in srgb,
+    var(--color-brand-accent) 7%,
+    var(--color-surface-elevated)
+  );
 
-  /* Role colors */
+  /* Feedback */
+  --color-info: #64d2ff;
+  --color-success: #56c98a;
+  --color-warning: #e5a23a;
+  --color-danger: #e5746c;
+  --color-info-subtle: rgba(100, 210, 255, 0.14);
+  --color-success-subtle: rgba(86, 201, 138, 0.14);
+  --color-warning-subtle: rgba(229, 162, 58, 0.14);
+  --color-danger-subtle: rgba(229, 116, 108, 0.14);
+
+  /* Conversation and application roles */
   --color-role-assistant: #ba6eee;
+  --color-role-user: #64d2ff;
   --color-role-thinking: #8c97e8;
   --color-role-tool: #dda84e;
-  --color-role-error: #e5746c;
+  --color-role-error: var(--color-danger);
+  --color-role-success: var(--color-success);
   --color-role-stderr: #e08ab2;
   --color-role-status: #7c7c84;
 
-  /* Diff */
+  /* Diff and source roles */
   --color-diff-added: #56c98a;
   --color-diff-removed: #e5746c;
-
-  /* Source kind tints */
+  --color-diff-added-subtle: rgba(86, 201, 138, 0.14);
+  --color-diff-removed-subtle: rgba(229, 116, 108, 0.14);
   --color-source-builtin: #f0a55a;
   --color-source-library: #be82eb;
   --color-source-project: #64c882;
+  --color-source-global: #64d2ff;
+  --color-source-project-subtle: rgba(100, 200, 130, 0.1);
+  --color-source-project-stroke: rgba(100, 200, 130, 0.18);
 
-  /* Misc */
-  --color-warning: #e5a23a;
-  --color-success: #56c98a;
+  /* Code and chrome */
   --color-code-block-fill: #1e1e20;
   --color-quote-bar-fill: #606066;
-  --color-hover-fill: rgba(255, 255, 255, 0.06);
-  --color-selection-fill: rgba(100, 210, 255, 0.22);
-  --color-selection-stroke: rgba(100, 210, 255, 0.32);
   --color-glass-tint: rgba(100, 210, 255, 0.55);
   --color-scrollbar: rgba(142, 142, 147, 0.52);
   --color-scrollbar-hover: rgba(196, 196, 200, 0.72);
+  --color-scroll-fade: var(--color-surface-elevated);
+
+  /* Terminal palette: a separate domain palette, not application feedback. */
+  --color-terminal-background: #1e1e20;
+  --color-terminal-foreground: #ededf0;
+  --color-terminal-cursor: #64d2ff;
+  --color-terminal-selection: rgba(100, 210, 255, 0.25);
+  --color-terminal-black: #181e26;
+  --color-terminal-red: #ff7a8e;
+  --color-terminal-green: #86e795;
+  --color-terminal-yellow: #f4cd72;
+  --color-terminal-blue: #89beff;
+  --color-terminal-magenta: #d0b0ff;
+  --color-terminal-cyan: #7ce8ed;
+  --color-terminal-white: #d2dae6;
+  --color-terminal-bright-black: #6e7888;
+  --color-terminal-bright-red: #ffa8b4;
+  --color-terminal-bright-green: #b0f5ba;
+  --color-terminal-bright-yellow: #ffe095;
+  --color-terminal-bright-blue: #aed2ff;
+  --color-terminal-bright-magenta: #e5cbff;
+  --color-terminal-bright-cyan: #a7f4f7;
+  --color-terminal-bright-white: #f4f7fc;
 
   /* Typography */
   --font-pixel: "Kemco Pixel Bold", "Press Start 2P", monospace;
-  /*
-   * Lead with the bundled @fontsource-variable/inter family so Linux
-   * and Windows hosts pick up the embedded webfont before any OS
-   * fallbacks. On macOS the apple-system fallback still kicks in if
-   * Inter Variable hasn't loaded yet.
-   */
   --font-sans:
     "Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", Inter, "Segoe UI",
     Roboto, sans-serif;
   --font-mono:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  --text-overline: 9px;
+  --text-micro: 10px;
+  --text-detail: 11px;
+  --text-caption: 12px;
+  --text-label: 13px;
+  --text-body: 14px;
+  --text-title: 16px;
+  --text-heading: 20px;
+  --leading-overline: 12px;
+  --leading-micro: 14px;
+  --leading-detail: 15px;
+  --leading-caption: 16px;
+  --leading-label: 18px;
+  --leading-body: 20px;
+  --leading-title: 22px;
+  --leading-heading: 26px;
 
-  /* Spacing */
-  --space-gutter: 16px;
-  --space-section: 24px;
+  /* Spacing: reusable values and semantic layout aliases */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-gutter: var(--space-4);
+  --space-section: var(--space-6);
+  --space-card: var(--space-4);
+  --space-row: var(--space-3);
+  --space-control-gap: var(--space-1-5);
 
-  /* Radii */
+  /* Sizing */
+  --size-control-sm: 28px;
+  --size-control-md: 32px;
+  --size-control-lg: 40px;
+  --size-icon-sm: 14px;
+  --size-icon-md: 16px;
+  --size-icon-lg: 20px;
+  --size-hit-target: 32px;
+  --size-titlebar: 40px;
+  --size-scroll-fade: 36px;
+  --sidebar-width: 240px;
+
+  /* Shape */
   --radius-xs: 4px;
+  --radius-icon: 5px;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-pill: 999px;
 
-  /* Shadows */
+  /* Elevation and layers */
   --shadow-card: 0 1px 0 rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-capsule: 0 1px 0 rgba(0, 0, 0, 0.2);
+  --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.08);
   --shadow-elevated: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.52);
+  --layer-base: 0;
+  --layer-sticky: 10;
+  --layer-popover: 30;
+  --layer-modal: 50;
+  --layer-toast: 70;
 
-  /* Sidebar width (overridable from uiSlice) */
-  --sidebar-width: 240px;
+  /* Motion and state */
+  --duration-fast: 120ms;
+  --duration-normal: 160ms;
+  --duration-slow: 220ms;
+  --ease-standard: ease-out;
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --opacity-disabled: 0.55;
+
+  /* Compatibility aliases. New code uses the semantic names above. */
+  --color-primary: var(--color-brand-accent);
+  --color-primary-hover: var(--color-brand-accent-bright);
+  --color-accent: var(--color-brand-accent);
+  --color-accent-foreground: var(--color-text-on-accent);
+  --color-on-primary: var(--color-text-on-accent);
 }
 
 [data-theme="light"] {
@@ -119,36 +212,41 @@
   --color-surface-elevated: #ffffff;
   --color-surface-subtle: #ececef;
   --color-surface-stroke: #d1d1d6;
-
+  --color-surface-overlay: rgba(24, 24, 27, 0.36);
   --color-text-primary: #18181b;
   --color-text-secondary: #3a3a40;
   --color-text-muted: #6a6a70;
-
+  --color-text-disabled: #97979d;
+  --color-text-inverse: #f5f5f7;
+  --color-text-on-accent: var(--color-brand-accent-shadow);
   --color-border-subtle: rgba(0, 0, 0, 0.06);
   --color-border-strong: rgba(0, 0, 0, 0.14);
-
   --color-hover-fill: rgba(0, 0, 0, 0.04);
+  --color-pressed-fill: rgba(0, 0, 0, 0.08);
   --color-code-block-fill: #f0f0f0;
   --color-quote-bar-fill: #b4b4b8;
   --color-scrollbar: rgba(106, 106, 112, 0.48);
   --color-scrollbar-hover: rgba(58, 58, 64, 0.68);
-
-  /*
-   * On the light theme the accent stays bright cyan, so we need a
-   * dark foreground (the deepest brand shadow) to keep button
-   * glyphs/text legible. This overrides the dark default.
-   */
-  --color-accent-foreground: var(--color-brand-accent-shadow);
+  --color-terminal-background: #f7f7f8;
+  --color-terminal-foreground: #242429;
+  --color-terminal-black: #242429;
+  --color-terminal-red: #b4233c;
+  --color-terminal-green: #237a43;
+  --color-terminal-yellow: #805b00;
+  --color-terminal-blue: #155cad;
+  --color-terminal-magenta: #7442a8;
+  --color-terminal-cyan: #087d83;
+  --color-terminal-white: #d7d7dc;
+  --color-terminal-bright-black: #6a6a70;
+  --color-terminal-bright-red: #d63b52;
+  --color-terminal-bright-green: #2b9652;
+  --color-terminal-bright-yellow: #9b7000;
+  --color-terminal-bright-blue: #2674cb;
+  --color-terminal-bright-magenta: #8d56c2;
+  --color-terminal-bright-cyan: #0b969e;
+  --color-terminal-bright-white: #ffffff;
 }
 
-/*
- * Keyframes for renderer-side feedback primitives.
- *
- * `indeterminate-bar` sweeps a 42%-wide pill across the parent track,
- * matching the macOS `AppIndeterminateBar` (1.15s easeInOut, infinite,
- * non-autoreversing). The pill starts off-screen on the left and exits
- * past the right edge before resetting.
- */
 @keyframes indeterminate-bar {
   0% {
     transform: translateX(-110%);

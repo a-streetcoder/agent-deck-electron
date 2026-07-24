@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { forwardRef, useState, type ReactNode } from "react";
 import { Brain, ChevronDown, ChevronRight, Diff, Globe, Plug, Terminal } from "lucide-react";
 
@@ -97,31 +98,31 @@ export const ToolGroupCard = forwardRef<HTMLDivElement, ToolGroupCardProps>(func
         className,
       )}
     >
-      <button
+      <ControlButton
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-2 text-left",
           "rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-          body ? "hover:bg-[var(--color-hover-fill)]" : "cursor-default",
+          body ? "hover:bg-hover" : "cursor-default",
         )}
       >
         <Icon className="h-4 w-4 shrink-0 text-text-secondary" />
-        <span className="font-mono text-[12px] font-semibold text-text-primary truncate">
+        <span className="font-mono text-caption font-semibold text-text-primary truncate">
           {name}
         </span>
         <AppLabelTag variant={STATUS_TAG[status]} className="shrink-0">
           {STATUS_LABEL[status]}
         </AppLabelTag>
         {typeof callCount === "number" && callCount > 0 ? (
-          <span className="shrink-0 text-[11px] text-text-muted">
+          <span className="shrink-0 text-detail text-text-muted">
             {callCount} {callCount === 1 ? "call" : "calls"}
           </span>
         ) : null}
         <span className="flex-1" />
         {duration ? (
-          <span className="shrink-0 text-[11px] font-mono text-text-muted">{duration}</span>
+          <span className="shrink-0 text-detail font-mono text-text-muted">{duration}</span>
         ) : null}
         {body ? (
           open ? (
@@ -130,12 +131,12 @@ export const ToolGroupCard = forwardRef<HTMLDivElement, ToolGroupCardProps>(func
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
           )
         ) : null}
-      </button>
+      </ControlButton>
       {open && body ? (
         <div
           data-testid="tool-group-card-body"
           data-variant={variant}
-          className="border-t border-border-subtle px-3 py-2 text-[12px]"
+          className="border-t border-border-subtle px-3 py-2 text-caption"
         >
           {body}
         </div>

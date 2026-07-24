@@ -23,7 +23,7 @@ export function SessionStartupCard() {
     <div className="mx-auto mt-12 w-full max-w-md" data-testid="session-startup">
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-5 shadow-card">
         <div
-          className="text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+          className="text-micro font-semibold uppercase tracking-wider text-text-muted"
           style={{ fontStretch: "expanded" }}
         >
           New session
@@ -53,7 +53,7 @@ export function SessionStartupCard() {
               </div>
               {session?.cwd ? (
                 <div
-                  className="truncate font-mono text-[11px] text-text-muted"
+                  className="truncate font-mono text-detail text-text-muted"
                   data-testid="startup-cwd"
                 >
                   {session.cwd}

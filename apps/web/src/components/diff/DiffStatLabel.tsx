@@ -43,12 +43,8 @@ export const DiffStatLabel = memo(function DiffStatLabel(props: {
       )}
       data-testid="diff-stat"
     >
-      <span className="font-mono text-[var(--color-diff-added)]">
-        +{formatCompactDiffCount(additions)}
-      </span>
-      <span className="font-mono text-[var(--color-diff-removed)]">
-        -{formatCompactDiffCount(deletions)}
-      </span>
+      <span className="font-mono text-diff-added">+{formatCompactDiffCount(additions)}</span>
+      <span className="font-mono text-diff-removed">-{formatCompactDiffCount(deletions)}</span>
     </span>
   );
 });

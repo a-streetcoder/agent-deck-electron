@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, GitFork, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import type { SessionMeta } from "@agent-deck/contracts";
@@ -79,10 +80,10 @@ function SessionRow({
         className="flex items-center gap-2 rounded-md px-2.5 py-1"
         data-testid={`chat-${session.id}`}
       >
-        <input
+        <ControlInput
           autoFocus
           data-testid={`chat-rename-input-${session.id}`}
-          className="min-w-0 flex-1 rounded border border-border-strong bg-surface px-1.5 py-0.5 text-[13px] text-text-primary outline-none focus:border-accent"
+          className="min-w-0 flex-1 rounded border border-border-strong bg-surface px-1.5 py-0.5 text-label text-text-primary outline-none focus:border-accent"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -99,10 +100,8 @@ function SessionRow({
     <div
       className={cn(
         "group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-brand-accent)]",
-        active
-          ? "bg-[var(--color-selection-fill)] text-text-primary"
-          : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
+        active ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
         !active && session.endedAt && "opacity-60 saturate-50",
       )}
       data-testid={`chat-${session.id}`}
@@ -120,7 +119,7 @@ function SessionRow({
     >
       <div className="flex min-w-0 flex-1 flex-col">
         <span
-          className="truncate text-[13px] font-medium"
+          className="truncate text-label font-medium"
           style={{ fontStretch: "expanded" }}
           data-testid="chat-title"
         >
@@ -128,7 +127,7 @@ function SessionRow({
         </span>
         {detailed && session.agentName ? (
           <span
-            className="flex items-center gap-1 truncate text-[11px] text-text-muted"
+            className="flex items-center gap-1 truncate text-detail text-text-muted"
             data-testid="chat-agent-name"
           >
             <Send size={10} className="shrink-0" />
@@ -136,7 +135,7 @@ function SessionRow({
           </span>
         ) : null}
         {detailed ? (
-          <span className="truncate text-[11px] text-text-muted" data-testid="chat-timestamp">
+          <span className="truncate text-detail text-text-muted" data-testid="chat-timestamp">
             {formatSessionTime(session.updatedAt ?? session.createdAt)}
           </span>
         ) : null}
@@ -144,7 +143,7 @@ function SessionRow({
       {running ? <TypingDots /> : null}
       {/* Hover-reveal actions (native session row). */}
       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-        <button
+        <ControlButton
           data-testid={`chat-rename-${session.id}`}
           className="rounded p-0.5 text-text-muted hover:text-text-primary"
           title="Rename"
@@ -155,8 +154,8 @@ function SessionRow({
           }}
         >
           <Pencil size={12} />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           data-testid={`chat-fork-${session.id}`}
           className="rounded p-0.5 text-text-muted enabled:hover:text-text-primary disabled:opacity-30"
           title={session.piSessionFile ? "Duplicate" : "Nothing to duplicate yet"}
@@ -167,10 +166,10 @@ function SessionRow({
           }}
         >
           <GitFork size={12} />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           data-testid={`chat-delete-${session.id}`}
-          className="rounded p-0.5 text-text-muted hover:text-[var(--color-role-error)]"
+          className="rounded p-0.5 text-text-muted hover:text-danger"
           title="Delete"
           onClick={(event) => {
             event.stopPropagation();
@@ -178,7 +177,7 @@ function SessionRow({
           }}
         >
           <Trash2 size={12} />
-        </button>
+        </ControlButton>
       </span>
     </div>
   );
@@ -224,9 +223,9 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
             Sessions
           </span>
           <span className="flex items-center gap-1">
-            <button
+            <ControlButton
               data-testid="new-chat"
-              className="rounded-capsule p-1 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
               title="New chat"
               onClick={() => {
                 setView("chat");
@@ -234,15 +233,15 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
               }}
             >
               <Plus size={14} />
-            </button>
-            <button
+            </ControlButton>
+            <ControlButton
               data-testid="sessions-expand"
-              className="rounded-capsule p-1 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
               title="All sessions"
               onClick={onExpand}
             >
               <ChevronUp size={14} />
-            </button>
+            </ControlButton>
           </span>
         </div>
         <div className="space-y-0.5" data-testid="chat-list">
@@ -343,15 +342,15 @@ export function SessionsExpandedOverlay({
           >
             All sessions
           </span>
-          <button
+          <ControlButton
             data-testid="sessions-collapse"
-            className="rounded-capsule p-1 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
             onClick={onCollapse}
           >
             <ChevronDown size={14} />
-          </button>
+          </ControlButton>
         </div>
-        <input
+        <ControlInput
           data-testid="sessions-search"
           className="mb-1.5 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-text-primary outline-none focus:border-accent"
           placeholder="Search sessions by title or content…"
@@ -369,7 +368,7 @@ export function SessionsExpandedOverlay({
           ) : null}
           {[...groups.entries()].map(([group, groupSessions]) => (
             <div key={group}>
-              <div className="px-2.5 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <div className="px-2.5 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
                 {group}
               </div>
               <div className="space-y-0.5">

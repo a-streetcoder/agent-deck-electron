@@ -14,23 +14,11 @@ export interface AppLabelTagProps extends HTMLAttributes<HTMLSpanElement> {
  * text in the same hue).
  */
 const variantClasses: Record<AppLabelTagVariant, string> = {
-  default: cn("border-border-strong/55 text-text-primary", "bg-[var(--color-surface-subtle)]"),
-  success: cn(
-    "border-[var(--color-diff-added)]/55 text-[var(--color-diff-added)]",
-    "bg-[var(--color-diff-added)]/10",
-  ),
-  warning: cn(
-    "border-[var(--color-warning)]/55 text-[var(--color-warning)]",
-    "bg-[var(--color-warning)]/10",
-  ),
-  error: cn(
-    "border-[var(--color-role-error)]/55 text-[var(--color-role-error)]",
-    "bg-[var(--color-role-error)]/10",
-  ),
-  info: cn(
-    "border-[var(--color-brand-accent)]/55 text-[var(--color-brand-accent)]",
-    "bg-[var(--color-brand-accent)]/10",
-  ),
+  default: cn("border-border-strong/55 text-text-primary", "bg-surface-subtle"),
+  success: cn("border-diff-added/55 text-diff-added", "bg-diff-added/10"),
+  warning: cn("border-warning/55 text-warning", "bg-warning/10"),
+  error: cn("border-danger/55 text-danger", "bg-danger/10"),
+  info: cn("border-accent/55 text-accent", "bg-accent/10"),
   neutral: cn("border-border-subtle text-text-muted", "bg-transparent"),
 };
 

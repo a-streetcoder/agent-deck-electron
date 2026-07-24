@@ -1,3 +1,9 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Play, Plus, Repeat, Square, Trash2 } from "lucide-react";
 import {
@@ -213,7 +219,7 @@ export function LoopsScreen() {
               Loop Bank
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="new-loop"
             className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
             style={{
@@ -224,7 +230,7 @@ export function LoopsScreen() {
             onClick={() => setDraft(draftFrom(null))}
           >
             <Plus size={13} /> New loop
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           Saved loops repeat an agent run until the validation command passes.
@@ -247,12 +253,12 @@ export function LoopsScreen() {
                 <span
                   data-testid="loop-run-status"
                   data-status={activeRun.status}
-                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary"
+                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary"
                 >
                   {RUN_STATUS_LABEL[activeRun.status]}
                 </span>
                 {isLoopRunTerminal(activeRun.status) ? (
-                  <button
+                  <ControlButton
                     data-testid="loop-run-dismiss"
                     className="rounded p-1 text-text-muted hover:text-text-primary"
                     title="Dismiss"
@@ -262,19 +268,19 @@ export function LoopsScreen() {
                     }}
                   >
                     <Trash2 size={13} />
-                  </button>
+                  </ControlButton>
                 ) : (
-                  <button
+                  <ControlButton
                     data-testid="loop-run-stop"
-                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary hover:text-[var(--color-role-error)]"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-danger"
                     onClick={() => void stopRun()}
                   >
                     <Square size={11} /> Stop
-                  </button>
+                  </ControlButton>
                 )}
               </div>
             </div>
-            <div className="mt-1 text-[11px] text-text-muted">
+            <div className="mt-1 text-detail text-text-muted">
               Iteration {activeRun.currentIteration} / {activeRun.maxIterations}
               {activeRun.stopReason ? ` · ${activeRun.stopReason}` : ""}
             </div>
@@ -283,7 +289,7 @@ export function LoopsScreen() {
                 {activeRun.iterations.map((it) => (
                   <span
                     key={it.index}
-                    className="rounded-capsule border px-1.5 py-0.5 text-[10px]"
+                    className="rounded-capsule border px-1.5 py-0.5 text-micro"
                     style={{
                       borderColor:
                         it.validationPassed === true
@@ -312,9 +318,9 @@ export function LoopsScreen() {
             <div
               key={loop.id}
               data-loop-name={loop.name}
-              className="flex items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5"
+              className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
             >
-              <button
+              <ControlButton
                 className="min-w-0 flex-1 text-left"
                 onClick={() => setDraft(draftFrom(loop))}
                 data-testid={`loop-open-${loop.name}`}
@@ -325,12 +331,12 @@ export function LoopsScreen() {
                 >
                   {loop.name}
                 </div>
-                <div className="truncate text-[11px] text-text-muted">
+                <div className="truncate text-detail text-text-muted">
                   {LOOP_STRUCTURE_LABEL[loop.structure]} · {loop.maxIterations}× ·{" "}
                   {loop.description || "No description"}
                 </div>
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid={`loop-run-${loop.name}`}
                 className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                 title={currentProjectId ? "Run loop" : "Open a project to run"}
@@ -338,23 +344,23 @@ export function LoopsScreen() {
                 onClick={() => void startRun(loop)}
               >
                 <Play size={12} /> Run
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid={`loop-duplicate-${loop.name}`}
                 className="rounded p-1 text-text-muted hover:text-text-primary"
                 title="Duplicate loop"
                 onClick={() => void duplicate(loop)}
               >
                 <Copy size={13} />
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid={`loop-delete-${loop.name}`}
-                className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                className="rounded p-1 text-text-muted hover:text-danger"
                 title="Delete loop"
                 onClick={() => void remove(loop)}
               >
                 <Trash2 size={13} />
-              </button>
+              </ControlButton>
             </div>
           ))}
           {loaded && loops.length === 0 ? (
@@ -367,7 +373,7 @@ export function LoopsScreen() {
 
       {draft ? (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8"
+          className="fixed inset-0 z-40 flex items-center justify-center bg-overlay p-8"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setDraft(null);
           }}
@@ -386,7 +392,7 @@ export function LoopsScreen() {
             </div>
             <label className="block text-xs text-text-muted">
               Name
-              <input
+              <ControlInput
                 data-testid="loop-name"
                 className={inputClass}
                 value={draft.name}
@@ -396,7 +402,7 @@ export function LoopsScreen() {
             </label>
             <label className="block text-xs text-text-muted">
               Description
-              <input
+              <ControlInput
                 className={inputClass}
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
@@ -404,9 +410,9 @@ export function LoopsScreen() {
             </label>
             <label className="block text-xs text-text-muted">
               Goal (what each iteration should accomplish)
-              <textarea
+              <ControlTextArea
                 data-testid="loop-goal"
-                className={`${inputClass} min-h-[100px] font-mono text-[12px]`}
+                className={`${inputClass} min-h-[100px] font-mono text-caption`}
                 value={draft.goal}
                 onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
               />
@@ -414,7 +420,7 @@ export function LoopsScreen() {
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-text-muted">
                 Structure
-                <select
+                <ControlSelect
                   data-testid="loop-structure"
                   className={inputClass}
                   value={draft.structure}
@@ -427,11 +433,11 @@ export function LoopsScreen() {
                       {LOOP_STRUCTURE_LABEL[s]}
                     </option>
                   ))}
-                </select>
+                </ControlSelect>
               </label>
               <label className="text-xs text-text-muted">
                 Agent
-                <input
+                <ControlInput
                   className={inputClass}
                   placeholder="agent name"
                   value={draft.agentName}
@@ -442,7 +448,7 @@ export function LoopsScreen() {
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-text-muted">
                 Max iterations
-                <input
+                <ControlInput
                   data-testid="loop-max-iterations"
                   type="number"
                   min={1}
@@ -456,7 +462,7 @@ export function LoopsScreen() {
               </label>
               <label className="text-xs text-text-muted">
                 Write target
-                <select
+                <ControlSelect
                   className={inputClass}
                   value={draft.writeTarget}
                   onChange={(e) =>
@@ -468,27 +474,27 @@ export function LoopsScreen() {
                       {LOOP_WRITE_TARGET_LABEL[t]}
                     </option>
                   ))}
-                </select>
+                </ControlSelect>
               </label>
             </div>
             <label className="block text-xs text-text-muted">
               Validation command (exit 0 stops the loop early)
-              <input
+              <ControlInput
                 data-testid="loop-validation"
-                className={`${inputClass} font-mono text-[12px]`}
+                className={`${inputClass} font-mono text-caption`}
                 placeholder="pnpm test"
                 value={draft.validationCommand}
                 onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
               />
             </label>
             <div className="flex justify-end gap-2 pt-1">
-              <button
+              <ControlButton
                 className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
                 onClick={() => setDraft(null)}
               >
                 Cancel
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="loop-save"
                 className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
                 style={{
@@ -500,7 +506,7 @@ export function LoopsScreen() {
                 onClick={() => void save()}
               >
                 {saving ? "Saving…" : "Save"}
-              </button>
+              </ControlButton>
             </div>
           </div>
         </div>

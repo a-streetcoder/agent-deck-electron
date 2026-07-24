@@ -1,3 +1,9 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useState } from "react";
 import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
@@ -79,16 +85,19 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             </span>
           ) : null}
         </div>
-        <button className="text-sm text-text-muted hover:text-text-primary" onClick={onClose}>
+        <ControlButton
+          className="text-sm text-text-muted hover:text-text-primary"
+          onClick={onClose}
+        >
           Close
-        </button>
+        </ControlButton>
       </div>
       <div className="grid grid-cols-2 gap-3">
         {!agent ? (
           <>
             <label className="text-xs text-text-muted">
               Name
-              <input
+              <ControlInput
                 data-testid="editor-name"
                 className={inputClass}
                 value={name}
@@ -97,7 +106,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             </label>
             <label className="text-xs text-text-muted">
               Scope
-              <select
+              <ControlSelect
                 data-testid="editor-scope"
                 className={inputClass}
                 value={scope}
@@ -105,13 +114,13 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
               >
                 <option value="global">global</option>
                 {currentProjectId ? <option value="project">project</option> : null}
-              </select>
+              </ControlSelect>
             </label>
           </>
         ) : null}
         <label className="col-span-2 text-xs text-text-muted">
           Description
-          <input
+          <ControlInput
             data-testid="editor-description"
             className={inputClass}
             value={description}
@@ -120,7 +129,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </label>
         <label className="col-span-2 text-xs text-text-muted">
           When to use
-          <input
+          <ControlInput
             className={inputClass}
             value={whenToUse}
             onChange={(e) => setWhenToUse(e.target.value)}
@@ -128,11 +137,15 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </label>
         <label className="text-xs text-text-muted">
           Model
-          <input className={inputClass} value={model} onChange={(e) => setModel(e.target.value)} />
+          <ControlInput
+            className={inputClass}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
         </label>
         <label className="text-xs text-text-muted">
           Thinking
-          <select
+          <ControlSelect
             className={inputClass}
             value={thinking}
             onChange={(e) => setThinking(e.target.value)}
@@ -143,11 +156,11 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
                 {level}
               </option>
             ))}
-          </select>
+          </ControlSelect>
         </label>
         <label className="text-xs text-text-muted">
           Tools (comma-separated)
-          <input
+          <ControlInput
             data-testid="editor-tools"
             className={inputClass}
             value={tools}
@@ -156,7 +169,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </label>
         <label className="text-xs text-text-muted">
           Skills (comma-separated)
-          <input
+          <ControlInput
             className={inputClass}
             value={skills}
             onChange={(e) => setSkills(e.target.value)}
@@ -164,18 +177,18 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </label>
         <label className="text-xs text-text-muted">
           System prompt mode
-          <select
+          <ControlSelect
             className={inputClass}
             value={mode}
             onChange={(e) => setMode(e.target.value as "replace" | "append")}
           >
             <option value="replace">replace</option>
             <option value="append">append</option>
-          </select>
+          </ControlSelect>
         </label>
         <label className="col-span-2 text-xs text-text-muted">
           System prompt (markdown body)
-          <textarea
+          <ControlTextArea
             data-testid="editor-body"
             className={`${inputClass} min-h-[140px] font-mono`}
             value={body}
@@ -189,7 +202,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </div>
       ) : null}
       <div className="mt-3 flex justify-end gap-2">
-        <button
+        <ControlButton
           data-testid="editor-save"
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium disabled:opacity-40"
           style={{ color: "var(--color-accent-foreground)" }}
@@ -197,7 +210,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
           onClick={() => void save()}
         >
           {saving ? "Saving…" : "Save"}
-        </button>
+        </ControlButton>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect } from "react";
 
 /**
@@ -41,7 +42,7 @@ export function SuggestionPanel({
       className="absolute bottom-full left-3 z-20 mb-1 max-h-56 w-[min(28rem,90%)] overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1 shadow-elevated"
     >
       {items.map((item, index) => (
-        <button
+        <ControlButton
           key={item.id}
           data-suggestion-index={index}
           data-testid={`${testid}-item-${item.id}`}
@@ -49,8 +50,8 @@ export function SuggestionPanel({
           aria-selected={index === selectedIndex}
           className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm ${
             index === selectedIndex
-              ? "bg-[var(--color-selection-fill)] text-text-primary"
-              : "text-text-secondary hover:bg-[var(--color-hover-fill)]"
+              ? "bg-selection text-text-primary"
+              : "text-text-secondary hover:bg-hover"
           }`}
           onMouseEnter={() => onHover(index)}
           onMouseDown={(event) => {
@@ -62,7 +63,7 @@ export function SuggestionPanel({
           {item.detail ? (
             <span className="min-w-0 truncate text-xs text-text-muted">{item.detail}</span>
           ) : null}
-        </button>
+        </ControlButton>
       ))}
     </div>
   );

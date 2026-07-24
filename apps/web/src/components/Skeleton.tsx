@@ -9,7 +9,7 @@ export function SkeletonRows({ count = 4, className }: { count?: number; classNa
       {Array.from({ length: count }).map((_, index) => (
         <div
           key={index}
-          className="h-12 animate-pulse rounded-[14px] border border-border-subtle bg-surface"
+          className="h-12 animate-pulse rounded-xl border border-border-subtle bg-surface"
           style={{ opacity: 1 - index * 0.15 }}
           aria-hidden="true"
         />

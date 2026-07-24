@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -33,7 +34,7 @@ export function JumpToLatestOverlay({ isPinned, onJump, className }: JumpToLates
       className={cn("pointer-events-none absolute inset-0", className)}
     >
       {!isPinned ? (
-        <button
+        <ControlButton
           type="button"
           onClick={onJump}
           aria-label="Jump to latest message"
@@ -43,15 +44,15 @@ export function JumpToLatestOverlay({ isPinned, onJump, className }: JumpToLates
             // while the outer overlay stays transparent to events.
             "pointer-events-auto absolute right-[22px] bottom-[14px]",
             "flex h-8 w-8 items-center justify-center rounded-full",
-            "bg-[var(--color-primary)]/90 text-[color:var(--color-on-primary,#fff)]",
-            "shadow-[0_8px_24px_-12px_rgba(0,0,0,0.25)]",
+            "bg-primary/90 text-on-accent",
+            "shadow-elevated",
             "ring-1 ring-white/10",
             "transition-transform duration-150 ease-out",
             "hover:scale-[1.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
           )}
         >
           <ChevronDown size={14} strokeWidth={3} aria-hidden="true" />
-        </button>
+        </ControlButton>
       ) : null}
     </div>
   );

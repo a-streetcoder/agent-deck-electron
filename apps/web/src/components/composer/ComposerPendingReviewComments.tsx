@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { MessageSquare, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PendingReviewComment } from "../../lib/reviewComments.ts";
@@ -52,12 +53,12 @@ export function ComposerPendingReviewComments({
             }}
           >
             <MessageSquare className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden />
-            <span className="min-w-0 truncate font-mono text-[11px]">{label}</span>
-            <button
+            <span className="min-w-0 truncate font-mono text-detail">{label}</span>
+            <ControlButton
               type="button"
               aria-label={`Remove comment on ${label}`}
               data-testid="pending-comment-remove"
-              className="shrink-0 rounded p-0.5 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-[var(--color-role-error)]"
+              className="shrink-0 rounded p-0.5 text-text-muted hover:bg-hover hover:text-danger"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -65,7 +66,7 @@ export function ComposerPendingReviewComments({
               }}
             >
               <X className="h-3 w-3" aria-hidden />
-            </button>
+            </ControlButton>
           </span>
         );
       })}

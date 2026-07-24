@@ -32,22 +32,19 @@ export const ErrorCard = forwardRef<HTMLDivElement, ErrorCardProps>(function Err
       data-testid="error-card"
       className={cn(
         "rounded-xl border p-3 flex items-start gap-3",
-        "border-[var(--color-role-error)]/45 bg-[var(--color-role-error)]/10",
+        "border-danger/45 bg-danger/10",
         className,
       )}
     >
-      <AlertTriangle
-        className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-role-error)]"
-        aria-hidden="true"
-      />
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-hidden="true" />
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[12px] font-semibold tracking-wide text-text-primary">Error</span>
+          <span className="text-caption font-semibold tracking-wide text-text-primary">Error</span>
           {timestamp ? (
-            <span className="shrink-0 text-[11px] text-text-muted">{timestamp}</span>
+            <span className="shrink-0 text-detail text-text-muted">{timestamp}</span>
           ) : null}
         </div>
-        <span className="text-[12px] text-text-secondary">{detail}</span>
+        <span className="text-caption text-text-secondary">{detail}</span>
         {(onRetry || payload) && (
           <div className="mt-1 flex items-center gap-2">
             {onRetry ? (

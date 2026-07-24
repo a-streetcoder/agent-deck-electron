@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useState } from "react";
 import { EyeOff, Github, Plus, RefreshCw, Search, Send, WandSparkles, X } from "lucide-react";
 import type { DiscoveredProject, ProjectMeta } from "@agent-deck/contracts";
@@ -33,7 +34,7 @@ function Switch({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <ControlButton
       role="switch"
       aria-checked={checked}
       data-testid={testid}
@@ -49,7 +50,7 @@ function Switch({
         className="absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-all"
         style={{ left: checked ? "calc(100% - 18px)" : "2px" }}
       />
-    </button>
+    </ControlButton>
   );
 }
 
@@ -65,7 +66,7 @@ function RecapButton({
   return (
     <span
       className={cn(
-        "flex items-center gap-1 rounded-capsule border border-border-subtle px-2 py-0.5 text-[11px]",
+        "flex items-center gap-1 rounded-capsule border border-border-subtle px-2 py-0.5 text-detail",
         count > 0 ? "text-text-secondary" : "text-text-muted opacity-50",
       )}
       title={`${title}: ${count}`}
@@ -159,7 +160,7 @@ function DiscoveryPanel() {
             Discover
           </h3>
         </div>
-        <button
+        <ControlButton
           data-testid="discovery-rescan"
           className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
           disabled={scanning}
@@ -167,7 +168,7 @@ function DiscoveryPanel() {
         >
           <RefreshCw size={11} className={scanning ? "animate-spin" : undefined} />
           Rescan
-        </button>
+        </ControlButton>
       </div>
       <p className="pb-2 text-xs text-text-muted">
         Scan folders for git repos and known project types, then add them with one click.
@@ -175,16 +176,16 @@ function DiscoveryPanel() {
 
       <div className="flex gap-2 pb-2">
         {isElectron() ? (
-          <button
+          <ControlButton
             data-testid="discovery-root-browse"
             className="rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary"
             onClick={() => void browseRoots()}
           >
             Choose folder…
-          </button>
+          </ControlButton>
         ) : (
           <>
-            <input
+            <ControlInput
               data-testid="discovery-root-input"
               className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
               placeholder="/path/to/dev/folder"
@@ -194,14 +195,14 @@ function DiscoveryPanel() {
                 if (e.key === "Enter") void addRoot();
               }}
             />
-            <button
+            <ControlButton
               data-testid="discovery-root-add"
               className="rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={!rootDraft.trim()}
               onClick={() => void addRoot()}
             >
               Add root
-            </button>
+            </ControlButton>
           </>
         )}
       </div>
@@ -212,16 +213,16 @@ function DiscoveryPanel() {
             <span
               key={root}
               data-testid="discovery-root-chip"
-              className="flex items-center gap-1 rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-[11px] text-text-secondary"
+              className="flex items-center gap-1 rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
             >
               {root}
-              <button
-                className="text-text-muted hover:text-[var(--color-role-error)]"
+              <ControlButton
+                className="text-text-muted hover:text-danger"
                 title="Remove root"
                 onClick={() => void removeRoot(root)}
               >
                 <X size={11} />
-              </button>
+              </ControlButton>
             </span>
           ))}
         </div>
@@ -246,13 +247,13 @@ function DiscoveryPanel() {
             >
               {candidate.name}
             </span>
-            <span className="rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted">
+            <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
               {candidate.type}
             </span>
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-muted">
+            <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-muted">
               {candidate.path}
             </span>
-            <button
+            <ControlButton
               data-testid={`discovery-add-${candidate.name}`}
               className="rounded-capsule px-2.5 py-0.5 text-xs font-medium shadow-capsule"
               style={{
@@ -263,7 +264,7 @@ function DiscoveryPanel() {
               onClick={() => void addProject(candidate.path).then(() => void scan())}
             >
               Add
-            </button>
+            </ControlButton>
           </div>
         ))}
         {roots.length > 0 && unregistered.length === 0 ? (
@@ -327,22 +328,22 @@ export function ProjectsScreen() {
             {/* Segmented filter (native All / Enabled / Disabled). */}
             <div className="flex rounded-capsule border border-border-subtle p-0.5">
               {(["all", "enabled", "disabled"] as Filter[]).map((f) => (
-                <button
+                <ControlButton
                   key={f}
                   data-testid={`project-filter-${f}`}
                   className={cn(
                     "rounded-capsule px-2.5 py-0.5 text-xs capitalize",
                     filter === f
-                      ? "bg-[var(--color-selection-fill)] text-text-primary"
+                      ? "bg-selection text-text-primary"
                       : "text-text-muted hover:text-text-primary",
                   )}
                   onClick={() => setFilter(f)}
                 >
                   {f}
-                </button>
+                </ControlButton>
               ))}
             </div>
-            <button
+            <ControlButton
               data-testid="projects-add"
               className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
               style={{
@@ -354,7 +355,7 @@ export function ProjectsScreen() {
               onClick={() => void startAdd()}
             >
               <Plus size={14} />
-            </button>
+            </ControlButton>
           </div>
         </div>
         <p className="pb-3 text-xs text-text-muted">
@@ -364,7 +365,7 @@ export function ProjectsScreen() {
 
         {adding ? (
           <div className="mb-3 flex gap-2">
-            <input
+            <ControlInput
               autoFocus
               data-testid="projects-add-path"
               className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
@@ -381,7 +382,7 @@ export function ProjectsScreen() {
                 if (event.key === "Escape") setAdding(false);
               }}
             />
-            <button
+            <ControlButton
               data-testid="projects-add-confirm"
               className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -398,7 +399,7 @@ export function ProjectsScreen() {
               }
             >
               Add
-            </button>
+            </ControlButton>
           </div>
         ) : null}
 
@@ -410,7 +411,7 @@ export function ProjectsScreen() {
               <div
                 key={project.id}
                 className={cn(
-                  "flex items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5",
+                  "flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5",
                   !enabled && "opacity-60 saturate-50",
                 )}
                 data-testid="project-row"
@@ -431,7 +432,7 @@ export function ProjectsScreen() {
                     </span>
                     {project.type && project.type !== "unknown" && project.type !== "git" ? (
                       <span
-                        className="rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted"
+                        className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
                         data-testid="project-type-badge"
                       >
                         {project.type}
@@ -440,7 +441,7 @@ export function ProjectsScreen() {
                     {project.path.includes("github") ? <Github size={12} /> : null}
                     {active ? (
                       <span
-                        className="rounded-capsule border px-1.5 py-0 text-[10px] font-medium"
+                        className="rounded-capsule border px-1.5 py-0 text-micro font-medium"
                         style={{
                           color: "var(--color-brand-accent)",
                           borderColor: "var(--color-brand-accent)",
@@ -452,7 +453,7 @@ export function ProjectsScreen() {
                     ) : null}
                   </div>
                   <div
-                    className="truncate font-mono text-[11px] text-text-muted"
+                    className="truncate font-mono text-detail text-text-muted"
                     style={{ direction: "rtl", textAlign: "left" }}
                     title={project.path}
                   >
@@ -478,15 +479,15 @@ export function ProjectsScreen() {
                     onChange={(next) => void updateProject(project.id, { enabled: next })}
                   />
                 </span>
-                <button
+                <ControlButton
                   data-testid={`project-hide-${project.name}`}
-                  className="rounded-capsule p-1.5 text-text-muted hover:text-[var(--color-role-error)] disabled:opacity-30 disabled:hover:text-text-muted"
+                  className="rounded-capsule p-1.5 text-text-muted hover:text-danger disabled:opacity-30 disabled:hover:text-text-muted"
                   title={active ? "Can't hide the active project" : "Hide from list"}
                   disabled={active}
                   onClick={() => void hide(project)}
                 >
                   <EyeOff size={14} />
-                </button>
+                </ControlButton>
               </div>
             );
           })}

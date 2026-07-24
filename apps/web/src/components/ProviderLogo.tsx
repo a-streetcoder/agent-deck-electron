@@ -27,7 +27,7 @@ export function ProviderLogo({
         data-logo="fallback"
         aria-hidden
         className={cn(
-          "inline-flex items-center justify-center rounded-[5px] bg-surface-hover font-semibold text-text-secondary",
+          "inline-flex items-center justify-center rounded-icon bg-hover font-semibold text-text-secondary",
           className,
         )}
         style={{ width: size, height: size, fontSize: size * 0.55 }}

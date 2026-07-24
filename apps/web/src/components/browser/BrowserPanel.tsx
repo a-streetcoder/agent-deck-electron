@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import {
   ArrowLeft,
@@ -506,11 +507,11 @@ function DesktopBrowser(): ReactElement {
                 className={cn(
                   "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
                   active
-                    ? "bg-[var(--color-selection-fill)] text-text-primary"
-                    : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                    ? "bg-selection text-text-primary"
+                    : "text-text-muted hover:bg-hover hover:text-text-primary",
                 )}
               >
-                <button
+                <ControlButton
                   type="button"
                   role="tab"
                   aria-selected={active}
@@ -526,11 +527,11 @@ function DesktopBrowser(): ReactElement {
                     <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   )}
                   <span className="truncate">{pageLabel(page)}</span>
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   type="button"
                   className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                    "flex size-4 shrink-0 items-center justify-center rounded hover:bg-hover hover:text-text-primary",
                     active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                   )}
                   data-testid="browser-page-close"
@@ -542,14 +543,14 @@ function DesktopBrowser(): ReactElement {
                   }}
                 >
                   <X className="h-3 w-3" aria-hidden />
-                </button>
+                </ControlButton>
               </div>
             );
           })}
         </div>
-        <button
+        <ControlButton
           type="button"
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           data-testid="browser-new-page"
           aria-label="New page"
           title={pages.length >= MAX_PAGES ? `At most ${MAX_PAGES} pages` : "New page"}
@@ -557,7 +558,7 @@ function DesktopBrowser(): ReactElement {
           onClick={() => openPage()}
         >
           <Plus className="h-4 w-4" aria-hidden />
-        </button>
+        </ControlButton>
       </div>
 
       {/* The address toolbar (shared, acts on the active page). */}
@@ -565,9 +566,9 @@ function DesktopBrowser(): ReactElement {
         onSubmit={navigate}
         className="flex items-center gap-1 border-b border-border-subtle px-2 py-1.5"
       >
-        <button
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
           title="Back"
           aria-label="Back"
           data-testid="browser-back"
@@ -575,10 +576,10 @@ function DesktopBrowser(): ReactElement {
           onClick={() => withActive((el) => el.goBack())}
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
           title="Forward"
           aria-label="Forward"
           data-testid="browser-forward"
@@ -586,10 +587,10 @@ function DesktopBrowser(): ReactElement {
           onClick={() => withActive((el) => el.goForward())}
         >
           <ArrowRight className="h-3.5 w-3.5" />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           title={activePage.loading ? "Stop" : "Reload"}
           aria-label={activePage.loading ? "Stop" : "Reload"}
           data-testid="browser-reload"
@@ -600,14 +601,14 @@ function DesktopBrowser(): ReactElement {
           ) : (
             <RotateCw className="h-3.5 w-3.5" />
           )}
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
           className={cn(
             "shrink-0 rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-30",
             picking
-              ? "bg-accent text-[var(--color-accent-foreground)]"
-              : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+              ? "bg-accent text-on-accent"
+              : "text-text-muted hover:bg-hover hover:text-text-primary",
           )}
           title="Pick an element for context"
           aria-label="Pick an element for context"
@@ -618,10 +619,10 @@ function DesktopBrowser(): ReactElement {
           onClick={togglePick}
         >
           <MousePointerClick className="h-3.5 w-3.5" />
-        </button>
-        <input
+        </ControlButton>
+        <ControlInput
           ref={inputRef}
-          className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-[11px] text-text-primary focus:border-accent focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-detail text-text-primary focus:border-accent focus:outline-none"
           data-testid="browser-url-input"
           value={draft}
           spellCheck={false}
@@ -642,7 +643,7 @@ function DesktopBrowser(): ReactElement {
           placeholder="Search or enter address"
         />
         <span
-          className="hidden min-w-0 max-w-[16ch] shrink truncate pl-1 text-[11px] text-text-muted sm:block"
+          className="hidden min-w-0 max-w-[16ch] shrink truncate pl-1 text-detail text-text-muted sm:block"
           data-testid="browser-page-title"
           title={activePage.title}
         >
@@ -771,7 +772,7 @@ function BrowserPageView(props: {
       />
       {page.error ? (
         <div
-          className="pointer-events-none absolute inset-x-0 top-0 bg-[rgba(229,116,108,0.15)] px-3 py-2 text-center text-xs text-[var(--color-role-error)]"
+          className="pointer-events-none absolute inset-x-0 top-0 bg-danger-subtle px-3 py-2 text-center text-xs text-danger"
           data-testid="browser-error"
         >
           {page.error}

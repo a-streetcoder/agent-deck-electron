@@ -1,3 +1,9 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Archive, Brain, Pin, RotateCcw, Trash2 } from "lucide-react";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
@@ -38,7 +44,7 @@ interface Draft {
 const STATUS_STYLE: Record<MemoryStatus, string> = {
   active: "border-border-subtle text-text-muted",
   pinned: "border-accent text-accent",
-  stale: "border-[var(--color-warning)] text-[var(--color-warning)]",
+  stale: "border-warning text-warning",
   archived: "border-border-subtle text-text-muted opacity-70",
 };
 
@@ -209,7 +215,7 @@ export function MemoryScreen() {
               Memory
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="memory-new"
             className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
             style={{
@@ -220,13 +226,13 @@ export function MemoryScreen() {
             onClick={startNew}
           >
             New memory
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-2 text-xs text-text-muted">
           Durable project knowledge agents recall across sessions. Active and pinned memories are
           injected; stale and archived are kept but not injected.
         </p>
-        <input
+        <ControlInput
           data-testid="memory-search"
           className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
           placeholder="Search memories (recall ranking)…"
@@ -240,7 +246,7 @@ export function MemoryScreen() {
             data-testid="memory-editor"
           >
             <div className="flex gap-2">
-              <select
+              <ControlSelect
                 data-testid="memory-type"
                 className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                 value={draft.type}
@@ -251,8 +257,8 @@ export function MemoryScreen() {
                     {t}
                   </option>
                 ))}
-              </select>
-              <input
+              </ControlSelect>
+              <ControlInput
                 data-testid="memory-title"
                 className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                 placeholder="title"
@@ -260,14 +266,14 @@ export function MemoryScreen() {
                 onChange={(e) => setDraft({ ...draft, title: e.target.value })}
               />
             </div>
-            <input
+            <ControlInput
               data-testid="memory-summary"
               className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
               placeholder="summary (a retrieval key)"
               value={draft.summary}
               onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
             />
-            <textarea
+            <ControlTextArea
               data-testid="memory-body"
               className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
               placeholder="the durable content"
@@ -276,13 +282,13 @@ export function MemoryScreen() {
               onChange={(e) => setDraft({ ...draft, body: e.target.value })}
             />
             <div className="flex items-center justify-end gap-2">
-              <button
+              <ControlButton
                 className="rounded-capsule px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => setDraft(null)}
               >
                 Cancel
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="memory-save"
                 className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
                 style={{
@@ -294,7 +300,7 @@ export function MemoryScreen() {
                 onClick={() => void save()}
               >
                 Save
-              </button>
+              </ControlButton>
             </div>
           </div>
         ) : null}
@@ -307,7 +313,7 @@ export function MemoryScreen() {
             : groupMemoriesByStatus(memories)
           ).map((group) => (
             <section key={group.status} data-testid={`memory-section-${group.status}`}>
-              <div className="flex items-center gap-1.5 px-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
                 {group.label}
                 <span className="rounded-capsule border border-border-subtle px-1 tabular-nums normal-case">
                   {group.memories.length}
@@ -319,19 +325,19 @@ export function MemoryScreen() {
                     key={memory.id}
                     data-testid={`memory-${memory.id}`}
                     data-status={memory.status}
-                    className="group flex items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5"
+                    className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
                   >
-                    <button
+                    <ControlButton
                       className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                       onClick={() => startEdit(memory)}
                     >
-                      <span className="rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted">
+                      <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                         {memory.type}
                       </span>
                       <span
                         data-testid="memory-status-chip"
                         className={cn(
-                          "rounded-capsule border px-1.5 text-[10px]",
+                          "rounded-capsule border px-1.5 text-micro",
                           STATUS_STYLE[memory.status],
                         )}
                       >
@@ -343,9 +349,9 @@ export function MemoryScreen() {
                       <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
                         {memory.summary}
                       </span>
-                    </button>
+                    </ControlButton>
                     <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                      <button
+                      <ControlButton
                         data-testid={`memory-pin-${memory.id}`}
                         className={cn(
                           "rounded p-1 hover:text-accent",
@@ -360,29 +366,29 @@ export function MemoryScreen() {
                         }
                       >
                         <Pin size={13} />
-                      </button>
+                      </ControlButton>
                       {memory.status === "stale" || memory.status === "archived" ? (
-                        <button
+                        <ControlButton
                           data-testid={`memory-activate-${memory.id}`}
                           className="rounded p-1 text-text-muted hover:text-accent"
                           title="Re-activate"
                           onClick={() => void setStatus(memory.id, "active")}
                         >
                           <RotateCcw size={13} />
-                        </button>
+                        </ControlButton>
                       ) : (
-                        <button
+                        <ControlButton
                           data-testid={`memory-archive-${memory.id}`}
                           className="rounded p-1 text-text-muted hover:text-text-secondary"
                           title="Archive"
                           onClick={() => void setStatus(memory.id, "archived")}
                         >
                           <Archive size={13} />
-                        </button>
+                        </ControlButton>
                       )}
-                      <button
+                      <ControlButton
                         data-testid={`memory-delete-${memory.id}`}
-                        className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                        className="rounded p-1 text-text-muted hover:text-danger"
                         title="Delete"
                         onClick={() => {
                           if (confirm("Delete this memory? This removes its file from disk.")) {
@@ -391,7 +397,7 @@ export function MemoryScreen() {
                         }}
                       >
                         <Trash2 size={13} />
-                      </button>
+                      </ControlButton>
                     </div>
                   </div>
                 ))}

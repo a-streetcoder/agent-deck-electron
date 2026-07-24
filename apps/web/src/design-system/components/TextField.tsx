@@ -97,7 +97,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
           "focus-within:border-primary",
           "focus-within:ring-2 focus-within:ring-primary/30",
           disabled && "opacity-55",
-          errorMessage && "border-[var(--color-role-error,#E5746C)]",
+          errorMessage && "border-danger",
           className,
         )}
       >
@@ -126,7 +126,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
       </div>
 
       {errorMessage ? (
-        <p id={errorId} role="alert" className="text-xs text-[var(--color-role-error,#E5746C)]">
+        <p id={errorId} role="alert" className="text-xs text-danger">
           {errorMessage}
         </p>
       ) : description ? (

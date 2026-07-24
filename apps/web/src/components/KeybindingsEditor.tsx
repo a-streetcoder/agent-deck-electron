@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useState } from "react";
 import {
   chordFromEvent,
@@ -134,7 +135,7 @@ export function KeybindingsEditor() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[10vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-overlay p-4 pt-[10vh] backdrop-blur-sm"
       data-testid="keybindings-editor"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setOpen(false);
@@ -157,15 +158,15 @@ export function KeybindingsEditor() {
             </h2>
             <p className="text-xs text-text-muted">Click a shortcut, then press the new keys.</p>
           </div>
-          <button
+          <ControlButton
             type="button"
-            className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)]"
+            className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-hover"
             aria-label="Close keybindings"
             data-testid="keybindings-editor-close"
             onClick={() => setOpen(false)}
           >
             <X className="h-4 w-4" />
-          </button>
+          </ControlButton>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -181,25 +182,25 @@ export function KeybindingsEditor() {
                 data-testid="keybindings-editor-row"
                 data-command={command}
               >
-                <span className="min-w-0 flex-1 truncate text-[13px] text-text-primary">
+                <span className="min-w-0 flex-1 truncate text-label text-text-primary">
                   {definition.label}
                 </span>
                 {overridden ? (
-                  <button
+                  <ControlButton
                     type="button"
-                    className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)]"
+                    className="rounded p-1 text-text-muted transition-colors hover:bg-hover"
                     title="Reset to default"
                     aria-label={`Reset ${definition.label} to default`}
                     data-testid="keybindings-editor-reset"
                     onClick={() => resetOverride(command)}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                  </button>
+                  </ControlButton>
                 ) : null}
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "min-w-[92px] rounded border px-2 py-1 text-center font-mono text-[11px] transition-colors",
+                    "min-w-[92px] rounded border px-2 py-1 text-center font-mono text-detail transition-colors",
                     isCapturing
                       ? "border-accent text-accent"
                       : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong",
@@ -214,7 +215,7 @@ export function KeybindingsEditor() {
                     : chord
                       ? formatChordString(chord, platform)
                       : "Unassigned"}
-                </button>
+                </ControlButton>
               </div>
             );
           })}

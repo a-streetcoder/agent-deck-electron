@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect } from "react";
 import { CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useAppStore, type Toast, type ToastKind } from "../state/store.ts";
@@ -38,13 +39,13 @@ function ToastItem({ toast }: { toast: Toast }) {
     >
       <Icon size={15} style={{ color: KIND_COLOR[toast.kind] }} className="shrink-0" />
       <span className="min-w-0 flex-1">{toast.message}</span>
-      <button
+      <ControlButton
         aria-label="Dismiss"
         className="shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary"
         onClick={() => dismiss(toast.id)}
       >
         <X size={13} />
-      </button>
+      </ControlButton>
     </div>
   );
 }

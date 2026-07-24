@@ -63,7 +63,7 @@ export const AppKeyValueList = forwardRef<HTMLDListElement, AppKeyValueListProps
                       "inline-flex h-6 w-6 shrink-0 items-center justify-center",
                       "rounded-md border border-border-subtle bg-surface-elevated text-text-secondary",
                       "transition-colors duration-150 ease-spring",
-                      "hover:bg-[var(--color-hover-fill)]",
+                      "hover:bg-hover",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                     )}
                   >

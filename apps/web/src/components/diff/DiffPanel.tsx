@@ -1,3 +1,4 @@
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -79,15 +80,15 @@ interface FileDiffState {
 
 const LINE_STYLE: Record<DiffLine["kind"], { row?: string; text?: string }> = {
   add: {
-    row: "bg-[color-mix(in_srgb,var(--color-diff-added)_14%,transparent)]",
-    text: "text-[var(--color-diff-added)]",
+    row: "bg-diff-added-subtle",
+    text: "text-diff-added",
   },
   del: {
-    row: "bg-[color-mix(in_srgb,var(--color-diff-removed)_14%,transparent)]",
-    text: "text-[var(--color-diff-removed)]",
+    row: "bg-diff-removed-subtle",
+    text: "text-diff-removed",
   },
   hunk: {
-    row: "bg-[var(--color-hover-fill)]",
+    row: "bg-hover",
     text: "text-accent",
   },
   meta: { text: "text-text-muted" },
@@ -111,7 +112,7 @@ function InlineCommentEditor(props: {
       className="border-y border-border-subtle bg-surface-elevated px-3 py-2"
       data-testid="diff-comment-box"
     >
-      <textarea
+      <ControlTextArea
         ref={ref}
         data-testid="diff-comment-input"
         className="block max-h-40 min-h-[3.5rem] w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-xs text-text-primary outline-none placeholder:text-text-muted focus:border-accent"
@@ -131,23 +132,23 @@ function InlineCommentEditor(props: {
         }}
       />
       <div className="mt-1.5 flex items-center justify-end gap-1.5">
-        <button
+        <ControlButton
           type="button"
           data-testid="diff-comment-cancel"
-          className="rounded-md px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="rounded-md px-2 py-1 text-detail text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           onClick={props.onCancel}
         >
           Cancel
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
           data-testid="diff-comment-save"
           disabled={text.trim().length === 0}
-          className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="rounded-md bg-accent px-2.5 py-1 text-detail font-medium text-on-accent transition-opacity hover:opacity-90 disabled:opacity-40"
           onClick={() => props.onSubmit(text)}
         >
           {props.mode === "edit" ? "Save" : "Comment"}
-        </button>
+        </ControlButton>
       </div>
     </div>
   );
@@ -161,33 +162,33 @@ function InlineCommentCard(props: {
 }) {
   return (
     <div
-      className="flex items-start gap-2 border-y border-border-subtle bg-[color-mix(in_srgb,var(--color-accent)_7%,var(--color-surface-elevated))] px-3 py-1.5"
+      className="flex items-start gap-2 border-y border-border-subtle bg-accent-surface px-3 py-1.5"
       data-testid="diff-inline-comment"
     >
-      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[11px] leading-snug text-text-secondary">
+      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-detail leading-snug text-text-secondary">
         {props.comment.text}
       </span>
       <div className="flex shrink-0 items-center gap-0.5">
-        <button
+        <ControlButton
           type="button"
           data-testid="diff-inline-comment-edit"
-          className="rounded p-0.5 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           title="Edit comment"
           aria-label="Edit comment"
           onClick={props.onEdit}
         >
           <Pencil className="h-3 w-3" aria-hidden />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
           data-testid="diff-inline-comment-remove"
-          className="rounded p-0.5 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-[var(--color-role-error)]"
+          className="rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-danger"
           title="Delete comment"
           aria-label="Delete comment"
           onClick={props.onRemove}
         >
           <Trash2 className="h-3 w-3" aria-hidden />
-        </button>
+        </ControlButton>
       </div>
     </div>
   );
@@ -213,16 +214,16 @@ function DiffLineRow(props: {
     <div>
       <div
         className={cn(
-          "group/diffrow flex items-start font-mono text-[11px] leading-[1.5]",
+          "group/diffrow flex items-start font-mono text-detail leading-[1.5]",
           style.row,
         )}
         data-testid="diff-line"
         data-kind={line.kind}
       >
-        <span className="w-9 shrink-0 select-none pr-1 text-right tabular-nums text-text-muted/70 text-[10px] leading-[1.65]">
+        <span className="w-9 shrink-0 select-none pr-1 text-right tabular-nums text-text-muted/70 text-micro leading-[1.65]">
           {line.oldLine ?? ""}
         </span>
-        <span className="w-9 shrink-0 select-none pr-2 text-right tabular-nums text-text-muted/70 text-[10px] leading-[1.65]">
+        <span className="w-9 shrink-0 select-none pr-2 text-right tabular-nums text-text-muted/70 text-micro leading-[1.65]">
           {line.newLine ?? ""}
         </span>
         <span className={cn("min-w-0 flex-1 whitespace-pre-wrap break-all pr-2", style.text)}>
@@ -231,16 +232,16 @@ function DiffLineRow(props: {
         {/* Hover-revealed add-comment affordance (hidden at rest so the resting
             panel layout — and the diff-panel visual baseline — is unchanged). */}
         {props.commentable && !props.boxOpen && (
-          <button
+          <ControlButton
             type="button"
             data-testid="diff-comment-add"
-            className="mr-1 hidden shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-accent group-focus-within/diffrow:flex group-hover/diffrow:flex"
+            className="mr-1 hidden shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-accent group-focus-within/diffrow:flex group-hover/diffrow:flex"
             title="Comment on this line"
             aria-label="Comment on this line"
             onClick={props.onAddComment}
           >
             <MessageSquarePlus className="h-3.5 w-3.5" aria-hidden />
-          </button>
+          </ControlButton>
         )}
       </div>
       {props.comments.map((comment) =>
@@ -269,7 +270,7 @@ function DiffLineRow(props: {
 function NoticeBar({ children }: { children: string }) {
   return (
     <p
-      className="shrink-0 border-b border-border-subtle bg-[var(--color-hover-fill)] px-3 py-1.5 text-[11px] text-text-muted"
+      className="shrink-0 border-b border-border-subtle bg-hover px-3 py-1.5 text-detail text-text-muted"
       data-testid="diff-notice"
     >
       {children}
@@ -336,7 +337,7 @@ function WorktreeMergeToolbar(props: {
       className="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface px-3 py-2"
       data-testid="diff-worktree-toolbar"
     >
-      <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-text-secondary">
+      <div className="flex min-w-0 items-center gap-1.5 font-mono text-detail text-text-secondary">
         <span
           className="truncate text-text-primary"
           title={props.worktreeBranch}
@@ -347,10 +348,10 @@ function WorktreeMergeToolbar(props: {
         <ArrowRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden />
         <span className="shrink-0 text-text-primary">{props.worktreeSourceBranch}</span>
       </div>
-      <button
+      <ControlButton
         type="button"
         data-testid="diff-merge"
-        className="shrink-0 rounded-capsule px-3 py-1 text-[11px] font-medium shadow-capsule disabled:opacity-40"
+        className="shrink-0 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
         style={{
           background:
             "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -361,7 +362,7 @@ function WorktreeMergeToolbar(props: {
         onClick={() => void merge()}
       >
         {merging ? "Merging…" : `Merge to ${props.worktreeSourceBranch}`}
-      </button>
+      </ControlButton>
     </div>
   );
 }
@@ -622,21 +623,21 @@ export function DiffPanel() {
             <DiffStatLabel
               additions={summaryStat.additions}
               deletions={summaryStat.deletions}
-              className="text-[11px]"
+              className="text-detail"
               layout="inline"
             />
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {files.length > 0 && (
-            <button
+            <ControlButton
               type="button"
-              className="rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+              className="rounded px-1.5 py-0.5 text-detail text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
               data-testid="diff-toggle-dirs"
               onClick={() => setAllDirectoriesExpanded((expanded) => !expanded)}
             >
               {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-            </button>
+            </ControlButton>
           )}
         </div>
       </div>
@@ -687,7 +688,7 @@ export function DiffPanel() {
               (and the diff-panel visual baseline) is unchanged. */}
           <div className="group/fileheader flex items-center gap-2 border-b border-border-subtle bg-surface px-3 py-1.5">
             <span
-              className="min-w-0 truncate font-mono text-[11px] text-text-primary"
+              className="min-w-0 truncate font-mono text-detail text-text-primary"
               data-testid="diff-file-path"
               title={selectedPath}
             >
@@ -695,7 +696,7 @@ export function DiffPanel() {
               {selectedPath}
             </span>
             {selectedEntry && !selectedEntry.binary && selectedEntry.insertions !== null && (
-              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
+              <span className="ml-auto shrink-0 font-mono text-micro tabular-nums">
                 <DiffStatLabel
                   additions={selectedEntry.insertions}
                   deletions={selectedEntry.deletions ?? 0}
@@ -710,10 +711,10 @@ export function DiffPanel() {
                 if (selectedPath !== null) editorPicker.open(selectedPath, openAtLine, editor);
               }}
             />
-            <button
+            <ControlButton
               type="button"
               className={cn(
-                "shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                "shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-text-primary",
                 !(selectedEntry && !selectedEntry.binary && selectedEntry.insertions !== null) &&
                   "ml-auto",
               )}
@@ -726,7 +727,7 @@ export function DiffPanel() {
               }}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
-            </button>
+            </ControlButton>
           </div>
           {activeDiff?.truncated && (
             <NoticeBar>

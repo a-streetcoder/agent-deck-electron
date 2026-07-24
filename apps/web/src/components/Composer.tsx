@@ -1,3 +1,8 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Paperclip, Shrink, X } from "lucide-react";
 import TextareaAutosize from "react-textarea-autosize";
@@ -365,7 +370,7 @@ export function Composer() {
 
   return (
     <div className="px-6 pb-5 pt-2">
-      <div className="relative rounded-[20px] border border-border-subtle bg-surface-elevated shadow-card">
+      <div className="relative rounded-3xl border border-border-subtle bg-surface-elevated shadow-card">
         {suggestions.mode ? (
           <SuggestionPanel
             items={suggestions.items}
@@ -419,7 +424,7 @@ export function Composer() {
                 data-testid={`attachment-${image.id}`}
                 className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
               >
-                <button
+                <ControlButton
                   type="button"
                   className="rounded outline-none focus-visible:ring-1 focus-visible:ring-accent"
                   aria-label={`Expand ${image.name}`}
@@ -431,10 +436,10 @@ export function Composer() {
                     alt={image.name}
                     className="h-8 w-8 cursor-zoom-in rounded object-cover"
                   />
-                </button>
+                </ControlButton>
                 <span className="max-w-[12ch] truncate">{image.name}</span>
-                <button
-                  className="text-text-muted hover:text-[var(--color-role-error)]"
+                <ControlButton
+                  className="text-text-muted hover:text-danger"
                   aria-label="Remove attachment"
                   onClick={() =>
                     setImages((prev) => {
@@ -444,7 +449,7 @@ export function Composer() {
                   }
                 >
                   <X size={12} />
-                </button>
+                </ControlButton>
               </span>
             ))}
           </div>
@@ -498,7 +503,7 @@ export function Composer() {
             sliding (unclickably) beneath the panel. */}
         <div className="flex flex-wrap items-center gap-2 px-3 pb-3 pt-1">
           <label className={chipClass()} title="Agent">
-            <select
+            <ControlSelect
               data-testid="agent-picker"
               className="max-w-[18ch] cursor-pointer truncate bg-transparent text-xs font-medium outline-none"
               value={currentAgentName ?? ""}
@@ -511,7 +516,7 @@ export function Composer() {
                   {agent.name} ({agent.scope})
                 </option>
               ))}
-            </select>
+            </ControlSelect>
           </label>
           <ModelChip
             state={piState}
@@ -572,10 +577,10 @@ export function Composer() {
               pi summarizes older history to free context. Shown alongside the
               context chip (after a turn); disabled mid-stream. */}
           {contextUsage ? (
-            <button
+            <ControlButton
               type="button"
               data-testid="compact-button"
-              className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary disabled:opacity-40"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary disabled:opacity-40"
               title="Compact context — Pi summarizes older history to free up context"
               disabled={running || compacting}
               onClick={() => {
@@ -593,16 +598,16 @@ export function Composer() {
               }}
             >
               <Shrink size={13} />
-            </button>
+            </ControlButton>
           ) : null}
           <div className="flex-1" />
           <label
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary"
             title="Attach image"
             data-testid="attach-button"
           >
             <Paperclip size={15} />
-            <input
+            <ControlInput
               type="file"
               accept="image/*"
               multiple

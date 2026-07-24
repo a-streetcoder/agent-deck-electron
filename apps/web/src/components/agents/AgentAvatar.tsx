@@ -1,5 +1,6 @@
 import { Send } from "lucide-react";
 import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
+import { tintedSurfaceStyle } from "@/design-system/styles";
 
 /**
  * Native AgentAvatarView: a circle tinted by source kind (10% fill / 18%
@@ -28,13 +29,7 @@ export function AgentAvatar({
   return (
     <span
       className="flex shrink-0 items-center justify-center rounded-full"
-      style={{
-        width: size,
-        height: size,
-        background: `color-mix(in srgb, ${tint} 10%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${tint} 18%, transparent)`,
-        color: tint,
-      }}
+      style={{ width: size, height: size, ...tintedSurfaceStyle(tint) }}
       aria-hidden
     >
       <Send size={Math.round(size * 0.42)} />

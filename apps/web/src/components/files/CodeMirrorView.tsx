@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { EditorState, EditorView, type Extension } from "@uiw/react-codemirror";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import {
+  defaultHighlightStyle,
+  LanguageDescription,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
+import { useResolvedTheme } from "../../design-system/theme";
 
 /**
  * The read-only CodeMirror 6 view (Slice L4a) — the TEXT branch of the file
@@ -84,6 +89,7 @@ export interface CodeMirrorViewProps {
 
 export default function CodeMirrorView(props: CodeMirrorViewProps) {
   const { value, filename, readOnly = true, onChange, visible = true } = props;
+  const resolvedTheme = useResolvedTheme();
   const [languageExtension, setLanguageExtension] = useState<Extension | null>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -117,14 +123,14 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
   const extensions = useMemo<Extension[]>(() => {
     const list: Extension[] = [
       tokenTheme,
-      syntaxHighlighting(oneDarkHighlightStyle),
+      syntaxHighlighting(resolvedTheme === "dark" ? oneDarkHighlightStyle : defaultHighlightStyle),
       EditorState.readOnly.of(readOnly),
       EditorView.editable.of(!readOnly),
       EditorView.contentAttributes.of({ tabindex: "0" }),
     ];
     if (languageExtension) list.push(languageExtension);
     return list;
-  }, [languageExtension, readOnly]);
+  }, [languageExtension, readOnly, resolvedTheme]);
 
   return (
     <CodeMirror

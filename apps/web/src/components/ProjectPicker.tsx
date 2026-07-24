@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LayoutGrid, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -82,12 +83,12 @@ export function ProjectPicker() {
 
   return (
     <div className="relative [-webkit-app-region:no-drag]" ref={ref}>
-      <button
+      <ControlButton
         data-testid="project-picker"
         className={cn(
-          "flex items-center gap-2 rounded-capsule border px-2.5 py-1 text-[13px] font-medium transition-colors",
+          "flex items-center gap-2 rounded-capsule border px-2.5 py-1 text-label font-medium transition-colors",
           open
-            ? "border-[var(--color-selection-stroke)] bg-[var(--color-selection-fill)] text-text-primary"
+            ? "border-selection-stroke bg-selection text-text-primary"
             : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary",
         )}
         title="Project"
@@ -104,7 +105,7 @@ export function ProjectPicker() {
           {current ? current.name : "All Projects"}
         </span>
         <ChevronDown size={12} className="opacity-60" />
-      </button>
+      </ControlButton>
 
       {open ? (
         <div
@@ -113,14 +114,14 @@ export function ProjectPicker() {
           aria-label="Project"
           className="absolute left-0 top-full z-30 mt-1.5 max-h-[70vh] w-72 overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
-          <button
+          <ControlButton
             role="menuitem"
             data-testid="project-all-projects"
             className={cn(
-              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px]",
+              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-label",
               currentProjectId === null
-                ? "bg-[var(--color-selection-fill)] text-text-primary"
-                : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+                ? "bg-selection text-text-primary"
+                : "text-text-secondary hover:bg-hover",
             )}
             onClick={() => void pick(null)}
           >
@@ -134,44 +135,42 @@ export function ProjectPicker() {
               <span className="block truncate" style={{ fontStretch: "expanded" }}>
                 All Projects
               </span>
-              <span className="block truncate text-[11px] text-text-muted">
+              <span className="block truncate text-detail text-text-muted">
                 Sessions across every project
               </span>
             </span>
-          </button>
+          </ControlButton>
 
           {enabled.map((project) => (
-            <button
+            <ControlButton
               key={project.id}
               role="menuitem"
               data-testid={`project-${project.name}`}
               title={project.path}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px]",
+                "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-label",
                 currentProjectId === project.id
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-secondary hover:bg-hover",
               )}
               onClick={() => void pick(project.id)}
             >
               <ProjectTypeIcon
                 type={project.type}
                 size={15}
-                className={
-                  currentProjectId === project.id ? "text-[var(--color-brand-accent)]" : undefined
-                }
+                className={currentProjectId === project.id ? "text-accent" : undefined}
               />
               <span className="truncate" style={{ fontStretch: "expanded" }}>
                 {project.name}
               </span>
-            </button>
+            </ControlButton>
           ))}
 
           <div className="my-1 h-px bg-border-subtle" />
 
           {adding ? (
             <div className="space-y-1.5 px-1 py-1">
-              <input
+              <ControlInput
                 autoFocus
                 data-testid="add-project-path"
                 className="w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
@@ -183,25 +182,25 @@ export function ProjectPicker() {
                   if (event.key === "Escape") setAdding(false);
                 }}
               />
-              <button
+              <ControlButton
                 data-testid="add-project-confirm"
                 className="w-full rounded-capsule bg-primary px-2 py-1.5 text-xs font-medium"
                 style={{ color: "var(--color-accent-foreground)" }}
                 onClick={() => void submitPath()}
               >
                 Add project
-              </button>
+              </ControlButton>
             </div>
           ) : (
-            <button
+            <ControlButton
               role="menuitem"
               data-testid="add-project"
-              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] text-text-muted hover:bg-[var(--color-hover-fill)]"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-label text-text-muted hover:bg-hover"
               onClick={() => void startAddProject()}
             >
               <Plus size={15} />
               <span style={{ fontStretch: "expanded" }}>Add project</span>
-            </button>
+            </ControlButton>
           )}
         </div>
       ) : null}

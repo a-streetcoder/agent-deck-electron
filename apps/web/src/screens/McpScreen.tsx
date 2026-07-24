@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, LogOut, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -190,7 +191,7 @@ export function McpScreen() {
               MCP servers
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="mcp-add"
             className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
             style={{
@@ -201,7 +202,7 @@ export function McpScreen() {
             onClick={() => setAdding((v) => !v)}
           >
             <Plus size={13} /> Add server
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           Model Context Protocol servers whose tools are proxied into every session as{" "}
@@ -210,7 +211,7 @@ export function McpScreen() {
 
         {adding ? (
           <div className="mb-3 flex flex-col gap-2" data-testid="mcp-add-form">
-            <input
+            <ControlInput
               autoFocus
               data-testid="mcp-name"
               className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
@@ -219,7 +220,7 @@ export function McpScreen() {
               onChange={(e) => setName(e.target.value)}
             />
             <div className="flex gap-2">
-              <input
+              <ControlInput
                 data-testid="mcp-command"
                 className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
                 placeholder="command with args (e.g. npx -y @modelcontextprotocol/server-filesystem /tmp)"
@@ -230,7 +231,7 @@ export function McpScreen() {
                   if (e.key === "Escape") setAdding(false);
                 }}
               />
-              <button
+              <ControlButton
                 data-testid="mcp-add-confirm"
                 className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                 style={{
@@ -242,7 +243,7 @@ export function McpScreen() {
                 onClick={() => void add()}
               >
                 Add
-              </button>
+              </ControlButton>
             </div>
           </div>
         ) : null}
@@ -253,7 +254,7 @@ export function McpScreen() {
               <div
                 data-testid={`mcp-${server.id}`}
                 data-connected={server.connected ? "true" : "false"}
-                className="flex items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5"
+                className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -266,15 +267,15 @@ export function McpScreen() {
                     <span
                       data-testid={`mcp-status-${server.id}`}
                       className={cn(
-                        "rounded-capsule border px-1.5 text-[10px]",
+                        "rounded-capsule border px-1.5 text-micro",
                         server.connected
-                          ? "border-[var(--color-success)] text-[var(--color-success)]"
-                          : "border-[var(--color-role-error)] text-[var(--color-role-error)]",
+                          ? "border-success text-success"
+                          : "border-danger text-danger",
                       )}
                     >
                       {server.connected ? "connected" : "disconnected"}
                     </span>
-                    <span className="rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted">
+                    <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                       {server.transport}
                     </span>
                     {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
@@ -282,61 +283,59 @@ export function McpScreen() {
                         data-testid={`mcp-auth-${server.id}`}
                         data-auth={server.auth.status}
                         className={cn(
-                          "rounded-capsule border px-1.5 text-[10px]",
+                          "rounded-capsule border px-1.5 text-micro",
                           server.auth.status === "authorized"
-                            ? "border-[var(--color-success)] text-[var(--color-success)]"
+                            ? "border-success text-success"
                             : "border-border-subtle text-text-muted",
                         )}
                       >
                         {server.auth.status === "authorized" ? "signed in" : "sign-in required"}
                       </span>
                     ) : null}
-                    <span className="text-[11px] text-text-muted">
+                    <span className="text-detail text-text-muted">
                       {server.toolNames.length} tool{server.toolNames.length === 1 ? "" : "s"}
                     </span>
                   </div>
                   {server.error ? (
-                    <div className="truncate text-[11px] text-[var(--color-role-error)]">
-                      {server.error}
-                    </div>
+                    <div className="truncate text-detail text-danger">{server.error}</div>
                   ) : server.toolNames.length > 0 ? (
-                    <div className="truncate font-mono text-[11px] text-text-muted">
+                    <div className="truncate font-mono text-detail text-text-muted">
                       {server.toolNames.join(", ")}
                     </div>
                   ) : null}
                 </div>
                 {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
                   server.auth.status === "authorized" ? (
-                    <button
+                    <ControlButton
                       data-testid={`mcp-logout-${server.id}`}
-                      className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                      className="rounded p-1 text-text-muted hover:text-danger"
                       title="Sign out"
                       onClick={() => void logout(server.id)}
                     >
                       <LogOut size={13} />
-                    </button>
+                    </ControlButton>
                   ) : (
-                    <button
+                    <ControlButton
                       data-testid={`mcp-login-${server.id}`}
-                      className="flex items-center gap-1 rounded-capsule px-2 py-1 text-[11px] font-medium text-accent hover:bg-surface-hover"
+                      className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover"
                       title="Sign in"
                       onClick={() => void beginLogin(server.id)}
                     >
                       <LogIn size={12} /> Sign in
-                    </button>
+                    </ControlButton>
                   )
                 ) : null}
-                <button
+                <ControlButton
                   data-testid={`mcp-refresh-${server.id}`}
                   className="rounded p-1 text-text-muted hover:text-accent"
                   title="Reconnect"
                   onClick={() => void refresh(server.id)}
                 >
                   <RefreshCw size={13} />
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   data-testid={`mcp-remove-${server.id}`}
-                  className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                  className="rounded p-1 text-text-muted hover:text-danger"
                   title="Remove"
                   onClick={() => {
                     if (
@@ -349,14 +348,14 @@ export function McpScreen() {
                   }}
                 >
                   <Trash2 size={13} />
-                </button>
+                </ControlButton>
               </div>
               {login?.id === server.id ? (
                 <div
                   data-testid={`mcp-login-panel-${server.id}`}
-                  className="mt-1 flex flex-col gap-2 rounded-[14px] border border-border-subtle bg-surface-subtle px-3.5 py-3"
+                  className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
                 >
-                  <div className="text-[11px] text-text-muted">
+                  <div className="text-detail text-text-muted">
                     1. Open the authorization page and approve access:
                   </div>
                   <a
@@ -364,15 +363,15 @@ export function McpScreen() {
                     href={login.authUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="truncate font-mono text-[11px] text-accent underline"
+                    className="truncate font-mono text-detail text-accent underline"
                   >
                     {login.authUrl}
                   </a>
-                  <div className="text-[11px] text-text-muted">
+                  <div className="text-detail text-text-muted">
                     2. Paste the code you were shown (or the full redirect URL):
                   </div>
                   <div className="flex gap-2">
-                    <input
+                    <ControlInput
                       autoFocus
                       data-testid={`mcp-login-code-${server.id}`}
                       className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
@@ -384,7 +383,7 @@ export function McpScreen() {
                         if (e.key === "Escape") setLogin(null);
                       }}
                     />
-                    <button
+                    <ControlButton
                       data-testid={`mcp-login-submit-${server.id}`}
                       className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                       style={{
@@ -396,14 +395,14 @@ export function McpScreen() {
                       onClick={() => void submitCode()}
                     >
                       Connect
-                    </button>
-                    <button
+                    </ControlButton>
+                    <ControlButton
                       data-testid={`mcp-login-cancel-${server.id}`}
                       className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary"
                       onClick={() => setLogin(null)}
                     >
                       Cancel
-                    </button>
+                    </ControlButton>
                   </div>
                 </div>
               ) : null}

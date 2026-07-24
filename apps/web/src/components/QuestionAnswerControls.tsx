@@ -1,3 +1,8 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+} from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
 import type { QuestionCell } from "@agent-deck/domain";
 import { sendUiResponse } from "../state/wsBridge.ts";
@@ -53,7 +58,7 @@ export function QuestionAnswerControls({
     <>
       {question.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <button
+          <ControlButton
             type="button"
             data-testid={`${testidPrefix}-confirm-yes`}
             className="rounded-capsule bg-primary px-4 py-1.5 text-sm font-medium"
@@ -61,20 +66,20 @@ export function QuestionAnswerControls({
             onClick={() => answer({ confirmed: true })}
           >
             Yes
-          </button>
-          <button
+          </ControlButton>
+          <ControlButton
             type="button"
             data-testid={`${testidPrefix}-confirm-no`}
             className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary"
             onClick={() => answer({ confirmed: false })}
           >
             No
-          </button>
+          </ControlButton>
         </div>
       ) : question.method === "select" ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {(question.options ?? []).map((option) => (
-            <button
+            <ControlButton
               key={option}
               type="button"
               data-testid={`${testidPrefix}-option-${option}`}
@@ -82,12 +87,12 @@ export function QuestionAnswerControls({
               onClick={() => answer({ value: option })}
             >
               {option}
-            </button>
+            </ControlButton>
           ))}
         </div>
       ) : question.method === "editor" ? (
         <div className="mt-3 flex flex-col gap-2">
-          <textarea
+          <ControlTextArea
             data-testid={`${testidPrefix}-editor`}
             aria-label={question.title}
             className="min-h-[7rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent"
@@ -95,7 +100,7 @@ export function QuestionAnswerControls({
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
-          <button
+          <ControlButton
             type="button"
             data-testid={`${testidPrefix}-submit`}
             className="self-end rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium"
@@ -103,11 +108,11 @@ export function QuestionAnswerControls({
             onClick={() => answer({ value: inputValue })}
           >
             Send
-          </button>
+          </ControlButton>
         </div>
       ) : (
         <div className="mt-3 flex gap-2">
-          <input
+          <ControlInput
             data-testid={`${testidPrefix}-input`}
             aria-label={question.title}
             className="flex-1 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
@@ -121,7 +126,7 @@ export function QuestionAnswerControls({
               }
             }}
           />
-          <button
+          <ControlButton
             type="button"
             data-testid={`${testidPrefix}-submit`}
             className="rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium"
@@ -129,17 +134,17 @@ export function QuestionAnswerControls({
             onClick={() => answer({ value: inputValue })}
           >
             Send
-          </button>
+          </ControlButton>
         </div>
       )}
-      <button
+      <ControlButton
         type="button"
         className="mt-2 text-xs text-text-muted hover:text-text-primary"
         data-testid={`${testidPrefix}-cancel`}
         onClick={() => answer({ cancelled: true })}
       >
         Cancel
-      </button>
+      </ControlButton>
     </>
   );
 }

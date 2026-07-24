@@ -216,7 +216,7 @@ export function AppList<T>({
                     id={labelId}
                     className={cn(
                       "px-2 pb-1 pt-2",
-                      "text-[10px] font-semibold uppercase tracking-wider text-text-muted",
+                      "text-micro font-semibold uppercase tracking-wider text-text-muted",
                     )}
                   >
                     {section.title}
@@ -252,8 +252,8 @@ export function AppList<T>({
                         // SwiftUI-parity: hover / selection fill swaps instantly
                         // (no transition), matching the native List highlight.
                         "transition-none",
-                        "hover:bg-[var(--color-hover-fill)]",
-                        isSelected && "bg-[var(--color-selection-fill)] text-text-primary",
+                        "hover:bg-hover",
+                        isSelected && "bg-selection text-text-primary",
                         disabled && "cursor-not-allowed opacity-55",
                       )}
                     >

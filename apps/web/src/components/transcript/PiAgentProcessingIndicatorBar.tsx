@@ -47,7 +47,7 @@ export function PiAgentProcessingIndicatorBar({
     >
       {isActive ? (
         <>
-          <span className="text-[12px] font-medium text-text-secondary truncate">{trimmed}</span>
+          <span className="text-caption font-medium text-text-secondary truncate">{trimmed}</span>
           <div className="flex-1 min-w-0">
             <AppIndeterminateBar label={trimmed} height={3} />
           </div>

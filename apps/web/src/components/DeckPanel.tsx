@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useMemo, useState } from "react";
 import { deckRunDetail, deckRuns, type DeckRun, type DeckRunDetail } from "@agent-deck/domain";
 import { RunMeta } from "./RunMeta.tsx";
@@ -18,8 +19,8 @@ const STATUS_LABEL: Record<DeckRun["status"], string> = {
 
 const STATUS_COLOR: Record<DeckRun["status"], string> = {
   running: "var(--color-brand-accent, var(--color-accent))",
-  done: "var(--color-diff-added, #2e7d32)",
-  error: "var(--color-role-tool, #b26a00)",
+  done: "var(--color-diff-added)",
+  error: "var(--color-role-tool)",
 };
 
 /** The expanded detail for one run: its full task, streamed output, progress
@@ -36,7 +37,7 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       {detail.questions.length > 0 ? (
         <ul className="space-y-1" data-testid="deck-run-questions">
           {detail.questions.map((q) => (
-            <li key={q.requestId} className="text-[11px]" data-testid="deck-run-question">
+            <li key={q.requestId} className="text-detail" data-testid="deck-run-question">
               <span className="font-medium text-text-primary">{q.title}</span>{" "}
               <span className="text-text-muted">
                 {q.answered
@@ -52,7 +53,7 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       {cell.progress.length > 0 ? (
         <ul className="space-y-0.5" data-testid="deck-run-progress">
           {cell.progress.map((message, i) => (
-            <li key={i} className="flex gap-1.5 text-[11px] text-text-muted">
+            <li key={i} className="flex gap-1.5 text-detail text-text-muted">
               <span aria-hidden>→</span>
               <span className="whitespace-pre-wrap">{message}</span>
             </li>
@@ -61,7 +62,7 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       ) : null}
       {cell.text ? (
         <div
-          className="max-h-48 overflow-auto whitespace-pre-wrap text-[11px] text-text-secondary"
+          className="max-h-48 overflow-auto whitespace-pre-wrap text-detail text-text-secondary"
           data-testid="deck-run-output"
         >
           {cell.text}
@@ -91,7 +92,7 @@ function RunRow({
       data-needs-input={run.needsInput ? "true" : "false"}
       data-expanded={expanded ? "true" : "false"}
     >
-      <button
+      <ControlButton
         type="button"
         className="w-full px-3 py-2 text-left"
         aria-expanded={expanded}
@@ -100,7 +101,7 @@ function RunRow({
       >
         <div className="flex items-center justify-between gap-2">
           <span
-            className="rounded-capsule px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+            className="rounded-capsule px-2 py-0.5 text-micro font-medium uppercase tracking-wide"
             style={{
               color: STATUS_COLOR[run.status],
               border: `1px solid ${STATUS_COLOR[run.status]}`,
@@ -110,14 +111,14 @@ function RunRow({
           </span>
           {run.needsInput ? (
             <span
-              className="rounded-capsule px-2 py-0.5 text-[10px] font-medium"
+              className="rounded-capsule px-2 py-0.5 text-micro font-medium"
               style={{ color: "var(--color-accent-foreground)", background: "var(--color-accent)" }}
               data-testid="deck-run-needs-input"
             >
               Needs input
             </span>
           ) : run.progressCount > 0 ? (
-            <span className="text-[10px] tabular-nums text-text-muted">
+            <span className="text-micro tabular-nums text-text-muted">
               {run.progressCount} update(s)
             </span>
           ) : null}
@@ -132,7 +133,7 @@ function RunRow({
           outputTokens={run.outputTokens}
           durationMs={run.durationMs}
         />
-      </button>
+      </ControlButton>
       {expanded && detail ? (
         <div className="px-3 pb-2">
           <RunDetail detail={detail} />

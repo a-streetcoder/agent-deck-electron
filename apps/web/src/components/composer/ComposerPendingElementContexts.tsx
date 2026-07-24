@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { MousePointerClick, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatElementContextLabel, type PendingElementContext } from "../../lib/elementContext.ts";
@@ -44,15 +45,15 @@ export function ComposerPendingElementContexts({
               .join("\n")}
           >
             <MousePointerClick className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden />
-            <span className="min-w-0 truncate font-mono text-[11px]">{label}</span>
+            <span className="min-w-0 truncate font-mono text-detail">{label}</span>
             {detail ? (
               <span className="min-w-0 max-w-[28ch] truncate text-text-muted">{detail}</span>
             ) : null}
-            <button
+            <ControlButton
               type="button"
               aria-label={`Remove element context ${label}`}
               data-testid="pending-element-remove"
-              className="shrink-0 rounded p-0.5 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-[var(--color-role-error)]"
+              className="shrink-0 rounded p-0.5 text-text-muted hover:bg-hover hover:text-danger"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -60,7 +61,7 @@ export function ComposerPendingElementContexts({
               }}
             >
               <X className="h-3 w-3" aria-hidden />
-            </button>
+            </ControlButton>
           </span>
         );
       })}

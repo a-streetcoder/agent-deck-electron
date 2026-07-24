@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { memo, useCallback, useMemo, useState } from "react";
 import { ChevronRight, FileText, Folder, FolderClosed, SquareArrowOutUpRight } from "lucide-react";
 import type { DiffFileEntry } from "@agent-deck/contracts";
@@ -88,9 +89,9 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
       const isExpanded = expandedDirectories[node.path] ?? allDirectoriesExpanded;
       return (
         <div key={`dir:${node.path}`}>
-          <button
+          <ControlButton
             type="button"
-            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-[var(--color-hover-fill)]"
+            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-hover"
             style={{ paddingLeft: `${leftPadding}px` }}
             data-testid="diff-tree-dir"
             data-path={node.path}
@@ -109,15 +110,15 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             ) : (
               <FolderClosed className="h-3.5 w-3.5 shrink-0 text-text-muted" />
             )}
-            <span className="truncate font-mono text-[11px] text-text-secondary group-hover:text-text-primary">
+            <span className="truncate font-mono text-detail text-text-secondary group-hover:text-text-primary">
               {node.name}
             </span>
             {hasNonZeroStat(node.stat) && (
-              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
+              <span className="ml-auto shrink-0 font-mono text-micro tabular-nums">
                 <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
               </span>
             )}
-          </button>
+          </ControlButton>
           {isExpanded && (
             <div className="space-y-0.5">
               {node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}
@@ -135,8 +136,8 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         role="button"
         tabIndex={0}
         className={cn(
-          "group flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-[var(--color-hover-fill)]",
-          selectedPath === node.path && "bg-[var(--color-selection-fill)]",
+          "group flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-hover",
+          selectedPath === node.path && "bg-selection",
         )}
         style={{ paddingLeft: `${leftPadding}px` }}
         data-testid="diff-tree-file"
@@ -160,7 +161,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         ) : null}
         <FileText className="h-3.5 w-3.5 shrink-0 text-text-muted" />
-        <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary group-hover:text-text-primary">
+        <span className="min-w-0 truncate font-mono text-detail text-text-secondary group-hover:text-text-primary">
           {node.name}
           {entry.oldPath !== undefined && (
             <span className="text-text-muted"> ← {entry.oldPath}</span>
@@ -170,7 +171,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             the resting row layout is unchanged) + the stat label. */}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {onOpenInEditor && (
-            <button
+            <ControlButton
               type="button"
               className="hidden shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary group-focus-within:flex group-hover:flex"
               title={openInEditorLabel}
@@ -182,9 +183,9 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
               }}
             >
               <SquareArrowOutUpRight aria-hidden="true" className="h-3 w-3" />
-            </button>
+            </ControlButton>
           )}
-          <span className="shrink-0 font-mono text-[10px] tabular-nums">
+          <span className="shrink-0 font-mono text-micro tabular-nums">
             {entry.binary ? (
               <span className="text-text-muted">binary</span>
             ) : node.stat ? (

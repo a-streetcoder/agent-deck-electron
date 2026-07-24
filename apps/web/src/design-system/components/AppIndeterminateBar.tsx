@@ -32,7 +32,7 @@ export const AppIndeterminateBar = forwardRef<HTMLDivElement, AppIndeterminateBa
         data-indeterminate-track
         className={cn(
           "relative w-full overflow-hidden rounded-capsule",
-          "bg-[var(--color-surface-subtle)]",
+          "bg-surface-subtle",
           className,
         )}
         style={{ height, ...style }}

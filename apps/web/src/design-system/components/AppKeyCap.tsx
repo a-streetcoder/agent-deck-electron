@@ -27,10 +27,10 @@ function Cap({ children }: CapProps) {
       data-length={length}
       className={cn(
         "inline-flex min-h-[22px] min-w-[22px] items-center justify-center",
-        "rounded-md border border-border-subtle bg-[var(--color-surface-subtle)]",
+        "rounded-md border border-border-subtle bg-surface-subtle",
         "font-mono font-semibold text-text-primary",
-        "shadow-[0_1px_0_rgba(0,0,0,0.08)]",
-        length === "single" ? "px-0 text-xs" : "px-1.5 text-[10px]",
+        "shadow-keycap",
+        length === "single" ? "px-0 text-xs" : "px-1.5 text-micro",
       )}
     >
       {children}

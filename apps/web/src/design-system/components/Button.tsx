@@ -58,29 +58,26 @@ const sizeClasses: Record<ButtonSize, string> = {
  */
 const variantClasses: Record<ButtonVariant, string> = {
   primary: cn(
-    "border-transparent text-[var(--color-accent-foreground,#000)]",
+    "border-transparent text-on-accent",
     "bg-primary hover:bg-primary-hover active:opacity-86",
     "shadow-capsule",
   ),
   secondary: cn(
     "bg-surface-elevated text-text-primary",
-    "border-border-strong hover:bg-[var(--color-hover-fill)]",
+    "border-border-strong hover:bg-hover",
     "shadow-card",
   ),
-  ghost: cn(
-    "bg-transparent text-text-primary border-transparent",
-    "hover:bg-[var(--color-hover-fill)]",
-  ),
+  ghost: cn("bg-transparent text-text-primary border-transparent", "hover:bg-hover"),
   pill: cn(
     "rounded-full border-transparent",
     "bg-surface-elevated/80 text-text-primary",
-    "hover:bg-[var(--color-hover-fill)] active:opacity-75",
+    "hover:bg-hover active:opacity-75",
     "data-[active=true]:bg-primary/20 data-[active=true]:text-accent",
     "data-[active=true]:font-semibold",
   ),
   destructive: cn(
     "border-transparent text-white",
-    "bg-[var(--color-role-error,#E5746C)] hover:opacity-90 active:opacity-80",
+    "bg-danger hover:opacity-90 active:opacity-80",
     "shadow-capsule",
   ),
 };

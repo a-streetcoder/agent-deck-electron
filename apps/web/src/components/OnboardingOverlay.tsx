@@ -1,3 +1,4 @@
+import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -237,16 +238,16 @@ function CopyFixButton({ command }: { command: string }) {
     );
   };
   return (
-    <button
+    <ControlButton
       data-testid="onboarding-fix-copy"
       data-fix-command={command}
       title={`Copy: ${command}`}
-      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-[10px] text-text-secondary hover:text-text-primary"
+      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary"
       onClick={copy}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
       {copied ? "Copied" : "Copy fix"}
-    </button>
+    </ControlButton>
   );
 }
 
@@ -487,7 +488,7 @@ export function OnboardingOverlay() {
                 </div>
                 <div className="flex items-center gap-2 pt-1" aria-label="Carousel controls">
                   {PAGES.map((p, i) => (
-                    <button
+                    <ControlButton
                       key={p.image}
                       aria-label={`Show welcome slide ${i + 1}`}
                       aria-current={i === page ? "true" : undefined}
@@ -503,15 +504,15 @@ export function OnboardingOverlay() {
                           )}
                         />
                       ) : null}
-                    </button>
+                    </ControlButton>
                   ))}
-                  <button
-                    className="rounded-full bg-black/35 p-1 text-white/80 hover:text-white"
+                  <ControlButton
+                    className="rounded-full bg-media-overlay p-1 text-white/80 hover:text-white"
                     aria-label="Next welcome slide"
                     onClick={() => setPage((current) => (current + 1) % PAGES.length)}
                   >
                     <ArrowRight size={14} />
-                  </button>
+                  </ControlButton>
                 </div>
               </div>
             </div>
@@ -542,10 +543,10 @@ export function OnboardingOverlay() {
                 <div className="flex items-center gap-2">
                   <span
                     className={cn(
-                      "rounded-capsule px-2.5 py-1 text-[11px] font-medium",
+                      "rounded-capsule px-2.5 py-1 text-detail font-medium",
                       setupReady
-                        ? "bg-[color-mix(in_srgb,var(--color-success)_14%,transparent)] text-[var(--color-success)]"
-                        : "bg-[color-mix(in_srgb,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]",
+                        ? "bg-success-subtle text-success"
+                        : "bg-warning-subtle text-warning",
                     )}
                   >
                     {setupReady ? "Ready to start" : "Action needed"}
@@ -585,12 +586,15 @@ export function OnboardingOverlay() {
                             <span className="truncate text-xs font-medium text-text-primary">
                               {summaryCheckLabel(check.id)}
                             </span>
-                            <span className="text-[9px] uppercase tracking-wide" style={{ color }}>
+                            <span
+                              className="text-overline uppercase tracking-wide"
+                              style={{ color }}
+                            >
                               {statusLabel}
                             </span>
                           </div>
                           <div
-                            className="mt-0.5 truncate text-[10px] text-text-muted"
+                            className="mt-0.5 truncate text-micro text-text-muted"
                             title={check.detail}
                           >
                             {summaryCheckDetail(check)}
@@ -602,7 +606,7 @@ export function OnboardingOverlay() {
               </div>
             </div>
             <div className="mt-auto flex w-full items-center justify-end border-t border-border-subtle px-8 py-4">
-              <button
+              <ControlButton
                 data-testid="onboarding-get-started"
                 className={cn(
                   primaryButtonClass,
@@ -619,7 +623,7 @@ export function OnboardingOverlay() {
                   <Rocket size={13} aria-hidden />
                 )}
                 {checksLoading ? "Checking…" : setupActionLabel}
-              </button>
+              </ControlButton>
             </div>
           </>
         ) : null}
@@ -639,7 +643,7 @@ export function OnboardingOverlay() {
                   Finish setup
                 </h2>
               </div>
-              <button
+              <ControlButton
                 data-testid="onboarding-recheck"
                 className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                 disabled={checksLoading}
@@ -647,7 +651,7 @@ export function OnboardingOverlay() {
               >
                 <RefreshCw size={11} className={checksLoading ? "animate-spin" : undefined} />
                 {checksLoading ? "Checking…" : "Re-check"}
-              </button>
+              </ControlButton>
             </div>
             <p className="mb-4 text-sm text-text-secondary">
               Complete the item below, then ask Agent Deck to check again.
@@ -675,21 +679,21 @@ export function OnboardingOverlay() {
                           <span className="text-sm font-medium text-text-primary">
                             {check.label}
                           </span>
-                          <span className="text-[10px] uppercase tracking-wide" style={{ color }}>
+                          <span className="text-micro uppercase tracking-wide" style={{ color }}>
                             {label}
                           </span>
                         </div>
-                        <div className="mt-0.5 break-words text-[11px] leading-relaxed text-text-muted">
+                        <div className="mt-0.5 break-words text-detail leading-relaxed text-text-muted">
                           {friendlyCheckDetail(check)}
                         </div>
                         {isProvider && check.status !== "ok" ? (
-                          <button
+                          <ControlButton
                             data-testid="onboarding-connect-provider"
-                            className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
+                            className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-text-primary"
                             onClick={() => setPhase("provider")}
                           >
                             Connect an AI model
-                          </button>
+                          </ControlButton>
                         ) : null}
                       </div>
                       {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
@@ -698,14 +702,14 @@ export function OnboardingOverlay() {
                 })}
             </div>
             <div className="flex items-center justify-between border-t border-border-subtle py-3">
-              <button
+              <ControlButton
                 data-testid="onboarding-setup-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => setPhase("tour")}
               >
                 <ArrowLeft size={13} /> Back
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="onboarding-setup-continue"
                 className={cn(
                   primaryButtonClass,
@@ -717,7 +721,7 @@ export function OnboardingOverlay() {
               >
                 {checksLoading ? "Checking…" : setupReady ? "Get Started" : "Check again"}
                 <ArrowRight size={13} aria-hidden />
-              </button>
+              </ControlButton>
             </div>
           </div>
         ) : null}
@@ -732,7 +736,7 @@ export function OnboardingOverlay() {
               }}
             />
             <div className="flex shrink-0 items-center justify-between border-t border-border-subtle px-8 py-4">
-              <button
+              <ControlButton
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => {
                   setPhase("tour");
@@ -740,7 +744,7 @@ export function OnboardingOverlay() {
                 }}
               >
                 <ArrowLeft size={13} /> Back
-              </button>
+              </ControlButton>
               <span className="text-xs text-text-muted">
                 Connect at least one provider to continue.
               </span>
@@ -793,7 +797,7 @@ export function OnboardingOverlay() {
                     <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
                       Default model
                     </label>
-                    <select
+                    <ControlSelect
                       id="pref-model"
                       data-testid="pref-model"
                       className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
@@ -809,9 +813,9 @@ export function OnboardingOverlay() {
                           {model.name ?? model.id}
                         </option>
                       ))}
-                    </select>
+                    </ControlSelect>
                     {models.length === 0 ? (
-                      <span className="text-[11px] text-text-muted">
+                      <span className="text-detail text-text-muted">
                         Connect a model provider to choose a default model.
                       </span>
                     ) : null}
@@ -823,7 +827,7 @@ export function OnboardingOverlay() {
                     >
                       Default thinking
                     </label>
-                    <select
+                    <ControlSelect
                       id="pref-thinking"
                       data-testid="pref-thinking"
                       className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
@@ -838,7 +842,7 @@ export function OnboardingOverlay() {
                           {level}
                         </option>
                       ))}
-                    </select>
+                    </ControlSelect>
                   </div>
                 </>
               ) : (
@@ -846,21 +850,21 @@ export function OnboardingOverlay() {
               )}
             </div>
             <div className="flex items-center justify-between border-t border-border-subtle px-5 py-3">
-              <button
+              <ControlButton
                 data-testid="onboarding-preferences-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => setPhase("setup")}
               >
                 <ArrowLeft size={13} /> Back
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="onboarding-preferences-continue"
                 className={primaryButtonClass}
                 style={primaryButtonStyle}
                 onClick={() => goto("final")}
               >
                 Continue <ArrowRight size={13} aria-hidden />
-              </button>
+              </ControlButton>
             </div>
           </div>
         ) : null}
@@ -891,14 +895,14 @@ export function OnboardingOverlay() {
               <FinalGate label="A project" ok={!projectMissing} />
             </div>
             <div className="flex items-center justify-between pt-1">
-              <button
+              <ControlButton
                 data-testid="onboarding-final-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => setPhase("setup")}
               >
                 <ArrowLeft size={13} /> Back
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="onboarding-finish"
                 data-target={finalCta.view}
                 className={cn(
@@ -910,7 +914,7 @@ export function OnboardingOverlay() {
                 onClick={() => finishTo(finalCta.view)}
               >
                 <finalCta.Icon size={13} aria-hidden /> {finalCta.label}
-              </button>
+              </ControlButton>
             </div>
           </div>
         ) : null}
@@ -938,7 +942,7 @@ function PrefToggle({
         <div className="text-sm font-medium text-text-primary">{label}</div>
         <div className="text-xs text-text-muted">{description}</div>
       </div>
-      <button
+      <ControlButton
         type="button"
         role="switch"
         aria-checked={checked}
@@ -947,7 +951,7 @@ function PrefToggle({
         onClick={() => onChange(!checked)}
         className={cn(
           "relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors",
-          checked ? "bg-[var(--color-brand-accent)]" : "bg-border-strong",
+          checked ? "bg-accent" : "bg-border-strong",
         )}
       >
         <span
@@ -956,7 +960,7 @@ function PrefToggle({
             checked ? "left-[18px]" : "left-0.5",
           )}
         />
-      </button>
+      </ControlButton>
     </div>
   );
 }

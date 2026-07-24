@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { ExpandedImagePreview } from "../../lib/expandedImage.ts";
@@ -58,13 +59,13 @@ export function ExpandedImageDialog({
   return (
     <div
       ref={dialogRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-media-overlay-strong px-4 py-6"
       role="dialog"
       aria-modal="true"
       aria-label="Expanded image preview"
       data-testid="expanded-image-dialog"
     >
-      <button
+      <ControlButton
         type="button"
         // A mouse-only click-to-close affordance: kept out of the tab order
         // (tabIndex -1) and off keyboard focus, since it spans the whole viewport
@@ -76,26 +77,26 @@ export function ExpandedImageDialog({
         onClick={onClose}
       />
       {count > 1 ? (
-        <button
+        <ControlButton
           type="button"
           className="absolute left-2 top-1/2 z-20 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white/90 hover:bg-white/10 sm:left-6"
           aria-label="Previous image"
           onClick={() => navigate(-1)}
         >
           <ChevronLeft size={20} />
-        </button>
+        </ControlButton>
       ) : null}
       <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
-        <button
+        <ControlButton
           ref={closeButtonRef}
           type="button"
-          className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/40 text-white/90 hover:bg-black/60"
+          className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-overlay text-white/90 hover:bg-media-overlay"
           onClick={onClose}
           aria-label="Close image preview"
           data-testid="expanded-image-close"
         >
           <X size={15} />
-        </button>
+        </ControlButton>
         <img
           src={item.src}
           alt={item.name}
@@ -108,14 +109,14 @@ export function ExpandedImageDialog({
         </p>
       </div>
       {count > 1 ? (
-        <button
+        <ControlButton
           type="button"
           className="absolute right-2 top-1/2 z-20 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white/90 hover:bg-white/10 sm:right-6"
           aria-label="Next image"
           onClick={() => navigate(1)}
         >
           <ChevronRight size={20} />
-        </button>
+        </ControlButton>
       ) : null}
     </div>
   );

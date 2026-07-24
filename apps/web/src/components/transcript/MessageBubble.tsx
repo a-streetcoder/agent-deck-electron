@@ -65,16 +65,12 @@ const ROLE_HEADER_LABEL: Record<MessageBubbleRole, string> = {
  * the macOS `roleFillOpacity` / `roleStrokeOpacity` constants.
  */
 const ROLE_CLASSES: Record<MessageBubbleRole, string> = {
-  user: cn("bg-[var(--color-role-user)]/8 border-[var(--color-role-user)]/20"),
-  assistant: cn("bg-[var(--color-brand-accent)]/6 border-[var(--color-brand-accent)]/20"),
-  thinking: cn(
-    "bg-[var(--color-role-thinking)]/8 border-[var(--color-role-thinking)]/20 italic text-text-secondary",
-  ),
-  tool: cn("bg-[var(--color-role-tool)]/8 border-[var(--color-role-tool)]/20"),
-  status: cn("bg-[var(--color-hover-fill)] border-border-subtle text-text-secondary"),
-  error: cn(
-    "bg-[var(--color-role-error)]/10 border-[var(--color-role-error)]/35 text-text-primary",
-  ),
+  user: cn("bg-role-user/8 border-role-user/20"),
+  assistant: cn("bg-accent/6 border-accent/20"),
+  thinking: cn("bg-role-thinking/8 border-role-thinking/20 italic text-text-secondary"),
+  tool: cn("bg-role-tool/8 border-role-tool/20"),
+  status: cn("bg-hover border-border-subtle text-text-secondary"),
+  error: cn("bg-danger/10 border-danger/35 text-text-primary"),
   stderr: cn("bg-surface border-border-subtle font-mono text-xs text-text-muted"),
   raw: cn("bg-surface border-border-subtle font-mono text-xs text-text-muted"),
 };
@@ -85,12 +81,12 @@ const ROLE_CLASSES: Record<MessageBubbleRole, string> = {
  * header.
  */
 const ROLE_HEADER_TINT: Record<MessageBubbleRole, string> = {
-  user: "text-[var(--color-role-user)]",
-  assistant: "text-[var(--color-brand-accent)]",
-  thinking: "text-[var(--color-role-thinking)]",
-  tool: "text-[var(--color-role-tool)]",
+  user: "text-role-user",
+  assistant: "text-accent",
+  thinking: "text-role-thinking",
+  tool: "text-role-tool",
   status: "text-text-muted",
-  error: "text-[var(--color-role-error)]",
+  error: "text-danger",
   stderr: "text-text-muted",
   raw: "text-text-muted",
 };
@@ -128,14 +124,14 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
         ROLE_CLASSES[role],
         // Soften the body color in muted roles. We add this AFTER the
         // role class so it can override the role's text color.
-        "text-[13px] leading-relaxed",
+        "text-label leading-relaxed",
         className,
       )}
     >
       <div className="flex items-baseline justify-between gap-3">
         <span
           className={cn(
-            "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide",
+            "flex items-center gap-1.5 text-detail font-semibold uppercase tracking-wide",
             ROLE_HEADER_TINT[role],
           )}
         >
@@ -145,7 +141,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
           ) : null}
           {label}
         </span>
-        {trailing ? <span className="shrink-0 text-[11px] text-text-muted">{trailing}</span> : null}
+        {trailing ? <span className="shrink-0 text-detail text-text-muted">{trailing}</span> : null}
       </div>
 
       {attachments && attachments.length > 0 ? (
@@ -156,7 +152,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
               data-kind={attachment.kind}
               className={cn(
                 "inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-elevated",
-                "px-2 py-0.5 text-[11px] font-medium text-text-secondary",
+                "px-2 py-0.5 text-detail font-medium text-text-secondary",
               )}
             >
               {attachment.label}
@@ -169,7 +165,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
         // For multi-line markdown bodies we delegate to MarkdownDocument
         // so fenced code + lists + headings all parse. Single-line
         // strings render fine through it too.
-        <MarkdownDocument source={text} className="text-[13px]" />
+        <MarkdownDocument source={text} className="text-label" />
       ) : null}
     </div>
   );

@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, Loader2, XCircle } from "lucide-react";
 import { openExternal } from "../lib/native.ts";
@@ -139,20 +140,27 @@ export function ProviderLoginSheet({
   const doneEvent = last?.type === "done" ? last : null;
   const hasBrowserAuth = events.some((event) => event.type === "auth_url");
 
+  const promptFormId = "provider-login-prompt-form";
+  const promptInputId = "provider-login-prompt-input";
+  const visiblePrompt =
+    awaitingPrompt && (!hasBrowserAuth || showManualEntry) ? awaitingPrompt : null;
+
   return (
     <div
-      className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8"
+      className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-overlay p-4 sm:p-8"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="app-modal-panel flex max-h-[85vh] w-[460px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
+        className="app-modal-panel flex max-h-[calc(100vh-2rem)] w-full max-w-[460px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
         data-testid="provider-login-sheet"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="provider-login-title"
       >
         <div
+          id="provider-login-title"
           className="text-sm font-semibold text-text-primary"
           style={{ fontStretch: "expanded" }}
         >
@@ -175,29 +183,75 @@ export function ProviderLoginSheet({
           ) : null}
         </div>
 
-        {awaitingPrompt && (!hasBrowserAuth || showManualEntry) ? (
+        {visiblePrompt ? (
           <form
+            id={promptFormId}
             className="flex flex-col gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void respond(promptValue);
             }}
           >
-            <label className="text-xs text-text-secondary">{awaitingPrompt.message}</label>
-            <div className="flex gap-2">
-              <input
-                autoFocus
-                data-testid="login-prompt-input"
-                className={inputClass}
-                type={awaitingPrompt.secret ? "password" : "text"}
-                placeholder={awaitingPrompt.placeholder}
-                value={promptValue}
-                onChange={(event) => setPromptValue(event.target.value)}
-              />
-              <button
+            <label htmlFor={promptInputId} className="text-xs text-text-secondary">
+              {visiblePrompt.message}
+            </label>
+            <ControlInput
+              id={promptInputId}
+              autoFocus
+              data-testid="login-prompt-input"
+              className={inputClass}
+              type={visiblePrompt.secret ? "password" : "text"}
+              placeholder={visiblePrompt.placeholder}
+              value={promptValue}
+              onChange={(event) => setPromptValue(event.target.value)}
+            />
+          </form>
+        ) : null}
+
+        {awaitingSelect ? (
+          <div className="flex flex-wrap gap-2" data-testid="login-select">
+            {awaitingSelect.options.map((option) => (
+              <ControlButton
+                key={option.id}
+                data-testid={`login-select-${option.id}`}
+                className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
+                onClick={() => void respond(option.id)}
+              >
+                {option.label}
+              </ControlButton>
+            ))}
+          </div>
+        ) : null}
+
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 pt-1"
+          data-testid="provider-login-actions"
+        >
+          {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
+            <ControlButton
+              type="button"
+              className="text-xs text-text-muted hover:text-text-primary"
+              onClick={() => setShowManualEntry(true)}
+            >
+              Enter a code manually
+            </ControlButton>
+          ) : (
+            <span />
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <ControlButton
+              type="button"
+              className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+              onClick={onClose}
+            >
+              {doneEvent || fatal ? "Close" : "Cancel"}
+            </ControlButton>
+            {visiblePrompt ? (
+              <ControlButton
                 type="submit"
+                form={promptFormId}
                 data-testid="login-prompt-submit"
-                className="rounded-capsule px-3 py-1.5 text-sm font-medium shadow-capsule"
+                className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -205,43 +259,9 @@ export function ProviderLoginSheet({
                 }}
               >
                 Submit
-              </button>
-            </div>
-          </form>
-        ) : null}
-
-        {awaitingSelect ? (
-          <div className="flex flex-wrap gap-2" data-testid="login-select">
-            {awaitingSelect.options.map((option) => (
-              <button
-                key={option.id}
-                data-testid={`login-select-${option.id}`}
-                className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
-                onClick={() => void respond(option.id)}
-              >
-                {option.label}
-              </button>
-            ))}
+              </ControlButton>
+            ) : null}
           </div>
-        ) : null}
-
-        <div className="flex items-center justify-between gap-2 pt-1">
-          {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
-            <button
-              className="text-xs text-text-muted hover:text-text-primary"
-              onClick={() => setShowManualEntry(true)}
-            >
-              Enter a code manually
-            </button>
-          ) : (
-            <span />
-          )}
-          <button
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
-            onClick={onClose}
-          >
-            {doneEvent ? "Close" : "Cancel"}
-          </button>
         </div>
       </div>
     </div>
@@ -257,15 +277,15 @@ function LoginStep({ event }: { event: LoginEvent }) {
           <div className="mt-1 text-xs leading-relaxed text-text-muted">
             Sign in securely with the provider, then return to Agent Deck.
           </div>
-          <button
+          <ControlButton
             className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent"
             data-testid="login-auth-url"
             onClick={() => void openExternal(event.url)}
           >
             <ExternalLink size={12} /> Open browser again
-          </button>
+          </ControlButton>
           {event.instructions ? (
-            <div className="mt-2 text-[11px] text-text-muted">{event.instructions}</div>
+            <div className="mt-2 text-detail text-text-muted">{event.instructions}</div>
           ) : null}
         </div>
       );
@@ -278,7 +298,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
               href={event.verificationUri}
               target="_blank"
               rel="noreferrer"
-              className="text-[var(--color-brand-accent)]"
+              className="text-accent"
             >
               {event.verificationUri}
             </a>{" "}

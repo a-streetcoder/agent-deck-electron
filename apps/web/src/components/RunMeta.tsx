@@ -39,7 +39,7 @@ export function RunMeta({ model, inputTokens, outputTokens, durationMs, classNam
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-1.5 text-[10px] tabular-nums text-text-muted ${className ?? ""}`}
+      className={`flex flex-wrap items-center gap-x-1.5 text-micro tabular-nums text-text-muted ${className ?? ""}`}
       data-testid="run-meta"
     >
       {parts.map((part, i) => (

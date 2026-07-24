@@ -18,6 +18,7 @@
  */
 import { marked, Marked } from "marked";
 import DOMPurify from "dompurify";
+import { SHIKI_THEMES } from "../themes/shiki";
 
 /** Shiki theme name. Kept loose so callers can pass any bundled theme. */
 export type ShikiThemeName = string;
@@ -40,7 +41,7 @@ type HighlighterInstance = {
 };
 
 let highlighterPromise: Promise<HighlighterInstance> | null = null;
-const DEFAULT_THEME: ShikiThemeName = "github-dark";
+const DEFAULT_THEME: ShikiThemeName = SHIKI_THEMES.dark;
 
 // A small starter set of languages — enough to cover most fenced blocks
 // without paying the cost of every grammar. Additional langs are loaded
@@ -63,13 +64,13 @@ const PRELOADED_LANGUAGES = [
   "sql",
 ] as const;
 
-async function getHighlighter(theme: ShikiThemeName): Promise<HighlighterInstance> {
+async function getHighlighter(): Promise<HighlighterInstance> {
   if (highlighterPromise) return highlighterPromise;
   highlighterPromise = (async () => {
-    // Dynamic import keeps shiki out of the initial bundle.
+    // Load both application themes once; mounted markdown can then switch live.
     const shiki = await import("shiki");
     const instance = await shiki.createHighlighter({
-      themes: [theme],
+      themes: [SHIKI_THEMES.dark, SHIKI_THEMES.light],
       langs: [...PRELOADED_LANGUAGES],
     });
     return instance as unknown as HighlighterInstance;
@@ -93,7 +94,7 @@ function normalizeLang(lang: string): string {
 async function highlightCode(code: string, lang: string, theme: ShikiThemeName): Promise<string> {
   const normalized = normalizeLang(lang);
   try {
-    const hl = await getHighlighter(theme);
+    const hl = await getHighlighter();
     const loaded = new Set(hl.getLoadedLanguages());
     if (!loaded.has(normalized) && normalized !== "text") {
       try {

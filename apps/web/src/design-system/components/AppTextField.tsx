@@ -134,7 +134,7 @@ export const AppTextField = forwardRef<HTMLInputElement, AppTextFieldProps>(func
           onClick={handleClear}
           className={cn(
             "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
-            "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+            "text-text-muted hover:bg-hover hover:text-text-primary",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
           )}
         >

@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import {
   Brain,
   CircleDot,
@@ -69,14 +70,12 @@ export function Sidebar({ width }: { width?: number }) {
 
   const rowClass = (active: boolean): string =>
     cn(
-      "flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[13px] font-medium transition-colors",
-      active
-        ? "bg-[var(--color-selection-fill)] text-text-primary"
-        : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+      "flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-label font-medium transition-colors",
+      active ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
     );
 
   const sectionHeader = (label: string) => (
-    <div className="px-4 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+    <div className="px-4 pb-1 pt-3 text-micro font-semibold uppercase tracking-wider text-text-muted">
       {label}
     </div>
   );
@@ -102,7 +101,7 @@ export function Sidebar({ width }: { width?: number }) {
         {(["AGENT", "DECK"] as const).map((word) => (
           <span
             key={word}
-            className="translate-y-px whitespace-nowrap font-pixel text-[18px] leading-none text-text-primary"
+            className="translate-y-px whitespace-nowrap font-pixel text-lg leading-none text-text-primary"
           >
             {word}
           </span>
@@ -133,7 +132,7 @@ export function Sidebar({ width }: { width?: number }) {
                 const Icon = item.icon;
                 const active = view === item.id;
                 return (
-                  <button
+                  <ControlButton
                     key={item.id}
                     className={rowClass(active)}
                     data-testid={`nav-${item.id}`}
@@ -144,7 +143,7 @@ export function Sidebar({ width }: { width?: number }) {
                       style={{ color: active ? "var(--color-brand-accent)" : undefined }}
                     />
                     <span style={{ fontStretch: "expanded" }}>{item.label}</span>
-                  </button>
+                  </ControlButton>
                 );
               })}
             </nav>
@@ -155,7 +154,7 @@ export function Sidebar({ width }: { width?: number }) {
                 const Icon = item.icon;
                 const active = view === item.id;
                 return (
-                  <button
+                  <ControlButton
                     key={item.id}
                     className={rowClass(active)}
                     data-testid={`nav-${item.id}`}
@@ -166,7 +165,7 @@ export function Sidebar({ width }: { width?: number }) {
                       style={{ color: active ? "var(--color-brand-accent)" : undefined }}
                     />
                     <span style={{ fontStretch: "expanded" }}>{item.label}</span>
-                  </button>
+                  </ControlButton>
                 );
               })}
             </nav>

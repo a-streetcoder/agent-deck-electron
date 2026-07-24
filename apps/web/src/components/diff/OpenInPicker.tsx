@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, SquareArrowOutUpRight } from "lucide-react";
 import { EDITORS, type EditorId } from "@agent-deck/contracts";
@@ -194,14 +195,14 @@ export function OpenInPicker({
 
   const buttonClass =
     "flex items-center rounded p-0.5 text-text-muted transition-colors " +
-    "hover:bg-[var(--color-hover-fill)] hover:text-text-primary";
+    "hover:bg-hover hover:text-text-primary";
 
   return (
     <div
       ref={ref}
       className={cn("relative flex shrink-0 items-center", menuOpen ? undefined : className)}
     >
-      <button
+      <ControlButton
         type="button"
         className={buttonClass}
         title={`Open in ${editorLabel(preferred)}`}
@@ -213,8 +214,8 @@ export function OpenInPicker({
         }}
       >
         <EditorGlyph id={preferred} className="h-3.5 w-3.5" />
-      </button>
-      <button
+      </ControlButton>
+      <ControlButton
         type="button"
         className={buttonClass}
         title="Choose editor"
@@ -225,7 +226,7 @@ export function OpenInPicker({
         onClick={() => setMenuOpen((open) => !open)}
       >
         <ChevronDown aria-hidden="true" className="h-3 w-3" />
-      </button>
+      </ControlButton>
       {menuOpen && (
         <div
           role="menu"
@@ -234,7 +235,7 @@ export function OpenInPicker({
           className="absolute right-0 top-full z-20 mt-1.5 w-48 rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
           {available.map((editor) => (
-            <button
+            <ControlButton
               key={editor}
               type="button"
               role="menuitem"
@@ -242,8 +243,8 @@ export function OpenInPicker({
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs",
                 editor === preferred
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-secondary hover:bg-[var(--color-hover-fill)]",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-secondary hover:bg-hover",
               )}
               onClick={() => {
                 setMenuOpen(false);
@@ -252,7 +253,7 @@ export function OpenInPicker({
             >
               <EditorGlyph id={editor} className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{editorLabel(editor)}</span>
-            </button>
+            </ControlButton>
           ))}
         </div>
       )}

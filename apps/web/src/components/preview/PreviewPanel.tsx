@@ -1,3 +1,9 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import {
   ArrowLeft,
@@ -327,22 +333,22 @@ function ScriptsRunner(props: {
           Preview
         </span>
         <div className="flex shrink-0 items-center gap-1">
-          <button
+          <ControlButton
             type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
             title="Refresh scripts"
             aria-label="Refresh scripts"
             data-testid="preview-refresh"
             onClick={onRefresh}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", scriptsLoading && "animate-spin")} />
-          </button>
+          </ControlButton>
         </div>
       </div>
 
       {/* Run control: pick a declared script, start / stop it. */}
       <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
-        <select
+        <ControlSelect
           className="min-w-0 flex-1 truncate rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-xs text-text-primary disabled:opacity-50"
           data-testid="preview-script-select"
           value={selected ?? ""}
@@ -358,28 +364,28 @@ function ScriptsRunner(props: {
           ) : (
             <option value="">No scripts</option>
           )}
-        </select>
+        </ControlSelect>
         {running ? (
-          <button
+          <ControlButton
             type="button"
-            className="flex items-center gap-1 rounded-md bg-[var(--color-role-error)] px-2.5 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+            className="flex items-center gap-1 rounded-md bg-danger px-2.5 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90"
             data-testid="preview-stop"
             onClick={onStop}
           >
             <Square className="h-3 w-3" />
             Stop
-          </button>
+          </ControlButton>
         ) : (
-          <button
+          <ControlButton
             type="button"
-            className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-[var(--color-accent-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
             data-testid="preview-run"
             disabled={!hasScripts || selected === null}
             onClick={onRun}
           >
             <Play className="h-3 w-3" />
             Run
-          </button>
+          </ControlButton>
         )}
       </div>
 
@@ -395,27 +401,27 @@ function ScriptsRunner(props: {
 
       {/* Discovered dev server: a card that embeds it in this panel. */}
       {server ? (
-        <button
+        <ControlButton
           type="button"
-          className="flex items-center gap-2 border-b border-border-subtle bg-surface px-3 py-2 text-left transition-colors hover:bg-[var(--color-hover-fill)]"
+          className="flex items-center gap-2 border-b border-border-subtle bg-surface px-3 py-2 text-left transition-colors hover:bg-hover"
           data-testid="preview-server-card"
           onClick={() => onOpenServer(server.url)}
         >
-          <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--color-success)]" />
+          <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-success" />
           <span className="min-w-0 flex-1">
             <span className="block text-xs font-semibold text-text-primary">Dev server ready</span>
-            <span className="block truncate font-mono text-[11px] text-text-muted">
+            <span className="block truncate font-mono text-detail text-text-muted">
               {server.url}
             </span>
           </span>
           <ExternalLink className="h-3.5 w-3.5 shrink-0 text-text-muted" />
-        </button>
+        </ControlButton>
       ) : null}
 
       {/* Output log, or the empty state. */}
       {log.length > 0 ? (
         <div
-          className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words bg-surface px-3 py-2 font-mono text-[11px] leading-relaxed text-text-secondary"
+          className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words bg-surface px-3 py-2 font-mono text-detail leading-relaxed text-text-secondary"
           data-testid="preview-log"
         >
           {log}
@@ -505,29 +511,29 @@ function PreviewBrowser(props: {
         onSubmit={submit}
         className="flex items-center gap-1 border-b border-border-subtle px-2 py-1.5"
       >
-        <button
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           title="Back to scripts"
           aria-label="Back to scripts"
           data-testid="preview-back"
           onClick={onBack}
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           title="Reload"
           aria-label="Reload"
           data-testid="preview-reload"
           onClick={() => setReloadNonce((n) => n + 1)}
         >
           <RotateCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-        </button>
-        <input
+        </ControlButton>
+        <ControlInput
           ref={inputRef}
-          className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-[11px] text-text-primary focus:border-accent focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-detail text-text-primary focus:border-accent focus:outline-none"
           data-testid="preview-url-input"
           value={draft}
           spellCheck={false}
@@ -547,10 +553,10 @@ function PreviewBrowser(props: {
           aria-label="Preview URL"
           placeholder="http://localhost:3000"
         />
-        <button
+        <ControlButton
           type="button"
           className={cn(
-            "shrink-0 rounded p-1 transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+            "shrink-0 rounded p-1 transition-colors hover:bg-hover hover:text-text-primary",
             selecting ? "text-accent" : "text-text-muted",
           )}
           title="Add element context"
@@ -560,17 +566,17 @@ function PreviewBrowser(props: {
           onClick={() => setSelecting((value) => !value)}
         >
           <MousePointerClick className="h-3.5 w-3.5" />
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="button"
-          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           title="Open in system browser"
           aria-label="Open in system browser"
           data-testid="preview-open-external"
           onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-        </button>
+        </ControlButton>
       </form>
 
       {/* Slice 16 — the manual element-capture form. Our preview iframe is
@@ -676,13 +682,13 @@ function ElementCaptureForm(props: {
     >
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-text-secondary">Add element context</span>
-        <span className="truncate pl-2 font-mono text-[10px] text-text-muted" title={pageUrl}>
+        <span className="truncate pl-2 font-mono text-micro text-text-muted" title={pageUrl}>
           {pageUrl}
         </span>
       </div>
-      <input
+      <ControlInput
         ref={selectorRef}
-        className="rounded-md border border-border-subtle bg-surface-elevated px-2 py-1 font-mono text-[11px] text-text-primary focus:border-accent focus:outline-none"
+        className="rounded-md border border-border-subtle bg-surface-elevated px-2 py-1 font-mono text-detail text-text-primary focus:border-accent focus:outline-none"
         data-testid="preview-element-selector"
         value={selector}
         spellCheck={false}
@@ -695,7 +701,7 @@ function ElementCaptureForm(props: {
           }
         }}
       />
-      <textarea
+      <ControlTextArea
         className="min-h-[3rem] resize-none rounded-md border border-border-subtle bg-surface-elevated px-2 py-1 text-xs text-text-primary focus:border-accent focus:outline-none"
         data-testid="preview-element-note"
         value={note}
@@ -714,22 +720,22 @@ function ElementCaptureForm(props: {
         }}
       />
       <div className="flex items-center justify-end gap-2">
-        <button
+        <ControlButton
           type="button"
-          className="rounded-md px-2.5 py-1 text-xs text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="rounded-md px-2.5 py-1 text-xs text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           data-testid="preview-element-cancel"
           onClick={onClose}
         >
           Cancel
-        </button>
-        <button
+        </ControlButton>
+        <ControlButton
           type="submit"
-          className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-[var(--color-accent-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
           data-testid="preview-element-add"
           disabled={!canAdd}
         >
           Add
-        </button>
+        </ControlButton>
       </div>
     </form>
   );

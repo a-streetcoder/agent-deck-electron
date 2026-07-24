@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
 import { FileWarning, History, RefreshCw, RotateCcw } from "lucide-react";
 import type { CheckpointInfo } from "@agent-deck/contracts";
@@ -96,16 +97,16 @@ export function CheckpointsPanel() {
           Checkpoints
         </span>
         <div className="flex shrink-0 items-center gap-1">
-          <button
+          <ControlButton
             type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
             title="Refresh checkpoints"
             aria-label="Refresh checkpoints"
             data-testid="checkpoints-refresh"
             onClick={() => void refreshCheckpoints(sessionId)}
           >
             <RefreshCw className="h-3.5 w-3.5" />
-          </button>
+          </ControlButton>
         </div>
       </div>
 
@@ -164,11 +165,11 @@ function CheckpointRow({
           <p className="truncate text-xs font-medium text-text-primary" title={label}>
             {label}
           </p>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-muted">
+          <div className="mt-0.5 flex items-center gap-1.5 text-micro text-text-muted">
             <span data-testid="checkpoint-time">{formatTime(checkpoint.createdAt)}</span>
             {!checkpoint.hasFiles ? (
               <span
-                className="inline-flex items-center gap-0.5 text-[var(--color-warning)]"
+                className="inline-flex items-center gap-0.5 text-warning"
                 title="No file snapshot (non-git session) — a rollback restores only the conversation."
                 data-testid="checkpoint-no-files"
               >
@@ -178,11 +179,11 @@ function CheckpointRow({
             ) : null}
           </div>
         </div>
-        <button
+        <ControlButton
           type="button"
           className={cn(
             "shrink-0 rounded p-1 text-text-muted transition-colors",
-            "hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+            "hover:bg-hover hover:text-text-primary",
             "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-muted",
           )}
           title={disabled ? "Wait for the current turn to finish" : "Restore to this point"}
@@ -192,7 +193,7 @@ function CheckpointRow({
           onClick={onRestore}
         >
           <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        </ControlButton>
       </div>
     </li>
   );
@@ -232,7 +233,7 @@ function RollbackConfirmDialog({
       // an in-panel dialog at a fractional device-Y and rasterize its fixed
       // height to ±1px. Centering an even-height box in the fixed viewport keeps
       // its top on an integer device pixel, so the screenshot is deterministic.
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay px-4"
       role="dialog"
       aria-modal="true"
       aria-label="Confirm rollback"
@@ -246,7 +247,7 @@ function RollbackConfirmDialog({
         data-testid="rollback-confirm-dialog"
       >
         <div className="mb-2 flex items-center gap-2">
-          <History className="h-4 w-4 text-[var(--color-warning)]" />
+          <History className="h-4 w-4 text-warning" />
           <h2 className="text-sm font-semibold text-text-primary">Roll back the session?</h2>
         </div>
         <p className="text-xs leading-[18px] text-text-muted">Restore the session to:</p>
@@ -255,22 +256,22 @@ function RollbackConfirmDialog({
         </p>
         <p className="mt-1.5 text-xs leading-[18px] text-text-muted">
           This{" "}
-          <span className="font-medium text-[var(--color-warning)]">
+          <span className="font-medium text-warning">
             discards all messages and uncommitted file changes after this turn
           </span>
           . A safety checkpoint of the current state is kept so you can undo it.
         </p>
         <div className="mt-auto flex justify-end gap-2">
-          <button
+          <ControlButton
             type="button"
-            className="rounded-md px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary disabled:opacity-50"
+            className="rounded-md px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:opacity-50"
             data-testid="rollback-cancel"
             disabled={busy}
             onClick={onCancel}
           >
             Cancel
-          </button>
-          <button
+          </ControlButton>
+          <ControlButton
             type="button"
             className="rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: "var(--color-role-error)" }}
@@ -279,7 +280,7 @@ function RollbackConfirmDialog({
             onClick={onConfirm}
           >
             {busy ? "Restoring…" : "Roll back"}
-          </button>
+          </ControlButton>
         </div>
       </div>
     </div>

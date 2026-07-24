@@ -20,7 +20,7 @@ export interface CardProps extends Omit<HTMLAttributes<HTMLDivElement>, "title">
 
 const variantClasses: Record<CardVariant, string> = {
   surface: cn("bg-surface-elevated text-text-primary", "border border-border-subtle"),
-  subtle: cn("bg-[var(--color-surface-subtle)] text-text-primary", "border border-border-subtle"),
+  subtle: cn("bg-surface-subtle text-text-primary", "border border-border-subtle"),
   transparent: "bg-transparent text-text-primary border border-transparent",
 };
 

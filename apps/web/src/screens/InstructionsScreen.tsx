@@ -1,3 +1,4 @@
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -116,23 +117,23 @@ export function InstructionsScreen() {
               aria-label="Instructions scope"
             >
               {(["project", "global"] as const).map((s) => (
-                <button
+                <ControlButton
                   key={s}
                   data-testid={`instructions-scope-${s}`}
                   aria-pressed={scope === s}
                   className={cn(
                     "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
                     scope === s
-                      ? "bg-[var(--color-selection-fill)] text-text-primary"
+                      ? "bg-selection text-text-primary"
                       : "text-text-muted hover:text-text-primary",
                   )}
                   onClick={() => setScope(s)}
                 >
                   {s}
-                </button>
+                </ControlButton>
               ))}
             </div>
-            <button
+            <ControlButton
               data-testid="instructions-save"
               className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -144,7 +145,7 @@ export function InstructionsScreen() {
               onClick={() => void save()}
             >
               {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-            </button>
+            </ControlButton>
           </div>
         </div>
 
@@ -161,11 +162,11 @@ export function InstructionsScreen() {
           </div>
         ) : (
           <>
-            <p className="truncate pb-3 font-mono text-[11px] text-text-muted" title={filePath}>
+            <p className="truncate pb-3 font-mono text-detail text-text-muted" title={filePath}>
               {filePath}
             </p>
             {loaded ? (
-              <textarea
+              <ControlTextArea
                 data-testid="instructions-editor"
                 className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-sm text-text-primary outline-none focus:border-accent"
                 placeholder={

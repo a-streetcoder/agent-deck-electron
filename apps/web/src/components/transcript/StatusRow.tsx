@@ -22,15 +22,11 @@ export interface StatusRowProps {
 }
 
 const VARIANT_TINT: Record<StatusRowVariant, string> = {
-  info: "border-border-subtle bg-[var(--color-hover-fill)] text-text-secondary",
-  compaction:
-    "border-[var(--color-brand-accent)]/35 bg-[var(--color-brand-accent)]/8 text-[var(--color-brand-accent)]",
-  error:
-    "border-[var(--color-role-error)]/40 bg-[var(--color-role-error)]/10 text-[var(--color-role-error)]",
-  warning:
-    "border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]",
-  subagent:
-    "border-[var(--color-brand-accent)]/25 bg-[var(--color-brand-accent)]/6 text-text-secondary",
+  info: "border-border-subtle bg-hover text-text-secondary",
+  compaction: "border-accent/35 bg-accent/8 text-accent",
+  error: "border-danger/40 bg-danger/10 text-danger",
+  warning: "border-warning/40 bg-warning/10 text-warning",
+  subagent: "border-accent/25 bg-accent/6 text-text-secondary",
   git: "border-border-subtle bg-surface-elevated text-text-secondary",
 };
 
@@ -60,7 +56,7 @@ export const StatusRow = forwardRef<HTMLDivElement, StatusRowProps>(function Sta
       data-tone={variant}
       className={cn(
         "flex items-center gap-2 rounded-lg border px-3 py-2",
-        "text-[12px]",
+        "text-caption",
         VARIANT_TINT[variant],
         className,
       )}
@@ -76,7 +72,7 @@ export const StatusRow = forwardRef<HTMLDivElement, StatusRowProps>(function Sta
       ) : (
         <span className="flex-1" />
       )}
-      {timestamp ? <span className="shrink-0 text-[11px] text-text-muted">{timestamp}</span> : null}
+      {timestamp ? <span className="shrink-0 text-detail text-text-muted">{timestamp}</span> : null}
       {trailing}
     </div>
   );

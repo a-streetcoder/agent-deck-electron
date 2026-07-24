@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -94,15 +95,15 @@ export function TabStrip(props: {
               className={cn(
                 "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
                 active
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-muted hover:bg-hover hover:text-text-primary",
               )}
               onContextMenu={(event) => {
                 event.preventDefault();
                 setContextMenu({ kind, x: event.clientX, y: event.clientY });
               }}
             >
-              <button
+              <ControlButton
                 type="button"
                 role="tab"
                 id={`ws-tab-${kind}`}
@@ -116,11 +117,11 @@ export function TabStrip(props: {
               >
                 <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 <span className="truncate">{meta.title}</span>
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 type="button"
                 className={cn(
-                  "flex size-4 shrink-0 items-center justify-center rounded hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                  "flex size-4 shrink-0 items-center justify-center rounded hover:bg-hover hover:text-text-primary",
                   active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                 )}
                 data-testid={`workspace-tab-close-${kind}`}
@@ -132,7 +133,7 @@ export function TabStrip(props: {
                 }}
               >
                 <X className="h-3 w-3" aria-hidden />
-              </button>
+              </ControlButton>
             </div>
           );
         })}
@@ -141,9 +142,9 @@ export function TabStrip(props: {
       {/* The "+" menu: open another tool as a tab. Diff is disabled (with a
           reason tooltip) when the session is not a git repo. */}
       <div ref={addRef} className="relative shrink-0">
-        <button
+        <ControlButton
           type="button"
-          className="flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          className="flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           data-testid="workspace-tab-add"
           aria-label="Open a tool"
           aria-haspopup="menu"
@@ -151,7 +152,7 @@ export function TabStrip(props: {
           onClick={() => setAddOpen((open) => !open)}
         >
           <Plus className="h-4 w-4" aria-hidden />
-        </button>
+        </ControlButton>
         {addOpen ? (
           <div
             role="menu"
@@ -165,7 +166,7 @@ export function TabStrip(props: {
               const enabled = available(kind);
               const isOpen = tabs.includes(kind);
               return (
-                <button
+                <ControlButton
                   key={kind}
                   type="button"
                   role="menuitem"
@@ -175,7 +176,7 @@ export function TabStrip(props: {
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
                     enabled
-                      ? "text-text-secondary hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+                      ? "text-text-secondary hover:bg-hover hover:text-text-primary"
                       : "cursor-not-allowed text-text-muted opacity-40",
                   )}
                   onClick={() => {
@@ -186,8 +187,8 @@ export function TabStrip(props: {
                 >
                   <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   <span className="flex-1 truncate">{meta.title}</span>
-                  {isOpen ? <span className="text-[10px] text-text-muted">open</span> : null}
-                </button>
+                  {isOpen ? <span className="text-micro text-text-muted">open</span> : null}
+                </ControlButton>
               );
             })}
           </div>
@@ -272,7 +273,7 @@ function TabContextMenu(props: {
       style={{ left: state.x, top: state.y }}
     >
       {items.map((item) => (
-        <button
+        <ControlButton
           key={item.testId}
           type="button"
           role="menuitem"
@@ -282,7 +283,7 @@ function TabContextMenu(props: {
             "flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs",
             item.disabled
               ? "cursor-not-allowed text-text-muted opacity-40"
-              : "text-text-secondary hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+              : "text-text-secondary hover:bg-hover hover:text-text-primary",
           )}
           onClick={() => {
             if (item.disabled) return;
@@ -291,7 +292,7 @@ function TabContextMenu(props: {
           }}
         >
           {item.label}
-        </button>
+        </ControlButton>
       ))}
     </div>
   );

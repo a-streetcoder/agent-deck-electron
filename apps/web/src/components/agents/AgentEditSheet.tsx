@@ -1,3 +1,9 @@
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
@@ -183,7 +189,7 @@ export function AgentEditSheet({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-overlay p-8"
       onMouseDown={(event) => {
         // Backdrop dismisses only while the form is clean — a stray press
         // must never discard edits (Cancel is the explicit path).
@@ -214,19 +220,19 @@ export function AgentEditSheet({
               </div>
             ) : null}
           </div>
-          <button
-            className="rounded-capsule p-1.5 text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+          <ControlButton
+            className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
             aria-label="Close"
             onClick={onClose}
           >
             <X size={15} />
-          </button>
+          </ControlButton>
         </div>
 
         {/* Tab strip */}
         <div className="flex gap-1 border-b border-border-subtle px-4 pt-2">
           {TABS.map((t) => (
-            <button
+            <ControlButton
               key={t.id}
               data-testid={`editor-tab-${t.id}`}
               className={cn(
@@ -239,7 +245,7 @@ export function AgentEditSheet({
               onClick={() => setTab(t.id)}
             >
               {t.label}
-            </button>
+            </ControlButton>
           ))}
         </div>
 
@@ -250,7 +256,7 @@ export function AgentEditSheet({
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-xs text-text-muted">
                     Name
-                    <input
+                    <ControlInput
                       data-testid="editor-name"
                       className={inputClass}
                       value={name}
@@ -259,7 +265,7 @@ export function AgentEditSheet({
                   </label>
                   <label className="text-xs text-text-muted">
                     Scope
-                    <select
+                    <ControlSelect
                       data-testid="editor-scope"
                       className={inputClass}
                       value={scope}
@@ -267,13 +273,13 @@ export function AgentEditSheet({
                     >
                       <option value="global">global</option>
                       {currentProjectId ? <option value="project">project</option> : null}
-                    </select>
+                    </ControlSelect>
                   </label>
                 </div>
               ) : null}
               <label className="block text-xs text-text-muted">
                 Description
-                <input
+                <ControlInput
                   data-testid="editor-description"
                   className={inputClass}
                   value={description}
@@ -282,7 +288,7 @@ export function AgentEditSheet({
               </label>
               <label className="block text-xs text-text-muted">
                 When to use
-                <input
+                <ControlInput
                   className={inputClass}
                   value={whenToUse}
                   onChange={(e) => setWhenToUse(e.target.value)}
@@ -291,7 +297,7 @@ export function AgentEditSheet({
               <div className="grid grid-cols-2 gap-3">
                 <label className="text-xs text-text-muted">
                   Model
-                  <input
+                  <ControlInput
                     className={inputClass}
                     placeholder="Use Pi default"
                     value={model}
@@ -300,7 +306,7 @@ export function AgentEditSheet({
                 </label>
                 <label className="text-xs text-text-muted">
                   Thinking
-                  <select
+                  <ControlSelect
                     className={inputClass}
                     value={thinking}
                     onChange={(e) => setThinking(e.target.value)}
@@ -311,12 +317,12 @@ export function AgentEditSheet({
                         {level}
                       </option>
                     ))}
-                  </select>
+                  </ControlSelect>
                 </label>
               </div>
               <label className="block text-xs text-text-muted">
                 Fallback models (comma-separated; tried in order if the primary is unavailable)
-                <input
+                <ControlInput
                   data-testid="editor-fallback-models"
                   className={inputClass}
                   placeholder="anthropic/claude-sonnet-4, openai/gpt-4o…"
@@ -331,20 +337,20 @@ export function AgentEditSheet({
             <>
               <label className="block text-xs text-text-muted">
                 Prompt mode
-                <select
+                <ControlSelect
                   className={inputClass}
                   value={mode}
                   onChange={(e) => setMode(e.target.value as "replace" | "append")}
                 >
                   <option value="replace">Replace</option>
                   <option value="append">Append</option>
-                </select>
+                </ControlSelect>
               </label>
               <label className="block text-xs text-text-muted">
                 System prompt (markdown)
-                <textarea
+                <ControlTextArea
                   data-testid="editor-body"
-                  className={cn(inputClass, "min-h-[220px] font-mono text-[12px]")}
+                  className={cn(inputClass, "min-h-[220px] font-mono text-caption")}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                 />
@@ -355,7 +361,7 @@ export function AgentEditSheet({
           {tab === "tools" ? (
             <label className="block text-xs text-text-muted">
               Tools (comma-separated; empty = pi defaults)
-              <input
+              <ControlInput
                 data-testid="editor-tools"
                 className={inputClass}
                 placeholder="read, grep, bash…"
@@ -368,7 +374,7 @@ export function AgentEditSheet({
           {tab === "skills" ? (
             <label className="block text-xs text-text-muted">
               Skills (comma-separated names from the catalog)
-              <input
+              <ControlInput
                 className={inputClass}
                 value={skills}
                 onChange={(e) => setSkills(e.target.value)}
@@ -379,7 +385,7 @@ export function AgentEditSheet({
           {tab === "mcp" ? (
             <label className="block text-xs text-text-muted">
               MCP servers (comma-separated names from mcp.json this agent uses)
-              <input
+              <ControlInput
                 data-testid="editor-mcp"
                 className={inputClass}
                 placeholder="github, linear…"
@@ -397,13 +403,13 @@ export function AgentEditSheet({
         </div>
 
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-          <button
+          <ControlButton
             className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
             onClick={onClose}
           >
             Cancel
-          </button>
-          <button
+          </ControlButton>
+          <ControlButton
             data-testid="editor-save"
             className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
             style={{
@@ -415,7 +421,7 @@ export function AgentEditSheet({
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}
-          </button>
+          </ControlButton>
         </div>
       </div>
     </div>

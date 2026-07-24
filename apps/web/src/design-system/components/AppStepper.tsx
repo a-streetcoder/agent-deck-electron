@@ -168,7 +168,7 @@ export const AppStepper = forwardRef<HTMLInputElement, AppStepperProps>(function
           className={cn(
             "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm",
             "text-text-primary transition-colors duration-150 ease-spring",
-            "hover:bg-[var(--color-hover-fill)]",
+            "hover:bg-hover",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
             "disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent",
           )}
@@ -214,7 +214,7 @@ export const AppStepper = forwardRef<HTMLInputElement, AppStepperProps>(function
           className={cn(
             "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm",
             "text-text-primary transition-colors duration-150 ease-spring",
-            "hover:bg-[var(--color-hover-fill)]",
+            "hover:bg-hover",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
             "disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent",
           )}

@@ -20,8 +20,8 @@ const STATUS_GLYPH: Record<PlanItemStatus, string> = {
 const STATUS_COLOR: Record<PlanItemStatus, string> = {
   todo: "var(--color-text-muted)",
   in_progress: "var(--color-accent)",
-  done: "var(--color-diff-added, #2e7d32)",
-  blocked: "var(--color-role-tool, #b26a00)",
+  done: "var(--color-diff-added)",
+  blocked: "var(--color-role-tool)",
   skipped: "var(--color-text-muted)",
 };
 

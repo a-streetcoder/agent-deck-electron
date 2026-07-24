@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import type { ReactNode } from "react";
 import { ChevronRight, FileText, Folder, FolderClosed, SquareArrowOutUpRight } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -45,7 +46,7 @@ export function FileTree(props: {
     if (state === undefined || (state.status === "loading" && state.entries.length === 0)) {
       return (
         <div
-          className="py-1 font-mono text-[11px] text-text-muted"
+          className="py-1 font-mono text-detail text-text-muted"
           style={{ paddingLeft: `${leftPadding + 20}px` }}
           data-testid="file-tree-loading"
         >
@@ -56,7 +57,7 @@ export function FileTree(props: {
     if (state.status === "error" && state.entries.length === 0) {
       return (
         <div
-          className="py-1 font-mono text-[11px] text-[var(--color-role-error)]"
+          className="py-1 font-mono text-detail text-danger"
           style={{ paddingLeft: `${leftPadding + 20}px` }}
           data-testid="file-tree-error"
         >
@@ -67,7 +68,7 @@ export function FileTree(props: {
     if (state.entries.length === 0) {
       return (
         <div
-          className="py-1 font-mono text-[11px] text-text-muted"
+          className="py-1 font-mono text-detail text-text-muted"
           style={{ paddingLeft: `${leftPadding + 20}px` }}
         >
           Empty
@@ -83,9 +84,9 @@ export function FileTree(props: {
             const isExpanded = expanded.has(path);
             return (
               <div key={`dir:${path}`}>
-                <button
+                <ControlButton
                   type="button"
-                  className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-[var(--color-hover-fill)]"
+                  className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-hover"
                   style={{ paddingLeft: `${leftPadding}px` }}
                   data-testid="file-tree-dir"
                   data-path={path}
@@ -104,10 +105,10 @@ export function FileTree(props: {
                   ) : (
                     <FolderClosed className="h-3.5 w-3.5 shrink-0 text-text-muted" />
                   )}
-                  <span className="truncate font-mono text-[11px] text-text-secondary group-hover:text-text-primary">
+                  <span className="truncate font-mono text-detail text-text-secondary group-hover:text-text-primary">
                     {entry.name}
                   </span>
-                </button>
+                </ControlButton>
                 {isExpanded && renderEntries(path, depth + 1)}
               </div>
             );
@@ -118,8 +119,8 @@ export function FileTree(props: {
               role="button"
               tabIndex={0}
               className={cn(
-                "group flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-[var(--color-hover-fill)]",
-                selectedPath === path && "bg-[var(--color-selection-fill)]",
+                "group flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-hover",
+                selectedPath === path && "bg-selection",
               )}
               // Align file rows with directory NAMES (past the chevron column).
               style={{ paddingLeft: `${leftPadding + 20}px` }}
@@ -139,12 +140,12 @@ export function FileTree(props: {
               }}
             >
               <FileText className="h-3.5 w-3.5 shrink-0 text-text-muted" />
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-secondary group-hover:text-text-primary">
+              <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-secondary group-hover:text-text-primary">
                 {entry.name}
               </span>
               <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 {onOpenInEditor && (
-                  <button
+                  <ControlButton
                     type="button"
                     className="hidden shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary group-focus-within:flex group-hover:flex"
                     title={openInEditorLabel}
@@ -156,10 +157,10 @@ export function FileTree(props: {
                     }}
                   >
                     <SquareArrowOutUpRight aria-hidden="true" className="h-3 w-3" />
-                  </button>
+                  </ControlButton>
                 )}
                 {entry.size !== null && (
-                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-text-muted">
+                  <span className="shrink-0 font-mono text-micro tabular-nums text-text-muted">
                     {formatBytes(entry.size)}
                   </span>
                 )}

@@ -30,11 +30,11 @@ const baseClasses = [
 
 const interactiveClasses = [
   "cursor-pointer",
-  "hover:bg-[var(--color-hover-fill)]",
+  "hover:bg-hover",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
   "disabled:cursor-not-allowed disabled:opacity-55",
-  "aria-selected:border-[var(--color-selection-stroke)]",
-  "aria-selected:bg-[var(--color-selection-fill)]",
+  "aria-selected:border-selection-stroke",
+  "aria-selected:bg-selection",
 ].join(" ");
 
 interface InnerProps {

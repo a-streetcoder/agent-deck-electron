@@ -1,3 +1,4 @@
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useState } from "react";
 import { GitBranch, Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
@@ -257,13 +258,13 @@ export function GitScreen() {
           {status?.repo && status.branch ? (
             <span
               data-testid="git-branch"
-              className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-[11px] text-text-secondary"
+              className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-detail text-text-secondary"
             >
               {status.branch}
             </span>
           ) : null}
           {gitActions === true && status?.repo && !releaseOpen ? (
-            <button
+            <ControlButton
               data-testid="git-release"
               className="ml-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={preflighting}
@@ -271,7 +272,7 @@ export function GitScreen() {
               title="Tag a version and generate release notes"
             >
               <Tag size={12} /> {preflighting ? "Preparing…" : "Release"}
-            </button>
+            </ControlButton>
           ) : null}
         </div>
 
@@ -291,19 +292,19 @@ export function GitScreen() {
                   "No releases yet — this will be the first."
                 )}
               </div>
-              <button
+              <ControlButton
                 data-testid="git-release-close"
                 className="text-xs text-text-muted hover:text-text-primary"
                 onClick={() => setReleaseOpen(false)}
               >
                 Cancel
-              </button>
+              </ControlButton>
             </div>
 
             {preflight?.blocker ? (
               <div
                 data-testid="git-release-blocker"
-                className="rounded-md border border-border-subtle bg-surface-raised px-2.5 py-2 text-xs text-text-muted"
+                className="rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
               >
                 {preflight.blocker}
               </div>
@@ -311,7 +312,7 @@ export function GitScreen() {
 
             <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Version bump">
               {(["patch", "minor", "major"] as const).map((kind) => (
-                <button
+                <ControlButton
                   key={kind}
                   data-testid={`git-release-version-${kind}`}
                   role="radio"
@@ -324,15 +325,15 @@ export function GitScreen() {
                   onClick={() => setBump(kind)}
                 >
                   <div className="capitalize">{kind}</div>
-                  <div className="font-mono text-[11px] text-text-muted">
+                  <div className="font-mono text-detail text-text-muted">
                     {preflight?.nextVersions[kind] ?? "…"}
                   </div>
-                </button>
+                </ControlButton>
               ))}
             </div>
 
             <div className="flex flex-col gap-2">
-              <textarea
+              <ControlTextArea
                 data-testid="git-release-notes"
                 className="min-h-[112px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
                 placeholder="Release notes (optional — Generate drafts them from your commits)"
@@ -340,7 +341,7 @@ export function GitScreen() {
                 onChange={(e) => setNotes(e.target.value)}
               />
               <div className="flex items-center justify-end gap-2">
-                <button
+                <ControlButton
                   data-testid="git-release-generate"
                   className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                   disabled={draftingNotes || releasing || !preflight}
@@ -348,8 +349,8 @@ export function GitScreen() {
                   title="Draft release notes from commits since the last tag"
                 >
                   <Sparkles size={12} /> {draftingNotes ? "Drafting…" : "Generate notes"}
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   data-testid="git-release-confirm"
                   className="rounded-capsule px-4 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                   style={{
@@ -361,7 +362,7 @@ export function GitScreen() {
                   onClick={() => void release()}
                 >
                   {releasing ? "Releasing…" : `Release ${preflight?.nextVersions[bump] ?? ""}`}
-                </button>
+                </ControlButton>
               </div>
             </div>
           </div>
@@ -378,7 +379,7 @@ export function GitScreen() {
               brings its commits back into{" "}
               <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
             </div>
-            <button
+            <ControlButton
               data-testid="git-merge"
               className="shrink-0 rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -391,7 +392,7 @@ export function GitScreen() {
               onClick={() => void merge()}
             >
               {merging ? "Merging…" : `Merge to ${session.worktreeSourceBranch}`}
-            </button>
+            </ControlButton>
           </div>
         ) : null}
 
@@ -411,12 +412,12 @@ export function GitScreen() {
                 <div
                   key={file.path}
                   data-git-path={file.path}
-                  className="flex items-center gap-3 rounded-[12px] border border-border-subtle bg-surface px-3 py-1.5"
+                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5"
                 >
-                  <span className="w-6 shrink-0 font-mono text-[11px] text-[var(--color-brand-accent)]">
+                  <span className="w-6 shrink-0 font-mono text-detail text-accent">
                     {file.status.trim() || "•"}
                   </span>
-                  <span className="truncate font-mono text-[12px] text-text-primary">
+                  <span className="truncate font-mono text-caption text-text-primary">
                     {file.path}
                   </span>
                 </div>
@@ -438,7 +439,7 @@ export function GitScreen() {
               </div>
             ) : gitActions === null ? null : (
               <div className="mt-4 flex flex-col gap-2">
-                <textarea
+                <ControlTextArea
                   data-testid="git-commit-message"
                   className="min-h-[64px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                   placeholder="Commit message"
@@ -446,7 +447,7 @@ export function GitScreen() {
                   onChange={(e) => setMessage(e.target.value)}
                 />
                 <div className="flex items-center justify-end gap-2">
-                  <button
+                  <ControlButton
                     data-testid="git-generate-message"
                     className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
                     disabled={generating || committing || status?.clean}
@@ -454,8 +455,8 @@ export function GitScreen() {
                     title="Draft a commit message from your changes"
                   >
                     <Sparkles size={12} /> {generating ? "Generating…" : "Generate"}
-                  </button>
-                  <button
+                  </ControlButton>
+                  <ControlButton
                     data-testid="git-push"
                     className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
                     disabled={committing || pushing}
@@ -463,16 +464,16 @@ export function GitScreen() {
                     title="Push the current branch's commits"
                   >
                     {pushing ? "Pushing…" : "Push"}
-                  </button>
-                  <button
+                  </ControlButton>
+                  <ControlButton
                     data-testid="git-commit"
                     className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
                     disabled={committing || status?.clean || !message.trim()}
                     onClick={() => void commit(false)}
                   >
                     {committing ? "Committing…" : "Commit all"}
-                  </button>
-                  <button
+                  </ControlButton>
+                  <ControlButton
                     data-testid="git-commit-push"
                     className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
                     style={{
@@ -484,7 +485,7 @@ export function GitScreen() {
                     onClick={() => void commit(true)}
                   >
                     Commit &amp; Push
-                  </button>
+                  </ControlButton>
                 </div>
               </div>
             )}

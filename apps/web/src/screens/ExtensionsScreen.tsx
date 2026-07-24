@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Plug, Plus, Trash2 } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
@@ -166,7 +167,7 @@ export function ExtensionsScreen() {
               Extensions
             </h2>
           </div>
-          <button
+          <ControlButton
             data-testid="extension-add"
             className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
             style={{
@@ -177,7 +178,7 @@ export function ExtensionsScreen() {
             onClick={() => setAdding((v) => !v)}
           >
             <Plus size={13} /> Add extension
-          </button>
+          </ControlButton>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           pi extension files loaded into every new session. Disabled ones stay listed but don&apos;t
@@ -186,10 +187,10 @@ export function ExtensionsScreen() {
 
         {bridges.length > 0 ? (
           <div className="mb-4" data-testid="app-bridges">
-            <div className="pb-1.5 text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            <div className="pb-1.5 text-detail font-medium uppercase tracking-wide text-text-muted">
               Agent Deck bridges
             </div>
-            <p className="pb-2 text-[11px] text-text-muted">
+            <p className="pb-2 text-detail text-text-muted">
               Features Agent Deck injects into pi over its own bridge (not your files). Read-only.
             </p>
             <div className="space-y-1.5">
@@ -199,7 +200,7 @@ export function ExtensionsScreen() {
                   data-testid={`bridge-${b.id}`}
                   data-active={b.active ? "true" : "false"}
                   className={cn(
-                    "rounded-[14px] border border-border-subtle bg-surface-subtle px-3.5 py-2.5",
+                    "rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-2.5",
                     !b.active && "opacity-55",
                   )}
                 >
@@ -213,22 +214,22 @@ export function ExtensionsScreen() {
                     <span
                       data-testid={`bridge-state-${b.id}`}
                       className={cn(
-                        "rounded-capsule border px-1.5 text-[10px]",
+                        "rounded-capsule border px-1.5 text-micro",
                         b.active
-                          ? "border-[var(--color-success)] text-[var(--color-success)]"
+                          ? "border-success text-success"
                           : "border-border-subtle text-text-muted",
                       )}
                     >
                       {b.active ? "active" : "off"}
                     </span>
                   </div>
-                  <div className="pt-0.5 text-[11px] text-text-muted">{b.summary}</div>
+                  <div className="pt-0.5 text-detail text-text-muted">{b.summary}</div>
                   {b.toolNames.length > 0 ? (
-                    <div className="truncate pt-0.5 font-mono text-[11px] text-text-muted">
+                    <div className="truncate pt-0.5 font-mono text-detail text-text-muted">
                       {b.toolNames.join(", ")}
                     </div>
                   ) : (
-                    <div className="pt-0.5 text-[11px] text-text-muted italic">{b.condition}</div>
+                    <div className="pt-0.5 text-detail text-text-muted italic">{b.condition}</div>
                   )}
                 </div>
               ))}
@@ -238,7 +239,7 @@ export function ExtensionsScreen() {
 
         {adding ? (
           <div className="mb-3 flex gap-2">
-            <input
+            <ControlInput
               autoFocus
               data-testid="extension-path"
               className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
@@ -250,7 +251,7 @@ export function ExtensionsScreen() {
                 if (e.key === "Escape") setAdding(false);
               }}
             />
-            <button
+            <ControlButton
               data-testid="extension-add-confirm"
               className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -262,7 +263,7 @@ export function ExtensionsScreen() {
               onClick={() => void add()}
             >
               Add
-            </button>
+            </ControlButton>
           </div>
         ) : null}
 
@@ -279,44 +280,44 @@ export function ExtensionsScreen() {
                     ["agentDeckManaged", "Agent Deck managed"],
                   ] as const
                 ).map(([mode, label]) => (
-                  <button
+                  <ControlButton
                     key={mode}
                     data-testid={`extension-mode-${mode}`}
                     data-active={loadingMode === mode}
                     className={cn(
-                      "rounded-capsule px-2.5 py-0.5 text-[11px] transition-colors",
+                      "rounded-capsule px-2.5 py-0.5 text-detail transition-colors",
                       loadingMode === mode
-                        ? "bg-[var(--color-selection-fill)] text-text-primary"
+                        ? "bg-selection text-text-primary"
                         : "text-text-secondary hover:text-text-primary",
                     )}
                     onClick={() => void setMode(mode)}
                   >
                     {label}
-                  </button>
+                  </ControlButton>
                 ))}
               </div>
             </div>
-            <p className="mt-1 text-[11px] text-text-muted">
+            <p className="mt-1 text-detail text-text-muted">
               {loadingMode === "agentDeckManaged"
                 ? "Only Agent Deck's built-in bridges load. Your own pi extensions stay off (still listed below)."
                 : "Your enabled pi extensions load alongside Agent Deck's bridges. Toggle any off below."}
             </p>
             {loadingMode === "useMyExtensions" && extensions.length > 0 ? (
               <div className="mt-2 flex items-center gap-2">
-                <button
+                <ControlButton
                   data-testid="extension-enable-all"
-                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => void setAllDisabled(false)}
                 >
                   Enable all
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   data-testid="extension-disable-all"
-                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => void setAllDisabled(true)}
                 >
                   Disable all
-                </button>
+                </ControlButton>
               </div>
             ) : null}
           </div>
@@ -334,8 +335,8 @@ export function ExtensionsScreen() {
                 data-extension-name={ext.name}
                 data-conflict={conflicting ? "true" : "false"}
                 className={cn(
-                  "flex items-center gap-3 rounded-[14px] border bg-surface px-3.5 py-2.5",
-                  conflicting ? "border-[var(--color-warning)]" : "border-border-subtle",
+                  "flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-2.5",
+                  conflicting ? "border-warning" : "border-border-subtle",
                   ext.disabled && "opacity-55",
                 )}
               >
@@ -350,20 +351,20 @@ export function ExtensionsScreen() {
                     {/* Where it came from (native scope/source label). */}
                     <span
                       data-testid={`extension-source-${ext.name}`}
-                      className="rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted"
+                      className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
                     >
                       {ext.source === "added"
                         ? "added"
                         : `${ext.scope === "project" ? "project" : "global"} · discovered`}
                     </span>
                   </div>
-                  <div className="truncate font-mono text-[11px] text-text-muted">{ext.path}</div>
+                  <div className="truncate font-mono text-detail text-text-muted">{ext.path}</div>
                 </div>
                 {ext.bridgeConflict ? (
                   <span
                     data-testid={`extension-bridge-conflict-${ext.name}`}
                     title={`This extension registers "${ext.bridgeConflict}", a tool Agent Deck provides through its own bridge. The bridge takes precedence, so this extension is not loaded — rename its tool to use it.`}
-                    className="flex items-center gap-1 rounded-capsule border border-[var(--color-role-error)] px-1.5 text-[10px] text-[var(--color-role-error)]"
+                    className="flex items-center gap-1 rounded-capsule border border-danger px-1.5 text-micro text-danger"
                   >
                     <AlertTriangle size={10} /> shadowed by bridge
                   </span>
@@ -372,35 +373,35 @@ export function ExtensionsScreen() {
                   <span
                     data-testid="extension-conflict"
                     title="Another enabled extension has the same filename. pi loads both (it keys by path), but two extensions sharing a name is usually a mistake — disable or remove one."
-                    className="flex items-center gap-1 rounded-capsule border border-[var(--color-warning)] px-1.5 text-[10px] text-[var(--color-warning)]"
+                    className="flex items-center gap-1 rounded-capsule border border-warning px-1.5 text-micro text-warning"
                   >
                     <AlertTriangle size={10} /> conflict
                   </span>
                 ) : null}
                 {!ext.exists ? (
-                  <span className="rounded-capsule border border-[var(--color-role-error)] px-1.5 text-[10px] text-[var(--color-role-error)]">
+                  <span className="rounded-capsule border border-danger px-1.5 text-micro text-danger">
                     missing
                   </span>
                 ) : null}
-                <button
+                <ControlButton
                   data-testid={`extension-toggle-${ext.name}`}
                   data-enabled={!ext.disabled}
                   className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary"
                   onClick={() => void toggle(ext)}
                 >
                   {ext.disabled ? "Enable" : "Disable"}
-                </button>
+                </ControlButton>
                 {/* Only registry entries can be removed; a discovered file is
                     managed on disk (disable to exclude it). */}
                 {ext.source !== "discovered" ? (
-                  <button
+                  <ControlButton
                     data-testid={`extension-remove-${ext.name}`}
-                    className="rounded p-1 text-text-muted hover:text-[var(--color-role-error)]"
+                    className="rounded p-1 text-text-muted hover:text-danger"
                     title="Remove"
                     onClick={() => void remove(ext)}
                   >
                     <Trash2 size={13} />
-                  </button>
+                  </ControlButton>
                 ) : null}
               </div>
             );

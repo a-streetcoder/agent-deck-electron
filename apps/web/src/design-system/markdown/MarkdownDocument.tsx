@@ -15,6 +15,8 @@
  */
 import { forwardRef, useEffect, useState, type HTMLAttributes } from "react";
 import { cn } from "../../lib/cn";
+import { useResolvedTheme } from "../theme";
+import { shikiThemeFor } from "../themes/shiki";
 import { renderMarkdown, type ShikiThemeName } from "./markdown";
 
 export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
@@ -64,16 +66,18 @@ const BLOCK_STYLES = [
 export const MarkdownDocument = forwardRef<HTMLDivElement, MarkdownDocumentProps>(
   function MarkdownDocument({ source, theme, className, ...rest }, ref) {
     const [html, setHtml] = useState<string>("");
+    const resolvedTheme = useResolvedTheme();
+    const codeTheme = theme ?? shikiThemeFor(resolvedTheme);
 
     useEffect(() => {
       let cancelled = false;
-      renderMarkdown(source, { theme }).then((rendered) => {
+      renderMarkdown(source, { theme: codeTheme }).then((rendered) => {
         if (!cancelled) setHtml(rendered);
       });
       return () => {
         cancelled = true;
       };
-    }, [source, theme]);
+    }, [source, codeTheme]);
 
     return (
       <div ref={ref} data-md-document="" className={cn(BLOCK_STYLES, className)} {...rest}>

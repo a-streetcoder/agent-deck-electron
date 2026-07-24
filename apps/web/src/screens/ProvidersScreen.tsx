@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight, KeyRound, Search, ShieldCheck, UserRound } from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
@@ -75,7 +76,7 @@ export function ProvidersScreen({
         </p>
         <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
           <Search size={14} className="text-text-muted" />
-          <input
+          <ControlInput
             className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
             placeholder="Search providers"
             value={search}
@@ -98,9 +99,19 @@ export function ProvidersScreen({
       </div>
 
       {methodProvider ? (
-        <div className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-8">
-          <div className="app-modal-panel w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated">
-            <h3 className="text-sm font-semibold text-text-primary">
+        <div
+          className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-overlay p-4 sm:p-8"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setMethodProvider(null);
+          }}
+        >
+          <div
+            className="app-modal-panel w-full max-w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="provider-method-title"
+          >
+            <h3 id="provider-method-title" className="text-sm font-semibold text-text-primary">
               Connect {methodProvider.name}
             </h3>
             <p className="mt-1 text-xs text-text-muted">Choose how you want to connect.</p>
@@ -125,12 +136,13 @@ export function ProvidersScreen({
               />
             </div>
             <div className="mt-4 flex justify-end">
-              <button
-                className="text-xs text-text-secondary"
+              <ControlButton
+                type="button"
+                className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
                 onClick={() => setMethodProvider(null)}
               >
                 Cancel
-              </button>
+              </ControlButton>
             </div>
           </div>
         </div>
@@ -162,12 +174,12 @@ function ProviderGroup({
   if (providers.length === 0) return null;
   return (
     <section className="mb-5">
-      <h3 className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+      <h3 className="mb-1 px-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
         {title}
       </h3>
       <div className="space-y-1" data-testid="provider-list">
         {providers.map((provider) => (
-          <button
+          <ControlButton
             key={provider.id}
             data-provider-id={provider.id}
             className="flex w-full items-center gap-3 rounded-xl py-2.5 pl-3 text-left hover:bg-surface-subtle"
@@ -178,11 +190,11 @@ function ProviderGroup({
               {provider.name}
             </span>
             {provider.configured ? (
-              <CheckCircle2 size={15} className="text-[var(--color-success)]" />
+              <CheckCircle2 size={15} className="text-success" />
             ) : (
               <ChevronRight size={14} className="text-text-muted" />
             )}
-          </button>
+          </ControlButton>
         ))}
       </div>
     </section>
@@ -201,7 +213,7 @@ function MethodButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <ControlButton
       className="flex w-full items-center gap-3 rounded-xl border border-border-subtle p-3 text-left hover:bg-surface-subtle"
       onClick={onClick}
     >
@@ -211,6 +223,6 @@ function MethodButton({
         <span className="block text-xs text-text-muted">{detail}</span>
       </span>
       <ChevronRight size={14} className="text-text-muted" />
-    </button>
+    </ControlButton>
   );
 }

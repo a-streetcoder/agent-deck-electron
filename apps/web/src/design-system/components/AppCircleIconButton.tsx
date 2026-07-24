@@ -40,14 +40,8 @@ const sizeClasses: Record<AppCircleIconButtonSize, string> = {
 
 const appearanceClasses: Record<AppCircleIconButtonAppearance, string> = {
   soft: cn("bg-primary/20 text-accent", "border-transparent hover:bg-primary/30"),
-  prominent: cn(
-    "bg-primary text-[var(--color-accent-foreground,#000)]",
-    "border-transparent hover:bg-primary-hover",
-  ),
-  neutral: cn(
-    "bg-surface-elevated text-text-muted",
-    "border-border-subtle hover:bg-[var(--color-hover-fill)]",
-  ),
+  prominent: cn("bg-primary text-on-accent", "border-transparent hover:bg-primary-hover"),
+  neutral: cn("bg-surface-elevated text-text-muted", "border-border-subtle hover:bg-hover"),
 };
 
 const baseClasses = [

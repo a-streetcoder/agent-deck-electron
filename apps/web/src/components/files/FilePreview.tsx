@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Code2, Eye, Loader2 } from "lucide-react";
 import type { EditorId } from "@agent-deck/contracts";
@@ -64,7 +65,7 @@ function formatBytes(bytes: number): string {
 function NoticeBar({ children }: { children: string }) {
   return (
     <p
-      className="shrink-0 border-b border-border-subtle bg-[var(--color-hover-fill)] px-3 py-1.5 text-[11px] text-text-muted"
+      className="shrink-0 border-b border-border-subtle bg-hover px-3 py-1.5 text-detail text-text-muted"
       data-testid="file-preview-notice"
     >
       {children}
@@ -244,7 +245,7 @@ export function FilePreview(props: {
           unchanged; the md toggle is always visible when applicable. */}
       <div className="group/fileheader flex items-center gap-2 border-b border-border-subtle bg-surface px-3 py-1.5">
         <span
-          className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-primary"
+          className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
           data-testid="file-preview-path"
           title={path}
         >
@@ -258,13 +259,13 @@ export function FilePreview(props: {
             role="group"
             aria-label="Markdown view mode"
           >
-            <button
+            <ControlButton
               type="button"
               className={cn(
                 "flex items-center rounded-l-md p-1 transition-colors",
                 markdownMode === "preview"
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-muted hover:bg-hover hover:text-text-primary",
               )}
               title="Preview"
               aria-label="Preview markdown"
@@ -273,14 +274,14 @@ export function FilePreview(props: {
               onClick={() => setMarkdownMode("preview")}
             >
               <Eye className="h-3.5 w-3.5" />
-            </button>
-            <button
+            </ControlButton>
+            <ControlButton
               type="button"
               className={cn(
                 "flex items-center rounded-r-md p-1 transition-colors",
                 markdownMode === "raw"
-                  ? "bg-[var(--color-selection-fill)] text-text-primary"
-                  : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                  ? "bg-selection text-text-primary"
+                  : "text-text-muted hover:bg-hover hover:text-text-primary",
               )}
               title="Raw"
               aria-label="Raw markdown"
@@ -289,7 +290,7 @@ export function FilePreview(props: {
               onClick={() => setMarkdownMode("raw")}
             >
               <Code2 className="h-3.5 w-3.5" />
-            </button>
+            </ControlButton>
           </div>
         )}
         <OpenInPicker
@@ -328,10 +329,10 @@ function SaveStatusChip({ status, onReload }: { status: SaveStatus; onReload: ()
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
+        "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium",
         status === "saved" && "text-text-muted",
         status === "saving" && "text-text-muted",
-        (status === "failed" || status === "conflict") && "text-[var(--color-role-error)]",
+        (status === "failed" || status === "conflict") && "text-danger",
       )}
       data-testid="file-save-status"
       data-status={status}
@@ -343,14 +344,14 @@ function SaveStatusChip({ status, onReload }: { status: SaveStatus; onReload: ()
       )}
       <span>{label}</span>
       {status === "conflict" && (
-        <button
+        <ControlButton
           type="button"
           className="ml-0.5 rounded px-1 underline underline-offset-2 hover:text-text-primary"
           data-testid="file-save-reload"
           onClick={onReload}
         >
           reload
-        </button>
+        </ControlButton>
       )}
     </span>
   );
@@ -417,7 +418,7 @@ function FilePreviewBody(props: {
           <Suspense
             fallback={
               <pre
-                className="h-full overflow-auto whitespace-pre px-3 py-1 font-mono text-[11px] leading-[1.5] text-text-secondary"
+                className="h-full overflow-auto whitespace-pre px-3 py-1 font-mono text-detail leading-[1.5] text-text-secondary"
                 data-testid="file-preview-fallback"
               >
                 {active.content}

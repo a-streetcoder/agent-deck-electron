@@ -22,7 +22,7 @@ export function ComposerPendingUserInput({ question }: { question: QuestionCell 
       data-testid="composer-question"
       data-method={question.method}
     >
-      <div className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
+      <div className="text-detail font-semibold uppercase tracking-widest text-text-muted">
         Pi needs input
       </div>
       <div className="mt-1 font-medium text-text-primary" style={{ fontStretch: "expanded" }}>

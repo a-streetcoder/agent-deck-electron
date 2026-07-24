@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import {
   useCallback,
   useEffect,
@@ -7,8 +8,10 @@ import {
 } from "react";
 import { ChevronDown, Trash2 } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal, type ITheme } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { THEME_CHANGE_EVENT } from "../design-system/theme.ts";
+import { createXtermTheme, getTerminalFontFamily } from "../design-system/themes/xterm.ts";
 import { useAppStore } from "../state/store.ts";
 import {
   closeSessionTerminal,
@@ -43,41 +46,6 @@ function clampDrawerHeight(height: number): number {
   const max = Math.max(MIN_DRAWER_HEIGHT, Math.floor(window.innerHeight * MAX_DRAWER_HEIGHT_RATIO));
   const safe = Number.isFinite(height) ? Math.round(height) : DEFAULT_DRAWER_HEIGHT;
   return Math.min(Math.max(safe, MIN_DRAWER_HEIGHT), max);
-}
-
-/** Read a design token off :root, with a fallback for detached test DOMs. */
-function tokenColor(name: string, fallback: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value.length > 0 ? value : fallback;
-}
-
-/**
- * xterm theme from our design tokens; the ANSI ramp is the donor's dark
- * palette (terminalThemeFromApp, MIT) — it reads well on our dark surface.
- */
-function terminalTheme(): ITheme {
-  return {
-    background: tokenColor("--color-surface", "#1e1e20"),
-    foreground: tokenColor("--color-text-primary", "#ededf0"),
-    cursor: tokenColor("--color-brand-accent", "#64d2ff"),
-    selectionBackground: "rgba(100, 210, 255, 0.25)",
-    black: "rgb(24, 30, 38)",
-    red: "rgb(255, 122, 142)",
-    green: "rgb(134, 231, 149)",
-    yellow: "rgb(244, 205, 114)",
-    blue: "rgb(137, 190, 255)",
-    magenta: "rgb(208, 176, 255)",
-    cyan: "rgb(124, 232, 237)",
-    white: "rgb(210, 218, 230)",
-    brightBlack: "rgb(110, 120, 136)",
-    brightRed: "rgb(255, 168, 180)",
-    brightGreen: "rgb(176, 245, 186)",
-    brightYellow: "rgb(255, 224, 149)",
-    brightBlue: "rgb(174, 210, 255)",
-    brightMagenta: "rgb(229, 203, 255)",
-    brightCyan: "rgb(167, 244, 247)",
-    brightWhite: "rgb(244, 247, 252)",
-  };
 }
 
 function fitSafely(fitAddon: FitAddon): void {
@@ -116,12 +84,14 @@ export function TerminalDrawer() {
       cursorBlink: false,
       fontSize: 12,
       scrollback: 5_000,
-      // Our --font-mono stack, inlined: xterm measures glyph metrics off this
-      // string, so it must resolve without CSS-variable indirection.
-      fontFamily:
-        '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace',
-      theme: terminalTheme(),
+      // xterm measures the resolved stack, so the adapter reads the token value.
+      fontFamily: getTerminalFontFamily(),
+      theme: createXtermTheme(),
     });
+    const syncTheme = (): void => {
+      terminal.options.theme = createXtermTheme();
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, syncTheme);
     terminal.loadAddon(fitAddon);
     terminal.open(mount);
     fitSafely(fitAddon);
@@ -196,6 +166,7 @@ export function TerminalDrawer() {
       disposed = true;
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       observer.disconnect();
+      window.removeEventListener(THEME_CHANGE_EVENT, syncTheme);
       unsubscribePush();
       inputDisposable.dispose();
       terminal.dispose();
@@ -252,9 +223,9 @@ export function TerminalDrawer() {
           Terminal
         </span>
         <div className="flex items-center gap-1">
-          <button
+          <ControlButton
             type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
             title="Kill terminal"
             aria-label="Kill terminal"
             data-testid="terminal-kill"
@@ -264,17 +235,17 @@ export function TerminalDrawer() {
             }}
           >
             <Trash2 className="h-3.5 w-3.5" />
-          </button>
-          <button
+          </ControlButton>
+          <ControlButton
             type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
             title="Hide terminal (⌘`)"
             aria-label="Hide terminal"
             data-testid="terminal-hide"
             onClick={() => setTerminalOpen(false)}
           >
             <ChevronDown className="h-3.5 w-3.5" />
-          </button>
+          </ControlButton>
         </div>
       </div>
       <div className="min-h-0 flex-1 px-2 py-1">

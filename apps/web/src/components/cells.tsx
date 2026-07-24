@@ -1,3 +1,4 @@
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useState } from "react";
 import { Send } from "lucide-react";
 import {
@@ -65,7 +66,7 @@ function ToolCellView({ cell }: { cell: ToolCell }) {
           <div className="space-y-2">
             {filePath ? (
               <div
-                className="font-mono text-[11px] text-text-secondary"
+                className="font-mono text-detail text-text-secondary"
                 data-testid="tool-file-path"
               >
                 {filePath}
@@ -195,18 +196,18 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
           {cell.options && cell.options.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {cell.options.map((option) => (
-                <button
+                <ControlButton
                   key={option}
                   data-testid={`supervisor-option-${option}`}
                   className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
                   onClick={() => answer(option)}
                 >
                   {option}
-                </button>
+                </ControlButton>
               ))}
             </div>
           ) : null}
-          <textarea
+          <ControlTextArea
             data-testid="supervisor-input"
             aria-label={cell.title}
             className="min-h-[4rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
@@ -214,7 +215,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
-          <button
+          <ControlButton
             data-testid="supervisor-submit"
             className="self-end rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium disabled:opacity-50"
             style={{ color: "var(--color-accent-foreground)" }}
@@ -222,7 +223,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
             onClick={() => answer(inputValue)}
           >
             Send response
-          </button>
+          </ControlButton>
         </div>
       )}
     </div>

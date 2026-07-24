@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useMemo, useState } from "react";
 import { Check, Pencil, Power, PowerOff, Plus, Star, Tag, Trash2, X } from "lucide-react";
 import {
@@ -43,10 +44,8 @@ function AgentRow({
     <div
       className={cn(
         "group flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-brand-accent)]",
-        selected
-          ? "border-[var(--color-selection-stroke)] bg-[var(--color-selection-fill)]"
-          : "border-transparent hover:bg-[var(--color-hover-fill)]",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
+        selected ? "border-selection-stroke bg-selection" : "border-transparent hover:bg-hover",
         (agent.shadowed || agent.disabled) && "opacity-60 saturate-50",
       )}
       data-testid="agent-row"
@@ -74,7 +73,7 @@ function AgentRow({
           <ScopeChip scope={agent.scope} />
           {agent.disabled ? (
             <span
-              className="rounded-capsule border px-1.5 text-[10px]"
+              className="rounded-capsule border px-1.5 text-micro"
               style={{
                 color: "var(--color-text-muted)",
                 borderColor: "var(--color-border-strong)",
@@ -86,14 +85,14 @@ function AgentRow({
           ) : null}
           {agent.overridden ? (
             <span
-              className="text-[10px]"
+              className="text-micro"
               style={{ color: "var(--color-warning)" }}
               data-testid="overridden-badge"
             >
               overridden
             </span>
           ) : null}
-          {agent.shadowed ? <span className="text-[10px] text-text-muted">shadowed</span> : null}
+          {agent.shadowed ? <span className="text-micro text-text-muted">shadowed</span> : null}
         </div>
         {agent.description ? (
           <div className="line-clamp-2 text-xs text-text-secondary">{agent.description}</div>
@@ -102,7 +101,7 @@ function AgentRow({
       {/* Hover-reveal Edit pill (native AgentListRow). Library agents are
           read-only catalog entries — no writable target exists for them. */}
       {agent.scope !== "library" ? (
-        <button
+        <ControlButton
           data-testid={`agent-row-edit-${agent.name}`}
           className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
           onClick={(event) => {
@@ -111,7 +110,7 @@ function AgentRow({
           }}
         >
           Edit
-        </button>
+        </ControlButton>
       ) : null}
     </div>
   );
@@ -121,14 +120,14 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
   if (!items?.length) return null;
   return (
     <div>
-      <div className="pb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+      <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
         {label}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((item) => (
           <span
             key={item}
-            className="rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-[11px] text-text-secondary"
+            className="rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
           >
             {item}
           </span>
@@ -163,7 +162,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
           <div className="flex items-center gap-2">
             {renameValue !== null ? (
               <>
-                <input
+                <ControlInput
                   autoFocus
                   data-testid="agent-rename-input"
                   className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-lg font-bold text-text-primary outline-none focus:border-accent"
@@ -174,22 +173,22 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
                     if (e.key === "Escape") setRenameValue(null);
                   }}
                 />
-                <button
+                <ControlButton
                   data-testid="agent-rename-confirm"
-                  className="rounded p-1 text-text-muted hover:text-[var(--color-brand-accent)]"
+                  className="rounded p-1 text-text-muted hover:text-accent"
                   title="Rename"
                   onClick={() => void submitRename()}
                 >
                   <Check size={16} />
-                </button>
-                <button
+                </ControlButton>
+                <ControlButton
                   data-testid="agent-rename-cancel"
                   className="rounded p-1 text-text-muted hover:text-text-primary"
                   title="Cancel"
                   onClick={() => setRenameValue(null)}
                 >
                   <X size={16} />
-                </button>
+                </ControlButton>
               </>
             ) : (
               <h2
@@ -212,12 +211,12 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {currentProject && !agent.shadowed ? (
-            <button
+            <ControlButton
               data-testid={`default-agent-${agent.name}`}
               className={cn(
                 "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
                 isDefault
-                  ? "border-[var(--color-brand-accent)] text-[var(--color-brand-accent)]"
+                  ? "border-accent text-accent"
                   : "border-border-strong text-text-muted hover:text-text-primary",
               )}
               onClick={() =>
@@ -228,19 +227,19 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
             >
               <Star size={12} fill={isDefault ? "currentColor" : "none"} />
               {isDefault ? "project default" : "make default"}
-            </button>
+            </ControlButton>
           ) : null}
           {agent.scope !== "library" ? (
             <>
-              <button
+              <ControlButton
                 data-testid="agent-disable"
                 className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                 onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
               >
                 {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 {agent.disabled ? "Enable" : "Disable"}
-              </button>
-              <button
+              </ControlButton>
+              <ControlButton
                 data-testid="agent-edit"
                 className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
                 style={{
@@ -252,26 +251,26 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
               >
                 <Pencil size={12} />
                 Edit
-              </button>
+              </ControlButton>
               {/* Rename moves a custom agent's file and re-points project
                   defaults. Builtins keep their name (it's the override key). */}
               {agent.scope !== "builtin" ? (
-                <button
+                <ControlButton
                   data-testid="agent-rename"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                   onClick={() => setRenameValue(agent.name)}
                 >
                   <Tag size={12} />
                   Rename
-                </button>
+                </ControlButton>
               ) : null}
               {/* Delete removes a custom agent's file. Builtins are bundled
                   and can only be reset — offered just when overridden, so its
                   effect ("clear all overrides") is unambiguous. */}
               {agent.scope !== "builtin" ? (
-                <button
+                <ControlButton
                   data-testid="agent-delete"
-                  className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-[var(--color-role-error)]"
+                  className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
                   title="Delete agent"
                   onClick={() => {
                     if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
@@ -280,11 +279,11 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
                   }}
                 >
                   <Trash2 size={13} />
-                </button>
+                </ControlButton>
               ) : agent.overridden ? (
-                <button
+                <ControlButton
                   data-testid="agent-reset"
-                  className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-[var(--color-role-error)]"
+                  className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-danger"
                   title="Clear all overrides and restore the bundled defaults"
                   onClick={() => {
                     if (
@@ -295,7 +294,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
                   }}
                 >
                   Reset
-                </button>
+                </ControlButton>
               ) : null}
             </>
           ) : null}
@@ -305,7 +304,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
       <div className="mt-5 space-y-4">
         {agent.whenToUse ? (
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <div className="pb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+            <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
               When to use
             </div>
             <p className="text-sm text-text-secondary">{agent.whenToUse}</p>
@@ -314,7 +313,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
 
         <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
           <div className="flex items-center justify-between pb-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+            <div className="text-micro font-semibold uppercase tracking-wider text-text-muted">
               System prompt
             </div>
             {/* Native "Prompt Mode" row (AgentManagementViews.swift:1335) surfaces
@@ -326,7 +325,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
             {agent.systemPromptMode === "append" ? (
               <span
                 data-testid="agent-prompt-mode"
-                className="rounded-capsule border border-border-strong px-2 py-0.5 text-[10px] font-medium text-text-secondary"
+                className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro font-medium text-text-secondary"
                 title="append — keeps pi's base system prompt and adds this agent's instructions on top"
               >
                 append
@@ -418,14 +417,14 @@ export function AgentsScreen() {
       <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle">
         <div className="space-y-2 px-3 pb-2 pt-3">
           <div className="flex items-center gap-2">
-            <input
+            <ControlInput
               data-testid="agent-search"
               className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
               placeholder="Search agents"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
-            <button
+            <ControlButton
               data-testid="new-agent"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
               style={{
@@ -437,23 +436,23 @@ export function AgentsScreen() {
               onClick={() => setEditing("new")}
             >
               <Plus size={15} />
-            </button>
+            </ControlButton>
           </div>
           <div className="flex flex-wrap gap-1">
             {AGENT_FILTERS.map((f) => (
-              <button
+              <ControlButton
                 key={f}
                 data-testid={`agent-filter-${f}`}
                 className={cn(
                   "rounded-capsule px-2.5 py-0.5 text-xs",
                   filter === f
-                    ? "bg-[var(--color-selection-fill)] text-text-primary"
-                    : "text-text-muted hover:bg-[var(--color-hover-fill)]",
+                    ? "bg-selection text-text-primary"
+                    : "text-text-muted hover:bg-hover",
                 )}
                 onClick={() => setFilter(f)}
               >
                 {f}
-              </button>
+              </ControlButton>
             ))}
           </div>
         </div>
@@ -469,12 +468,12 @@ export function AgentsScreen() {
               <div key={scope}>
                 <div className="flex items-baseline gap-2 px-1 pb-1 pt-2">
                   <span
-                    className="text-[10px] font-semibold uppercase tracking-wider"
+                    className="text-micro font-semibold uppercase tracking-wider"
                     style={{ color: agentSourceColor({ scope }) }}
                   >
                     {title}
                   </span>
-                  {hint ? <span className="text-[10px] text-text-muted">{hint}</span> : null}
+                  {hint ? <span className="text-micro text-text-muted">{hint}</span> : null}
                 </div>
                 <div className="space-y-1">
                   {sectionAgents.map((agent) => (

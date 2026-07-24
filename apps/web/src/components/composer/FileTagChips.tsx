@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { FileText, X } from "lucide-react";
 import type { FileMention } from "../../lib/fileMentions.ts";
 
@@ -38,15 +39,15 @@ export function FileTagChips({
         >
           <FileText size={12} className="shrink-0 text-text-muted" />
           <span className="max-w-[18ch] truncate font-mono">{basename(mention.path)}</span>
-          <button
+          <ControlButton
             type="button"
-            className="text-text-muted hover:text-[var(--color-role-error)]"
+            className="text-text-muted hover:text-danger"
             aria-label={`Remove ${mention.path}`}
             data-testid="file-tag-remove"
             onClick={() => onRemove(mention.start)}
           >
             <X size={12} />
-          </button>
+          </ControlButton>
         </span>
       ))}
     </div>

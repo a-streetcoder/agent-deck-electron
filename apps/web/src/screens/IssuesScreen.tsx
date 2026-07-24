@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -297,13 +298,13 @@ export function IssuesScreen() {
       <div className="mx-auto max-w-3xl">
         {detailNumber !== null ? (
           <div data-testid="issue-detail">
-            <button
+            <ControlButton
               data-testid="issue-detail-back"
               className="flex items-center gap-1 pb-3 text-xs text-text-muted hover:text-text-primary"
               onClick={closeDetail}
             >
               <ArrowLeft size={13} /> Back to issues
-            </button>
+            </ControlButton>
             {detailError ? (
               <div
                 className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-sm text-text-muted"
@@ -322,9 +323,9 @@ export function IssuesScreen() {
                     data-testid="issue-detail-state"
                     data-state={detail.state.toLowerCase()}
                     className={cn(
-                      "rounded-capsule border px-2 py-0.5 text-[11px] capitalize",
+                      "rounded-capsule border px-2 py-0.5 text-detail capitalize",
                       detail.state.toLowerCase() === "open"
-                        ? "border-[var(--color-role-success)] text-[var(--color-role-success)]"
+                        ? "border-success text-success"
                         : "border-border-strong text-text-muted",
                     )}
                   >
@@ -338,7 +339,7 @@ export function IssuesScreen() {
                 >
                   {detail.title}
                 </h2>
-                <div className="flex flex-wrap items-center gap-2 pt-1.5 text-[11px] text-text-muted">
+                <div className="flex flex-wrap items-center gap-2 pt-1.5 text-detail text-text-muted">
                   {detail.author ? (
                     <span className="flex items-center gap-1">
                       <User size={11} /> {detail.author}
@@ -359,7 +360,7 @@ export function IssuesScreen() {
                   ))}
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button
+                  <ControlButton
                     data-testid="issue-open-in-pi"
                     className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
                     style={{
@@ -370,23 +371,23 @@ export function IssuesScreen() {
                     onClick={() => void start(detail)}
                   >
                     <Sparkles size={13} /> Open in Pi
-                  </button>
+                  </ControlButton>
                   {detail.state.toLowerCase() === "open" ? (
                     <>
-                      <button
+                      <ControlButton
                         data-testid="issue-close-completed"
                         className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                         onClick={() => void closeIssue("completed")}
                       >
                         <CheckCircle2 size={13} /> Close as completed
-                      </button>
-                      <button
+                      </ControlButton>
+                      <ControlButton
                         data-testid="issue-close-not-planned"
                         className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-text-primary"
                         onClick={() => void closeIssue("not_planned")}
                       >
                         <CircleSlash size={13} /> Not planned
-                      </button>
+                      </ControlButton>
                     </>
                   ) : null}
                 </div>
@@ -398,7 +399,7 @@ export function IssuesScreen() {
                 </div>
 
                 <div className="mt-5" data-testid="issue-comments">
-                  <div className="flex items-center gap-1.5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  <div className="flex items-center gap-1.5 pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
                     <MessageSquare size={12} /> Comments
                     <span className="rounded-capsule border border-border-subtle px-1 tabular-nums">
                       {detail.comments.length}
@@ -414,7 +415,7 @@ export function IssuesScreen() {
                           data-testid="issue-comment"
                           className="rounded-xl border border-border-subtle bg-surface px-4 py-2.5"
                         >
-                          <div className="flex items-center gap-2 pb-1 text-[11px] text-text-muted">
+                          <div className="flex items-center gap-2 pb-1 text-detail text-text-muted">
                             <span className="flex items-center gap-1 font-medium text-text-secondary">
                               <User size={11} /> {comment.author ?? "unknown"}
                             </span>
@@ -450,30 +451,30 @@ export function IssuesScreen() {
                   aria-label="Filter issues by state"
                 >
                   {(["open", "closed", "all"] as const).map((s) => (
-                    <button
+                    <ControlButton
                       key={s}
                       data-testid={`issues-state-${s}`}
                       aria-pressed={stateFilter === s}
                       className={cn(
                         "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
                         stateFilter === s
-                          ? "bg-[var(--color-selection-fill)] text-text-primary"
+                          ? "bg-selection text-text-primary"
                           : "text-text-muted hover:text-text-primary",
                       )}
                       onClick={() => setStateFilter(s)}
                     >
                       {s}
-                    </button>
+                    </ControlButton>
                   ))}
                 </div>
-                <button
+                <ControlButton
                   data-testid="issues-refresh"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                   disabled={loading}
                   onClick={() => currentProjectId && void load(currentProjectId)}
                 >
                   <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
-                </button>
+                </ControlButton>
               </div>
             </div>
             <p className="pb-3 text-xs text-text-muted">
@@ -486,7 +487,7 @@ export function IssuesScreen() {
             {/* Native free-text search (searchableHaystack): filters the loaded
                 board client-side by title / #number / labels / assignees. */}
             {!error ? (
-              <input
+              <ControlInput
                 data-testid="issues-search"
                 className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                 placeholder="Search issues by title, #number, label, assignee, or author…"
@@ -508,20 +509,20 @@ export function IssuesScreen() {
                     {availableAuthors.map((author) => {
                       const on = authorFilter === author;
                       return (
-                        <button
+                        <ControlButton
                           key={author}
                           data-testid={`issues-author-${author}`}
                           aria-pressed={on}
                           className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-[11px] transition-colors",
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
                             on
-                              ? "border-border-strong bg-[var(--color-selection-fill)] text-text-primary"
+                              ? "border-border-strong bg-selection text-text-primary"
                               : "border-border-subtle text-text-muted hover:text-text-primary",
                           )}
                           onClick={() => setAuthorFilter(on ? null : author)}
                         >
                           {author}
-                        </button>
+                        </ControlButton>
                       );
                     })}
                   </div>
@@ -532,20 +533,20 @@ export function IssuesScreen() {
                     {availableAssignees.map((assignee) => {
                       const on = assigneeFilter === assignee;
                       return (
-                        <button
+                        <ControlButton
                           key={assignee}
                           data-testid={`issues-assignee-${assignee}`}
                           aria-pressed={on}
                           className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-[11px] transition-colors",
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
                             on
-                              ? "border-border-strong bg-[var(--color-selection-fill)] text-text-primary"
+                              ? "border-border-strong bg-selection text-text-primary"
                               : "border-border-subtle text-text-muted hover:text-text-primary",
                           )}
                           onClick={() => setAssigneeFilter(on ? null : assignee)}
                         >
                           {assignee}
-                        </button>
+                        </ControlButton>
                       );
                     })}
                   </div>
@@ -553,14 +554,14 @@ export function IssuesScreen() {
                 {availableLabels.map((label) => {
                   const on = labelFilters.includes(label);
                   return (
-                    <button
+                    <ControlButton
                       key={label}
                       data-testid={`issues-label-${label}`}
                       aria-pressed={on}
                       className={cn(
-                        "rounded-capsule border px-2 py-0.5 text-[11px] transition-colors",
+                        "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
                         on
-                          ? "border-border-strong bg-[var(--color-selection-fill)] text-text-primary"
+                          ? "border-border-strong bg-selection text-text-primary"
                           : "border-border-subtle text-text-muted hover:text-text-primary",
                       )}
                       onClick={() =>
@@ -570,17 +571,17 @@ export function IssuesScreen() {
                       }
                     >
                       {label}
-                    </button>
+                    </ControlButton>
                   );
                 })}
                 {filtersActive ? (
-                  <button
+                  <ControlButton
                     data-testid="issues-clear-filters"
-                    className="rounded-capsule px-2 py-0.5 text-[11px] text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
+                    className="rounded-capsule px-2 py-0.5 text-detail text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
                     onClick={clearFilters}
                   >
                     Clear filters
-                  </button>
+                  </ControlButton>
                 ) : null}
               </div>
             ) : null}
@@ -595,10 +596,10 @@ export function IssuesScreen() {
             ) : (
               <div className="space-y-1.5" data-testid="issues-list">
                 {visibleIssues.map((issue) => (
-                  <button
+                  <ControlButton
                     key={issue.number}
                     data-testid={`issue-${issue.number}`}
-                    className="flex w-full items-center gap-3 rounded-[14px] border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-[var(--color-hover-fill)]"
+                    className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
                     onClick={() => void openDetail(issue.number)}
                   >
                     <span className="font-mono text-xs text-text-muted">#{issue.number}</span>
@@ -613,7 +614,7 @@ export function IssuesScreen() {
                     {issue.author ? (
                       <span
                         data-testid="issue-author"
-                        className="flex shrink-0 items-center gap-1 text-[11px] text-text-muted"
+                        className="flex shrink-0 items-center gap-1 text-detail text-text-muted"
                       >
                         <User size={11} className="shrink-0" />
                         <span className="max-w-[16ch] truncate">{issue.author}</span>
@@ -623,7 +624,7 @@ export function IssuesScreen() {
                     {issue.updatedAt ? (
                       <span
                         data-testid="issue-updated"
-                        className="shrink-0 whitespace-nowrap text-[11px] text-text-muted"
+                        className="shrink-0 whitespace-nowrap text-detail text-text-muted"
                         title={formatDate(issue.updatedAt)}
                       >
                         {formatRelative(issue.updatedAt)}
@@ -632,12 +633,12 @@ export function IssuesScreen() {
                     {issue.labels.slice(0, 3).map((label) => (
                       <span
                         key={label}
-                        className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-[10px] text-text-muted"
+                        className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
                       >
                         {label}
                       </span>
                     ))}
-                  </button>
+                  </ControlButton>
                 ))}
                 {visibleIssues.length === 0 && !loading ? (
                   <div

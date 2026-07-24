@@ -1,3 +1,4 @@
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   formatChordString,
@@ -169,7 +170,7 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[12vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-overlay p-4 pt-[12vh] backdrop-blur-sm"
       data-testid="command-palette"
       onMouseDown={(event) => {
         // Click on the backdrop (not the panel) closes.
@@ -185,7 +186,7 @@ export function CommandPalette() {
       >
         <div className="flex items-center gap-2 border-b border-border-subtle px-3.5 py-2.5">
           <Search className="h-4 w-4 shrink-0 text-text-muted" />
-          <input
+          <ControlInput
             ref={inputRef}
             value={query}
             onChange={(event) => {
@@ -214,7 +215,7 @@ export function CommandPalette() {
               const GroupIcon = GROUP_ICON[group.id];
               return (
                 <div key={group.id} data-testid="command-palette-group" data-group={group.id}>
-                  <div className="px-4 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  <div className="px-4 pb-0.5 pt-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
                     {group.label}
                   </div>
                   {group.items.map((item) => {
@@ -222,14 +223,12 @@ export function CommandPalette() {
                     const selected = flatIndex === highlight;
                     const index = flatIndex;
                     return (
-                      <button
+                      <ControlButton
                         key={item.id}
                         type="button"
                         className={cn(
                           "flex w-full items-center gap-2.5 px-3 py-1.5 text-left",
-                          selected
-                            ? "bg-[var(--color-selection-fill)]"
-                            : "hover:bg-[var(--color-hover-fill)]",
+                          selected ? "bg-selection" : "hover:bg-hover",
                         )}
                         data-testid="command-palette-item"
                         data-command={item.id}
@@ -239,7 +238,7 @@ export function CommandPalette() {
                       >
                         <GroupIcon className="h-4 w-4 shrink-0 text-text-muted" />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] text-text-primary">
+                          <span className="block truncate text-label text-text-primary">
                             {item.title}
                           </span>
                           {item.subtitle ? (
@@ -249,11 +248,11 @@ export function CommandPalette() {
                           ) : null}
                         </span>
                         {item.shortcutLabel ? (
-                          <kbd className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text-secondary">
+                          <kbd className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 py-0.5 font-mono text-detail text-text-secondary">
                             {item.shortcutLabel}
                           </kbd>
                         ) : null}
-                      </button>
+                      </ControlButton>
                     );
                   })}
                 </div>

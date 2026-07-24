@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
 import {
   FolderTree,
@@ -240,10 +241,10 @@ export function App() {
                   read-only preview. Ungated by git — shown for any chat
                   session (it browses the session cwd). */}
               {session && isChat ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "rounded-md p-1.5 transition-colors hover:bg-hover",
                     openTabs?.includes("files") ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -254,16 +255,16 @@ export function App() {
                   onClick={() => toggleWorkspaceTab(session.id, "files")}
                 >
                   <FolderTree className="h-4 w-4" />
-                </button>
+                </ControlButton>
               ) : null}
               {/* Preview toggle (Slice 15b): runs project dev scripts and embeds
                   the discovered dev-server URL. Ungated by git — shown for any
                   chat session (it browses the session's package.json scripts). */}
               {session && isChat ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "rounded-md p-1.5 transition-colors hover:bg-hover",
                     openTabs?.includes("preview") ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -274,16 +275,16 @@ export function App() {
                   onClick={() => toggleWorkspaceTab(session.id, "preview")}
                 >
                   <MonitorPlay className="h-4 w-4" />
-                </button>
+                </ControlButton>
               ) : null}
               {/* Changed-files toggle (Slice 10): only for git-repo sessions
                   (repo:false keeps the whole surface hidden); the badge tracks
                   the server-refreshed changed-file count live. */}
               {session && isChat && diffRepo ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "relative rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "relative rounded-md p-1.5 transition-colors hover:bg-hover",
                     openTabs?.includes("diff") ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -296,23 +297,23 @@ export function App() {
                   <GitCompareArrows className="h-4 w-4" />
                   {diffFileCount > 0 ? (
                     <span
-                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-[9px] font-semibold leading-[14px] text-[var(--color-accent-foreground)]"
+                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
                       data-testid="diff-badge"
                     >
                       {diffFileCount}
                     </span>
                   ) : null}
-                </button>
+                </ControlButton>
               ) : null}
               {/* Checkpoints toggle (Slice 18b): a per-turn rewind timeline.
                   Ungated (every session captures per turn); the badge tracks the
                   available-checkpoint count so a session with none shows nothing
                   extra, one with captures shows a subtle indicator. */}
               {session && isChat ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "relative rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "relative rounded-md p-1.5 transition-colors hover:bg-hover",
                     openTabs?.includes("checkpoints") ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -325,13 +326,13 @@ export function App() {
                   <History className="h-4 w-4" />
                   {checkpointCount > 0 ? (
                     <span
-                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-[9px] font-semibold leading-[14px] text-[var(--color-accent-foreground)]"
+                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
                       data-testid="checkpoints-badge"
                     >
                       {checkpointCount}
                     </span>
                   ) : null}
-                </button>
+                </ControlButton>
               ) : null}
               {/* Browser toggle (Slice L2): a real general-purpose Chromium guest
                   (<webview>) as a workspace tab. Desktop-only — the <webview> tag
@@ -339,10 +340,10 @@ export function App() {
                   never rendered in the web build (the "+" menu still lists it, but
                   disabled with an "Available in the desktop app." reason). */}
               {session && isChat && isElectron() ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "rounded-md p-1.5 transition-colors hover:bg-hover",
                     openTabs?.includes("browser") ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -353,13 +354,13 @@ export function App() {
                   onClick={() => toggleWorkspaceTab(session.id, "browser")}
                 >
                   <Globe className="h-4 w-4" />
-                </button>
+                </ControlButton>
               ) : null}
               {session && isChat ? (
-                <button
+                <ControlButton
                   type="button"
                   className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-[var(--color-hover-fill)]",
+                    "rounded-md p-1.5 transition-colors hover:bg-hover",
                     terminalOpen ? "text-accent" : "text-text-muted",
                     macDesktop && "[-webkit-app-region:no-drag]",
                   )}
@@ -370,7 +371,7 @@ export function App() {
                   onClick={() => setTerminalOpen(!terminalOpen)}
                 >
                   <SquareTerminal className="h-4 w-4" />
-                </button>
+                </ControlButton>
               ) : null}
               <div
                 className="flex items-center gap-2"
@@ -387,8 +388,7 @@ export function App() {
           </header>
           {error ? (
             <div
-              className="px-6 py-2 text-sm"
-              style={{ background: "rgba(229,116,108,0.15)", color: "var(--color-role-error)" }}
+              className="bg-danger-subtle px-6 py-2 text-sm text-danger"
               data-testid="error-banner"
             >
               {error}

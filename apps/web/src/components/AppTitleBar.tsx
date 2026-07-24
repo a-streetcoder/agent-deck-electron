@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { hasIntegratedDesktopChrome, openAppMenu } from "@/lib/native";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { MouseEvent } from "react";
@@ -31,7 +32,7 @@ export function AppTitleBar({ sidebarVisible, onToggleSidebar }: AppTitleBarProp
       data-testid="desktop-titlebar"
       aria-label="Application title bar"
     >
-      <button
+      <ControlButton
         className="desktop-sidebar-toggle"
         type="button"
         data-testid="desktop-sidebar-toggle"
@@ -40,17 +41,17 @@ export function AppTitleBar({ sidebarVisible, onToggleSidebar }: AppTitleBarProp
         onClick={onToggleSidebar}
       >
         {sidebarVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-      </button>
+      </ControlButton>
       <nav className="desktop-titlebar-menu" aria-label="Application menu">
         {MENUS.map((name) => (
-          <button
+          <ControlButton
             key={name}
             type="button"
             data-testid={`desktop-menu-${name}`}
             onClick={(event) => openAnchoredMenu(event, name)}
           >
             {name[0]!.toUpperCase() + name.slice(1)}
-          </button>
+          </ControlButton>
         ))}
       </nav>
     </header>

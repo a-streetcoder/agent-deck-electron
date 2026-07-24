@@ -1,3 +1,4 @@
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useCallback, useRef } from "react";
 import { RefreshCw, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -151,9 +152,9 @@ export function FilesPanel() {
           Files
         </span>
         <div className="flex shrink-0 items-center gap-1">
-          <button
+          <ControlButton
             type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-[var(--color-hover-fill)] hover:text-text-primary"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
             title="Refresh files"
             aria-label="Refresh files"
             data-testid="files-refresh"
@@ -162,7 +163,7 @@ export function FilesPanel() {
             <RefreshCw
               className={cn("h-3.5 w-3.5", rootState?.status === "loading" && "animate-spin")}
             />
-          </button>
+          </ControlButton>
         </div>
       </div>
 
@@ -228,11 +229,11 @@ export function FilesPanel() {
                         className={cn(
                           "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
                           isActive
-                            ? "bg-[var(--color-selection-fill)] text-text-primary"
-                            : "text-text-muted hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                            ? "bg-selection text-text-primary"
+                            : "text-text-muted hover:bg-hover hover:text-text-primary",
                         )}
                       >
-                        <button
+                        <ControlButton
                           type="button"
                           role="tab"
                           aria-selected={isActive}
@@ -244,11 +245,11 @@ export function FilesPanel() {
                           onClick={() => activateFile(file.id)}
                         >
                           <span className="truncate font-mono">{label}</span>
-                        </button>
-                        <button
+                        </ControlButton>
+                        <ControlButton
                           type="button"
                           className={cn(
-                            "flex size-4 shrink-0 items-center justify-center rounded hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+                            "flex size-4 shrink-0 items-center justify-center rounded hover:bg-hover hover:text-text-primary",
                             isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                           )}
                           data-testid={`files-tab-close-${index}`}
@@ -260,7 +261,7 @@ export function FilesPanel() {
                           }}
                         >
                           <X className="h-3 w-3" aria-hidden />
-                        </button>
+                        </ControlButton>
                       </div>
                     );
                   })}

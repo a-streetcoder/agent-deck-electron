@@ -30,22 +30,10 @@ const sizeClasses: Record<IconButtonSize, string> = {
 };
 
 const variantClasses: Record<IconButtonVariant, string> = {
-  ghost: cn(
-    "bg-transparent text-text-primary border-transparent",
-    "hover:bg-[var(--color-hover-fill)]",
-  ),
-  secondary: cn(
-    "bg-surface-elevated text-text-primary",
-    "border-border-strong hover:bg-[var(--color-hover-fill)]",
-  ),
-  primary: cn(
-    "bg-primary text-[var(--color-accent-foreground,#000)]",
-    "border-transparent hover:bg-primary-hover",
-  ),
-  destructive: cn(
-    "bg-[var(--color-role-error,#E5746C)] text-white",
-    "border-transparent hover:opacity-90",
-  ),
+  ghost: cn("bg-transparent text-text-primary border-transparent", "hover:bg-hover"),
+  secondary: cn("bg-surface-elevated text-text-primary", "border-border-strong hover:bg-hover"),
+  primary: cn("bg-primary text-on-accent", "border-transparent hover:bg-primary-hover"),
+  destructive: cn("bg-danger text-white", "border-transparent hover:opacity-90"),
 };
 
 /**

@@ -93,7 +93,7 @@ export const AppCopyButton = forwardRef<HTMLButtonElement, AppCopyButtonProps>(
           "inline-flex h-7 w-7 items-center justify-center rounded-full",
           "border border-border-subtle bg-surface-elevated text-text-muted",
           "transition-colors duration-150 ease-spring",
-          "hover:bg-[var(--color-hover-fill)] hover:text-text-primary",
+          "hover:bg-hover hover:text-text-primary",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
           "disabled:opacity-55 disabled:pointer-events-none",
           state === "copied" && "text-accent",
