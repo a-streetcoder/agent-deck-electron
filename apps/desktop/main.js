@@ -534,7 +534,7 @@ app.whenReady().then(() => {
   // builds get the same artwork from electron-builder's bundle metadata.
   if (process.platform === "darwin" && !app.isPackaged) {
     try {
-      app.dock.setIcon(path.join(repoRoot, "build", "icon.png"));
+      app.dock.setIcon(path.join(repoRoot, "build", "icon.icns"));
     } catch (error) {
       // Branding must never prevent the development app from starting.
       console.warn("Unable to set the development Dock icon:", error);

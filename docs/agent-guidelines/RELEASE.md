@@ -1,5 +1,7 @@
 # Release guidance
 
+App artwork has one canonical source at `build/icon-source.png`. After changing it, run `pnpm generate:icons` on macOS to regenerate the native macOS, Windows, and Linux formats.
+
 Local macOS production-layout validation uses an unsigned Apple Silicon app:
 
 ```sh
