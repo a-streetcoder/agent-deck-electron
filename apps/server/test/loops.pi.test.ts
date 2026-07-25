@@ -17,7 +17,7 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import { isLoopRunTerminal, type LoopRun } from "@agent-deck/domain";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
@@ -303,6 +303,50 @@ describe("loop run engine (real pi)", () => {
     expect(evaluatorMock.requests).toHaveLength(evaluatorRequestStart + 1);
     // The agent actually ran (a real pi subagent produced output).
     expect(run.iterations[0]!.output.length).toBeGreaterThan(0);
+  });
+
+  it("restores streamed Loop role cards exactly once after server restart and resume", async () => {
+    await putLoop("restart-session-loop", "", 1);
+    const run = await waitTerminal(await startRun("restart-session-loop"));
+    expect(run.sessionId).toBeTruthy();
+    const sessionId = run.sessionId!;
+    const snapshotFile = path.join(dataDir, "loop-session-snapshots.json");
+    await vi.waitFor(() => expect(existsSync(snapshotFile)).toBe(true));
+    const persisted = JSON.parse(readFileSync(snapshotFile, "utf8")) as {
+      sessions: Record<string, { cells: Array<{ id: string; text: string }> }>;
+    };
+    const persistedCells = persisted.sessions[sessionId]?.cells ?? [];
+    expect(persistedCells.length).toBeGreaterThanOrEqual(2);
+    expect(persistedCells.some((cell) => cell.text.includes("Maker streamed"))).toBe(true);
+    expect(persistedCells.some((cell) => cell.text.includes("SUCCESS"))).toBe(true);
+
+    await server.close();
+    server = await startServer({ dataDir });
+    base = `http://127.0.0.1:${server.port}`;
+    const listed = (await (await fetch(`${base}/sessions`)).json()) as {
+      sessions: Array<{ id: string; endedAt?: string }>;
+    };
+    expect(listed.sessions.find((session) => session.id === sessionId)?.endedAt).toBeTruthy();
+    const resumed = await fetch(`${base}/sessions/${encodeURIComponent(sessionId)}/resume`, {
+      method: "POST",
+    });
+    expect(resumed.status).toBe(200);
+    const restoredCells = server.sessions
+      .get(sessionId)!
+      .snapshot()
+      .state.cells.filter((cell) => cell.kind === "subagent");
+    expect(restoredCells.map((cell) => cell.id)).toEqual(persistedCells.map((cell) => cell.id));
+    expect(new Set(restoredCells.map((cell) => cell.id)).size).toBe(restoredCells.length);
+    expect(restoredCells.some((cell) => cell.text.includes("Maker streamed"))).toBe(true);
+
+    const deleted = await fetch(`${base}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    const afterDelete = JSON.parse(readFileSync(snapshotFile, "utf8")) as {
+      sessions: Record<string, unknown>;
+    };
+    expect(afterDelete.sessions[sessionId]).toBeUndefined();
   });
 
   it("streams real Pi maker, checker, and evaluator sequentially before finalization", async () => {

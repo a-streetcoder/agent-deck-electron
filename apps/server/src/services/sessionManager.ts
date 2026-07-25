@@ -12,6 +12,7 @@ import {
   type IngestState,
   type SessionPlanItem,
   type SessionPlanUpdate,
+  type SubagentCell,
   type TranscriptState,
 } from "@agent-deck/domain";
 import {
@@ -194,6 +195,7 @@ export interface ManagedSessionRuntime {
   /** Rebuild the transcript from pi's canonical history (resume/fork path). A
    * getMessages failure surfaces as a defect (the resume/fork route reports it). */
   readonly seedFromHistory: Effect.Effect<void>;
+  readonly seedSyntheticCells: (cells: readonly SubagentCell[]) => Effect.Effect<void>;
 
   readonly snapshot: Effect.Effect<{ seq: number; state: TranscriptState }>;
   readonly isRunning: Effect.Effect<boolean>;
@@ -559,6 +561,15 @@ export const makeManagedSessionRuntime = (
       bus,
       ingest: ingestLoop,
       seedFromHistory,
+      seedSyntheticCells: (cells) =>
+        Effect.sync(() => {
+          const known = new Set(transcript.cells.map((cell) => cell.id));
+          for (const cell of cells) {
+            if (known.has(cell.id)) continue;
+            transcript = reduceTranscript(transcript, { type: "cell_open", cell });
+            known.add(cell.id);
+          }
+        }),
       snapshot: Effect.sync(() => ({ seq: bus.unsafeLastSeq(), state: transcript })),
       isRunning: handle.isRunning,
       plan: Effect.sync(() => transcript.plan),

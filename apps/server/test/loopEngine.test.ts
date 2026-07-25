@@ -1,9 +1,13 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
+  rmSync,
   readdirSync,
   realpathSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -261,7 +265,7 @@ describe("loop engine (single-agent)", () => {
       "Do not implement fixes unless the loop goal explicitly asks you to",
     );
     expect(triageRequests[0]!.prompt).toContain(
-      path.join(dataDir, "loop-artifacts", run.id, "iteration-1-triage.md"),
+      path.join(run.artifactDirectory!, "iteration-1-triage.md"),
     );
     expect(triageRequests[1]!.prompt).toContain("validation-1");
     expect(triageRequests[1]!.prompt).toContain("CONTINUE\nMore evidence needed");
@@ -554,7 +558,7 @@ describe("loop engine (single-agent)", () => {
       iteration.artifacts.every(
         (artifact) =>
           !artifact.filePath.startsWith(project + path.sep) &&
-          artifact.filePath.startsWith(path.join(dataDir, "loop-artifacts") + path.sep),
+          artifact.filePath.startsWith(run.artifactDirectory! + path.sep),
       ),
     ).toBe(true);
     expect(
@@ -1260,6 +1264,61 @@ describe("loop engine (single-agent)", () => {
     });
   });
 
+  it("writes bounded manifests, progress, and complete Git changed-file evidence", async () => {
+    const project = mkdtempSync(path.join(tmpdir(), "loop-git-evidence-"));
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-git-artifacts-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project, stdio: "ignore" });
+    git("init");
+    git("config", "user.email", "loop@example.invalid");
+    git("config", "user.name", "Loop Test");
+    writeFileSync(path.join(project, "modified.txt"), "base\n");
+    writeFileSync(path.join(project, "deleted.txt"), "delete\n");
+    writeFileSync(path.join(project, "renamed.txt"), "rename\n");
+    writeFileSync(path.join(project, "binary.bin"), Buffer.from([0, 1, 2]));
+    git("add", ".");
+    git("commit", "-m", "base");
+    writeFileSync(path.join(project, "modified.txt"), "changed\n");
+    rmSync(path.join(project, "deleted.txt"));
+    renameSync(path.join(project, "renamed.txt"), path.join(project, "moved.txt"));
+    git("add", "renamed.txt", "moved.txt");
+    writeFileSync(path.join(project, "staged.txt"), "staged\n");
+    git("add", "staged.txt");
+    writeFileSync(path.join(project, "untracked.txt"), "new\n");
+    writeFileSync(path.join(project, "binary.bin"), Buffer.from([0, 9, 2]));
+
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "work"),
+    });
+    const run = engine.start(makeLoop({ writeTarget: "currentCheckout" }), project);
+    await engine.settled(run.id);
+
+    const iteration = run.iterations[0]!;
+    expect(iteration.changedFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "modified.txt", status: "unstaged" }),
+        expect.objectContaining({ path: "deleted.txt", status: "deleted" }),
+        expect.objectContaining({ path: "moved.txt", oldPath: "renamed.txt", status: "renamed" }),
+        expect.objectContaining({ path: "staged.txt", status: "staged" }),
+        expect.objectContaining({ path: "untracked.txt", status: "untracked" }),
+        expect.objectContaining({ path: "binary.bin", status: "binary" }),
+      ]),
+    );
+    expect(JSON.parse(readFileSync(iteration.manifestPath!, "utf8"))).toMatchObject({
+      runId: run.id,
+      iteration: 1,
+    });
+    expect(JSON.parse(readFileSync(run.manifestPath!, "utf8"))).toMatchObject({
+      runId: run.id,
+      status: "completed",
+    });
+    expect(readFileSync(run.progressPath!, "utf8").length).toBeLessThanOrEqual(101_000);
+    expect(new LoopEngine({ dataDir }).get(run.id)).toMatchObject({
+      artifactDirectoryId: run.artifactDirectoryId,
+      manifestPath: run.manifestPath,
+    });
+  });
+
   it("persists report-only artifacts outside the project for every role", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifacts-data-"));
     const project = mkdtempSync(path.join(tmpdir(), "loop-artifacts-project-"));
@@ -1288,9 +1347,7 @@ describe("loop engine (single-agent)", () => {
     expect(artifacts.map((artifact) => artifact.phase)).toEqual(["maker", "checker", "evaluator"]);
     for (const artifact of artifacts) {
       expect(artifact.filePath.startsWith(project + path.sep)).toBe(false);
-      expect(artifact.filePath.startsWith(path.join(dataDir, "loop-artifacts") + path.sep)).toBe(
-        true,
-      );
+      expect(artifact.filePath.startsWith(run.artifactDirectory! + path.sep)).toBe(true);
       expect(readFileSync(artifact.filePath, "utf8")).toContain("report");
     }
     const terminalStore = readFileSync(path.join(dataDir, "loop-runs.json"), "utf8");
@@ -1324,6 +1381,83 @@ describe("loop engine (single-agent)", () => {
       iterations: [{ index: 0, output: "parent session creation failed" }],
     });
     expect(readdirSync(dataDir).some((name) => name.includes(".corrupt-"))).toBe(false);
+  });
+
+  it("quarantines persisted artifact paths outside the owned run directory", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-tamper-"));
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "report"),
+    });
+    const run = engine.start(makeLoop(), cwd());
+    await engine.settled(run.id);
+    const storePath = path.join(dataDir, "loop-runs.json");
+    const persisted = JSON.parse(readFileSync(storePath, "utf8"));
+    persisted[0].iterations[0].artifacts[0].filePath = path.join(dataDir, "outside.md");
+    writeFileSync(storePath, JSON.stringify(persisted));
+    const warn = vi.fn();
+
+    expect(new LoopEngine({ dataDir, warn }).get(run.id)).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(readdirSync(dataDir).some((name) => name.startsWith("loop-runs.corrupt-"))).toBe(true);
+  });
+
+  it("rejects traversal artifact IDs and nested symlink evidence parents on restore", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-restore-symlink-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "loop-artifact-outside-"));
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "report"),
+    });
+    const run = engine.start(makeLoop({ validationCommand: "exit 0" }), cwd());
+    await engine.settled(run.id);
+    const storePath = path.join(dataDir, "loop-runs.json");
+    const original = JSON.parse(readFileSync(storePath, "utf8"));
+
+    original[0].artifactDirectoryId = "../outside";
+    writeFileSync(storePath, JSON.stringify(original));
+    expect(new LoopEngine({ dataDir, warn: vi.fn() }).get(run.id)).toBeUndefined();
+
+    const secondDataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-parent-link-"));
+    const secondEngine = new LoopEngine({
+      dataDir: secondDataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "report"),
+    });
+    const secondRun = secondEngine.start(makeLoop({ validationCommand: "exit 0" }), cwd());
+    await secondEngine.settled(secondRun.id);
+    const validationDirectory = path.join(secondRun.artifactDirectory!, "validation");
+    rmSync(validationDirectory, { recursive: true });
+    symlinkSync(outside, validationDirectory, process.platform === "win32" ? "junction" : "dir");
+    const warn = vi.fn();
+    expect(new LoopEngine({ dataDir: secondDataDir, warn }).get(secondRun.id)).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("fails validation before writing through a nested symlink evidence parent", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-live-symlink-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "loop-artifact-live-outside-"));
+    let run!: ReturnType<LoopEngine["start"]>;
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (phase !== "evaluator" && !existsSync(path.join(run.artifactDirectory!, "validation"))) {
+          symlinkSync(
+            outside,
+            path.join(run.artifactDirectory!, "validation"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        }
+        return phase === "evaluator" ? "SUCCESS" : "report";
+      },
+    });
+    run = engine.start(makeLoop({ validationCommand: "printf unsafe" }), cwd());
+    await engine.settled(run.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stopReason).toBe("toolFailed");
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it.each([

@@ -47,6 +47,7 @@ import {
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { useAgents } from "../state/useAgents.ts";
+import { switchToSession } from "../state/wsBridge.ts";
 
 /**
  * Loop Bank (native LoopBankScreen): the library of saved loop definitions —
@@ -216,6 +217,8 @@ export function LoopsScreen() {
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const currentSessionId = useAppStore((state) => state.session?.id);
+  const sessions = useAppStore((state) => state.sessions);
+  const setView = useAppStore((state) => state.setView);
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -633,6 +636,16 @@ export function LoopsScreen() {
     }
   };
 
+  const openLoopSession = (run: LoopRun): void => {
+    const session = sessions.find((candidate) => candidate.id === run.sessionId);
+    if (!session) {
+      setError("The durable Loop session is unavailable.");
+      return;
+    }
+    setView("chat");
+    void switchToSession(session);
+  };
+
   const openRetry = (): void => {
     if (!activeRun?.definitionSnapshot || !activeRun.catalogId || runPending) return;
     launchReturnFocusRef.current =
@@ -1046,6 +1059,24 @@ export function LoopsScreen() {
                 </ControlButton>
               </div>
             ) : null}
+            {activeRun.sessionId ? (
+              <div className="mt-2 space-y-1 text-detail" data-testid="loop-session-evidence">
+                <div>Session: {activeRun.sessionId}</div>
+                <ControlButton
+                  data-testid="loop-open-session"
+                  aria-label={`Open session for ${activeRun.loopName}`}
+                  onClick={() => openLoopSession(activeRun)}
+                >
+                  Open Session
+                </ControlButton>
+                {activeRun.manifestPath ? (
+                  <div className="break-all">Run manifest: {activeRun.manifestPath}</div>
+                ) : null}
+                {activeRun.progressPath ? (
+                  <div className="break-all">Progress report: {activeRun.progressPath}</div>
+                ) : null}
+              </div>
+            ) : null}
             {activeRun.iterations.length > 0 ? (
               <ol
                 className="mt-2 space-y-2"
@@ -1196,6 +1227,24 @@ export function LoopsScreen() {
                         Validation evidence: {iteration.validationEvidence}
                       </div>
                     ) : null}
+                    {iteration.manifestPath ? (
+                      <div className="break-all">Iteration manifest: {iteration.manifestPath}</div>
+                    ) : null}
+                    {iteration.changedFiles?.length ? (
+                      <ul aria-label={`Changed files for iteration ${iteration.index}`}>
+                        {iteration.changedFiles.map((change, index) => (
+                          <li
+                            key={`${change.status}-${change.path}-${index}`}
+                            className="break-all"
+                          >
+                            {change.status}: {change.oldPath ? `${change.oldPath} → ` : ""}
+                            {change.path}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div>Changed files: none</div>
+                    )}
                     {iteration.artifacts?.length ? (
                       <div>
                         Report artifacts:{" "}

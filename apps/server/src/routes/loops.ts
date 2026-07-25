@@ -135,7 +135,6 @@ export function registerLoopRoutes(
       if (!launch || launch.sessionReconciledAt) continue;
       try {
         await sessions.destroy(launch.sessionId);
-        index.remove(launch.sessionId);
         bridgeTokens.delete(launch.sessionId);
         loopEngine.markSessionReconciled(run.id);
       } catch (error) {
@@ -482,13 +481,15 @@ export function registerLoopRoutes(
     // never allocates a Pi session, child, validation process, checkout lock,
     // or worktree, regardless of the saved write target.
     if (loop.structure === "humanApproval") {
+      let run: ReturnType<typeof loopEngine.start> | undefined;
       try {
-        const run = loopEngine.start(loop, project.path, {
+        run = loopEngine.start(loop, project.path, {
           projectId: body.projectId,
           retryOf: body.retryOf,
         });
         return reply.status(201).send({ run, worktree: null });
       } catch (error) {
+        if (run) loopEngine.rollbackStart(run.id);
         return reply.status(500).send({
           code: "loop_start_failed",
           error: `The approval checkpoint couldn't be recorded safely: ${error instanceof Error ? error.message : String(error)}`,
@@ -590,6 +591,7 @@ export function registerLoopRoutes(
     let parent: ReturnType<typeof sessions.create> | undefined;
     let run: ReturnType<typeof loopEngine.start> | undefined;
     let announcementAttempted = false;
+    let stopSnapshotTracking: (() => void) | undefined;
     try {
       parent = sessions.create({
         cwd,
@@ -654,8 +656,11 @@ export function registerLoopRoutes(
         },
         cancel: () => sessions.destroy(parent!.meta.id),
       });
+      parent.meta.title = `Loop: ${loop.name} · ${run.id.slice(0, 8)}`;
+      parent.meta.agentName = `Loop · ${loop.name}`;
       announcementAttempted = true;
       sessions.announceCreated(parent);
+      stopSnapshotTracking = sessions.trackLoopSession?.(parent.meta.id);
     } catch (error) {
       if (run) {
         void loopEngine.stop(run.id);
@@ -672,7 +677,10 @@ export function registerLoopRoutes(
       else if (error instanceof SessionCreationError) await error.cleanup;
       const partialId =
         parent?.meta.id ?? (error instanceof SessionCreationError ? error.sessionId : undefined);
-      if (partialId) bridgeTokens.delete(partialId);
+      if (partialId) {
+        bridgeTokens.delete(partialId);
+        sessions.removeLoopSessionSnapshot?.(partialId);
+      }
       if (announcementAttempted && parent) {
         const owned = parent.meta;
         const indexed = index.find((meta) => meta.id === owned.id);
@@ -725,13 +733,12 @@ export function registerLoopRoutes(
     void loopEngine.settled(run.id).finally(async () => {
       try {
         await sessions.destroy(parent.meta.id);
-        const removed = index.remove(parent.meta.id);
-        if (removed) broadcast({ type: "session_removed", sessionId: parent.meta.id });
         bridgeTokens.delete(parent.meta.id);
         loopEngine.markSessionReconciled(run.id);
       } catch (cleanupError) {
         fastify.log.warn({ err: cleanupError }, "failed to reconcile settled Loop parent");
       } finally {
+        stopSnapshotTracking?.();
         releaseCheckoutLock();
       }
     });

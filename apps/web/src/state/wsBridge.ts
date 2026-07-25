@@ -503,6 +503,13 @@ async function findOrCreateSession(
     (s) => (s.agentName ?? null) === agentName,
   );
   const existing = scoped.at(-1);
+  if (existing?.endedAt) {
+    const { session } = await fetchJson<{ session: SessionMeta }>(
+      `/sessions/${encodeURIComponent(existing.id)}/resume`,
+      { method: "POST" },
+    );
+    return session;
+  }
   if (existing) return existing;
   const { session } = await fetchJson<{ session: SessionMeta }>("/sessions", {
     method: "POST",

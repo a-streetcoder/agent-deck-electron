@@ -3,7 +3,12 @@ import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
-import type { SessionPlanItem, SessionPlanUpdate, TranscriptState } from "@agent-deck/domain";
+import type {
+  SessionPlanItem,
+  SessionPlanUpdate,
+  SubagentCell,
+  TranscriptState,
+} from "@agent-deck/domain";
 import {
   buildLaunchArgs,
   resolvePiBinary,
@@ -14,6 +19,7 @@ import {
 } from "@agent-deck/pi-host";
 import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
+import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
@@ -183,6 +189,10 @@ export class ManagedSession {
     await runPromiseUnwrapped(this.runtime, this.rt.seedFromHistory);
   }
 
+  seedSyntheticCells(cells: readonly SubagentCell[]): void {
+    runSyncUnwrapped(this.rt.seedSyntheticCells(cells));
+  }
+
   snapshot(): { seq: number; state: TranscriptState } {
     return Effect.runSync(this.rt.snapshot);
   }
@@ -329,6 +339,7 @@ export class SessionManager {
      * swallowed and never surface (capture is inert until S18b restores).
      */
     private readonly onCheckpointCapture?: (meta: SessionMeta, label: string) => Promise<void>,
+    private readonly loopSnapshots?: LoopSessionSnapshotStore,
   ) {}
 
   create(options: CreateSessionOptions): ManagedSession {
@@ -405,6 +416,7 @@ export class SessionManager {
       const session = this.launch(revived, plan, env);
       try {
         await session.seedFromHistory();
+        session.seedSyntheticCells(this.loopSnapshots?.get(revived.id) ?? []);
         // The activity plan is app state (not in pi's session file), so restore
         // it from the persisted meta after the pi history is rebuilt.
         //
@@ -614,6 +626,40 @@ export class SessionManager {
           }
         : {}),
     };
+  }
+
+  /** Persist bounded synthetic Loop cards after every ordered transcript event. */
+  trackLoopSession(sessionId: string): () => void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !this.loopSnapshots) return () => {};
+    let timer: NodeJS.Timeout | undefined;
+    const persist = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      const cells = session
+        .snapshot()
+        .state.cells.filter((cell): cell is SubagentCell => cell.kind === "subagent");
+      this.loopSnapshots!.save(sessionId, cells);
+    };
+    const schedule = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(persist, 250);
+      timer.unref();
+    };
+    persist();
+    const unsubscribe = session.bus.subscribe(schedule);
+    return () => {
+      unsubscribe();
+      persist();
+    };
+  }
+
+  saveLoopSessionSnapshot(sessionId: string, cells: readonly SubagentCell[]): void {
+    this.loopSnapshots?.save(sessionId, cells);
+  }
+
+  removeLoopSessionSnapshot(sessionId: string): void {
+    this.loopSnapshots?.remove(sessionId);
   }
 
   /** Commit a successfully prepared session to persistence/broadcast, then

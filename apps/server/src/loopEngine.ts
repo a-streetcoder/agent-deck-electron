@@ -1,6 +1,8 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -21,6 +23,7 @@ import {
   normalizeParallelBranches,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopChildRecord,
+  type LoopChangedFile,
   type LoopCheckerDecision,
   type LoopDefinition,
   type LoopExecutionSnapshot,
@@ -225,6 +228,7 @@ export interface LoopEngineDeps {
 
 export interface LoopStartOptions {
   projectId?: string;
+  sessionId?: string;
   retryOf?: string;
   launch?: LoopRunLaunchOwnership;
   executeAgent?: ExecuteAgent;
@@ -311,6 +315,11 @@ const persistedRunSchema = z
     projectId: z.string().optional(),
     retryOf: z.string().optional(),
     checkpointPrompt: z.string().optional(),
+    sessionId: z.string().min(1).optional(),
+    artifactDirectoryId: z.string().uuid().optional(),
+    artifactDirectory: z.string().min(1).optional(),
+    progressPath: z.string().min(1).optional(),
+    manifestPath: z.string().min(1).optional(),
     launchContext: z.string().optional(),
     launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
     definitionSnapshot: z
@@ -497,16 +506,79 @@ function exactFirstLine<T extends string>(text: string, allowed: Set<T>): T | un
   return first && allowed.has(first as T) ? (first as T) : undefined;
 }
 
+function changedFilesForGit(cwd: string, reportOnly: boolean): LoopChangedFile[] {
+  if (reportOnly) return [];
+  let raw: string;
+  try {
+    raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 2_000_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return [];
+  }
+  const fields = raw.split("\0");
+  const changes: LoopChangedFile[] = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const entry = fields[index];
+    if (!entry || entry.length < 4) continue;
+    const x = entry[0]!;
+    const y = entry[1]!;
+    const filePath = entry.slice(3);
+    if (x === "R" || y === "R") {
+      const oldPath = fields[++index] || undefined;
+      changes.push({ path: filePath, oldPath, status: "renamed" });
+      continue;
+    }
+    if (x === "?" && y === "?") {
+      changes.push({ path: filePath, status: "untracked" });
+      continue;
+    }
+    if (x === "D" || y === "D") {
+      changes.push({ path: filePath, status: "deleted" });
+      continue;
+    }
+    if (x !== " ") changes.push({ path: filePath, status: "staged" });
+    if (y !== " ") changes.push({ path: filePath, status: "unstaged" });
+  }
+  for (const extra of [[], ["--cached"]] as const) {
+    try {
+      const binary = execFileSync("git", ["diff", ...extra, "--numstat", "--no-renames"], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 2_000_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      for (const line of binary.split("\n")) {
+        const match = /^-\t-\t(.+)$/.exec(line);
+        if (
+          match &&
+          !changes.some((change) => change.path === match[1] && change.status === "binary")
+        ) {
+          changes.push({ path: match[1]!, status: "binary" });
+        }
+      }
+    } catch {
+      // Status evidence above remains useful when numstat is unavailable.
+    }
+  }
+  return changes.slice(0, 2_000);
+}
+
 export class LoopEngine {
   private readonly runs = new Map<string, LoopRun>();
   private readonly settledPromises = new Map<string, Promise<void>>();
   private readonly active = new Map<string, ActiveRun>();
+  private readonly artifactContexts = new Map<string, { cwd: string; reportOnly: boolean }>();
   private readonly now: () => string;
   private readonly defaultExecuteAgent?: ExecuteAgent;
   private readonly defaultExecuteRole?: ExecuteLoopRole;
   private readonly runValidation: NonNullable<LoopEngineDeps["runValidation"]>;
   private readonly storePath?: string;
   private readonly artifactsRoot?: string;
+  private readonly artifactSetupError?: Error;
   private readonly warn: (message: string, error?: unknown) => void;
 
   constructor(deps: LoopEngineDeps = {}) {
@@ -514,9 +586,27 @@ export class LoopEngine {
     this.defaultExecuteAgent = deps.executeAgent;
     this.defaultExecuteRole = deps.executeRole;
     this.runValidation = deps.runValidation ?? runValidationCommand;
-    this.storePath = deps.dataDir ? path.join(deps.dataDir, "loop-runs.json") : undefined;
-    this.artifactsRoot = deps.dataDir ? path.join(deps.dataDir, "loop-artifacts") : undefined;
     this.warn = deps.warn ?? (() => {});
+    this.storePath = deps.dataDir ? path.join(deps.dataDir, "loop-runs.json") : undefined;
+    let artifactsRoot: string | undefined;
+    let artifactSetupError: Error | undefined;
+    if (deps.dataDir) {
+      const candidate = path.join(deps.dataDir, "loop-artifacts");
+      try {
+        try {
+          if (lstatSync(candidate).isSymbolicLink()) throw new Error("artifact root is a symlink");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        mkdirSync(candidate, { recursive: true, mode: 0o700 });
+        artifactsRoot = realpathSync(candidate);
+      } catch (error) {
+        artifactSetupError = error instanceof Error ? error : new Error(String(error));
+        this.warn("Loop artifact root refused", error);
+      }
+    }
+    this.artifactsRoot = artifactsRoot;
+    this.artifactSetupError = artifactSetupError;
     this.loadAndRecover();
   }
 
@@ -537,6 +627,60 @@ export class LoopEngine {
       const parsed = persistedRunsSchema.parse(JSON.parse(readFileSync(this.storePath, "utf8")));
       for (const persisted of parsed) {
         const run = persisted as unknown as LoopRun;
+        if (run.artifactDirectory || run.artifactDirectoryId) {
+          if (!this.artifactsRoot || !run.artifactDirectoryId || !run.artifactDirectory) {
+            throw new Error("incomplete Loop artifact ownership metadata");
+          }
+          const expected = path.join(this.artifactsRoot, run.artifactDirectoryId);
+          if (path.resolve(run.artifactDirectory) !== expected) {
+            throw new Error("unsafe persisted Loop artifact directory");
+          }
+          this.assertSafeArtifactPath(expected, expected, true);
+          run.artifactDirectory = expected;
+          const pin = (persistedPath: string | undefined, canonicalPath: string): string => {
+            if (persistedPath && path.resolve(persistedPath) !== canonicalPath) {
+              throw new Error("unsafe persisted Loop artifact path");
+            }
+            this.assertSafeArtifactPath(expected, canonicalPath, false);
+            return canonicalPath;
+          };
+          run.manifestPath = pin(run.manifestPath, path.join(expected, "run-manifest.json"));
+          run.progressPath = pin(run.progressPath, path.join(expected, "loop-progress.md"));
+          for (const iteration of run.iterations) {
+            if (iteration.manifestPath) {
+              iteration.manifestPath = pin(
+                iteration.manifestPath,
+                path.join(expected, `iteration-${iteration.index}-manifest.json`),
+              );
+            }
+            const validation = iteration.validationResult;
+            if (validation?.stdoutPath) {
+              validation.stdoutPath = pin(
+                validation.stdoutPath,
+                path.join(expected, "validation", path.basename(validation.stdoutPath)),
+              );
+            }
+            if (validation?.stderrPath) {
+              validation.stderrPath = pin(
+                validation.stderrPath,
+                path.join(expected, "validation", path.basename(validation.stderrPath)),
+              );
+            }
+            for (const artifact of iteration.artifacts ?? []) {
+              if (path.basename(artifact.filename) !== artifact.filename || !artifact.filename) {
+                throw new Error("unsafe persisted Loop artifact filename");
+              }
+              artifact.filePath = pin(
+                artifact.filePath,
+                path.join(
+                  expected,
+                  artifact.phase === "validation" ? "validation" : "",
+                  artifact.filename,
+                ),
+              );
+            }
+          }
+        }
         for (const iteration of run.iterations) iteration.artifacts ??= [];
         if (run.status === "running" || run.status === "stopping") {
           run.status = "interrupted";
@@ -544,6 +688,7 @@ export class LoopEngine {
           run.endedAt = this.now();
           run.updatedAt = run.endedAt;
           for (const iteration of run.iterations) {
+            iteration.endedAt ??= run.endedAt;
             for (const child of iteration.children) {
               if (child.status === "queued" || child.status === "running") {
                 child.status = "stopped";
@@ -583,8 +728,147 @@ export class LoopEngine {
     }
   }
 
+  private allocateArtifacts(run: LoopRun): void {
+    if (this.artifactSetupError) throw this.artifactSetupError;
+    if (!this.artifactsRoot) return;
+    const id = randomUUID();
+    const directory = path.join(this.artifactsRoot, id);
+    mkdirSync(directory, { mode: 0o700 });
+    if (lstatSync(directory).isSymbolicLink() || realpathSync(directory) !== directory) {
+      throw new Error("unsafe Loop artifact directory");
+    }
+    run.artifactDirectoryId = id;
+    run.artifactDirectory = directory;
+    run.progressPath = path.join(directory, "loop-progress.md");
+    run.manifestPath = path.join(directory, "run-manifest.json");
+  }
+
+  private writeArtifactEvidence(run: LoopRun): void {
+    if (!run.artifactDirectory) return;
+    const context = this.artifactContexts.get(run.id);
+    for (const iteration of run.iterations) {
+      if (!iteration.endedAt || iteration.manifestPath) continue;
+      iteration.changedFiles = context ? changedFilesForGit(context.cwd, context.reportOnly) : [];
+      iteration.manifestPath = path.join(
+        run.artifactDirectory,
+        `iteration-${iteration.index}-manifest.json`,
+      );
+      this.atomicArtifactWrite(
+        iteration.manifestPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            runId: run.id,
+            iteration: iteration.index,
+            startedAt: iteration.startedAt,
+            endedAt: iteration.endedAt,
+            artifacts: iteration.artifacts,
+            validation: iteration.validationResult,
+            changedFiles: iteration.changedFiles,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    }
+    const progress = run.iterations
+      .map((iteration) => {
+        const reports = [
+          iteration.output,
+          iteration.checkerOutput,
+          iteration.classificationOutput,
+          iteration.evaluatorOutput,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+          .slice(-20_000);
+        return `## Iteration ${iteration.index}\n\n${reports}`;
+      })
+      .join("\n\n")
+      .slice(-100_000);
+    this.atomicArtifactWrite(
+      run.progressPath!,
+      `# Loop progress: ${run.loopName}\n\n${progress}\n`,
+    );
+    this.atomicArtifactWrite(
+      run.manifestPath!,
+      `${JSON.stringify(
+        {
+          version: 1,
+          runId: run.id,
+          sessionId: run.sessionId,
+          loopName: run.loopName,
+          status: run.status,
+          stopReason: run.stopReason,
+          startedAt: run.startedAt,
+          endedAt: run.endedAt,
+          iterations: run.iterations.map((iteration) => ({
+            index: iteration.index,
+            manifestPath: iteration.manifestPath,
+          })),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+
+  private assertSafeArtifactPath(owner: string, candidate: string, directory: boolean): void {
+    if (!this.artifactsRoot) throw new Error("Loop artifact root is unavailable");
+    const resolvedOwner = path.resolve(owner);
+    const rootRelative = path.relative(this.artifactsRoot, resolvedOwner);
+    if (
+      !rootRelative ||
+      path.isAbsolute(rootRelative) ||
+      rootRelative.startsWith(`..${path.sep}`) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        rootRelative,
+      )
+    ) {
+      throw new Error("unsafe Loop artifact owner");
+    }
+    const resolvedCandidate = path.resolve(candidate);
+    const relative = path.relative(resolvedOwner, resolvedCandidate);
+    if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+      throw new Error("unsafe Loop artifact path");
+    }
+    const parent = directory ? resolvedCandidate : path.dirname(resolvedCandidate);
+    let current = resolvedOwner;
+    for (const segment of path.relative(resolvedOwner, parent).split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+        throw new Error("symlinked Loop artifact parent");
+      }
+    }
+    if (
+      lstatSync(resolvedOwner).isSymbolicLink() ||
+      realpathSync(resolvedOwner) !== resolvedOwner
+    ) {
+      throw new Error("unsafe Loop artifact owner");
+    }
+    if (existsSync(resolvedCandidate) && lstatSync(resolvedCandidate).isSymbolicLink()) {
+      throw new Error("symlinked Loop artifact path");
+    }
+  }
+
+  private atomicArtifactWrite(filePath: string, content: string): void {
+    if (!this.artifactsRoot) throw new Error("Loop artifact root is unavailable");
+    const relative = path.relative(this.artifactsRoot, path.resolve(filePath));
+    const ownerId = relative.split(path.sep)[0]!;
+    const owner = path.join(this.artifactsRoot, ownerId);
+    this.assertSafeArtifactPath(owner, filePath, false);
+    const temp = `${filePath}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, content, { encoding: "utf8", mode: 0o600 });
+      renameSync(temp, filePath);
+    } finally {
+      rmSync(temp, { force: true });
+    }
+  }
+
   private changed(run: LoopRun): void {
     if (isLoopRunTerminal(run.status)) return;
+    this.writeArtifactEvidence(run);
     run.updatedAt = this.now();
     this.persist();
   }
@@ -790,6 +1074,7 @@ export class LoopEngine {
         catalogId: loop.id,
         loopName: loop.name,
         structure: "humanApproval",
+        sessionId: options.sessionId ?? options.launch?.sessionId,
         projectId: options.projectId,
         retryOf: options.retryOf,
         checkpointPrompt: prompt,
@@ -823,6 +1108,22 @@ export class LoopEngine {
         artifacts: [],
       };
       run.iterations.push(iteration);
+      try {
+        this.allocateArtifacts(run);
+      } catch (error) {
+        return this.recordFailedStart(
+          loop,
+          cwd,
+          "toolFailed",
+          error instanceof Error ? error.message : String(error),
+          options.projectId,
+          options.launch,
+        );
+      }
+      this.artifactContexts.set(run.id, {
+        cwd,
+        reportOnly: loop.writeTarget === "artifactMarkdown",
+      });
       this.runs.set(run.id, run);
       try {
         this.writeHumanApprovalArtifact(
@@ -834,8 +1135,10 @@ export class LoopEngine {
         this.finalize(run, "stopped", "humanInputRequired");
       } catch (error) {
         this.runs.delete(run.id);
+        this.artifactContexts.delete(run.id);
         throw error;
       }
+      this.artifactContexts.delete(run.id);
       this.settledPromises.set(run.id, Promise.resolve());
       return run;
     }
@@ -848,6 +1151,7 @@ export class LoopEngine {
       catalogId: loop.id,
       loopName: loop.name,
       structure: loop.structure,
+      sessionId: options.sessionId ?? options.launch?.sessionId,
       projectId: options.projectId,
       retryOf: options.retryOf,
       launch: options.launch,
@@ -861,6 +1165,22 @@ export class LoopEngine {
       startedAt: now,
       updatedAt: now,
     };
+    try {
+      this.allocateArtifacts(run);
+    } catch (error) {
+      return this.recordFailedStart(
+        loop,
+        cwd,
+        "toolFailed",
+        error instanceof Error ? error.message : String(error),
+        options.projectId,
+        options.launch,
+      );
+    }
+    this.artifactContexts.set(run.id, {
+      cwd,
+      reportOnly: loop.writeTarget === "artifactMarkdown",
+    });
     const active = { controller: new AbortController(), cancel: options.cancel };
     this.runs.set(run.id, run);
     this.active.set(run.id, active);
@@ -869,13 +1189,17 @@ export class LoopEngine {
     } catch (error) {
       this.runs.delete(run.id);
       this.active.delete(run.id);
+      this.artifactContexts.delete(run.id);
       throw error;
     }
     const task = this.execute(run, loop, cwd, executeRole, executeAgent, active.controller.signal)
       .catch(() => {
         if (!isLoopRunTerminal(run.status)) this.finalize(run, "failed", "agentFailed");
       })
-      .finally(() => this.active.delete(run.id));
+      .finally(() => {
+        this.active.delete(run.id);
+        this.artifactContexts.delete(run.id);
+      });
     this.settledPromises.set(run.id, task);
     return run;
   }
@@ -886,6 +1210,7 @@ export class LoopEngine {
     run.stopReason = reason;
     run.endedAt = this.now();
     run.updatedAt = run.endedAt;
+    this.writeArtifactEvidence(run);
     this.persist();
   }
 
@@ -893,6 +1218,15 @@ export class LoopEngine {
     if (!signal.aborted && run.status !== "stopping") return false;
     this.finalize(run, "stopped", "userStopped");
     return true;
+  }
+
+  private durableProgressPrompt(run: LoopRun): string {
+    if (!run.progressPath) return "";
+    try {
+      return `Durable prior Loop progress:\n${readFileSync(run.progressPath, "utf8").slice(-4_000)}`;
+    } catch {
+      return "";
+    }
   }
 
   private async role(
@@ -937,7 +1271,11 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
-      const effectivePrompt = [launchContextPrompt(run, iteration.index), prompt]
+      const effectivePrompt = [
+        launchContextPrompt(run, iteration.index),
+        this.durableProgressPrompt(run),
+        prompt,
+      ]
         .filter(Boolean)
         .join("\n\n");
       const output = executeRole
@@ -1015,7 +1353,11 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
-      const effectivePrompt = [launchContextPrompt(run, iteration.index), prompt]
+      const effectivePrompt = [
+        launchContextPrompt(run, iteration.index),
+        this.durableProgressPrompt(run),
+        prompt,
+      ]
         .filter(Boolean)
         .join("\n\n");
       const output = executeRole
@@ -1070,17 +1412,10 @@ export class LoopEngine {
     filename: string,
     markdown: string,
   ): void {
-    if (!this.artifactsRoot) return;
-    const directory = path.join(this.artifactsRoot, run.id);
-    mkdirSync(directory, { recursive: true });
+    if (!run.artifactDirectory) return;
+    const directory = run.artifactDirectory;
     const filePath = path.join(directory, filename);
-    const temp = `${filePath}.${randomUUID()}.tmp`;
-    try {
-      writeFileSync(temp, markdown, "utf8");
-      renameSync(temp, filePath);
-    } finally {
-      rmSync(temp, { force: true });
-    }
+    this.atomicArtifactWrite(filePath, markdown);
     const createdAt = this.now();
     iteration.artifacts.push({
       id: randomUUID(),
@@ -1108,8 +1443,8 @@ export class LoopEngine {
     agentName?: string,
     branchIndex?: number,
   ): void {
-    if (!this.artifactsRoot || isLoopRunTerminal(run.status)) return;
-    const directory = path.join(this.artifactsRoot, run.id);
+    if (!run.artifactDirectory || isLoopRunTerminal(run.status)) return;
+    const directory = run.artifactDirectory;
     const filename =
       phase === "stage"
         ? `iteration-${iteration.index}-stage-${(stageIndex ?? 0) + 1}.md`
@@ -1117,21 +1452,12 @@ export class LoopEngine {
           ? `iteration-${iteration.index}-branch-${(branchIndex ?? 0) + 1}.md`
           : `iteration-${iteration.index}-${phase}.md`;
     const filePath = path.join(directory, filename);
-    const temp = `${filePath}.${randomUUID()}.tmp`;
     try {
-      mkdirSync(directory, { recursive: true });
-      writeFileSync(temp, output, "utf8");
-      renameSync(temp, filePath);
+      this.atomicArtifactWrite(filePath, output);
     } catch (error) {
       throw new LoopToolFailureError(
         `Loop artifact persistence failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-    } finally {
-      try {
-        rmSync(temp, { force: true });
-      } catch {
-        // The primary persistence error above remains authoritative.
-      }
     }
     const artifact: LoopRunArtifact = {
       id: randomUUID(),
@@ -1174,12 +1500,19 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
-      const result = await this.runValidation(
-        cwd,
-        command,
-        signal,
-        this.artifactsRoot ? path.join(this.artifactsRoot, run.id, "validation") : undefined,
-      );
+      const validationDirectory = run.artifactDirectory
+        ? path.join(run.artifactDirectory, "validation")
+        : undefined;
+      if (validationDirectory) {
+        try {
+          this.assertSafeArtifactPath(run.artifactDirectory!, validationDirectory, true);
+        } catch (error) {
+          throw new LoopToolFailureError(
+            `Loop validation artifact persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      const result = await this.runValidation(cwd, command, signal, validationDirectory);
       const normalized: ValidationResult =
         typeof result === "boolean" || !("classification" in result)
           ? {
@@ -1222,6 +1555,7 @@ export class LoopEngine {
       }
       return normalized;
     } catch (error) {
+      if (error instanceof LoopToolFailureError) throw error;
       const stderr = error instanceof Error ? error.message : String(error);
       const failed: ValidationResult = {
         command,
@@ -1442,8 +1776,8 @@ export class LoopEngine {
         if (loop.structure === "discoveryTriage") {
           const triageAgent = loop.triageAgent!;
           const classificationPrompt = normalizeLoopClassificationPrompt(loop.classificationPrompt);
-          const artifactPath = this.artifactsRoot
-            ? path.join(this.artifactsRoot, run.id, `iteration-${index}-triage.md`)
+          const artifactPath = run.artifactDirectory
+            ? path.join(run.artifactDirectory, `iteration-${index}-triage.md`)
             : "Agent Deck's durable in-memory run artifact";
           const targetInstructions =
             loop.writeTarget === "artifactMarkdown"
@@ -1525,9 +1859,7 @@ export class LoopEngine {
           );
           if (this.stopped(run, signal)) return;
           iteration.evaluatorOutput = evaluatorOutput;
-          if (loop.writeTarget === "artifactMarkdown") {
-            this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
-          }
+          this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
           const goalDecision = exactFirstLine(evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
@@ -1598,9 +1930,7 @@ export class LoopEngine {
             stageOutputs.push({ id: randomUUID(), stageIndex, agentName, output });
             iteration.output = output;
             this.changed(run);
-            if (loop.writeTarget === "artifactMarkdown") {
-              this.persistArtifact(run, iteration, "stage", output, stageIndex, agentName);
-            }
+            this.persistArtifact(run, iteration, "stage", output, stageIndex, agentName);
           }
 
           let validation: ValidationResult = unconfiguredValidation(cwd);
@@ -1640,9 +1970,7 @@ export class LoopEngine {
             executeAgent,
           );
           if (this.stopped(run, signal)) return;
-          if (loop.writeTarget === "artifactMarkdown") {
-            this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          }
+          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
           const goalDecision =
             exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
           iteration.goalDecision = goalDecision;
@@ -1695,9 +2023,7 @@ export class LoopEngine {
           executeAgent,
         );
         if (this.stopped(run, signal)) return;
-        if (loop.writeTarget === "artifactMarkdown") {
-          this.persistArtifact(run, iteration, "maker", iteration.output);
-        }
+        this.persistArtifact(run, iteration, "maker", iteration.output);
 
         if (loop.structure === "singleAgent") {
           let validation = unconfiguredValidation(cwd);
@@ -1778,9 +2104,7 @@ export class LoopEngine {
           executeAgent,
         );
         if (this.stopped(run, signal)) return;
-        if (loop.writeTarget === "artifactMarkdown") {
-          this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
-        }
+        this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
         const checkerDecision = exactFirstLine(iteration.checkerOutput, CHECKER_DECISIONS);
         if (!checkerDecision) {
           iteration.endedAt = this.now();
@@ -1827,9 +2151,7 @@ export class LoopEngine {
           executeAgent,
         );
         if (this.stopped(run, signal)) return;
-        if (loop.writeTarget === "artifactMarkdown") {
-          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-        }
+        this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
         const goalDecision =
           exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
         iteration.goalDecision = goalDecision;

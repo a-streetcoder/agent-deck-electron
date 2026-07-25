@@ -269,6 +269,7 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   await selectProject(page, path.basename(project));
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
+  await expect(page.getByTestId("loop-open-session")).toHaveCount(0);
   const approve = page.getByTestId("loop-approval-approve");
   await page.route("**/loops/runs/*/resolve", async (route) => {
     await route.fulfill({
@@ -502,10 +503,30 @@ test("runs a single-agent loop to completion", async ({ page }) => {
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-iterations")).toContainText("✓ passed");
+  await expect(page.getByTestId("loop-run-iterations")).toContainText("Iteration manifest:");
+  await expect(page.getByTestId("loop-run-iterations")).toContainText("Changed files: none");
   const validation = page.getByTestId("loop-validation-evidence").first();
   await expect(validation).toHaveAccessibleName("Validation for iteration 1");
   await expect(validation).toContainText("exit 0");
   await expect(validation).toContainText("completed");
+  await expect(page.getByTestId("loop-session-evidence")).toContainText("Run manifest:");
+  await expect(page.getByTestId("loop-session-evidence")).toContainText("Progress report:");
+  const openSession = page.getByTestId("loop-open-session");
+  await expect(openSession).toHaveAccessibleName(/Open session for Green Suite/i);
+  await openSession.click();
+  await expect(page.getByTestId("subagent-cell")).toHaveCount(2, { timeout: 15_000 });
+  await page.getByRole("button", { name: /Subagent · Agent A result/i }).click();
+  await expect(page.getByTestId("subagent-output").first()).toContainText(
+    "detailed streamed implementation",
+  );
+  await page.reload();
+  await openLoops(page);
+  await page.getByTestId("loop-open-session").click();
+  await expect(page.getByTestId("subagent-cell")).toHaveCount(2, { timeout: 15_000 });
+  await page.getByRole("button", { name: /Subagent · Agent A result/i }).click();
+  await expect(page.getByTestId("subagent-output").first()).toContainText(
+    "detailed streamed implementation",
+  );
 });
 
 test("renders bounded rich validation output, working directory, and artifacts", async ({

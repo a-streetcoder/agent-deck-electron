@@ -123,6 +123,48 @@ const waitUntil = (pred: () => boolean, ms = 5_000): Effect.Effect<void> =>
     if (!pred()) yield* Effect.die(new Error("waitUntil: condition not met in time"));
   });
 
+describe("Loop synthetic transcript restoration", () => {
+  it("seeds ordered durable role cards exactly once", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, makeParams());
+          const cells = [
+            {
+              kind: "subagent" as const,
+              id: "maker",
+              task: "Make",
+              status: "done" as const,
+              text: "maker output",
+              progress: [],
+            },
+            {
+              kind: "subagent" as const,
+              id: "evaluator",
+              task: "Evaluate",
+              status: "done" as const,
+              text: "SUCCESS",
+              progress: [],
+            },
+          ];
+          yield* rt.seedSyntheticCells(cells);
+          yield* rt.seedSyntheticCells(cells);
+          const snapshot = yield* rt.snapshot;
+          expect(
+            snapshot.state.cells
+              .filter((cell) => cell.kind === "subagent")
+              .map((cell) => [cell.id, cell.text]),
+          ).toEqual([
+            ["maker", "maker output"],
+            ["evaluator", "SUCCESS"],
+          ]);
+        }),
+      ),
+    );
+  });
+});
+
 describe("child tool capability policy", () => {
   const dangerous = [
     "read",

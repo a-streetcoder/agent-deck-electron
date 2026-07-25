@@ -228,6 +228,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
     await sessions.destroy(id);
+    sessions.removeLoopSessionSnapshot(id);
     index.remove(id);
     bridgeTokens.delete(id);
     if (meta.piSessionFile) {

@@ -53,6 +53,7 @@ function makeRoutes(
   const destroySession = vi.fn();
   const runSubagent = vi.fn();
   const announceCreated = vi.fn();
+  const removeLoopSessionSnapshot = vi.fn();
   const startEngine = vi.fn();
   const recordFailedStart = vi.fn((_loop, _cwd, reason, summary) => ({
     id: "failed-start",
@@ -84,9 +85,12 @@ function makeRoutes(
   }));
   const indexRows = new Map<
     string,
-    { id: string; cwd: string; createdAt: string; projectId?: string }
+    { id: string; cwd: string; createdAt: string; projectId?: string; title?: string }
   >();
   const bridgeTokens = new Map<string, string>();
+  announceCreated.mockImplementation((session) => {
+    indexRows.set(session.meta.id, session.meta);
+  });
   const canonicalCheckoutEffect = vi.fn(canonicalCheckoutLockKey);
   const createWorktreeEffect = vi.fn((...args: Parameters<typeof createLoopWorktree>) =>
     createLoopWorktree(...args),
@@ -99,8 +103,11 @@ function makeRoutes(
         destroy: destroySession,
         runSubagent,
         announceCreated,
+        removeLoopSessionSnapshot,
       },
       index: {
+        upsert: (meta: Parameters<ServerContext["index"]["upsert"]>[0]) =>
+          indexRows.set(meta.id, meta),
         find: (
           predicate: (meta: {
             id: string;
@@ -144,6 +151,7 @@ function makeRoutes(
     destroySession,
     runSubagent,
     announceCreated,
+    removeLoopSessionSnapshot,
     startEngine,
     recordFailedStart,
     stopEngine,
@@ -219,6 +227,7 @@ describe("loop route honesty gate", () => {
       resolveHumanApproval,
       getEngine,
       broadcast,
+      indexRows,
       canonicalCheckoutEffect,
       createWorktreeEffect,
     } = makeRoutes(home);
@@ -249,6 +258,7 @@ describe("loop route honesty gate", () => {
     });
     expect(duplicate.statusCode).toBe(200);
 
+    broadcast.mockClear();
     const run = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Release Approval", "run"),
@@ -271,10 +281,9 @@ describe("loop route honesty gate", () => {
       home,
       { projectId: "project", retryOf: undefined },
     );
-    expect(startEngine.mock.calls[0]?.[2]).toEqual({
-      projectId: "project",
-      retryOf: undefined,
-    });
+    expect(checkpoint.sessionId).toBeUndefined();
+    expect(indexRows.size).toBe(0);
+    expect(broadcast).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_meta" }));
     expect(createSession).not.toHaveBeenCalled();
     expect(runSubagent).not.toHaveBeenCalled();
     expect(canonicalCheckoutEffect).not.toHaveBeenCalled();
@@ -332,6 +341,7 @@ describe("loop route honesty gate", () => {
       createSession,
       startEngine,
       recordFailedStart,
+      removeLoopSessionSnapshot,
       broadcast,
       bridgeTokens,
       indexRows,
@@ -394,6 +404,7 @@ describe("loop route honesty gate", () => {
     expect(response.json()).toMatchObject({ run: { status: "failed", stopReason: "toolFailed" } });
     expect(bridgeTokens.size).toBe(0);
     expect(indexRows.size).toBe(0);
+    expect(removeLoopSessionSnapshot).toHaveBeenCalledWith("failed-parent");
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -677,7 +688,8 @@ describe("loop route honesty gate", () => {
         writeTarget: "newWorktree",
       },
     );
-    const { fastify, createSession, destroySession, startEngine, settledEngine } = makeRoutes(home);
+    const { fastify, createSession, destroySession, startEngine, settledEngine, indexRows } =
+      makeRoutes(home);
     let worktree!: Awaited<ReturnType<typeof createLoopWorktree>>;
     vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => {
       worktree = { path: target, branch, sourceBranch: "main", branchOwned: true };
@@ -710,9 +722,11 @@ describe("loop route honesty gate", () => {
       branch: worktree.branch,
       branchOwned: true,
     });
+    expect(indexRows.get("retained-parent")?.title).toBe("Loop: Retained Review Loop · retained");
 
     settle();
     await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
+    expect(indexRows.has("retained-parent")).toBe(true);
     expect(gitWorktreeRemove).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
@@ -1145,8 +1159,8 @@ describe("loop route honesty gate", () => {
 
     settle();
     await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
-    expect(indexRows.has(parent.meta.id)).toBe(false);
-    expect(broadcast).toHaveBeenCalledWith({
+    expect(indexRows.has(parent.meta.id)).toBe(true);
+    expect(broadcast).not.toHaveBeenCalledWith({
       type: "session_removed",
       sessionId: parent.meta.id,
     });
@@ -1306,7 +1320,7 @@ describe("loop route honesty gate", () => {
     expect(destroySession).toHaveBeenCalledTimes(2);
     expect(destroySession).toHaveBeenCalledWith("stale-parent");
     expect(destroySession).toHaveBeenCalledWith("unsettled-parent");
-    expect(indexRows.has("stale-parent")).toBe(false);
+    expect(indexRows.has("stale-parent")).toBe(true);
     expect(bridgeTokens.has("stale-parent")).toBe(false);
     expect(markSessionReconciled).toHaveBeenCalledOnce();
     expect(gitWorktreeRemove).not.toHaveBeenCalled();

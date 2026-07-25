@@ -70,6 +70,7 @@ import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
+import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import {
   resolveManagedPath,
   resolveManagedSkillRoot,
@@ -296,6 +297,10 @@ async function initServer(
   const checkpoints = makeCheckpointService({
     dataDir: options.dataDir ?? defaultDataDir(),
   });
+  const loopSnapshots = new LoopSessionSnapshotStore(
+    options.dataDir ?? defaultDataDir(),
+    (message, error) => fastify.log.warn({ err: error }, message),
+  );
 
   const sessions = new SessionManager(
     effectRuntime,
@@ -439,6 +444,7 @@ async function initServer(
       });
       receipts.emit("checkpoint_captured", meta.id);
     },
+    loopSnapshots,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.

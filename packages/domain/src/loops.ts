@@ -439,6 +439,12 @@ export interface LoopValidationResult {
   passed: boolean;
 }
 
+export interface LoopChangedFile {
+  path: string;
+  status: "staged" | "unstaged" | "untracked" | "deleted" | "renamed" | "binary";
+  oldPath?: string;
+}
+
 export interface LoopRunIteration {
   id: string;
   index: number;
@@ -460,6 +466,8 @@ export interface LoopRunIteration {
   timeline: LoopTimelineEvent[];
   children: LoopChildRecord[];
   artifacts: LoopRunArtifact[];
+  changedFiles?: LoopChangedFile[];
+  manifestPath?: string;
 }
 
 export interface LoopOwnedWorktree {
@@ -475,7 +483,7 @@ export interface LoopOwnedWorktree {
 }
 
 export interface LoopRunLaunchOwnership {
-  /** Transient Loop parent session. Never exposed as a reopenable conversation. */
+  /** Visible Loop parent session; runtime ownership ends while its index remains durable. */
   sessionId: string;
   writeTarget: LoopWriteTarget;
   /** Canonical, platform-normalized key for destructive current-checkout locking. */
@@ -488,6 +496,13 @@ export interface LoopRunLaunchOwnership {
 
 export interface LoopRun {
   id: string;
+  /** Durable visible parent session containing synthetic Loop role cards. */
+  sessionId?: string;
+  /** Private app-owned run artifact identity and canonical directory. */
+  artifactDirectoryId?: string;
+  artifactDirectory?: string;
+  manifestPath?: string;
+  progressPath?: string;
   /** Opaque catalog identity captured at launch; retained even if the file is deleted. */
   catalogId?: string;
   loopName: string;
