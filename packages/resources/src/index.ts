@@ -68,6 +68,7 @@ export {
   discoverSkillRoots,
   skillMdHash,
   type DiscoveredSkillRoot,
+  type SkillImportFilter,
   type SkillImportResult,
   type WritableScope,
 } from "./writer.ts";
@@ -87,7 +88,11 @@ export {
   type LoginStatus,
   type ProviderLoginFn,
 } from "./providerLogin.ts";
-export { LoopCatalogCapabilityError } from "@agent-deck/loop-catalog-native";
+export {
+  LoopCatalogCapabilityError,
+  ResourceCatalogCapabilityError,
+  type ResourceCatalogErrorCode,
+} from "@agent-deck/loop-catalog-native";
 export {
   loopsDir,
   loopSlug,

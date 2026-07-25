@@ -1,8 +1,9 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Plug, Plus, Trash2 } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
 
 /**
@@ -40,6 +41,12 @@ export function ExtensionsScreen() {
   const [bridges, setBridges] = useState<AppBridge[]>([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
+  const [modeBusy, setModeBusy] = useState(false);
+  const modeBusyRef = useRef(false);
+  const [bulkAction, setBulkAction] = useState<boolean | null>(null);
+  const bulkBusyRef = useRef(false);
+  const [extensionBusy, setExtensionBusy] = useState<Record<string, "toggle" | "remove">>({});
+  const extensionBusyRef = useRef(new Set<string>());
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -48,7 +55,7 @@ export function ExtensionsScreen() {
         ? `/resources/extensions?projectId=${encodeURIComponent(currentProjectId)}`
         : "/resources/extensions";
       const response = await fetch(url);
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       const data = (await response.json()) as { extensions: ExtensionEntry[] };
       setExtensions(data.extensions);
     } catch (err) {
@@ -69,37 +76,71 @@ export function ExtensionsScreen() {
   // stray click mutate everything before the real mode arrives.
   const [loadingMode, setLoadingMode] = useState<LoadingMode | null>(null);
   useEffect(() => {
-    void fetch("/settings")
-      .then((response) => response.json())
-      .then((data: { settings: { extensionLoadingMode: LoadingMode } }) =>
-        setLoadingMode(data.settings.extensionLoadingMode),
-      )
-      .catch(() => {});
-  }, []);
+    void (async () => {
+      try {
+        const response = await fetch("/settings");
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const data = (await response.json()) as {
+          settings: { extensionLoadingMode: LoadingMode };
+        };
+        setLoadingMode(data.settings.extensionLoadingMode);
+      } catch (err) {
+        setError(String(err));
+      }
+    })();
+  }, [setError]);
   const setMode = async (mode: LoadingMode): Promise<void> => {
+    if (modeBusyRef.current || mode === loadingMode) return;
+    modeBusyRef.current = true;
+    setModeBusy(true);
     const prev = loadingMode;
     setLoadingMode(mode); // optimistic
-    const res = await fetch("/settings", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ extensionLoadingMode: mode }),
-    }).catch(() => null);
-    if (!res || !res.ok) setLoadingMode(prev); // revert on failure
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ extensionLoadingMode: mode }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+    } catch (err) {
+      setLoadingMode(prev); // no later mode request can make this rollback stale
+      setError(String(err));
+    } finally {
+      modeBusyRef.current = false;
+      setModeBusy(false);
+    }
   };
   // Bulk enable/disable every listed extension (native All / None).
   const setAllDisabled = async (disabled: boolean): Promise<void> => {
-    await Promise.all(
-      extensions
-        .filter((ext) => ext.disabled !== disabled)
-        .map((ext) =>
-          fetch("/resources/extensions/disabled", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: ext.path, disabled }),
-          }).catch(() => {}),
-        ),
-    );
-    await load();
+    // Bulk and per-extension writes share the same server collection. Do not
+    // calculate a bulk request from a list with an in-flight individual write.
+    if (bulkBusyRef.current || extensionBusyRef.current.size > 0) return;
+    bulkBusyRef.current = true;
+    setBulkAction(disabled);
+    try {
+      const results = await Promise.allSettled(
+        extensions
+          .filter((ext) => ext.disabled !== disabled)
+          .map(async (ext) => {
+            const response = await fetch("/resources/extensions/disabled", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ path: ext.path, disabled }),
+            });
+            if (!response.ok) throw new Error(await responseErrorMessage(response));
+          }),
+      );
+      const failure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) setError(String(failure.reason));
+      // All writes have settled before reloading, so the refreshed list cannot
+      // miss a late sibling after a partial failure.
+      await load();
+    } finally {
+      bulkBusyRef.current = false;
+      setBulkAction(null);
+    }
   };
 
   useEffect(() => {
@@ -124,7 +165,7 @@ export function ExtensionsScreen() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       setDraft("");
       setAdding(false);
       await load();
@@ -133,23 +174,42 @@ export function ExtensionsScreen() {
     }
   };
 
-  const toggle = async (ext: ExtensionEntry): Promise<void> => {
-    await fetch("/resources/extensions/disabled", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: ext.path, disabled: !ext.disabled }),
-    }).catch(() => {});
-    await load();
+  const mutateExtension = async (
+    ext: ExtensionEntry,
+    action: "toggle" | "remove",
+  ): Promise<void> => {
+    if (bulkBusyRef.current || extensionBusyRef.current.has(ext.path)) return;
+    extensionBusyRef.current.add(ext.path);
+    setExtensionBusy((current) => ({ ...current, [ext.path]: action }));
+    try {
+      const response = await fetch(
+        action === "remove" ? "/resources/extensions" : "/resources/extensions/disabled",
+        {
+          method: action === "remove" ? "DELETE" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            action === "remove" ? { path: ext.path } : { path: ext.path, disabled: !ext.disabled },
+          ),
+        },
+      );
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      // Reconcile even on failure: the server may have applied a mutation before
+      // returning an error, and another client may have changed this entry.
+      await load();
+      extensionBusyRef.current.delete(ext.path);
+      setExtensionBusy((current) => {
+        const next = { ...current };
+        delete next[ext.path];
+        return next;
+      });
+    }
   };
 
-  const remove = async (ext: ExtensionEntry): Promise<void> => {
-    await fetch("/resources/extensions", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: ext.path }),
-    }).catch(() => {});
-    await load();
-  };
+  const toggle = (ext: ExtensionEntry): Promise<void> => mutateExtension(ext, "toggle");
+  const remove = (ext: ExtensionEntry): Promise<void> => mutateExtension(ext, "remove");
 
   // Names loaded by 2+ enabled extensions — pi would load duplicates (§16.2).
   const conflicts = conflictingExtensionNames(extensions);
@@ -273,7 +333,11 @@ export function ExtensionsScreen() {
           <div className="mb-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-text-primary">Loading mode</span>
-              <div className="flex rounded-capsule border border-border-subtle p-0.5" role="group">
+              <div
+                className="flex rounded-capsule border border-border-subtle p-0.5"
+                role="group"
+                aria-busy={modeBusy}
+              >
                 {(
                   [
                     ["useMyExtensions", "Use my extensions"],
@@ -284,8 +348,9 @@ export function ExtensionsScreen() {
                     key={mode}
                     data-testid={`extension-mode-${mode}`}
                     data-active={loadingMode === mode}
+                    disabled={modeBusy}
                     className={cn(
-                      "rounded-capsule px-2.5 py-0.5 text-detail transition-colors",
+                      "rounded-capsule px-2.5 py-0.5 text-detail transition-colors disabled:opacity-40",
                       loadingMode === mode
                         ? "bg-selection text-text-primary"
                         : "text-text-secondary hover:text-text-primary",
@@ -303,20 +368,22 @@ export function ExtensionsScreen() {
                 : "Your enabled pi extensions load alongside Agent Deck's bridges. Toggle any off below."}
             </p>
             {loadingMode === "useMyExtensions" && extensions.length > 0 ? (
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex items-center gap-2" aria-busy={bulkAction !== null}>
                 <ControlButton
                   data-testid="extension-enable-all"
-                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={bulkAction !== null || Object.keys(extensionBusy).length > 0}
                   onClick={() => void setAllDisabled(false)}
                 >
-                  Enable all
+                  {bulkAction === false ? "Enabling all…" : "Enable all"}
                 </ControlButton>
                 <ControlButton
                   data-testid="extension-disable-all"
-                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={bulkAction !== null || Object.keys(extensionBusy).length > 0}
                   onClick={() => void setAllDisabled(true)}
                 >
-                  Disable all
+                  {bulkAction === true ? "Disabling all…" : "Disable all"}
                 </ControlButton>
               </div>
             ) : null}
@@ -329,11 +396,14 @@ export function ExtensionsScreen() {
         >
           {extensions.map((ext) => {
             const conflicting = !ext.disabled && conflicts.has(ext.name);
+            const busyAction = extensionBusy[ext.path];
+            const controlsBusy = bulkAction !== null || busyAction !== undefined;
             return (
               <div
                 key={ext.path}
                 data-extension-name={ext.name}
                 data-conflict={conflicting ? "true" : "false"}
+                aria-busy={controlsBusy}
                 className={cn(
                   "flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-2.5",
                   conflicting ? "border-warning" : "border-border-subtle",
@@ -386,18 +456,29 @@ export function ExtensionsScreen() {
                 <ControlButton
                   data-testid={`extension-toggle-${ext.name}`}
                   data-enabled={!ext.disabled}
-                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={controlsBusy}
                   onClick={() => void toggle(ext)}
                 >
-                  {ext.disabled ? "Enable" : "Disable"}
+                  {busyAction === "toggle"
+                    ? ext.disabled
+                      ? "Enabling…"
+                      : "Disabling…"
+                    : ext.disabled
+                      ? "Enable"
+                      : "Disable"}
                 </ControlButton>
                 {/* Only registry entries can be removed; a discovered file is
                     managed on disk (disable to exclude it). */}
                 {ext.source !== "discovered" ? (
                   <ControlButton
                     data-testid={`extension-remove-${ext.name}`}
-                    className="rounded p-1 text-text-muted hover:text-danger"
-                    title="Remove"
+                    className="rounded p-1 text-text-muted hover:text-danger disabled:opacity-40"
+                    title={busyAction === "remove" ? "Removing…" : "Remove"}
+                    aria-label={
+                      busyAction === "remove" ? `Removing ${ext.name}` : `Remove ${ext.name}`
+                    }
+                    disabled={controlsBusy}
                     onClick={() => void remove(ext)}
                   >
                     <Trash2 size={13} />

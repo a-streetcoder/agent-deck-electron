@@ -259,6 +259,8 @@ version = "0.0.1"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
+ "getrandom",
+ "libc",
  "napi",
  "napi-build",
  "napi-derive",

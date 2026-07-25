@@ -1,19 +1,16 @@
-import {
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-  type Dirent,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import {
+  copyResourceTree,
+  readResourceCatalogFile,
+  removeResourceCatalogEntry,
+  renameResourceCatalogEntry,
+  ResourceCatalogCapabilityError,
+  writeResourceCatalogFile,
+  type ResourceCatalog,
+} from "@agent-deck/loop-catalog-native";
 import YAML from "yaml";
 import type { AgentEdit } from "./overrides.ts";
 import {
@@ -30,6 +27,100 @@ import {
  */
 
 export type WritableScope = "global" | "library" | "project";
+
+type CatalogLocation = { catalog: ResourceCatalog; components: string[]; path: string };
+
+function catalogLocation(roots: ResourceRoots, filePath: string): CatalogLocation {
+  const candidates: Array<[ResourceCatalog, string]> = [
+    ["legacy-agents", path.join(roots.home, ".agents")],
+    ["global-agents", path.join(roots.home, ".pi", "agent", "agents")],
+    ["library-agents", path.join(roots.home, ".pi", "agent", "agent-library", "agents")],
+    ["global-prompts", path.join(roots.home, ".pi", "agent", "prompts")],
+    ["library-prompts", path.join(roots.home, ".pi", "agent", "prompt-library")],
+    ["global-skills", path.join(roots.home, ".pi", "agent", "skills")],
+  ];
+  const resolved = path.resolve(filePath);
+  for (const [catalog, root] of candidates) {
+    const relative = path.relative(path.resolve(root), resolved);
+    if (
+      relative &&
+      !relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative)
+    ) {
+      return { catalog, components: relative.split(path.sep), path: resolved };
+    }
+  }
+  throw new ResourceCatalogCapabilityError(
+    "RESOURCE_INVALID_PATH",
+    "Resource target is not in a writable catalog.",
+  );
+}
+
+function secureRead(roots: ResourceRoots, filePath: string): string {
+  const location = catalogLocation(roots, filePath);
+  return readResourceCatalogFile(roots.home, location.catalog, location.components);
+}
+
+function secureReadIfPresent(roots: ResourceRoots, filePath: string): string | undefined {
+  try {
+    return secureRead(roots, filePath);
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function secureWrite(
+  roots: ResourceRoots,
+  filePath: string,
+  content: string,
+  createOnly = false,
+): void {
+  const location = catalogLocation(roots, filePath);
+  writeResourceCatalogFile(roots.home, location.catalog, location.components, content, createOnly);
+}
+
+function secureRemove(roots: ResourceRoots, filePath: string, force = false): void {
+  const location = catalogLocation(roots, filePath);
+  try {
+    removeResourceCatalogEntry(roots.home, location.catalog, location.components);
+  } catch (error) {
+    if (
+      force &&
+      error instanceof ResourceCatalogCapabilityError &&
+      error.code === "RESOURCE_NOT_FOUND"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
+function secureRename(
+  roots: ResourceRoots,
+  from: string,
+  to: string,
+  replacementContent?: string,
+): void {
+  const source = catalogLocation(roots, from);
+  const target = catalogLocation(roots, to);
+  if (source.catalog !== target.catalog) {
+    throw new ResourceCatalogCapabilityError(
+      "RESOURCE_INVALID_PATH",
+      "Resource rename must stay in one catalog.",
+    );
+  }
+  renameResourceCatalogEntry(
+    roots.home,
+    source.catalog,
+    source.components,
+    target.components,
+    replacementContent,
+  );
+}
 
 function agentDirFor(roots: ResourceRoots, scope: WritableScope): string {
   const catalogs = agentCatalogDirs(roots).filter((d) => d.scope === scope);
@@ -133,26 +224,24 @@ export function writePromptFile(
 
   let frontmatter: Record<string, unknown> = {};
   let body = "";
-  try {
-    const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
+  const existingContent = secureReadIfPresent(roots, filePath);
+  if (existingContent !== undefined) {
+    const existing = parseFrontmatter(existingContent);
     frontmatter = { ...existing.frontmatter };
     body = existing.body.trim();
-  } catch {
-    // New prompt.
   }
 
   frontmatter.name = name;
   if (edit.description !== undefined) frontmatter.description = edit.description;
   if (edit.body !== undefined) body = edit.body.trim();
 
-  mkdirSync(promptDirFor(roots, scope), { recursive: true });
-  writeFileSync(filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
+  secureWrite(roots, filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
   return filePath;
 }
 
 /** Delete a global/library prompt-template .md file. */
 export function deletePromptFile(roots: ResourceRoots, scope: WritableScope, name: string): void {
-  rmSync(promptFilePath(roots, scope, name), { force: true });
+  secureRemove(roots, promptFilePath(roots, scope, name), true);
 }
 
 /** True when two paths refer to the same on-disk file (same device + inode). */
@@ -183,37 +272,38 @@ function isSameFile(a: string, b: string): boolean {
  * instead of being clobbered). Throws `${kind}_not_found` / `${kind}_exists`.
  */
 function renameMarkdownFile(
+  roots: ResourceRoots,
   from: string,
   to: string,
-  dir: string,
   kind: "prompt" | "agent",
   newName: string,
 ): string {
   if (from === to) return to; // no-op: nothing to rename
   let parsed: { frontmatter: Record<string, unknown>; body: string };
   try {
-    parsed = parseFrontmatter(readFileSync(from, "utf8"));
-  } catch {
-    throw new Error(`${kind}_not_found`);
+    parsed = parseFrontmatter(secureRead(roots, from));
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      throw new Error(`${kind}_not_found`);
+    }
+    throw error;
   }
   const content = `---\n${serializeFrontmatter({ ...parsed.frontmatter, name: newName })}\n---\n\n${parsed.body.trim()}\n`;
 
-  // A case-only rename (review→Review) is the one case where `to` can "exist"
-  // yet actually BE `from` (same inode on a case-insensitive filesystem).
-  if (from.toLowerCase() === to.toLowerCase() && existsSync(to) && isSameFile(from, to)) {
-    renameSync(from, to);
-    writeFileSync(to, content);
-    return to;
-  }
-
-  mkdirSync(dir, { recursive: true });
   try {
-    writeFileSync(to, content, { flag: "wx" });
+    secureRename(roots, from, to, content);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`${kind}_exists`);
+    if (
+      error instanceof ResourceCatalogCapabilityError &&
+      error.code === "RESOURCE_ALREADY_EXISTS"
+    ) {
+      throw new Error(`${kind}_exists`);
+    }
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      throw new Error(`${kind}_not_found`);
+    }
     throw error;
   }
-  rmSync(from, { force: true });
   return to;
 }
 
@@ -224,9 +314,9 @@ export function renamePromptFile(
   newName: string,
 ): string {
   return renameMarkdownFile(
+    roots,
     promptFilePath(roots, scope, name),
     promptFilePath(roots, scope, newName),
-    promptDirFor(roots, scope),
     "prompt",
     newName,
   );
@@ -264,16 +354,13 @@ export function writeAgentFile(
   edit: AgentEdit,
 ): string {
   const filePath = agentFilePath(roots, scope, name);
-  const dir = path.dirname(filePath);
-
   let frontmatter: Record<string, unknown> = {};
   let body = "";
-  try {
-    const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
+  const existingContent = secureReadIfPresent(roots, filePath);
+  if (existingContent !== undefined) {
+    const existing = parseFrontmatter(existingContent);
     frontmatter = { ...existing.frontmatter };
     body = existing.body.trim();
-  } catch {
-    // New file.
   }
 
   frontmatter.name = name;
@@ -305,8 +392,7 @@ export function writeAgentFile(
   }
   if (edit.body !== undefined) body = edit.body.trim();
 
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
+  secureWrite(roots, filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
   return filePath;
 }
 
@@ -322,26 +408,24 @@ export function writeSkillFile(
 
   let frontmatter: Record<string, unknown> = {};
   let body = "";
-  try {
-    const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
+  const existingContent = secureReadIfPresent(roots, filePath);
+  if (existingContent !== undefined) {
+    const existing = parseFrontmatter(existingContent);
     frontmatter = { ...existing.frontmatter };
     body = existing.body.trim();
-  } catch {
-    // New skill.
   }
 
   frontmatter.name = name;
   if (edit.description !== undefined) frontmatter.description = edit.description;
   if (edit.body !== undefined) body = edit.body.trim();
 
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(filePath, `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${body}\n`);
+  secureWrite(roots, filePath, `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${body}\n`);
   return filePath;
 }
 
 /** Delete a global/library agent's .md file. Builtins are never touched here. */
 export function deleteAgentFile(roots: ResourceRoots, scope: WritableScope, name: string): void {
-  rmSync(agentFilePath(roots, scope, name), { force: true });
+  secureRemove(roots, agentFilePath(roots, scope, name), true);
 }
 
 /**
@@ -366,7 +450,7 @@ export function renameAgentFile(
       .find((candidate) => candidate !== from);
     if (conflict && !isSameFile(conflict, from)) throw new Error("agent_exists");
   }
-  return renameMarkdownFile(from, to, dir, "agent", newName);
+  return renameMarkdownFile(roots, from, to, "agent", newName);
 }
 
 /** Set the `disabled` frontmatter flag on a global/library agent file. */
@@ -377,29 +461,17 @@ export function setAgentDisabledFile(
   disabled: boolean,
 ): void {
   const filePath = agentFilePath(roots, scope, name);
-  const existing = parseFrontmatter(readFileSync(filePath, "utf8"));
+  const existing = parseFrontmatter(secureRead(roots, filePath));
   const frontmatter: Record<string, unknown> = { ...existing.frontmatter };
   if (disabled) frontmatter.disabled = true;
   else delete frontmatter.disabled;
   // A metadata-only toggle preserves the body verbatim (no re-trim).
-  writeFileSync(filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n${existing.body}`);
+  secureWrite(roots, filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n${existing.body}`);
 }
 
 /** Delete a global/project skill directory (its SKILL.md + contents). */
 export function deleteSkillDir(roots: ResourceRoots, scope: WritableScope, name: string): void {
-  const dir = path.join(skillDirFor(roots, scope), name);
-  // Guard against traversal: the resolved dir must stay under the catalog.
-  const catalog = skillDirFor(roots, scope);
-  if (!path.resolve(dir).startsWith(path.resolve(catalog) + path.sep)) {
-    throw new Error("refusing to delete outside the skill catalog");
-  }
-  rmSync(dir, { recursive: true, force: true });
-  // Prune the catalog dir if it's now empty.
-  try {
-    if (readdirSync(catalog).length === 0) rmSync(catalog, { recursive: true, force: true });
-  } catch {
-    // Non-fatal.
-  }
+  secureRemove(roots, skillDirPath(roots, scope, name), true);
 }
 
 /** Defense-in-depth: the resolved skill dir must stay inside the catalog. */
@@ -427,24 +499,12 @@ export function renameSkillDir(
   const from = skillDirPath(roots, scope, name);
   const to = skillDirPath(roots, scope, newName);
   if (from === to) return to; // no-op: nothing to rename
-  if (!existsSync(from)) throw new Error("skill_not_found");
-
-  // A case-only rename (skill→Skill) resolves `to` onto `from` on a
-  // case-insensitive filesystem (same inode) — not a real clash.
-  const caseOnly =
-    from.toLowerCase() === to.toLowerCase() && existsSync(to) && isSameFile(from, to);
-  if (!caseOnly && existsSync(to)) throw new Error("skill_exists");
   try {
-    renameSync(from, to);
+    secureRename(roots, from, to);
   } catch (error) {
-    // Backstop for a target that races into the gap after the existsSync check:
-    // a non-empty dir throws ENOTEMPTY/EEXIST (POSIX) or EPERM (Windows). A real
-    // skill dir is always non-empty (it holds SKILL.md), so a genuine clash
-    // always lands here. The one residual race — an EMPTY dir appearing at `to`
-    // on POSIX — is replaced silently, but loses nothing (it was empty).
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOTEMPTY" || code === "EEXIST" || code === "EPERM") {
-      throw new Error("skill_exists");
+    if (error instanceof ResourceCatalogCapabilityError) {
+      if (error.code === "RESOURCE_NOT_FOUND") throw new Error("skill_not_found");
+      if (error.code === "RESOURCE_ALREADY_EXISTS") throw new Error("skill_exists");
     }
     throw error;
   }
@@ -452,14 +512,37 @@ export function renameSkillDir(
   // Keep SKILL.md's name field in step with the directory name.
   const skillFile = path.join(to, "SKILL.md");
   try {
-    const parsed = parseFrontmatter(readFileSync(skillFile, "utf8"));
+    const parsed = parseFrontmatter(secureRead(roots, skillFile));
     const frontmatter = { ...parsed.frontmatter, name: newName };
-    writeFileSync(
+    secureWrite(
+      roots,
       skillFile,
       `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${parsed.body.trim()}\n`,
     );
-  } catch {
-    // No SKILL.md to update — the directory move is still the rename.
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      // A directory without SKILL.md can still be renamed.
+      return to;
+    }
+
+    // The manifest update happens after the directory move. Restore the source
+    // location before exposing the failure so a retry starts from the original,
+    // internally consistent state. Both moves remain inside the typed native
+    // catalog boundary.
+    try {
+      secureRename(roots, to, from);
+    } catch (rollbackError) {
+      const incomplete = new ResourceCatalogCapabilityError(
+        "RESOURCE_RECONCILE_INCOMPLETE",
+        "The skill directory was renamed, its SKILL.md update failed, and the directory rollback also failed. Retry the rename to reconcile it safely.",
+      );
+      incomplete.cause = new AggregateError(
+        [error, rollbackError],
+        "Skill rename reconciliation failed",
+      );
+      throw incomplete;
+    }
+    throw error;
   }
   return to;
 }
@@ -544,6 +627,13 @@ export interface SkillImportResult {
   hashes: Record<string, string>;
 }
 
+export interface SkillImportFilter {
+  only?: Set<string>;
+  exclude?: Set<string>;
+  /** Called after each catalog copy completes, allowing durable update progress. */
+  onImported?: (name: string, hash: string | undefined) => void;
+}
+
 /** sha-256 of a SKILL.md file, or null if it can't be read. */
 function hashSkillMd(skillDir: string): string | null {
   try {
@@ -561,7 +651,16 @@ export function skillMdHash(
   scope: WritableScope,
   name: string,
 ): string | null {
-  return hashSkillMd(path.join(skillDirFor(roots, scope), name));
+  try {
+    return createHash("sha256")
+      .update(secureRead(roots, path.join(skillDirFor(roots, scope), name, "SKILL.md")))
+      .digest("hex");
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -581,7 +680,7 @@ export function importSkillsFromClone(
   overwrite = false,
   /** Restrict which skills are touched: `only` = just these names; `exclude` =
    *  every name but these (used to HOLD locally-edited conflicts on a re-sync). */
-  filter?: { only?: Set<string>; exclude?: Set<string> },
+  filter?: SkillImportFilter,
 ): SkillImportResult {
   const skillDirs = existsSync(path.join(cloneDir, "SKILL.md"))
     ? [cloneDir] // root SKILL.md → the whole repo is a single skill
@@ -612,19 +711,24 @@ export function importSkillsFromClone(
       skipped.push(name); // held back (a conflict to resolve)
       continue;
     }
-    const dest = path.join(catalog, name);
-    if (existsSync(dest)) {
-      if (!overwrite) {
+    const dest = catalogLocation(roots, path.join(catalog, name));
+    try {
+      copyResourceTree(roots.home, dest.catalog, dest.components, srcDir, overwrite);
+    } catch (error) {
+      if (
+        !overwrite &&
+        error instanceof ResourceCatalogCapabilityError &&
+        error.code === "RESOURCE_ALREADY_EXISTS"
+      ) {
         skipped.push(name);
         continue;
       }
-      rmSync(dest, { recursive: true, force: true }); // re-sync replaces the copy
+      throw error;
     }
-    mkdirSync(catalog, { recursive: true });
-    cpSync(srcDir, dest, { recursive: true, filter: (src) => path.basename(src) !== ".git" });
     imported.push(name);
     const hash = hashSkillMd(srcDir);
     if (hash) hashes[name] = hash;
+    filter?.onImported?.(name, hash ?? undefined);
   }
   return { imported, skipped, hashes };
 }
@@ -644,7 +748,14 @@ export function importSkillFile(
   const name = fromFrontmatter || path.basename(sourcePath, ".md");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error("invalid_skill_name");
   const dir = skillDirPath(roots, scope, name);
-  if (existsSync(dir)) throw new Error("skill_exists");
+  try {
+    const existing = lstatSync(dir);
+    if (!existing.isSymbolicLink()) throw new Error("skill_exists");
+    // Let the native parent walk return the authoritative unsafe-component error.
+  } catch (error) {
+    if (error instanceof Error && error.message === "skill_exists") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   // Skills need a description to be discoverable — default one if the file lacks it.
   const description =
     typeof parsed.frontmatter.description === "string" && parsed.frontmatter.description.trim()
@@ -656,10 +767,21 @@ export function importSkillFile(
   const frontmatter = { ...parsed.frontmatter, name, description };
   const rawBody = rawBodyAfterFrontmatter(content);
   const body = rawBody.endsWith("\n") ? rawBody : `${rawBody}\n`;
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, "SKILL.md"),
-    `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}`,
-  );
+  try {
+    secureWrite(
+      roots,
+      path.join(dir, "SKILL.md"),
+      `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}`,
+      true,
+    );
+  } catch (error) {
+    if (
+      error instanceof ResourceCatalogCapabilityError &&
+      error.code === "RESOURCE_ALREADY_EXISTS"
+    ) {
+      throw new Error("skill_exists");
+    }
+    throw error;
+  }
   return name;
 }

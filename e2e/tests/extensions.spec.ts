@@ -156,6 +156,147 @@ test("shows the read-only Agent Deck bridges inventory (memory active)", async (
   await expect(page.getByTestId("bridge-state-mcp")).toHaveText("off");
 });
 
+test("shows readable extension load, toggle, and remove failures", async ({ page }) => {
+  await page.route("**/resources/extensions*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 503,
+      json: { error: "Extension inventory is temporarily unavailable." },
+    });
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-extensions").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Extension inventory is temporarily unavailable.",
+  );
+
+  await page.unroute("**/resources/extensions*");
+  await page.route("**/resources/extensions*", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      await route.fulfill({
+        status: 200,
+        json: {
+          extensions: [
+            {
+              path: "/tmp/failing-extension.ts",
+              name: "failing-extension.ts",
+              exists: true,
+              disabled: false,
+              source: "added",
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (method === "DELETE") {
+      await route.fulfill({ status: 409, json: { error: "Extension removal was refused." } });
+      return;
+    }
+    return route.fallback();
+  });
+  await page.route("**/resources/extensions/disabled", async (route) => {
+    await route.fulfill({ status: 409, json: { error: "Extension toggle was refused." } });
+  });
+  await page.reload();
+  await page.getByTestId("nav-extensions").click();
+
+  await page.getByTestId("extension-toggle-failing-extension.ts").click();
+  await expect(page.getByTestId("error-banner")).toHaveText("Error: Extension toggle was refused.");
+  await page.getByTestId("extension-remove-failing-extension.ts").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Extension removal was refused.",
+  );
+});
+
+test("serializes mode and extension mutations and reconciles partial bulk failures", async ({
+  page,
+}) => {
+  const entries = [
+    {
+      path: "/tmp/overlap-a.ts",
+      name: "overlap-a.ts",
+      exists: true,
+      disabled: false,
+      source: "added",
+    },
+    {
+      path: "/tmp/overlap-b.ts",
+      name: "overlap-b.ts",
+      exists: true,
+      disabled: false,
+      source: "added",
+    },
+  ];
+  let modeRequests = 0;
+  let releaseMode: (() => void) | undefined;
+  await page.route("**/settings", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    modeRequests += 1;
+    if (modeRequests === 1) await new Promise<void>((resolve) => (releaseMode = resolve));
+    await route.fulfill({ status: 200, json: { ok: true } });
+  });
+  await page.route("**/resources/extensions*", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, json: { extensions: entries } });
+      return;
+    }
+    return route.fallback();
+  });
+
+  let mutationPhase: "individual" | "bulk" = "individual";
+  let individualRequests = 0;
+  let releaseIndividual: (() => void) | undefined;
+  await page.route("**/resources/extensions/disabled", async (route) => {
+    const body = route.request().postDataJSON() as { path: string; disabled: boolean };
+    if (mutationPhase === "individual") {
+      individualRequests += 1;
+      await new Promise<void>((resolve) => (releaseIndividual = resolve));
+      await route.fulfill({ status: 409, json: { error: "Individual update failed." } });
+      return;
+    }
+    if (body.path.endsWith("overlap-a.ts")) {
+      entries[0]!.disabled = body.disabled;
+      await route.fulfill({ status: 200, json: { ok: true } });
+    } else {
+      await route.fulfill({ status: 409, json: { error: "One extension stayed enabled." } });
+    }
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-extensions").click();
+
+  const managedMode = page.getByTestId("extension-mode-agentDeckManaged");
+  await managedMode.click();
+  await expect(page.getByTestId("extension-mode-useMyExtensions")).toBeDisabled();
+  await managedMode.evaluate((button: { click(): void }) => button.click());
+  expect(modeRequests).toBe(1);
+  releaseMode!();
+  await expect(managedMode).toBeEnabled();
+  await page.getByTestId("extension-mode-useMyExtensions").click();
+
+  const toggleA = page.getByTestId("extension-toggle-overlap-a.ts");
+  await toggleA.click();
+  await expect(toggleA).toBeDisabled();
+  await expect(toggleA).toHaveAccessibleName("Disabling…");
+  await expect(page.getByTestId("extension-remove-overlap-a.ts")).toBeDisabled();
+  await expect(page.getByTestId("extension-disable-all")).toBeDisabled();
+  await toggleA.evaluate((button: { click(): void }) => button.click());
+  expect(individualRequests).toBe(1);
+  releaseIndividual!();
+  await expect(page.getByTestId("error-banner")).toHaveText("Error: Individual update failed.");
+  await expect(toggleA).toBeEnabled();
+
+  mutationPhase = "bulk";
+  await page.getByTestId("extension-disable-all").click();
+  await expect(page.getByTestId("extension-disable-all")).toHaveAccessibleName("Disabling all…");
+  await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toBeDisabled();
+  await expect(page.getByTestId("error-banner")).toHaveText("Error: One extension stayed enabled.");
+  await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toHaveText("Enable");
+  await expect(page.getByTestId("extension-toggle-overlap-b.ts")).toHaveText("Disable");
+});
+
 test("loading-mode picker + bulk enable/disable (native PiAgentExtensionLoadingMode)", async ({
   page,
 }) => {

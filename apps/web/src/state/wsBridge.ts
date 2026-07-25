@@ -16,6 +16,7 @@ import type {
   ScriptRunResult,
   TerminalOpenResult,
 } from "@agent-deck/client-runtime";
+import { responseErrorMessage } from "../lib/responseError.ts";
 import { RpcClientTransport, type ClientTransport, type TransportHost } from "./clientTransport.ts";
 import { useAppStore } from "./store.ts";
 
@@ -479,17 +480,7 @@ function handleMessage(message: ServerMessage): void {
 
 async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
-  if (!response.ok) {
-    const text = await response.text();
-    let practicalError: string | undefined;
-    try {
-      const body = JSON.parse(text) as { error?: unknown };
-      if (typeof body.error === "string" && body.error.trim()) practicalError = body.error;
-    } catch {
-      // Non-JSON failures retain the existing plain-text fallback.
-    }
-    throw new Error(practicalError ?? (text || `Request failed (${response.status}).`));
-  }
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
   return (await response.json()) as T;
 }
 
@@ -657,7 +648,7 @@ export async function forkSession(sessionId: string): Promise<void> {
 async function resourceAction(input: string, init: RequestInit): Promise<void> {
   try {
     const response = await fetch(input, init);
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
   } catch (error) {
     useAppStore.getState().setError(String(error));
   }
