@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -65,8 +66,6 @@ async function legacyFixture(options: { localEdit?: boolean } = {}): Promise<Leg
   writeFileSync(path.join(path.dirname(copiedSkill), "was-file"), "old file");
   mkdirSync(path.join(path.dirname(copiedSkill), "was-dir"));
   writeFileSync(path.join(path.dirname(copiedSkill), "was-dir", "old"), "old nested file");
-  writeFileSync(path.join(path.dirname(copiedSkill), "local-stale"), "remove me");
-
   writeFileSync(path.join(upstream, "SKILL.md"), skill("legacy-skill", "Upstream body."));
   rmSync(path.join(upstream, "was-file"));
   mkdirSync(path.join(upstream, "was-file"));
@@ -172,7 +171,104 @@ describe("legacy copied skill repository compatibility", () => {
         "new nested file",
       );
       expect(readFileSync(path.join(copiedRoot, "was-dir"), "utf8")).toBe("now a file");
-      expect(existsSync(path.join(copiedRoot, "local-stale"))).toBe(false);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it.each(["modify", "add", "delete", "reserved-git"] as const)(
+    "holds an asset %s as a whole-skill conflict",
+    async (change) => {
+      const fixture = await legacyFixture();
+      try {
+        const copiedRoot = path.dirname(fixture.copiedSkill);
+        const asset = path.join(copiedRoot, "was-file");
+        if (change === "modify") writeFileSync(asset, "local asset edit");
+        if (change === "add") writeFileSync(path.join(copiedRoot, "local-asset"), "local addition");
+        if (change === "delete") rmSync(asset);
+        if (change === "reserved-git") {
+          mkdirSync(path.join(copiedRoot, ".git"));
+          writeFileSync(path.join(copiedRoot, ".git", "config"), "local repository metadata");
+        }
+
+        const update = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(update.status).toBe(200);
+        expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+        if (change === "modify") expect(readFileSync(asset, "utf8")).toBe("local asset edit");
+        if (change === "add") {
+          expect(readFileSync(path.join(copiedRoot, "local-asset"), "utf8")).toBe("local addition");
+        }
+        if (change === "delete") expect(existsSync(asset)).toBe(false);
+        if (change === "reserved-git") {
+          expect(readFileSync(path.join(copiedRoot, ".git", "config"), "utf8")).toBe(
+            "local repository metadata",
+          );
+        }
+        expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toMatch(
+          /^tree-v1:[0-9a-f]{64}$/,
+        );
+        if (change === "modify") {
+          const sameCommit = await fetch(
+            `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+            { method: "POST" },
+          );
+          expect(await sameCommit.json()).toMatchObject({
+            updated: false,
+            conflicts: ["legacy-skill"],
+          });
+        }
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  it.each(["rename", "type-transition", "whole-skill-delete"] as const)(
+    "holds a local %s as a whole-skill conflict",
+    async (change) => {
+      const fixture = await legacyFixture();
+      try {
+        const copiedRoot = path.dirname(fixture.copiedSkill);
+        if (change === "rename") {
+          renameSync(path.join(copiedRoot, "was-file"), path.join(copiedRoot, "WAS-FILE"));
+        } else if (change === "type-transition") {
+          rmSync(path.join(copiedRoot, "was-file"));
+          mkdirSync(path.join(copiedRoot, "was-file"));
+        } else {
+          rmSync(copiedRoot, { recursive: true });
+        }
+        const update = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+        if (change === "rename") expect(existsSync(path.join(copiedRoot, "WAS-FILE"))).toBe(true);
+        if (change === "type-transition") {
+          expect(existsSync(path.join(copiedRoot, "was-file"))).toBe(true);
+        }
+        if (change === "whole-skill-delete") expect(existsSync(copiedRoot)).toBe(false);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  it("fails closed when a legacy baseline cannot be proven from a clean tied clone", async () => {
+    const fixture = await legacyFixture();
+    try {
+      writeFileSync(path.join(fixture.clonePath, "ambiguous-untracked"), "dirty clone");
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+      expect(readFileSync(fixture.copiedSkill, "utf8")).toContain("Original body");
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toBe(
+        sha256(skill("legacy-skill", "Original body.")),
+      );
     } finally {
       await fixture.close();
     }
@@ -204,7 +300,190 @@ describe("legacy copied skill repository compatibility", () => {
     }
   });
 
+  it("Keep Mine re-baselines the complete tree and same-commit retry stays clear", async () => {
+    const fixture = await legacyFixture();
+    try {
+      const localAsset = path.join(path.dirname(fixture.copiedSkill), "local-only");
+      writeFileSync(localAsset, "mine");
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+
+      const resolve = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "legacy-skill", resolution: "mine" }),
+        },
+      );
+      expect(resolve.status).toBe(200);
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toMatch(
+        /^tree-v1:[0-9a-f]{64}$/,
+      );
+      const retry = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await retry.json()).toMatchObject({ updated: false, conflicts: [] });
+      expect(readFileSync(localAsset, "utf8")).toBe("mine");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("holds a new upstream name when an unmanaged catalog folder already exists", async () => {
+    const fixture = await legacyFixture();
+    try {
+      await establishTwoSkillBaseline(fixture);
+      const catalog = path.dirname(path.dirname(fixture.copiedSkill));
+      const local = path.join(catalog, "gamma");
+      mkdirSync(local);
+      writeFileSync(path.join(local, "SKILL.md"), skill("gamma", "unrelated local skill"));
+      const upstream = path.join(fixture.upstream, "gamma");
+      mkdirSync(upstream);
+      writeFileSync(path.join(upstream, "SKILL.md"), skill("gamma", "upstream skill"));
+      git(fixture.upstream, ["add", "-A"]);
+      git(fixture.upstream, ["commit", "-m", "add colliding gamma"]);
+
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await update.json()).toMatchObject({ conflicts: ["gamma"] });
+      expect(readFileSync(path.join(local, "SKILL.md"), "utf8")).toContain("unrelated local skill");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("Take Remote applies a whole-skill upstream deletion and stores missing state", async () => {
+    const fixture = await legacyFixture({ localEdit: true });
+    try {
+      rmSync(path.join(fixture.upstream, "SKILL.md"));
+      rmSync(path.join(fixture.upstream, "was-file"), { recursive: true });
+      rmSync(path.join(fixture.upstream, "was-dir"), { force: true });
+      git(fixture.upstream, ["add", "-A"]);
+      git(fixture.upstream, ["commit", "-m", "remove remote skill"]);
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+      const resolve = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "legacy-skill", resolution: "remote" }),
+        },
+      );
+      expect(resolve.status).toBe(200);
+      expect(existsSync(path.dirname(fixture.copiedSkill))).toBe(false);
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toBe("tree-v1:missing");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("Take Remote replaces the complete skill tree", async () => {
+    const fixture = await legacyFixture();
+    try {
+      const copiedRoot = path.dirname(fixture.copiedSkill);
+      writeFileSync(path.join(copiedRoot, "local-only"), "remove me");
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+      const resolve = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "legacy-skill", resolution: "remote" }),
+        },
+      );
+      expect(resolve.status).toBe(200);
+      expect(existsSync(path.join(copiedRoot, "local-only"))).toBe(false);
+      expect(readFileSync(fixture.copiedSkill, "utf8")).toContain("Upstream body");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   const unixIt = process.platform === "win32" ? it.skip : it;
+
+  unixIt.each(["replace", "delete"] as const)(
+    "holds a payload changed after initial scan immediately before upstream %s",
+    async (operation) => {
+      const fixture = await legacyFixture();
+      try {
+        if (operation === "delete") {
+          rmSync(path.join(fixture.upstream, "SKILL.md"));
+          rmSync(path.join(fixture.upstream, "was-file"), { recursive: true });
+          rmSync(path.join(fixture.upstream, "was-dir"), { force: true });
+          git(fixture.upstream, ["add", "-A"]);
+          git(fixture.upstream, ["commit", "-m", "delete skill for race"]);
+        }
+        const localAsset = path.join(path.dirname(fixture.copiedSkill), "was-file");
+        const gitPath = "/usr/bin/git";
+        const wrapper = path.join(fixture.dataDir, `mutate-before-${operation}.mjs`);
+        writeFileSync(
+          wrapper,
+          `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nimport { writeFileSync } from "node:fs";\nconst result = spawnSync(${JSON.stringify(gitPath)}, process.argv.slice(2), { stdio: "inherit" });\nif (result.status === 0 && process.argv[2] === "reset") writeFileSync(${JSON.stringify(localAsset)}, "late local bytes");\nprocess.exit(result.status ?? 1);\n`,
+        );
+        chmodSync(wrapper, 0o755);
+        process.env.AGENT_DECK_GIT_BIN = wrapper;
+
+        const update = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(update.status).toBe(200);
+        expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+        expect(readFileSync(localAsset, "utf8")).toBe("late local bytes");
+        const retry = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(await retry.json()).toMatchObject({
+          updated: false,
+          conflicts: ["legacy-skill"],
+        });
+      } finally {
+        delete process.env.AGENT_DECK_GIT_BIN;
+        await fixture.close();
+      }
+    },
+  );
+
+  unixIt("persists a proven legacy migration before fetch", async () => {
+    const fixture = await legacyFixture();
+    try {
+      const gitPath = "/usr/bin/git";
+      const wrapper = path.join(fixture.dataDir, "fail-fetch-git.mjs");
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nif (process.argv[2] === "fetch") process.exit(1);\nconst result = spawnSync(${JSON.stringify(gitPath)}, process.argv.slice(2), { stdio: "inherit" });\nprocess.exit(result.status ?? 1);\n`,
+      );
+      chmodSync(wrapper, 0o755);
+      process.env.AGENT_DECK_GIT_BIN = wrapper;
+      const update = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(update.status).toBe(500);
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toMatch(
+        /^tree-v1:[0-9a-f]{64}$/,
+      );
+    } finally {
+      delete process.env.AGENT_DECK_GIT_BIN;
+      await fixture.close();
+    }
+  });
 
   unixIt(
     "persists partial update progress so a retry converges without a false conflict",
@@ -237,7 +516,7 @@ describe("legacy copied skill repository compatibility", () => {
         expect(readFileSync(copied.beta, "utf8")).toContain("beta baseline");
         const partial = persistedLegacyRecord(fixture);
         expect(partial.lastSyncedCommit).toBe(baselineCommit);
-        expect(partial.skillHashes.alpha).toBe(sha256(alphaUpdate));
+        expect(partial.skillHashes.alpha).toMatch(/^tree-v1:[0-9a-f]{64}$/);
 
         rmSync(path.join(fixture.upstream, "beta", "unsafe-link"));
         writeFileSync(path.join(fixture.upstream, "beta", "safe-asset"), "safe");
@@ -382,7 +661,7 @@ describe("legacy copied skill repository compatibility", () => {
     }
   });
 
-  it("does not advance metadata when upstream deletion hits an unsafe catalog target", async () => {
+  it("holds an unsafe catalog target as a conflict without following it", async () => {
     const fixture = await legacyFixture();
     try {
       const list = async (): Promise<{ repos: Array<{ lastSyncedCommit: string }> }> =>
@@ -406,9 +685,9 @@ describe("legacy copied skill repository compatibility", () => {
         `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
         { method: "POST" },
       );
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ error: expect.stringContaining("unsafe") });
-      expect((await list()).repos[0]?.lastSyncedCommit).toBe(before.repos[0]?.lastSyncedCommit);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+      expect((await list()).repos[0]?.lastSyncedCommit).not.toBe(before.repos[0]?.lastSyncedCommit);
       expect(readFileSync(path.join(victim, "sentinel"), "utf8")).toBe("outside-safe");
     } finally {
       await fixture.close();

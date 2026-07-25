@@ -19,6 +19,7 @@ import {
   skillCatalogDirs,
   type ResourceRoots,
 } from "./paths.ts";
+import { skillTreeFingerprint, SkillTreeFingerprintError } from "./skillTreeFingerprint.ts";
 
 /**
  * File writers for global/library agents and prompts, plus global skills. Existing files keep
@@ -563,13 +564,14 @@ function rawBodyAfterFrontmatter(content: string): string {
 
 /** Recursively find top-level skill roots (nested SKILL.md files belong to
  * their containing skill), skipping symlinks and dependency metadata. */
-function findSkillDirs(root: string): string[] {
+function findSkillDirs(root: string, failClosed = false): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
     let entries: string[];
     try {
       entries = readdirSync(dir);
-    } catch {
+    } catch (error) {
+      if (failClosed) throw error;
       return;
     }
     if (entries.includes("SKILL.md")) {
@@ -580,9 +582,17 @@ function findSkillDirs(root: string): string[] {
       if (entry === ".git" || entry === "node_modules") continue;
       const full = path.join(dir, entry);
       try {
-        if (lstatSync(full).isDirectory()) walk(full);
-      } catch {
-        // Unreadable entry — skip.
+        const entryStat = lstatSync(full);
+        if (entryStat.isSymbolicLink()) {
+          if (failClosed) throw new Error("linked_skill_discovery_entry");
+        } else if (entryStat.isDirectory()) {
+          walk(full);
+        } else if (!entryStat.isFile() && failClosed) {
+          throw new Error("unsupported_skill_discovery_entry");
+        }
+      } catch (error) {
+        if (failClosed) throw error;
+        // Unreadable entry — skip during best-effort collection discovery.
       }
     }
   };
@@ -620,32 +630,63 @@ export function discoverSkillRoots(
     });
 }
 
+export interface ImportSkillRoot {
+  name: string;
+  rootPath: string;
+}
+
+/** Exact roots/names used by legacy copying, with discovery failures rejected. */
+export function discoverImportSkillRoots(cloneDir: string, repoName: string): ImportSkillRoot[] {
+  let rootSkill = false;
+  try {
+    const rootSkillStat = lstatSync(path.join(cloneDir, "SKILL.md"));
+    if (!rootSkillStat.isFile() || rootSkillStat.isSymbolicLink()) {
+      throw new Error("unsafe_root_skill_file");
+    }
+    rootSkill = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const roots = rootSkill ? [cloneDir] : findSkillDirs(cloneDir, true);
+  return roots.map((rootPath) => {
+    let name: string;
+    try {
+      const fm = parseFrontmatter(
+        readFileSync(path.join(rootPath, "SKILL.md"), "utf8"),
+      ).frontmatter;
+      name =
+        typeof fm.name === "string" && fm.name.trim()
+          ? fm.name.trim()
+          : rootPath === cloneDir
+            ? repoName
+            : path.basename(rootPath);
+    } catch {
+      name = rootPath === cloneDir ? repoName : path.basename(rootPath);
+    }
+    return { name, rootPath };
+  });
+}
+
 export interface SkillImportResult {
   imported: string[];
   skipped: string[];
-  /** sha-256 of each imported skill's SKILL.md (the as-written fingerprint). */
+  /** Versioned payload-tree fingerprint of each imported skill. */
   hashes: Record<string, string>;
 }
 
 export interface SkillImportFilter {
   only?: Set<string>;
   exclude?: Set<string>;
+  /**
+   * Runs after source payload fingerprinting, immediately before native copy.
+   * Return false to hold the skill without touching its catalog payload.
+   */
+  beforeImport?: (name: string, sourceFingerprint: string) => boolean;
   /** Called after each catalog copy completes, allowing durable update progress. */
-  onImported?: (name: string, hash: string | undefined) => void;
+  onImported?: (name: string, hash: string) => void;
 }
 
-/** sha-256 of a SKILL.md file, or null if it can't be read. */
-function hashSkillMd(skillDir: string): string | null {
-  try {
-    return createHash("sha256")
-      .update(readFileSync(path.join(skillDir, "SKILL.md")))
-      .digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-/** The catalog copy's current SKILL.md hash, for detecting a local edit. */
+/** The catalog copy's current SKILL.md hash, retained for legacy migration. */
 export function skillMdHash(
   roots: ResourceRoots,
   scope: WritableScope,
@@ -663,12 +704,23 @@ export function skillMdHash(
   }
 }
 
+/** Complete catalog payload state, including missing and reserved `.git` presence. */
+export function catalogSkillTreeFingerprint(
+  roots: ResourceRoots,
+  scope: WritableScope,
+  name: string,
+): string {
+  return skillTreeFingerprint(path.join(skillDirFor(roots, scope), name), {
+    reservedGit: "presence",
+  });
+}
+
 /**
  * Import every skill found in a cloned repo dir into the scope's skill catalog
  * (native SkillRepositorySync). Rule (native): a SKILL.md at the repo root means
  * the whole repo is ONE skill; otherwise every SKILL.md's parent dir is a skill.
- * Each skill's directory is copied whole (assets included) with the .git dir
- * excluded. Names come from SKILL.md frontmatter `name`, else the dir basename
+ * Each skill's payload directory is copied whole (assets included) with reserved
+ * `.git` entries excluded. Names come from SKILL.md frontmatter `name`, else the dir basename
  * (or `repoName` for the root case). Existing + invalid names are skipped.
  */
 export function importSkillsFromClone(
@@ -682,26 +734,12 @@ export function importSkillsFromClone(
    *  every name but these (used to HOLD locally-edited conflicts on a re-sync). */
   filter?: SkillImportFilter,
 ): SkillImportResult {
-  const skillDirs = existsSync(path.join(cloneDir, "SKILL.md"))
-    ? [cloneDir] // root SKILL.md → the whole repo is a single skill
-    : findSkillDirs(cloneDir);
+  const skillRoots = discoverImportSkillRoots(cloneDir, repoName);
   const catalog = skillDirFor(roots, scope);
   const imported: string[] = [];
   const skipped: string[] = [];
   const hashes: Record<string, string> = {};
-  for (const srcDir of skillDirs) {
-    let name: string;
-    try {
-      const fm = parseFrontmatter(readFileSync(path.join(srcDir, "SKILL.md"), "utf8")).frontmatter;
-      name =
-        typeof fm.name === "string" && fm.name.trim()
-          ? fm.name.trim()
-          : srcDir === cloneDir
-            ? repoName
-            : path.basename(srcDir);
-    } catch {
-      name = srcDir === cloneDir ? repoName : path.basename(srcDir);
-    }
+  for (const { rootPath: srcDir, name } of skillRoots) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
       skipped.push(name);
       continue;
@@ -709,6 +747,22 @@ export function importSkillsFromClone(
     if (filter?.only && !filter.only.has(name)) continue; // not in the include set
     if (filter?.exclude?.has(name)) {
       skipped.push(name); // held back (a conflict to resolve)
+      continue;
+    }
+    let hash: string;
+    try {
+      hash = skillTreeFingerprint(srcDir);
+    } catch (error) {
+      if (error instanceof SkillTreeFingerprintError) {
+        throw new ResourceCatalogCapabilityError(
+          "RESOURCE_UNSAFE_COMPONENT",
+          "The skill payload could not be fingerprinted safely.",
+        );
+      }
+      throw error;
+    }
+    if (filter?.beforeImport && !filter.beforeImport(name, hash)) {
+      skipped.push(name);
       continue;
     }
     const dest = catalogLocation(roots, path.join(catalog, name));
@@ -726,9 +780,8 @@ export function importSkillsFromClone(
       throw error;
     }
     imported.push(name);
-    const hash = hashSkillMd(srcDir);
-    if (hash) hashes[name] = hash;
-    filter?.onImported?.(name, hash ?? undefined);
+    hashes[name] = hash;
+    filter?.onImported?.(name, hash);
   }
   return { imported, skipped, hashes };
 }

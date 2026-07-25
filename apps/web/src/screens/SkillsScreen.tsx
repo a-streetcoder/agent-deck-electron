@@ -424,6 +424,8 @@ export function SkillsScreen() {
     {},
   );
   const resolvingConflictsRef = useRef(new Set<string>());
+  const conflictActionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const repoUpdateRefs = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
@@ -625,6 +627,13 @@ export function SkillsScreen() {
   ): Promise<void> => {
     const key = `${id}\0${name}`;
     if (resolvingConflictsRef.current.has(key)) return;
+    const actionKey = `${key}\0${resolution}`;
+    const invokedAction = conflictActionRefs.current.get(actionKey);
+    const ownedFocus = invokedAction !== undefined && document.activeElement === invokedAction;
+    const focusStillOnAction = (): boolean =>
+      ownedFocus && document.activeElement === invokedAction;
+    const focusMayBeRestored = (): boolean =>
+      focusStillOnAction() || (ownedFocus && document.activeElement === document.body);
     resolvingConflictsRef.current.add(key);
     setResolvingConflicts((current) => ({ ...current, [key]: resolution }));
     try {
@@ -634,15 +643,35 @@ export function SkillsScreen() {
         body: JSON.stringify({ name, resolution }),
       });
       if (!res.ok) throw new Error(await responseErrorMessage(res));
-      setConflicts((prev) => {
-        const remaining = (prev[id] ?? []).filter((n) => n !== name);
-        const next = { ...prev };
+      let nextName: string | undefined;
+      setConflicts((previous) => {
+        const currentNames = previous[id] ?? [];
+        const removedIndex = currentNames.indexOf(name);
+        const remaining = currentNames.filter((candidate) => candidate !== name);
+        nextName =
+          removedIndex >= 0
+            ? (remaining[removedIndex] ?? remaining[Math.max(0, removedIndex - 1)])
+            : remaining[0];
+        const next = { ...previous };
         if (remaining.length > 0) next[id] = remaining;
         else delete next[id];
         return next;
       });
+      requestAnimationFrame(() => {
+        if (!focusMayBeRestored()) return;
+        const primary = nextName
+          ? conflictActionRefs.current.get(`${id}\0${nextName}\0mine`)
+          : undefined;
+        if (primary && !primary.disabled) primary.focus();
+        else repoUpdateRefs.current.get(id)?.focus();
+      });
     } catch (err) {
-      setGlobalError(String(err));
+      const detail = err instanceof Error ? err.message : String(err);
+      setGlobalError(`Couldn't resolve ${name}. ${detail} Try again.`);
+      requestAnimationFrame(() => {
+        if (!focusMayBeRestored()) return;
+        conflictActionRefs.current.get(actionKey)?.focus();
+      });
     } finally {
       resolvingConflictsRef.current.delete(key);
       setResolvingConflicts((current) => {
@@ -858,6 +887,10 @@ export function SkillsScreen() {
                     </span>
                   ) : null}
                   <ControlButton
+                    ref={(element) => {
+                      if (element) repoUpdateRefs.current.set(repo.id, element);
+                      else repoUpdateRefs.current.delete(repo.id);
+                    }}
                     data-testid={`skill-repo-update-${repo.id}`}
                     className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
                     disabled={repoBusy[repo.id] !== undefined}
@@ -888,7 +921,8 @@ export function SkillsScreen() {
                     className="mt-1 space-y-1 rounded-lg border border-warning bg-surface px-2.5 py-1.5"
                   >
                     <div className="text-micro text-text-muted">
-                      Locally edited — your version was kept. Resolve:
+                      Local folder changes were kept. Taking remote replaces or deletes the entire
+                      skill folder, including assets.
                     </div>
                     {conflicts[repo.id]!.map((name) => {
                       const resolution = resolvingConflicts[`${repo.id}\0${name}`];
@@ -899,24 +933,49 @@ export function SkillsScreen() {
                           className="flex items-center gap-2"
                           aria-busy={conflictBusy}
                         >
-                          <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary">
+                          <span
+                            className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
+                            title={name}
+                          >
                             {name}
                           </span>
                           <ControlButton
+                            ref={(element) => {
+                              const actionKey = `${repo.id}\0${name}\0mine`;
+                              if (element) conflictActionRefs.current.set(actionKey, element);
+                              else conflictActionRefs.current.delete(actionKey);
+                            }}
+                            data-conflict-primary="true"
                             data-testid={`skill-conflict-mine-${repo.id}-${name}`}
                             className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            aria-label={
+                              resolution === "mine"
+                                ? `Keeping mine for ${name}…`
+                                : `Keep mine for ${name}`
+                            }
                             disabled={conflictBusy}
                             onClick={() => void resolveConflict(repo.id, name, "mine")}
                           >
                             {resolution === "mine" ? "Keeping mine…" : "Keep mine"}
                           </ControlButton>
                           <ControlButton
+                            ref={(element) => {
+                              const actionKey = `${repo.id}\0${name}\0remote`;
+                              if (element) conflictActionRefs.current.set(actionKey, element);
+                              else conflictActionRefs.current.delete(actionKey);
+                            }}
                             data-testid={`skill-conflict-remote-${repo.id}-${name}`}
                             className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            title="Replace or delete the entire local skill folder and all assets with the remote version"
+                            aria-label={
+                              resolution === "remote"
+                                ? `Taking remote folder for ${name}…`
+                                : `Take remote folder for ${name}; replaces or deletes the entire folder and all assets`
+                            }
                             disabled={conflictBusy}
                             onClick={() => void resolveConflict(repo.id, name, "remote")}
                           >
-                            {resolution === "remote" ? "Taking remote…" : "Take remote"}
+                            {resolution === "remote" ? "Taking remote…" : "Take remote folder"}
                           </ControlButton>
                         </div>
                       );

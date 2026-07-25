@@ -1,18 +1,22 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { SkillInfo } from "@agent-deck/domain";
 import {
   BUILTIN_AGENTS_DIR,
+  catalogSkillTreeFingerprint,
   computeBuiltinOverride,
+  discoverImportSkillRoots,
   discoverSkillRoots,
   deleteAgentFile,
   deletePromptFile,
   deleteSkillDir,
   importSkillFile,
   importSkillsFromClone,
+  isSkillTreeFingerprint,
   mergeWithUnmanagedOverrideFields,
+  MISSING_SKILL_TREE_FINGERPRINT,
   parseAgentFile,
   readAgentOverrides,
   renameAgentFile,
@@ -24,7 +28,7 @@ import {
   scanExtensions,
   scanPrompts,
   setAgentDisabledFile,
-  skillMdHash,
+  skillTreeFingerprint,
   writeAgentFile,
   writeBuiltinAgentOverride,
   writePromptFile,
@@ -118,6 +122,25 @@ function subdirScanPath(clonePath: string, subdir?: string): string {
   const base = nodePath.resolve(clonePath);
   const resolved = nodePath.resolve(clonePath, subdir);
   return resolved === base || resolved.startsWith(base + nodePath.sep) ? resolved : clonePath;
+}
+
+function fileSha256(file: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+function legacySourceRoots(clonePath: string, subdir: string | undefined, remoteUrl: string) {
+  const scanDir = subdirScanPath(clonePath, subdir);
+  const byName = new Map<string, string[]>();
+  for (const skill of discoverImportSkillRoots(scanDir, skillRepoName(remoteUrl))) {
+    const matches = byName.get(skill.name) ?? [];
+    matches.push(skill.rootPath);
+    byName.set(skill.name, matches);
+  }
+  return { scanDir, byName };
 }
 
 /**
@@ -695,43 +718,126 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         const roots = rootsForRepoRecord(currentRecord);
         if (!roots) throw new Error("repository_project_missing");
 
-        // Conflicts: skills whose catalog copy the user has locally edited since we
-        // wrote it (current hash ≠ the stored fingerprint). Detected BEFORE the
-        // fetch and HELD back from the overwrite so an edit is never silently lost.
+        // Migrate old SKILL.md-only (or absent) baselines only from the persistent
+        // clone while it is demonstrably the clean checkout of lastSyncedCommit.
+        // The current catalog is never adopted as historical truth.
         const stored = { ...(currentRecord.skillHashes ?? {}) };
-        // Backfill a baseline for any skill without a stored fingerprint (records
-        // imported before hashing existed): adopt its current catalog hash so this
-        // round isn't a false conflict AND future edits become detectable — closes
-        // the "no baseline → silently overwritten" gap.
-        for (const name of currentRecord.skillNames) {
-          if (stored[name] === undefined) {
-            const current = skillMdHash(roots, currentRecord.scope, name);
-            if (current) stored[name] = current;
+        const forcedConflicts = new Set<string>();
+        let migrationChanged = false;
+        const needsMigration = currentRecord.skillNames.some(
+          (name) => !isSkillTreeFingerprint(stored[name]),
+        );
+        if (needsMigration) {
+          const [head, status] = await Promise.all([
+            gitHead(currentRecord.clonePath),
+            gitStatus(currentRecord.clonePath),
+          ]);
+          let sourceRoots: ReturnType<typeof legacySourceRoots> | undefined;
+          if (head === currentRecord.lastSyncedCommit && status.repo && status.clean) {
+            try {
+              sourceRoots = legacySourceRoots(
+                currentRecord.clonePath,
+                currentRecord.subdir,
+                currentRecord.remoteUrl,
+              );
+            } catch {
+              sourceRoots = undefined;
+            }
+          }
+          for (const name of currentRecord.skillNames) {
+            const old = stored[name];
+            if (isSkillTreeFingerprint(old)) continue;
+            const matches = sourceRoots?.byName.get(name);
+            const sourceRoot = matches?.length === 1 ? matches[0] : undefined;
+            const oldHashVerified =
+              old === undefined ||
+              (sourceRoot !== undefined &&
+                fileSha256(nodePath.join(sourceRoot, "SKILL.md")) === old);
+            if (sourceRoot && oldHashVerified) {
+              try {
+                stored[name] = skillTreeFingerprint(sourceRoot);
+                migrationChanged = true;
+                continue;
+              } catch {
+                // An unreadable, linked, special, or raced source cannot prove a baseline.
+              }
+            }
+            forcedConflicts.add(name);
+          }
+          if (migrationChanged) {
+            settings.upsertImportedSkillRepository({ ...currentRecord, skillHashes: stored });
           }
         }
-        const conflicts = currentRecord.skillNames.filter((name) => {
-          const current = skillMdHash(roots, currentRecord.scope, name);
-          return current !== null && stored[name] !== undefined && current !== stored[name];
-        });
+
+        const conflicts = new Set<string>(forcedConflicts);
+        const catalogPayloadMatchesStored = (name: string): boolean => {
+          const expected = stored[name];
+          if (!isSkillTreeFingerprint(expected)) return false;
+          try {
+            return catalogSkillTreeFingerprint(roots, currentRecord.scope, name) === expected;
+          } catch {
+            return false;
+          }
+        };
+        for (const name of currentRecord.skillNames) {
+          try {
+            if (!isSkillTreeFingerprint(stored[name])) conflicts.add(name);
+            else if (
+              catalogSkillTreeFingerprint(roots, currentRecord.scope, name) !== stored[name]
+            ) {
+              conflicts.add(name);
+            }
+          } catch {
+            conflicts.add(name);
+          }
+        }
 
         const newCommit = await gitPullFfInto(currentRecord.clonePath, currentRecord.ref);
         if (newCommit === currentRecord.lastSyncedCommit) {
-          return { updated: false, commit: newCommit, conflicts: [] as string[] };
+          return { updated: false, commit: newCommit, conflicts: [...conflicts] };
         }
 
         // A legacy update copies several independent catalog trees. Persist each
         // completed tree before starting the next one so an interrupted update can
         // distinguish already-applied upstream content from a real local edit.
-        let progressRecord = currentRecord;
-        let progressPersisted = false;
+        let progressRecord: ImportedSkillRepository = { ...currentRecord, skillHashes: stored };
+        let progressPersisted = migrationChanged;
         const persistProgress = (next: ImportedSkillRepository): void => {
           settings.upsertImportedSkillRepository(next);
           progressRecord = next;
           progressPersisted = true;
         };
+        const persistHeldConflict = (name: string): void => {
+          conflicts.add(name);
+          const skillHashes = { ...(progressRecord.skillHashes ?? {}) };
+          if (stored[name]) skillHashes[name] = stored[name];
+          persistProgress({
+            ...progressRecord,
+            skillNames: [...new Set([...progressRecord.skillNames, name])],
+            skillHashes,
+          });
+        };
 
         try {
-          const scanDir = subdirScanPath(currentRecord.clonePath, currentRecord.subdir);
+          const { scanDir, byName: upstreamRoots } = legacySourceRoots(
+            currentRecord.clonePath,
+            currentRecord.subdir,
+            currentRecord.remoteUrl,
+          );
+          // A newly-discovered upstream name does not own a pre-existing catalog
+          // directory. Record an explicit missing baseline and hold it for choice.
+          for (const name of upstreamRoots.keys()) {
+            if (currentRecord.skillNames.includes(name)) continue;
+            stored[name] = MISSING_SKILL_TREE_FINGERPRINT;
+            if (!catalogPayloadMatchesStored(name)) conflicts.add(name);
+          }
+          if ([...conflicts].some((name) => !currentRecord.skillNames.includes(name))) {
+            persistProgress({
+              ...progressRecord,
+              skillNames: [...new Set([...progressRecord.skillNames, ...conflicts])],
+              skillHashes: { ...stored },
+            });
+          }
           const result = importSkillsFromClone(
             roots,
             currentRecord.scope,
@@ -739,7 +845,14 @@ export function registerResourceRoutes(ctx: ServerContext): void {
             skillRepoName(currentRecord.remoteUrl),
             true,
             {
-              exclude: new Set(conflicts),
+              exclude: conflicts,
+              // Recheck at the practical owning boundary: source discovery and
+              // fingerprinting are complete, but native replacement has not begun.
+              beforeImport: (name) => {
+                if (catalogPayloadMatchesStored(name)) return true;
+                persistHeldConflict(name);
+                return false;
+              },
               onImported: (name, hash) => {
                 const skillHashes = { ...(progressRecord.skillHashes ?? {}) };
                 if (hash) skillHashes[name] = hash;
@@ -754,13 +867,18 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           // Skills upstream DELETED (in the record before, now neither imported nor
           // held) are removed from the catalog too, so the repo stays the source of
           // truth rather than leaving orphans — but NEVER a locally-edited conflict.
-          const conflictSet = new Set(conflicts);
           for (const name of currentRecord.skillNames) {
             if (
               !result.imported.includes(name) &&
               !result.skipped.includes(name) &&
-              !conflictSet.has(name)
+              !conflicts.has(name)
             ) {
+              // Pull and earlier copies may have taken time. Never delete a payload
+              // that changed since the initial scan or became unreadable/unsafe.
+              if (!catalogPayloadMatchesStored(name)) {
+                persistHeldConflict(name);
+                continue;
+              }
               try {
                 deleteSkillDir(roots, currentRecord.scope, name);
               } catch (error) {
@@ -772,7 +890,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
                 }
               }
               const skillHashes = { ...(progressRecord.skillHashes ?? {}) };
-              delete skillHashes[name];
+              skillHashes[name] = MISSING_SKILL_TREE_FINGERPRINT;
               persistProgress({
                 ...progressRecord,
                 skillNames: progressRecord.skillNames.filter((candidate) => candidate !== name),
@@ -782,10 +900,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           }
           // The held conflicts keep their OLD fingerprint so they stay flagged until
           // resolved; the freshly-imported skills take their new one.
-          const heldConflicts = conflicts.filter(
-            (name) => skillMdHash(roots, currentRecord.scope, name) !== null,
-          );
-          const skillHashes: Record<string, string> = { ...result.hashes };
+          const heldConflicts = [...conflicts];
+          const skillHashes: Record<string, string> = {
+            ...(progressRecord.skillHashes ?? {}),
+            ...result.hashes,
+          };
           for (const name of heldConflicts) if (stored[name]) skillHashes[name] = stored[name];
           const next = {
             ...progressRecord,
@@ -898,13 +1017,12 @@ export function registerResourceRoutes(ctx: ServerContext): void {
                 throw error;
               }
             }
-            delete skillHashes[name];
+            skillHashes[name] = MISSING_SKILL_TREE_FINGERPRINT;
             skillNames = skillNames.filter((candidate) => candidate !== name);
           }
         } else {
-          // Keep the local edit — re-fingerprint so the update stops flagging it.
-          const current = skillMdHash(roots, currentRecord.scope, name);
-          if (current) skillHashes[name] = current;
+          // Keep the complete local state (including deletion) as the new baseline.
+          skillHashes[name] = catalogSkillTreeFingerprint(roots, currentRecord.scope, name);
         }
         settings.upsertImportedSkillRepository({
           ...currentRecord,

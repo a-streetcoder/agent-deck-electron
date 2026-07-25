@@ -121,9 +121,8 @@ export interface ImportedSkillRepository {
   /** Associated collection id for collection-v1 records. */
   collectionId?: string;
   /**
-   * The as-written SKILL.md fingerprint per skill name (native conflict
-   * detection): if the catalog copy's current hash differs on update, the user
-   * edited it locally → a conflict to resolve rather than silently overwrite.
+   * Legacy copy baseline per skill name. New values are versioned payload-tree
+   * fingerprints; bare SHA-256 SKILL.md values remain readable for lazy migration.
    */
   skillHashes?: Record<string, string>;
   /** The clone's HEAD commit at the last successful sync. */

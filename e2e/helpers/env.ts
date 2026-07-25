@@ -36,6 +36,8 @@ export async function startHarness(options?: {
   extraExtensions?: string[];
   /** Drive a real pi tool call (e.g. read/bash) — see MockProviderOptions.toolCall. */
   toolCall?: NonNullable<Parameters<typeof startMockProvider>[0]>["toolCall"];
+  /** Seed persistence/catalog fixtures before the server reads them. */
+  prepare?: (paths: { dataDir: string; piHome: string }) => void;
 }): Promise<E2eHarness> {
   // dist is ignored and may exist from an older checkout. Build once per
   // Playwright worker so browser E2E always serves the renderer under test.
@@ -72,9 +74,11 @@ export async function startHarness(options?: {
     PI_SKIP_VERSION_CHECK: "1",
   });
 
+  const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-e2e-data-"));
+  options?.prepare?.({ dataDir, piHome: tmpHome });
   const server = await startServer({
     staticDir: WEB_DIST,
-    dataDir: mkdtempSync(path.join(tmpdir(), "agent-deck-e2e-data-")),
+    dataDir,
   });
 
   return {

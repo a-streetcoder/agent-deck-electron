@@ -65,13 +65,23 @@ export {
   renameSkillDir,
   importSkillFile,
   importSkillsFromClone,
+  discoverImportSkillRoots,
   discoverSkillRoots,
+  catalogSkillTreeFingerprint,
   skillMdHash,
   type DiscoveredSkillRoot,
+  type ImportSkillRoot,
   type SkillImportFilter,
   type SkillImportResult,
   type WritableScope,
 } from "./writer.ts";
+export {
+  isSkillTreeFingerprint,
+  MISSING_SKILL_TREE_FINGERPRINT,
+  SKILL_TREE_FINGERPRINT_PREFIX,
+  skillTreeFingerprint,
+  SkillTreeFingerprintError,
+} from "./skillTreeFingerprint.ts";
 export { scanEnv, writeEnvVar, type EnvEntry, type EnvScope } from "./env.ts";
 export { resolveSkillSource, type RemoteSkillSource } from "./skillSource.ts";
 export {
