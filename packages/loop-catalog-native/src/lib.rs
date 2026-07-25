@@ -319,6 +319,19 @@ fn map_resource_io(error: std::io::Error) -> Error {
     resource_error(code, error.kind().to_string())
 }
 
+fn map_validated_resource_mutation_io(error: std::io::Error) -> Error {
+    // Windows may report a sharing conflict from rename as ERROR_ACCESS_DENIED
+    // rather than ERROR_SHARING_VIOLATION. This mapper is intentionally used
+    // only after the named target was validated as a regular, non-reparse file;
+    // validation and traversal permission failures remain unsafe-component
+    // errors through map_resource_io.
+    #[cfg(windows)]
+    if error.kind() == ErrorKind::PermissionDenied {
+        return resource_error("RESOURCE_BUSY", "resource is in use by another process");
+    }
+    map_resource_io(error)
+}
+
 fn valid_resource_component(name: &str) -> bool {
     if name.is_empty()
         || name == "."
@@ -641,7 +654,11 @@ pub fn write_resource_catalog_file(
                 "resource write failed and private-temporary cleanup was interrupted; retry",
             ));
         }
-        return Err(map_resource_io(error));
+        return Err(if replace_existing {
+            map_validated_resource_mutation_io(error)
+        } else {
+            map_resource_io(error)
+        });
     }
     if !replace_existing && parent.remove_file(&temp).is_err() {
         return Err(resource_error(
@@ -1643,6 +1660,21 @@ mod tests {
             assert!(!valid_catalog_basename(invalid), "accepted {invalid}");
         }
         assert!(valid_catalog_basename("native name.loop.md"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_access_denied_is_busy_only_at_validated_mutation_boundary() {
+        let validation = map_resource_io(std::io::Error::from_raw_os_error(5));
+        assert!(
+            validation.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:"),
+            "{validation:?}"
+        );
+        let mutation = map_validated_resource_mutation_io(std::io::Error::from_raw_os_error(5));
+        assert!(
+            mutation.reason.starts_with("RESOURCE_BUSY:"),
+            "{mutation:?}"
+        );
     }
 
     #[test]
