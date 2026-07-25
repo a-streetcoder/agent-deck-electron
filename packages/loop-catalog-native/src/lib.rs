@@ -531,27 +531,62 @@ fn windows_rename_handle(
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_RENAME_INFO, FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle,
+        FILE_NAME_NORMALIZED, FILE_RENAME_INFO, FileRenameInfoEx, GetFinalPathNameByHandleW,
+        SetFileInformationByHandle, VOLUME_NAME_DOS,
+    };
+    use windows_sys::Win32::System::WindowsProgramming::{
+        FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
     };
 
-    let name: Vec<u16> = std::ffi::OsStr::new(to).encode_wide().collect();
+    let mut capacity = 512_usize;
+    let mut name = loop {
+        let mut path = vec![0_u16; capacity];
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                to_dir.as_raw_handle(),
+                path.as_mut_ptr(),
+                u32::try_from(path.len()).map_err(|_| {
+                    std::io::Error::new(ErrorKind::InvalidInput, "target path is too long")
+                })?,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        };
+        if length == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let length = usize::try_from(length)
+            .map_err(|_| std::io::Error::new(ErrorKind::InvalidInput, "target path is too long"))?;
+        if length < path.len() {
+            path.truncate(length);
+            break path;
+        }
+        capacity = length.checked_add(1).ok_or_else(|| {
+            std::io::Error::new(ErrorKind::InvalidInput, "target path is too long")
+        })?;
+    };
+    if !name.ends_with(&[b'\\' as u16]) && !name.ends_with(&[b'/' as u16]) {
+        name.push(b'\\' as u16);
+    }
+    name.extend(std::ffi::OsStr::new(to).encode_wide());
+
     let name_bytes = name
         .len()
-        .checked_mul(2)
+        .checked_mul(size_of::<u16>())
         .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "target name is too long"))?;
     let buffer_size = offset_of!(FILE_RENAME_INFO, FileName)
         .checked_add(name_bytes)
+        .and_then(|size| size.checked_add(size_of::<u16>()))
         .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "rename buffer overflow"))?;
     let words = buffer_size.div_ceil(size_of::<usize>());
     let mut buffer = vec![0_usize; words];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     unsafe {
-        if replace {
-            (*info).Anonymous.Flags = 0x0000_0001 | 0x0000_0002;
+        (*info).Anonymous.Flags = if replace {
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
         } else {
-            (*info).Anonymous.ReplaceIfExists = 0;
-        }
-        (*info).RootDirectory = to_dir.as_raw_handle();
+            0
+        };
+        (*info).RootDirectory = std::ptr::null_mut();
         (*info).FileNameLength = u32::try_from(name_bytes)
             .map_err(|_| std::io::Error::new(ErrorKind::InvalidInput, "target name is too long"))?;
         std::ptr::copy_nonoverlapping(
@@ -561,11 +596,7 @@ fn windows_rename_handle(
         );
         if SetFileInformationByHandle(
             source.as_raw_handle(),
-            if replace {
-                FileRenameInfoEx
-            } else {
-                FileRenameInfo
-            },
+            FileRenameInfoEx,
             info.cast(),
             u32::try_from(buffer_size).map_err(|_| {
                 std::io::Error::new(ErrorKind::InvalidInput, "rename buffer is too large")
@@ -734,12 +765,6 @@ pub fn write_resource_catalog_file(
     } else {
         false
     };
-    #[cfg(windows)]
-    let target_guard = if replace_existing {
-        Some(windows_open_mutation(&parent, &leaf, true, true).map_err(map_resource_io)?)
-    } else {
-        None
-    };
     let (temp, file) =
         unique_resource_temp(&parent, RESOURCE_TEMP_PREFIX, &content).map_err(map_resource_io)?;
     #[cfg(windows)]
@@ -757,8 +782,6 @@ pub fn write_resource_catalog_file(
         let _ = windows_delete_handle(&file);
     }
     drop(file);
-    #[cfg(windows)]
-    drop(target_guard);
     #[cfg(not(windows))]
     let _ = parent.remove_file(&temp);
     result.map_err(map_resource_io)?;
@@ -1329,9 +1352,6 @@ fn reconcile_staged_entry(
             .as_ref()
             .is_some_and(|entry| entry.is_file() && !entry.file_type().is_symlink())
     {
-        #[cfg(windows)]
-        let target_guard =
-            windows_open_mutation(destination, name, true, true).map_err(map_resource_io)?;
         let (temporary, file) = staged_file_temp(staged, name, destination)?;
         #[cfg(windows)]
         let _ = &temporary;
@@ -1344,8 +1364,6 @@ fn reconcile_staged_entry(
             let _ = windows_delete_handle(&file);
         }
         drop(file);
-        #[cfg(windows)]
-        drop(target_guard);
         if let Err(error) = result {
             #[cfg(not(windows))]
             let _ = destination.remove_file(&temporary);
@@ -2589,7 +2607,7 @@ mod tests {
         let victim = root.path().join("resource-victim");
         fs::create_dir(&victim).unwrap();
         fs::write(victim.join("SKILL.md"), "outside-safe").unwrap();
-        let skills = root.path().join(".pi/agent/skills");
+        let skills = root.path().join(".pi").join("agent").join("skills");
         fs::create_dir_all(&skills).unwrap();
         let link = skills.join("linked");
         let status = Command::new("cmd")
