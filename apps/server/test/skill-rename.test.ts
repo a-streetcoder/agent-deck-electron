@@ -6,10 +6,9 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * Skill rename route (native RenameResourceSheet): POST
- * /resources/skills/rename moves a skill directory (200 / 409 / 404) AND
- * re-points every reference — app-level default/disabled lists and per-project
- * assignments — so an assignment never silently drops (and a shadowing project
- * skill is left alone when the global one is renamed).
+ * /resources/skills/rename moves a global skill directory (200 / 409 / 404)
+ * and re-points app defaults and project assignments. Removed project catalogs
+ * are rejected without changing global resources or references.
  */
 
 const resourceHome = mkdtempSync(path.join(tmpdir(), "skill-rename-home-"));
@@ -40,10 +39,19 @@ async function defaultSkills(): Promise<string[]> {
   return settings.defaultSkills;
 }
 
-async function writeSkill(scope: "global" | "project", name: string): Promise<void> {
+async function globalSkillNames(): Promise<string[]> {
+  const { skills } = (await (
+    await api("GET", `/resources/skills?projectId=${projectId}`)
+  ).json()) as { skills: Array<{ name: string; scope: string }> };
+  return skills
+    .filter((skill) => skill.scope === "global")
+    .map((skill) => skill.name)
+    .sort();
+}
+
+async function writeGlobalSkill(name: string): Promise<void> {
   const res = await api("PUT", "/resources/skills", {
-    projectId: scope === "project" ? projectId : undefined,
-    scope,
+    scope: "global",
     name,
     edit: { description: name, body: `Skill ${name}` },
   });
@@ -67,7 +75,7 @@ afterAll(async () => {
 
 describe("POST /resources/skills/rename", () => {
   it("renames the dir AND re-points the project assignment + default list", async () => {
-    await writeSkill("global", "linter");
+    await writeGlobalSkill("linter");
     await api("PATCH", "/settings", { setDefaultSkill: { name: "linter", enabled: true } });
     await api("PATCH", `/projects/${projectId}`, { assignedSkills: ["linter"] });
 
@@ -83,60 +91,64 @@ describe("POST /resources/skills/rename", () => {
     expect(await defaultSkills()).not.toContain("linter");
   });
 
-  it("does NOT re-point an assignment that shadows the renamed global skill", async () => {
-    // A project skill "shared" shadows a same-named global one; the assignment
-    // resolves to the PROJECT skill.
-    await writeSkill("global", "shared");
-    await writeSkill("project", "shared");
+  it("rejects project rename without changing assignments or global skills", async () => {
+    await writeGlobalSkill("shared");
     await api("PATCH", `/projects/${projectId}`, { assignedSkills: ["formatter", "shared"] });
+    const assignmentsBefore = await assignedOf();
+    const globalsBefore = await globalSkillNames();
 
-    const res = await api("POST", "/resources/skills/rename", {
-      scope: "global",
+    const response = await api("POST", "/resources/skills/rename", {
+      projectId,
+      scope: "project",
       name: "shared",
       newName: "shared2",
     });
-    expect(res.status).toBe(200);
-    // "shared" stays (it named the project skill); "formatter" untouched.
-    expect((await assignedOf()).sort()).toEqual(["formatter", "shared"]);
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("project resource catalogs are not supported");
+    expect(await assignedOf()).toEqual(assignmentsBefore);
+    expect(await globalSkillNames()).toEqual(globalsBefore);
   });
 
-  it("leaves the flat default list alone when the old name still resolves (shadow)", async () => {
-    // "dup" exists both globally and as a project skill; it's an app-level default.
-    await writeSkill("global", "dup");
-    await writeSkill("project", "dup");
+  it("rejects project rename without changing the flat default list", async () => {
+    await writeGlobalSkill("dup");
     await api("PATCH", "/settings", { setDefaultSkill: { name: "dup", enabled: true } });
+    const defaultsBefore = await defaultSkills();
+    const globalsBefore = await globalSkillNames();
 
-    const res = await api("POST", "/resources/skills/rename", {
-      scope: "global",
+    const response = await api("POST", "/resources/skills/rename", {
+      projectId,
+      scope: "project",
       name: "dup",
       newName: "dup2",
     });
-    expect(res.status).toBe(200);
-    // The project "dup" still resolves the name, so the flat default must NOT be
-    // redirected to the renamed global (that would misdirect the shadowing project).
-    expect(await defaultSkills()).toContain("dup");
-    expect(await defaultSkills()).not.toContain("dup2");
+
+    expect(response.status).toBe(400);
+    expect(await defaultSkills()).toEqual(defaultsBefore);
+    expect(await globalSkillNames()).toEqual(globalsBefore);
   });
 
-  it("re-points a default whose name is fully gone after a project-scope rename", async () => {
-    // "solo" exists only as this project's skill, yet sits in the app defaults.
-    await writeSkill("project", "solo");
+  it("rejects project rename without inventing a destination or re-pointing defaults", async () => {
+    await writeGlobalSkill("solo");
     await api("PATCH", "/settings", { setDefaultSkill: { name: "solo", enabled: true } });
+    const defaultsBefore = await defaultSkills();
+    const globalsBefore = await globalSkillNames();
 
-    const res = await api("POST", "/resources/skills/rename", {
+    const response = await api("POST", "/resources/skills/rename", {
       projectId,
       scope: "project",
       name: "solo",
       newName: "solo2",
     });
-    expect(res.status).toBe(200);
-    // No skill named "solo" remains anywhere → the default follows the rename.
-    expect(await defaultSkills()).toContain("solo2");
-    expect(await defaultSkills()).not.toContain("solo");
+
+    expect(response.status).toBe(400);
+    expect(await defaultSkills()).toEqual(defaultsBefore);
+    expect(await globalSkillNames()).toEqual(globalsBefore);
+    expect(await globalSkillNames()).not.toContain("solo2");
   });
 
   it("409 on a name clash and 404 on a missing source", async () => {
-    await writeSkill("global", "clashme");
+    await writeGlobalSkill("clashme");
     expect(
       (
         await api("POST", "/resources/skills/rename", {

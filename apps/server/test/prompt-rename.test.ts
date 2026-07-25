@@ -6,9 +6,10 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * Prompt rename route (native RenameResourceSheet): POST
- * /resources/prompts/rename moves a global/project prompt on disk, mapping the
- * writer's sentinels to 200 / 409 (name taken) / 404 (source gone). The
- * resource home follows AGENT_DECK_PI_ENV so the scan is hermetic.
+ * /resources/prompts/rename moves global prompts on disk, mapping the writer's
+ * sentinels to 200 / 409 (name taken) / 404 (source gone). Project catalog
+ * mutations are rejected without changing resources or references. The resource
+ * home follows AGENT_DECK_PI_ENV so the scan is hermetic.
  */
 
 const resourceHome = mkdtempSync(path.join(tmpdir(), "prompt-home-"));
@@ -132,20 +133,11 @@ describe("prompt rename/delete re-points assignments (native defaultPromptTempla
     expect(projects.find((p) => p.id === projectId)!.assignedPrompts).toEqual(["release"]);
   });
 
-  it("global rename re-points an assignment even when the project has its OWN same-named prompt (global-first)", async () => {
-    // A global "shared" AND a project-local "shared"; the project's assignment
-    // resolves to the GLOBAL (prompts are global-first), so renaming the global
-    // must re-point it — NOT skip it like the skill (shadowing) rule would.
+  it("global rename re-points a project assignment", async () => {
     await api("PUT", "/resources/prompts", {
       scope: "global",
       name: "shared",
       edit: { body: "g" },
-    });
-    await api("PUT", "/resources/prompts", {
-      scope: "project",
-      projectId,
-      name: "shared",
-      edit: { body: "p" },
     });
     expect(
       (await api("PATCH", `/projects/${projectId}`, { assignedPrompts: ["shared"] })).status,
@@ -167,36 +159,38 @@ describe("prompt rename/delete re-points assignments (native defaultPromptTempla
     expect(projects.find((p) => p.id === projectId)!.assignedPrompts).toEqual(["common"]);
   });
 
-  it("project rename does NOT re-point an assignment that a global shadows-first", async () => {
-    // "common" now exists globally (from the prior test) and as a project prompt.
-    // The project's assignment "common" resolves to the GLOBAL, so renaming the
-    // PROJECT's own "common" must leave the assignment pointing at the global.
-    await api("PUT", "/resources/prompts", {
+  it("rejects project rename without changing assignments, defaults, or global prompts", async () => {
+    const promptsBefore = await promptNames();
+    const { settings: settingsBefore } = (await (await api("GET", "/settings")).json()) as {
+      settings: { defaultPromptTemplates: string[] };
+    };
+    const { projects: projectsBefore } = (await (await api("GET", "/projects")).json()) as {
+      projects: Array<{ id: string; assignedPrompts?: string[] }>;
+    };
+    const assignedBefore = projectsBefore.find(
+      (project) => project.id === projectId,
+    )!.assignedPrompts;
+
+    const response = await api("POST", "/resources/prompts/rename", {
       scope: "project",
       projectId,
       name: "common",
-      edit: { body: "p2" },
+      newName: "local-only",
     });
-    expect(
-      (await api("PATCH", `/projects/${projectId}`, { assignedPrompts: ["common"] })).status,
-    ).toBe(200);
 
-    expect(
-      (
-        await api("POST", "/resources/prompts/rename", {
-          scope: "project",
-          projectId,
-          name: "common",
-          newName: "local-only",
-        })
-      ).status,
-    ).toBe(200);
-
-    const { projects } = (await (await api("GET", "/projects")).json()) as {
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("project resource catalogs are not supported");
+    expect(await promptNames()).toEqual(promptsBefore);
+    const { settings: settingsAfter } = (await (await api("GET", "/settings")).json()) as {
+      settings: { defaultPromptTemplates: string[] };
+    };
+    expect(settingsAfter.defaultPromptTemplates).toEqual(settingsBefore.defaultPromptTemplates);
+    const { projects: projectsAfter } = (await (await api("GET", "/projects")).json()) as {
       projects: Array<{ id: string; assignedPrompts?: string[] }>;
     };
-    // Unchanged: the assignment still names the global "common".
-    expect(projects.find((p) => p.id === projectId)!.assignedPrompts).toEqual(["common"]);
+    expect(projectsAfter.find((project) => project.id === projectId)!.assignedPrompts).toEqual(
+      assignedBefore,
+    );
   });
 
   it("delete drops the default and the project assignment", async () => {
