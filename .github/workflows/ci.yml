@@ -86,6 +86,14 @@ jobs:
           cargo test --manifest-path packages/loop-catalog-native/Cargo.toml --locked
       - run: pnpm build:native
       - run: pnpm --filter @agent-deck/resources test
+      - run: pnpm build
+      - name: Package Electron and run packaged HTTP CRUD containment smoke
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          ${{ matrix.package }}
+          node scripts/smoke-packaged-loop-catalog.mjs release "${{ matrix.platform }}" "${{ matrix.arch }}"
       - name: Focused Loop retention and engine tests
         shell: bash
         run: |
@@ -95,14 +103,6 @@ jobs:
           pnpm --filter @agent-deck/server exec vitest run \
             test/git.test.ts \
             -t "session worktree branch ownership"
-      - run: pnpm build
-      - name: Package Electron and run packaged HTTP CRUD containment smoke
-        shell: bash
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: |
-          ${{ matrix.package }}
-          node scripts/smoke-packaged-loop-catalog.mjs release "${{ matrix.platform }}" "${{ matrix.arch }}"
 
   # Units + real-pi integration (the pinned pi binary provides deterministic,
   # keyless runs). Linux + Windows are the ship targets and BLOCK. macOS is
