@@ -1,7 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 import { sanitizedRepositoryFolder } from "../src/skillRepositories.ts";
@@ -18,13 +26,19 @@ function createSource(root: string, body = "Original body."): string {
   git(root, ["init", "-b", "main"]);
   git(root, ["config", "user.email", "test@example.com"]);
   git(root, ["config", "user.name", "Test"]);
+  git(root, ["config", "core.autocrlf", "false"]);
   writeFileSync(
     path.join(root, "SKILL.md"),
     `---\nname: adopted-skill\ndescription: Adopted\n---\n\n${body}\n`,
   );
+  writeFileSync(path.join(root, "native-marker.txt"), "must remain untouched\n");
   git(root, ["add", "."]);
   git(root, ["commit", "-m", "initial"]);
   return root;
+}
+
+function cloneSource(source: string, destination: string): void {
+  execFileSync("git", ["clone", "--config", "core.autocrlf=false", source, destination]);
 }
 
 async function startIsolatedServer(skillRepositoriesRoot: string): Promise<AgentDeckServer> {
@@ -47,26 +61,33 @@ async function importRepository(server: AgentDeckServer, source: string): Promis
 describe("existing native-style skill repository adoption", () => {
   it("registers a matching existing clone without modifying its files or Git state", async () => {
     const parent = mkdtempSync(path.join(tmpdir(), "adoption-matching-"));
-    const source = createSource(path.join(parent, "acme", "skills"));
+    const source = pathToFileURL(
+      realpathSync(createSource(path.join(parent, "acme", "skills"))),
+    ).href;
     const collectionRoot = path.join(parent, "SkillRepositories");
     const clonePath = path.join(collectionRoot, sanitizedRepositoryFolder(source));
     mkdirSync(collectionRoot, { recursive: true });
-    execFileSync("git", ["clone", source, clonePath]);
+    cloneSource(source, clonePath);
+    git(clonePath, ["remote", "set-url", "origin", source]);
     const marker = path.join(clonePath, "native-marker.txt");
-    writeFileSync(marker, "must remain untouched\n");
     const before = {
       head: git(clonePath, ["rev-parse", "HEAD"]),
+      origin: git(clonePath, ["remote", "get-url", "origin"]),
       status: git(clonePath, ["status", "--porcelain=v1"]),
       skill: readFileSync(path.join(clonePath, "SKILL.md"), "utf8"),
       marker: readFileSync(marker, "utf8"),
     };
 
+    expect(before.status).toBe("");
+
     const server = await startIsolatedServer(collectionRoot);
     try {
       const response = await importRepository(server, source);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ imported: ["adopted-skill"] });
+      const responseBody = await response.text();
+      expect(response.status, responseBody).toBe(200);
+      expect(JSON.parse(responseBody)).toMatchObject({ imported: ["adopted-skill"] });
       expect(git(clonePath, ["rev-parse", "HEAD"])).toBe(before.head);
+      expect(git(clonePath, ["remote", "get-url", "origin"])).toBe(before.origin);
       expect(git(clonePath, ["status", "--porcelain=v1"])).toBe(before.status);
       expect(readFileSync(path.join(clonePath, "SKILL.md"), "utf8")).toBe(before.skill);
       expect(readFileSync(marker, "utf8")).toBe(before.marker);
@@ -92,7 +113,7 @@ describe("existing native-style skill repository adoption", () => {
     const collectionRoot = path.join(parent, "SkillRepositories");
     const clonePath = path.join(collectionRoot, sanitizedRepositoryFolder(requested));
     mkdirSync(collectionRoot, { recursive: true });
-    execFileSync("git", ["clone", localSource, clonePath]);
+    cloneSource(localSource, clonePath);
     git(clonePath, ["remote", "set-url", "origin", "git@github.com:owner/repo.git"]);
     const beforeHead = git(clonePath, ["rev-parse", "HEAD"]);
 
@@ -137,7 +158,7 @@ describe("existing native-style skill repository adoption", () => {
     const collectionRoot = path.join(parent, "SkillRepositories");
     const clonePath = path.join(collectionRoot, sanitizedRepositoryFolder(requested));
     mkdirSync(collectionRoot, { recursive: true });
-    execFileSync("git", ["clone", different, clonePath]);
+    cloneSource(different, clonePath);
     const beforeHead = git(clonePath, ["rev-parse", "HEAD"]);
     const beforeSkill = readFileSync(path.join(clonePath, "SKILL.md"), "utf8");
 

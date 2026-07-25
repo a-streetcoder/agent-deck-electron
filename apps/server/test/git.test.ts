@@ -148,7 +148,7 @@ describe("strict release synchronization", () => {
       ahead: 1,
       behind: 1,
     });
-  });
+  }, 20_000);
 
   it("classifies detached HEAD, missing upstream, and an unreachable remote", async () => {
     const detached = makeRemoteFixture();

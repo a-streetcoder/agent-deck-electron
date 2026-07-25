@@ -13,7 +13,13 @@ import {
 describe("skill repositories fixed root", () => {
   it("resolves macOS, Windows, and Linux native-compatible locations", () => {
     expect(skillRepositoriesRoot({ platform: "darwin", home: "/Users/test", env: {} })).toBe(
-      path.join("/Users/test", "Library", "Application Support", "Agent Deck", "SkillRepositories"),
+      path.posix.join(
+        "/Users/test",
+        "Library",
+        "Application Support",
+        "Agent Deck",
+        "SkillRepositories",
+      ),
     );
     expect(
       skillRepositoriesRoot({
@@ -31,9 +37,9 @@ describe("skill repositories fixed root", () => {
         home: "/home/test",
         env: { XDG_DATA_HOME: "/data" },
       }),
-    ).toBe(path.join("/data", "Agent Deck", "SkillRepositories"));
+    ).toBe(path.posix.join("/data", "Agent Deck", "SkillRepositories"));
     expect(skillRepositoriesRoot({ platform: "linux", home: "/home/test", env: {} })).toBe(
-      path.join("/home/test", ".local", "share", "Agent Deck", "SkillRepositories"),
+      path.posix.join("/home/test", ".local", "share", "Agent Deck", "SkillRepositories"),
     );
   });
 

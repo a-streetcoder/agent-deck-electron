@@ -117,40 +117,103 @@ if (
 }
 
 const sandbox = mkdtempSync(path.join(tmpdir(), "agent-deck-packaged-electron-loop-"));
-const child = spawn(executable, [path.join(asarPath, "dist", "server", "index.mjs")], {
-  cwd: sandbox,
-  env: {
-    ...baseEnvironment,
-    HOME: sandbox,
-    USERPROFILE: sandbox,
-    PORT: "0",
-    AGENT_DECK_TEST: "1",
-    AGENT_DECK_DATA_DIR: path.join(sandbox, "data"),
-    AGENT_DECK_WEB_DIST: path.join(asarPath, "apps", "web", "dist"),
-    AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(resourcesPath, "builtin-agents"),
-    AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: addonPath,
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let output = "";
-child.stdout.setEncoding("utf8");
-child.stderr.setEncoding("utf8");
-child.stdout.on("data", (chunk) => (output += chunk));
-child.stderr.on("data", (chunk) => (output += chunk));
-const deadline = Date.now() + 30_000;
-let base;
-while (Date.now() < deadline) {
-  const match = output.match(/agent-deck listening on (http:\/\/127\.0\.0\.1:\d+)/);
-  if (match) {
-    base = match[1];
-    break;
-  }
-  if (child.exitCode !== null) throw new Error(`packaged Electron server exited:\n${output}`);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+const serverEntry = path.join(asarPath, "dist", "server", "index.mjs");
+const serverEnvironment = {
+  ...baseEnvironment,
+  HOME: sandbox,
+  USERPROFILE: sandbox,
+  PORT: "0",
+  AGENT_DECK_TEST: "1",
+  AGENT_DECK_DATA_DIR: path.join(sandbox, "data"),
+  AGENT_DECK_WEB_DIST: path.join(asarPath, "apps", "web", "dist"),
+  AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(resourcesPath, "builtin-agents"),
+  AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: addonPath,
+};
+let activeServer;
+
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
-if (!base) throw new Error(`packaged Electron server did not become ready:\n${output}`);
+
+async function waitForExit(child, timeoutMs) {
+  if (childExited(child)) return true;
+  return await new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    child.once("exit", onExit);
+    if (childExited(child)) {
+      child.off("exit", onExit);
+      clearTimeout(timer);
+      resolve(true);
+    }
+  });
+}
+
+async function stopServer() {
+  const state = activeServer;
+  if (!state) return;
+  let stopped = false;
+  try {
+    if (!childExited(state.child)) state.child.kill("SIGTERM");
+    if (!(await waitForExit(state.child, 5_000))) {
+      state.child.kill("SIGKILL");
+      if (!(await waitForExit(state.child, 5_000))) {
+        throw new Error(`packaged Electron server did not exit:\n${state.output}`);
+      }
+    }
+    stopped = true;
+  } finally {
+    if (stopped && activeServer === state) activeServer = undefined;
+  }
+}
+
+async function startServer() {
+  if (activeServer) throw new Error("packaged Electron server is already running");
+  const child = spawn(executable, [serverEntry], {
+    cwd: sandbox,
+    env: serverEnvironment,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const state = { child, output: "", base: undefined, spawnError: undefined };
+  activeServer = state;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => (state.output += chunk));
+  child.stderr.on("data", (chunk) => (state.output += chunk));
+  child.on("error", (error) => {
+    state.spawnError = error;
+    state.output += `${error.stack ?? error.message}\n`;
+  });
+
+  try {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const match = state.output.match(/agent-deck listening on (http:\/\/127\.0\.0\.1:\d+)/);
+      if (match) {
+        state.base = match[1];
+        return state.base;
+      }
+      if (state.spawnError || childExited(child)) {
+        throw new Error(`packaged Electron server exited:\n${state.output}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`packaged Electron server did not become ready:\n${state.output}`);
+  } catch (error) {
+    await stopServer();
+    throw error;
+  }
+}
 
 async function jsonRequest(method, route, body, expectedStatus = 200) {
+  const base = activeServer?.base;
+  if (!base) throw new Error("packaged Electron server is not ready");
   const response = await fetch(`${base}${route}`, {
     method,
     ...(body
@@ -165,6 +228,7 @@ async function jsonRequest(method, route, body, expectedStatus = 200) {
 }
 
 try {
+  await startServer();
   const initial = await jsonRequest("GET", "/loops");
   if (initial.loops.length !== 0) throw new Error("initial catalog was not empty");
 
@@ -200,6 +264,7 @@ try {
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops.length !== 0) throw new Error("delete failed");
 
+  await stopServer();
   const catalogRoot = path.join(sandbox, ".pi");
   const retainedCatalog = path.join(sandbox, ".pi-retained");
   renameSync(catalogRoot, retainedCatalog);
@@ -208,19 +273,18 @@ try {
   const sentinel = path.join(victim, "sentinel");
   writeFileSync(sentinel, "sentinel-safe");
   symlinkSync(victim, catalogRoot, expectedPlatform === "win32" ? "junction" : "dir");
+
+  await startServer();
   const refused = await jsonRequest("GET", "/loops", undefined, 409);
   if (refused.code !== "loop_catalog_capability_error") {
     throw new Error(`unexpected containment refusal: ${JSON.stringify(refused)}`);
   }
+  await stopServer();
   if (readFileSync(sentinel, "utf8") !== "sentinel-safe") throw new Error("victim was modified");
 
   console.log(
     `Packaged Electron Loop HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
   );
 } finally {
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
+  await stopServer();
 }
