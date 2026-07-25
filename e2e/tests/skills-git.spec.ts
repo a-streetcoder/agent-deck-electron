@@ -274,18 +274,85 @@ test("tracks concurrent conflict resolutions independently with action-specific 
   await expect.poll(() => requestCounts.get("conflict-a")).toBe(1);
   await expect.poll(() => requestCounts.get("conflict-b")).toBe(1);
   await expect(mineA).toBeDisabled();
-  await expect(mineA).toHaveAccessibleName("Keeping mine…");
+  await expect(mineA).toHaveAccessibleName("Keeping mine for conflict-a…");
   await expect(remoteB).toBeDisabled();
-  await expect(remoteB).toHaveAccessibleName("Taking remote…");
+  await expect(remoteB).toHaveAccessibleName("Taking remote folder for conflict-b…");
 
   pending.get("conflict-b")!();
   await expect(remoteB).toHaveCount(0);
   await expect(mineA).toBeDisabled();
+  const update = page.getByTestId(`skill-repo-update-${id}`);
+  await expect(update).toBeFocused();
   await mineA.evaluate((button: { click(): void }) => button.click());
   expect(requestCounts.get("conflict-a")).toBe(1);
 
   pending.get("conflict-a")!();
   await expect(mineA).toHaveCount(0);
+  await expect(update).toBeFocused();
+});
+
+test("restores keyboard focus after conflict success and rejected retry", async ({ page }) => {
+  const id = "conflict-focus";
+  let alphaAttempts = 0;
+  await page.route("**/resources/skill-repos", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        repos: [
+          {
+            id,
+            remoteUrl: "https://example.invalid/focus.git",
+            skillNames: ["alpha", "beta", "gamma"],
+            lastSyncedCommit: "focus123",
+            importedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    });
+  });
+  await page.route(`**/resources/skill-repos/${id}/check`, async (route) => {
+    await route.fulfill({ status: 200, json: { updateAvailable: true } });
+  });
+  await page.route(`**/resources/skill-repos/${id}/update`, async (route) => {
+    await route.fulfill({ status: 200, json: { conflicts: ["alpha", "beta", "gamma"] } });
+  });
+  await page.route(`**/resources/skill-repos/${id}/resolve`, async (route) => {
+    const { name } = route.request().postDataJSON() as { name: string };
+    if (name === "alpha" && alphaAttempts++ === 0) {
+      await route.fulfill({ status: 409, json: { error: "Temporary resolution failure." } });
+      return;
+    }
+    await route.fulfill({ status: 200, json: { ok: true } });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  const update = page.getByTestId(`skill-repo-update-${id}`);
+  await update.click();
+
+  const betaMine = page.getByTestId(`skill-conflict-mine-${id}-beta`);
+  await betaMine.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`skill-conflict-mine-${id}-gamma`)).toBeFocused();
+
+  const gammaRemote = page.getByTestId(`skill-conflict-remote-${id}-gamma`);
+  await gammaRemote.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`skill-conflict-mine-${id}-alpha`)).toBeFocused();
+
+  const alphaRemote = page.getByTestId(`skill-conflict-remote-${id}-alpha`);
+  await alphaRemote.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`skill-conflict-mine-${id}-alpha`)).toBeEnabled();
+  await expect(alphaRemote).toBeEnabled();
+  await expect(alphaRemote).toBeFocused();
+  await expect(page.getByTestId("error-banner")).toContainText(
+    "Couldn't resolve alpha. Temporary resolution failure. Try again.",
+  );
+
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`skill-repo-conflicts-${id}`)).toHaveCount(0);
+  await expect(update).toBeFocused();
 });
 
 test("holds a locally-edited skill as a conflict and resolves it Take Remote", async ({ page }) => {

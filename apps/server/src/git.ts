@@ -41,6 +41,69 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   return stdout;
 }
 
+function validateGitObjectId(commit: string): void {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) {
+    throw new Error("invalid_git_commit");
+  }
+}
+
+function validateGitBlobPath(repoRelativePosixPath: string): void {
+  if (
+    repoRelativePosixPath.length === 0 ||
+    repoRelativePosixPath.startsWith("/") ||
+    repoRelativePosixPath.includes("\\") ||
+    repoRelativePosixPath.includes(":") ||
+    repoRelativePosixPath.includes("\0") ||
+    path.posix.normalize(repoRelativePosixPath) !== repoRelativePosixPath ||
+    repoRelativePosixPath.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new Error("invalid_git_blob_path");
+  }
+}
+
+/**
+ * Convert an absolute path beneath a checkout to Git's repository-relative,
+ * POSIX path spelling. Ambiguous path syntax is rejected rather than passed to
+ * Git's `<object>:<path>` revision parser.
+ */
+export function gitRepoRelativePosixPath(repoDir: string, absolutePath: string): string {
+  const root = path.resolve(repoDir);
+  const target = path.resolve(absolutePath);
+  const relative = path.relative(root, target);
+  if (
+    relative === "" ||
+    path.isAbsolute(relative) ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error("git_blob_path_outside_repository");
+  }
+  const posixPath = relative.split(path.sep).join("/");
+  validateGitBlobPath(posixPath);
+  return posixPath;
+}
+
+/** Read exact blob bytes from a validated commit without consulting checkout filters. */
+export async function gitBlobAtCommit(
+  repoDir: string,
+  commit: string,
+  repoRelativePosixPath: string,
+): Promise<Buffer> {
+  validateGitObjectId(commit);
+  validateGitBlobPath(repoRelativePosixPath);
+  const { stdout } = await execFileAsync(
+    gitBin(),
+    ["cat-file", "blob", `${commit}:${repoRelativePosixPath}`],
+    {
+      cwd: repoDir,
+      encoding: "buffer",
+      timeout: 15_000,
+      maxBuffer: 8_000_000,
+    },
+  );
+  return stdout;
+}
+
 /** As {@link runGit}, but with extra environment (checkpoint capture threads a
  * throwaway `GIT_INDEX_FILE` + author/committer identity through here). */
 async function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {

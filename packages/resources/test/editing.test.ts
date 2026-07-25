@@ -349,6 +349,30 @@ describe("agent/skill file writer", () => {
     expect(again.skipped.sort()).toEqual(["alpha", "beta"]);
   });
 
+  it("fingerprints source payload before the immediate pre-import hold hook", () => {
+    const home = makeHome();
+    const clone = mkdtempSync(path.join(tmpdir(), "skillrepo-hook-"));
+    writeFileSync(
+      path.join(clone, "SKILL.md"),
+      "---\nname: held\ndescription: Held\n---\nRemote body",
+    );
+    const destination = path.join(home, ".pi", "agent", "skills", "held");
+    mkdirSync(destination, { recursive: true });
+    writeFileSync(path.join(destination, "SKILL.md"), "local bytes");
+    let fingerprint = "";
+
+    const result = importSkillsFromClone({ home }, "global", clone, "held", true, {
+      beforeImport: (_name, sourceFingerprint) => {
+        fingerprint = sourceFingerprint;
+        return false;
+      },
+    });
+
+    expect(fingerprint).toMatch(/^tree-v1:[0-9a-f]{64}$/);
+    expect(result).toMatchObject({ imported: [], skipped: ["held"] });
+    expect(readFileSync(path.join(destination, "SKILL.md"), "utf8")).toBe("local bytes");
+  });
+
   it("a root SKILL.md imports the whole repo as one skill, .git excluded", () => {
     const home = makeHome();
     const clone = mkdtempSync(path.join(tmpdir(), "skillrepo-root-"));
