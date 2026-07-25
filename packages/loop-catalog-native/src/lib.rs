@@ -163,17 +163,6 @@ fn unique_temp(dir: &Dir, content: &str) -> std::io::Result<(String, cap_std::fs
             .maybe_dir(false);
         #[cfg(unix)]
         options.mode(0o600);
-        #[cfg(windows)]
-        options
-            .access_mode(
-                windows_sys::Win32::Storage::FileSystem::DELETE
-                    | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ
-                    | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE,
-            )
-            .share_mode(
-                windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
-                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
-            );
         match dir.open_with(&name, &options) {
             Ok(mut file) => {
                 if let Err(error) = file
@@ -262,18 +251,8 @@ pub fn create_loop_catalog_file(home: String, basename: String, content: String)
         )
     })?;
     let (temp, file) = unique_temp(&dir, &content).map_err(map_io)?;
-    #[cfg(windows)]
-    let _ = &temp;
-    #[cfg(windows)]
-    let result = windows_rename_handle(&file, &dir, &basename, false);
-    #[cfg(not(windows))]
-    let result = dir.hard_link(&temp, &dir, &basename);
-    #[cfg(windows)]
-    if result.is_err() {
-        let _ = windows_delete_handle(&file);
-    }
     drop(file);
-    #[cfg(not(windows))]
+    let result = dir.hard_link(&temp, &dir, &basename);
     let _ = dir.remove_file(&temp);
     result.map_err(map_io)?;
     sync_dir(&dir).map_err(map_io)?;
@@ -297,23 +276,9 @@ pub fn replace_loop_catalog_file(home: String, basename: String, content: String
             "target is not a regular file",
         ));
     }
-    #[cfg(windows)]
-    let target_guard = windows_open_mutation(&dir, &basename, true, true).map_err(map_io)?;
     let (temp, file) = unique_temp(&dir, &content).map_err(map_io)?;
-    #[cfg(windows)]
-    let _ = &temp;
-    #[cfg(windows)]
-    let result = windows_rename_handle(&file, &dir, &basename, true);
-    #[cfg(not(windows))]
-    let result = dir.rename(&temp, &dir, &basename);
-    #[cfg(windows)]
-    if result.is_err() {
-        let _ = windows_delete_handle(&file);
-    }
     drop(file);
-    #[cfg(windows)]
-    drop(target_guard);
-    #[cfg(not(windows))]
+    let result = dir.rename(&temp, &dir, &basename);
     if result.is_err() {
         let _ = dir.remove_file(&temp);
     }
@@ -1007,7 +972,7 @@ pub fn rename_resource_catalog_entry(
             replacement_content.as_deref(),
         )?;
         sync_dir(&from_parent).map_err(map_resource_io)?;
-        return sync_dir(&to_parent).map_err(map_resource_io);
+        sync_dir(&to_parent).map_err(map_resource_io)
     }
     #[cfg(not(windows))]
     let replacement = if let Some(content) = replacement_content.as_deref() {
@@ -1909,6 +1874,34 @@ mod tests {
         assert_eq!(scan_loop_catalog(home.clone()).unwrap()[0].content, "two");
         delete_loop_catalog_file(home.clone(), "a.loop.md".into()).unwrap();
         assert!(scan_loop_catalog(home).unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_loop_crud_and_resource_pinning_coexist() {
+        let root = home();
+        let home = root.path().to_string_lossy().into_owned();
+        create_loop_catalog_file(home.clone(), "windows.loop.md".into(), "one".into()).unwrap();
+        replace_loop_catalog_file(home.clone(), "windows.loop.md".into(), "two".into()).unwrap();
+        assert_eq!(scan_loop_catalog(home.clone()).unwrap()[0].content, "two");
+        write_resource_catalog_file(
+            home.clone(),
+            "global-prompts".into(),
+            vec!["windows.md".into()],
+            "resource".into(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            read_resource_catalog_file(
+                home.clone(),
+                "global-prompts".into(),
+                vec!["windows.md".into()]
+            )
+            .unwrap(),
+            "resource"
+        );
+        delete_loop_catalog_file(home, "windows.loop.md".into()).unwrap();
     }
 
     #[cfg(unix)]
