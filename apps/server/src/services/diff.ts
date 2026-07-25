@@ -8,6 +8,7 @@ import {
 } from "@agent-deck/contracts";
 import { Context, Effect, Layer } from "effect";
 import {
+  gitCommitOid,
   gitDiffBase,
   gitDiffFilePatch,
   gitDiffNameStatus,
@@ -34,9 +35,10 @@ import {
  *
  * ## Diff-base semantics (donor's review-diff preview)
  *
- * The working tree vs HEAD for the SESSION's checkout (`meta.cwd`, worktree-
- * aware — a worktree session naturally scopes to its own branch), staged and
- * unstaged changes alike, with rename detection (`-M`). Untracked files are
+ * Normal sessions compare the working tree with HEAD for the SESSION's checkout
+ * (`meta.cwd`, worktree-aware). A server-marked retained Loop review may instead
+ * supply its validated, fully-qualified source-branch ref, exposing committed as
+ * well as staged and unstaged branch changes. Untracked files are
  * part of the set (status `"?"`) and their diffs are synthesized against
  * `/dev/null`, exactly like the donor's `readUntrackedReviewDiffs`. In a fresh
  * repo with no commits the base falls back to the empty tree (git.ts
@@ -89,9 +91,13 @@ export interface DiffRefreshResult {
 
 export interface SessionDiffShape {
   /** The session's changed-file set — cached; computes on first call. */
-  readonly listFiles: (sessionId: string, cwd: string) => Effect.Effect<DiffFileSet>;
+  readonly listFiles: (sessionId: string, cwd: string, base?: string) => Effect.Effect<DiffFileSet>;
   /** Recompute the set now (turn boundary / on demand) and diff vs the cache. */
-  readonly refresh: (sessionId: string, cwd: string) => Effect.Effect<DiffRefreshResult>;
+  readonly refresh: (
+    sessionId: string,
+    cwd: string,
+    base?: string,
+  ) => Effect.Effect<DiffRefreshResult>;
   /**
    * One file's unified diff, bounded. `path` must be an entry of the session's
    * changed-file set (this is also the traversal guard: only paths git itself
@@ -101,6 +107,7 @@ export interface SessionDiffShape {
     sessionId: string,
     cwd: string,
     path: string,
+    base?: string,
   ) => Effect.Effect<FileDiffResult>;
   /** Drop a session's cache entry (session ended/destroyed). */
   readonly drop: (sessionId: string) => Effect.Effect<void>;
@@ -158,9 +165,12 @@ interface CheapScan {
 
 const RACY_MTIME_WINDOW_MS = 2_000;
 
-async function cheapScan(cwd: string): Promise<CheapScan | null> {
+async function cheapScan(cwd: string, selectedBase?: string): Promise<CheapScan | null> {
   if (!(await isGitRepo(cwd))) return null;
-  const base = await gitDiffBase(cwd);
+  // A Loop review selects a validated branch ref internally, but the ref itself
+  // is mutable. Pin each scan (and its later file patches) to the commit observed
+  // now so source-branch movement cannot reuse stale status/count fingerprints.
+  const base = selectedBase ? await gitCommitOid(cwd, selectedBase) : await gitDiffBase(cwd);
   const [nameStatus, numstat, untracked] = await Promise.all([
     gitDiffNameStatus(cwd, base),
     gitDiffNumstat(cwd, base),
@@ -303,19 +313,28 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
   // turn boundary reconciles).
   const cache = new Map<
     string,
-    { set: DiffFileSet; fingerprint: string; scanFingerprint: string }
+    { set: DiffFileSet; fingerprint: string; scanFingerprint: string; base: string }
   >();
+  const cacheKey = (sessionId: string, base?: string): string =>
+    `${sessionId}\0${base ?? "<working-tree-head>"}`;
 
-  const compute = async (sessionId: string, cwd: string): Promise<DiffRefreshResult> => {
+  const compute = async (
+    sessionId: string,
+    cwd: string,
+    selectedBase?: string,
+  ): Promise<DiffRefreshResult> => {
+    const key = cacheKey(sessionId, selectedBase);
     let set: DiffFileSet;
     let scanFingerprint: string;
+    let effectiveBase = selectedBase ?? "HEAD";
     try {
-      const scan = await cheapScan(cwd);
+      const scan = await cheapScan(cwd, selectedBase);
       if (scan === null) {
         set = EMPTY_SET;
         scanFingerprint = "";
       } else {
-        const cached = cache.get(sessionId);
+        effectiveBase = scan.base;
+        const cached = cache.get(key);
         // Cheap short-circuit (the spawn-storm guard): identical scan
         // fingerprint == identical working tree, so the cached set is current
         // and the per-file untracked numstat pass is skipped entirely. A racy
@@ -333,26 +352,47 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
       set = { repo: true, files: [], truncated: false };
       scanFingerprint = "";
     }
-    const next = fingerprint(set);
-    const previous = cache.get(sessionId)?.fingerprint ?? emptyFingerprintFor(set.repo);
-    cache.set(sessionId, { set, fingerprint: next, scanFingerprint });
-    return { set, changed: next !== previous };
+    // A selected Loop base is part of the externally observable diff snapshot.
+    // Its OID must participate even when file/status/numstat shapes are identical,
+    // otherwise refresh would not notify clients to refetch changed patch bodies.
+    const resultFingerprint = selectedBase
+      ? JSON.stringify([effectiveBase, fingerprint(set)])
+      : fingerprint(set);
+    const emptyFingerprint = selectedBase
+      ? JSON.stringify([effectiveBase, emptyFingerprintFor(set.repo)])
+      : emptyFingerprintFor(set.repo);
+    const previous = cache.get(key)?.fingerprint ?? emptyFingerprint;
+    cache.set(key, {
+      set,
+      fingerprint: resultFingerprint,
+      scanFingerprint,
+      base: effectiveBase,
+    });
+    const changed = resultFingerprint !== previous;
+    return { set, changed };
   };
 
   return {
-    listFiles: (sessionId, cwd) =>
+    listFiles: (sessionId, cwd, base) =>
       Effect.promise(async () => {
-        const cached = cache.get(sessionId);
+        // Normal sessions retain the established cache-on-list behavior. A Loop
+        // review base is a mutable server-selected ref, so reopening a terminal
+        // review must rescan and pin its current OID even without a turn-boundary
+        // refresh. compute() replaces the same bounded cache entry atomically.
+        if (base !== undefined) return (await compute(sessionId, cwd, base)).set;
+        const cached = cache.get(cacheKey(sessionId, base));
         if (cached) return cached.set;
-        return (await compute(sessionId, cwd)).set;
+        return (await compute(sessionId, cwd, base)).set;
       }),
 
-    refresh: (sessionId, cwd) => Effect.promise(() => compute(sessionId, cwd)),
+    refresh: (sessionId, cwd, base) => Effect.promise(() => compute(sessionId, cwd, base)),
 
-    fileDiff: (sessionId, cwd, path) =>
+    fileDiff: (sessionId, cwd, path, base) =>
       Effect.promise(async () => {
-        const cached = cache.get(sessionId);
-        const set = cached ? cached.set : (await compute(sessionId, cwd)).set;
+        const key = cacheKey(sessionId, base);
+        let cached = cache.get(key);
+        const set = cached ? cached.set : (await compute(sessionId, cwd, base)).set;
+        cached ??= cache.get(key);
         const entry = set.files.find((file) => file.path === path);
         // Not in the set (or a non-repo session): the clean empty answer. This
         // doubles as the path-traversal guard — only paths git itself listed
@@ -364,10 +404,10 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
             const out = await gitDiffUntrackedPatch(cwd, path, maxPatchChars);
             return { path, diff: out.text, truncated: out.truncated, binary: false };
           }
-          const base = await gitDiffBase(cwd);
+          const patchBase = cached?.base ?? base ?? (await gitDiffBase(cwd));
           // A rename needs BOTH paths in the pathspec (see git.ts).
           const paths = entry.oldPath !== undefined ? [entry.oldPath, entry.path] : [entry.path];
-          const out = await gitDiffFilePatch(cwd, base, paths, maxPatchChars);
+          const out = await gitDiffFilePatch(cwd, patchBase, paths, maxPatchChars);
           return { path, diff: out.text, truncated: out.truncated, binary: false };
         } catch {
           return { path, diff: "", truncated: false, binary: false };
@@ -376,7 +416,10 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
 
     drop: (sessionId) =>
       Effect.sync(() => {
-        cache.delete(sessionId);
+        const prefix = `${sessionId}\0`;
+        for (const key of cache.keys()) {
+          if (key.startsWith(prefix)) cache.delete(key);
+        }
       }),
   };
 };

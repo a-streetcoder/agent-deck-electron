@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,17 @@ test.beforeAll(async () => {
   // invokes the workspace's installed pnpm directly, so it does not need the real HOME.
   const dataDir = mkdtempSync(path.join(tmpdir(), "electron-e2e-data-"));
   const resourceHome = mkdtempSync(path.join(tmpdir(), "electron-e2e-home-"));
+  const agentsDir = path.join(resourceHome, ".pi", "agent", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    path.join(agentsDir, "Desktop Loop Agent.md"),
+    "---\nname: Desktop Loop Agent\ntools: read, bash, edit\n---\nCreate review evidence.\n",
+  );
+  execSync("git init -b main", { cwd: projectDir });
+  execSync("git config user.email desktop-e2e@example.com", { cwd: projectDir });
+  execSync('git config user.name "Desktop E2E"', { cwd: projectDir });
+  writeFileSync(path.join(projectDir, "README.md"), "# Desktop E2E\n");
+  execSync("git add README.md && git commit -m initial", { cwd: projectDir });
   // CI runs as root in a container where Chromium's setuid sandbox can't start,
   // so Electron needs --no-sandbox there (harmless locally, gated on CI).
   const launchArgs = process.env.CI ? [DESKTOP_DIR, "--no-sandbox"] : [DESKTOP_DIR];
@@ -223,23 +234,33 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   expect(health).toBe(true);
 });
 
-test("Loop artifact reveal accepts only backend-owned opaque run ids", async () => {
+test("Loop reveal bridges accept only backend-owned opaque run ids", async () => {
   const window = await app.firstWindow();
   const result = await window.evaluate(async () => {
     const bridge = (
       globalThis as typeof globalThis & {
-        agentDeck?: { revealLoopArtifacts?(runId: string): Promise<boolean> };
+        agentDeck?: {
+          revealLoopArtifacts?(runId: string): Promise<boolean>;
+          revealLoopWorktree?(runId: string): Promise<boolean>;
+        };
       }
     ).agentDeck;
-    if (!bridge?.revealLoopArtifacts) return "bridge unavailable";
-    try {
-      await bridge.revealLoopArtifacts("../../arbitrary-path");
-      return "unexpected success";
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+    if (!bridge?.revealLoopArtifacts || !bridge.revealLoopWorktree) return "bridge unavailable";
+    const messages: string[] = [];
+    for (const reveal of [bridge.revealLoopArtifacts, bridge.revealLoopWorktree]) {
+      try {
+        await reveal("../../arbitrary-path");
+        messages.push("unexpected success");
+      } catch (error) {
+        messages.push(error instanceof Error ? error.message : String(error));
+      }
     }
+    return messages;
   });
-  expect(result).toContain("Loop run is unavailable");
+  expect(result).toEqual([
+    expect.stringContaining("Loop run is unavailable"),
+    expect.stringContaining("Loop run is unavailable"),
+  ]);
 });
 
 test("adding a project via the native folder picker registers it", async () => {
@@ -315,6 +336,71 @@ test("adding a project via the native folder picker registers it", async () => {
       ),
     )
     .toContain("loop-artifacts");
+
+  const worktreeRunId = await window.evaluate(async (selectedPath) => {
+    const { projects } = (await (await fetch("/projects")).json()) as {
+      projects: Array<{ id: string; path: string }>;
+    };
+    const project = projects.find((candidate) => candidate.path === selectedPath);
+    if (!project) throw new Error("desktop test project is unavailable");
+    const create = await fetch("/loops", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Desktop Retained Review",
+        goal: "Retain a review worktree.",
+        agentName: "Desktop Loop Agent",
+        writeTarget: "newWorktree",
+        maxIterations: 1,
+      }),
+    });
+    if (!create.ok) throw new Error(await create.text());
+    const { loops } = (await (await fetch("/loops")).json()) as {
+      loops: Array<{ id: string; name: string }>;
+    };
+    const loop = loops.find((candidate) => candidate.name === "Desktop Retained Review");
+    if (!loop) throw new Error("desktop retained Loop was not persisted");
+    const started = await fetch(`/loops/${encodeURIComponent(loop.id)}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id }),
+    });
+    const startBody = (await started.json()) as { run?: { id: string }; error?: string };
+    if (!startBody.run) throw new Error(startBody.error ?? "worktree run did not start");
+    await fetch(`/loops/runs/${startBody.run.id}/stop`, { method: "POST" });
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const current = (await (await fetch(`/loops/runs/${startBody.run.id}`)).json()) as {
+        run: { status: string };
+      };
+      if (!["running", "stopping"].includes(current.run.status)) return startBody.run.id;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("worktree run did not stop");
+  }, projectDir);
+  await app.evaluate(({ shell }) => {
+    shell.showItemInFolder = (revealedPath) => {
+      (globalThis as typeof globalThis & { revealedLoopWorktree?: string }).revealedLoopWorktree =
+        revealedPath;
+    };
+  });
+  const worktreeRevealed = await window.evaluate(async (id) => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: { revealLoopWorktree?(runId: string): Promise<boolean> };
+      }
+    ).agentDeck;
+    return await bridge?.revealLoopWorktree?.(id);
+  }, worktreeRunId);
+  expect(worktreeRevealed).toBe(true);
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { revealedLoopWorktree?: string })
+            .revealedLoopWorktree,
+      ),
+    )
+    .toContain("loop-");
 });
 
 test("the native File menu exposes New Chat and it creates a session", async () => {

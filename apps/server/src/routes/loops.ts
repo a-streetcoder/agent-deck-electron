@@ -4,6 +4,7 @@ import nodePath from "node:path";
 import {
   canRetryLoopRun,
   isLoopAvailableInProject,
+  isLoopRunTerminal,
   isRunnableLoopStructure,
   loopAgentRoleLabel,
   loopRequiredAgentRoles,
@@ -30,7 +31,12 @@ import {
 import type { ThinkingLevel } from "@agent-deck/pi-host";
 import type { FastifyReply } from "fastify";
 import { z } from "zod";
-import { createLoopWorktree, type GitWorktree, type OwnedLoopWorktreeProof } from "../git.ts";
+import {
+  createLoopWorktree,
+  gitWorktreeRegistrations,
+  type GitWorktree,
+  type OwnedLoopWorktreeProof,
+} from "../git.ts";
 import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
@@ -79,6 +85,10 @@ function catalogCapabilityRefusal(error: unknown, reply: FastifyReply): FastifyR
   });
 }
 
+function loopWorktreeBranch(loopName: string, ownershipId: string): string {
+  return `agent-deck/loop-${loopName.replace(/[^A-Za-z0-9]+/g, "-")}-${ownershipId.slice(0, 8)}`;
+}
+
 function unsupportedStructureError(structure: LoopStructure): {
   code: typeof LOOP_STRUCTURE_UNSUPPORTED_CODE;
   error: string;
@@ -96,6 +106,7 @@ function unsupportedStructureError(structure: LoopStructure): {
 export interface LoopRouteTestDependencies {
   canonicalCheckoutLockKey: typeof canonicalCheckoutLockKey;
   createLoopWorktree: typeof createLoopWorktree;
+  gitWorktreeRegistrations: typeof gitWorktreeRegistrations;
 }
 
 export function registerLoopRoutes(
@@ -103,6 +114,7 @@ export function registerLoopRoutes(
   routeDependencies: LoopRouteTestDependencies = {
     canonicalCheckoutLockKey,
     createLoopWorktree,
+    gitWorktreeRegistrations,
   },
 ): void {
   const {
@@ -552,7 +564,7 @@ export function registerLoopRoutes(
     if (loop.writeTarget === "newWorktree") {
       const ownershipId = randomUUID();
       const target = nodePath.join(loopWorktreesRoot, `loop-${ownershipId}`);
-      const branch = `agent-deck/loop-${loop.name.replace(/[^A-Za-z0-9]+/g, "-")}-${ownershipId.slice(0, 8)}`;
+      const branch = loopWorktreeBranch(loop.name, ownershipId);
       try {
         worktree = await routeDependencies.createLoopWorktree(project.path, target, branch);
         worktreeOwnership = {
@@ -588,6 +600,10 @@ export function registerLoopRoutes(
       ...baseExtensions,
       ...enabledExtensionPaths(body.projectId),
     ]);
+    // Allocate the durable run identity before the parent session so retained
+    // worktree sessions carry an explicit, server-owned review marker from their
+    // first persisted metadata snapshot.
+    const loopReviewRunId = worktree ? randomUUID() : undefined;
     let parent: ReturnType<typeof sessions.create> | undefined;
     let run: ReturnType<typeof loopEngine.start> | undefined;
     let announcementAttempted = false;
@@ -596,7 +612,7 @@ export function registerLoopRoutes(
       parent = sessions.create({
         cwd,
         projectId: body.projectId,
-        ...(worktree ? { worktree } : {}),
+        ...(worktree ? { worktree, loopReviewRunId } : {}),
         env: { ...defaults.env, ...body.env },
         plan: {
           kind: "parent",
@@ -625,6 +641,7 @@ export function registerLoopRoutes(
         }
       }
       run = loopEngine.start(loop, cwd, {
+        ...(loopReviewRunId ? { runId: loopReviewRunId } : {}),
         projectId: body.projectId,
         retryOf: body.retryOf,
         launch: {
@@ -751,6 +768,96 @@ export function registerLoopRoutes(
     const run = loopEngine.get((request.params as { id: string }).id);
     if (!run) return reply.status(404).send({ error: "unknown loop run" });
     return { run };
+  });
+
+  // Electron main calls this with an opaque run id. Every persisted ownership
+  // claim is re-proven against current project metadata, the private root, the
+  // filesystem, and Git's registration table before a path crosses the boundary.
+  fastify.get("/loops/runs/:id/worktree-directory", async (request, reply) => {
+    const unavailable = () =>
+      reply.status(409).send({
+        code: "loop_worktree_unavailable",
+        error: "The retained Loop worktree is unavailable for review.",
+      });
+    const id = (request.params as { id: string }).id;
+    const run = loopEngine.get(id);
+    if (!run) return reply.status(404).send({ error: "unknown loop run" });
+    const ownership = run.launch?.worktree as Partial<OwnedLoopWorktreeProof> | undefined;
+    if (
+      !isLoopRunTerminal(run.status) ||
+      run.launch?.writeTarget !== "newWorktree" ||
+      !ownership ||
+      ownership.ownershipVersion !== 1 ||
+      typeof ownership.ownershipId !== "string" ||
+      !z.string().uuid().safeParse(ownership.ownershipId).success ||
+      typeof ownership.projectRoot !== "string" ||
+      !nodePath.isAbsolute(ownership.projectRoot) ||
+      typeof ownership.path !== "string" ||
+      !nodePath.isAbsolute(ownership.path) ||
+      typeof ownership.branch !== "string" ||
+      typeof ownership.sourceBranch !== "string" ||
+      ownership.sourceBranch.length === 0 ||
+      ownership.branchOwned !== true ||
+      !run.projectId
+    ) {
+      return unavailable();
+    }
+    const project = projects.find((candidate) => candidate.id === run.projectId);
+    if (!project) return unavailable();
+    try {
+      const rootStat = lstatSync(loopWorktreesRoot);
+      if (
+        !rootStat.isDirectory() ||
+        rootStat.isSymbolicLink() ||
+        (process.platform !== "win32" && (rootStat.mode & 0o077) !== 0)
+      ) {
+        return unavailable();
+      }
+      const projectRoot = routeDependencies.canonicalCheckoutLockKey(project.path);
+      if (routeDependencies.canonicalCheckoutLockKey(ownership.projectRoot) !== projectRoot) {
+        return unavailable();
+      }
+      const expectedBasename = `loop-${ownership.ownershipId}`;
+      const expectedPath = nodePath.join(loopWorktreesRoot, expectedBasename);
+      const expectedBranch = loopWorktreeBranch(run.loopName, ownership.ownershipId);
+      if (
+        nodePath.basename(ownership.path) !== expectedBasename ||
+        (process.platform === "win32"
+          ? routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
+            routeDependencies.canonicalCheckoutLockKey(expectedPath)
+          : nodePath.normalize(ownership.path) !== nodePath.normalize(expectedPath)) ||
+        ownership.branch !== expectedBranch
+      ) {
+        return unavailable();
+      }
+      const candidateStat = lstatSync(expectedPath);
+      if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) return unavailable();
+      const canonicalPath = realpathSync.native(expectedPath);
+      if (
+        routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
+          routeDependencies.canonicalCheckoutLockKey(canonicalPath) ||
+        routeDependencies.canonicalCheckoutLockKey(nodePath.dirname(canonicalPath)) !==
+          routeDependencies.canonicalCheckoutLockKey(loopWorktreesRoot)
+      ) {
+        return unavailable();
+      }
+      const registrations = await routeDependencies.gitWorktreeRegistrations(projectRoot);
+      const registered = registrations.some((entry) => {
+        if (entry.branch !== ownership.branch) return false;
+        try {
+          return (
+            routeDependencies.canonicalCheckoutLockKey(entry.path) ===
+            routeDependencies.canonicalCheckoutLockKey(canonicalPath)
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (!registered) return unavailable();
+      return { directory: canonicalPath };
+    } catch {
+      return unavailable();
+    }
   });
 
   // Electron main calls this with an opaque run id; the renderer never supplies a filesystem path.

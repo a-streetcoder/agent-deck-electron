@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("agentDeck", {
   openAppMenu: (name, anchor) => ipcRenderer.invoke("app-menu:open", name, anchor),
   /** Reveal a backend-validated Loop artifact directory by opaque run id. */
   revealLoopArtifacts: (runId) => ipcRenderer.invoke("loops:revealArtifacts", runId),
+  /** Reveal a backend-validated retained Loop worktree by opaque run id. */
+  revealLoopWorktree: (runId) => ipcRenderer.invoke("loops:revealWorktree", runId),
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /**

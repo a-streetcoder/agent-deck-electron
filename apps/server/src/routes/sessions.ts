@@ -238,11 +238,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         // pi may still hold the file briefly; best-effort.
       }
     }
-    // Remove the session's isolated worktree (native: session-delete removes the
-    // worktree). The BRANCH is deliberately kept so committed-but-unmerged work is
-    // never lost (gitWorktreeRemove doesn't delete it). destroy() above awaited the
-    // pi exit, so the checkout is no longer in use (matters on Windows).
-    if (meta.worktreePath && meta.projectId) {
+    // Remove an ordinary session's isolated worktree (native: session-delete
+    // removes the worktree). Retained Loop review evidence is explicitly outside
+    // this deletion boundary and remains registered even if its transcript is
+    // removed. The ordinary-session BRANCH is deliberately kept so committed-but-
+    // unmerged work is never lost (gitWorktreeRemove doesn't delete it).
+    if (meta.worktreePath && meta.projectId && !meta.loopReviewRunId) {
       const project = projects.find((p) => p.id === meta.projectId);
       if (project) await gitWorktreeRemove(project.path, meta.worktreePath).catch(() => {});
     }
@@ -258,6 +259,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
+    if (meta.loopReviewRunId) {
+      return reply.status(409).send({
+        code: "loop_review_read_only",
+        error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+      });
+    }
     const { worktreePath, worktreeBranch, worktreeSourceBranch, projectId } = meta;
     if (!worktreePath || !worktreeBranch || !worktreeSourceBranch) {
       return reply

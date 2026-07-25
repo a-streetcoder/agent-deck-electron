@@ -621,6 +621,50 @@ export interface OwnedLoopWorktreeProof {
   branchOwned: true;
 }
 
+export interface GitWorktreeRegistration {
+  path: string;
+  branch: string;
+}
+
+/**
+ * Read Git's registration table without pruning or otherwise mutating it. The
+ * porcelain NUL format preserves paths containing whitespace/newlines; callers
+ * still own canonical-path and branch-ownership policy.
+ */
+export async function gitWorktreeRegistrations(
+  projectDir: string,
+): Promise<GitWorktreeRegistration[]> {
+  const output = await runGit(projectDir, ["worktree", "list", "--porcelain", "-z"]);
+  return output
+    .split("\0\0")
+    .map((record) => record.split("\0"))
+    .flatMap((fields) => {
+      const worktree = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+      const branchRef = fields.find((field) => field.startsWith("branch refs/heads/"));
+      if (!worktree || !branchRef) return [];
+      return [{ path: worktree, branch: branchRef.slice("branch refs/heads/".length) }];
+    });
+}
+
+/**
+ * Validate a persisted local branch name with Git itself, fully qualify it, and
+ * prove it still resolves to a commit. This is used only for server-owned Loop
+ * review metadata; no renderer request can select a revision.
+ */
+export async function gitFullyQualifiedBranchRef(cwd: string, branch: string): Promise<string> {
+  if (!branch || branch.startsWith("-")) throw new Error("invalid branch name");
+  const checked = (await runGit(cwd, ["check-ref-format", "--branch", branch])).trim();
+  if (checked !== branch) throw new Error("invalid branch name");
+  const ref = `refs/heads/${branch}`;
+  await gitCommitOid(cwd, ref);
+  return ref;
+}
+
+/** Resolve a validated revision to the immutable commit used by one diff scan. */
+export async function gitCommitOid(cwd: string, revision: string): Promise<string> {
+  return (await runGit(cwd, ["rev-parse", "--verify", `${revision}^{commit}`])).trim();
+}
+
 /** Commits on `branch` not yet reachable from `base` (native commitsAhead). */
 export async function gitCommitsAhead(cwd: string, branch: string, base: string): Promise<number> {
   const out = (await runGit(cwd, ["rev-list", "--count", `${base}..${branch}`])).trim();

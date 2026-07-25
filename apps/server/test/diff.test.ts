@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseNameStatusZ, parseNumstatZ } from "../src/git.ts";
+import { gitFullyQualifiedBranchRef, parseNameStatusZ, parseNumstatZ } from "../src/git.ts";
 import { makeSessionDiff, type SessionDiffShape } from "../src/services/diff.ts";
 
 // Real git repos + spawns compete with the rest of the suite (node-pty,
@@ -56,8 +56,8 @@ function makeRepo(): string {
 
 const run = <A>(effect: Effect.Effect<A>): Promise<A> => Effect.runPromise(effect);
 
-const listFiles = (diff: SessionDiffShape, sessionId: string, cwd: string) =>
-  run(diff.listFiles(sessionId, cwd));
+const listFiles = (diff: SessionDiffShape, sessionId: string, cwd: string, base?: string) =>
+  run(diff.listFiles(sessionId, cwd, base));
 
 describe("git -z parsers", () => {
   it("parseNameStatusZ handles plain entries and renames (two paths)", () => {
@@ -78,6 +78,15 @@ describe("git -z parsers", () => {
       { path: "new.txt", oldPath: "old.txt", insertions: 0, deletions: 0 },
       { path: "bin.dat", insertions: null, deletions: null },
     ]);
+  });
+});
+
+describe("Loop review branch qualification", () => {
+  it("fully qualifies an existing local branch and rejects revision syntax", async () => {
+    const repo = makeRepo();
+    await expect(gitFullyQualifiedBranchRef(repo, "main")).resolves.toBe("refs/heads/main");
+    await expect(gitFullyQualifiedBranchRef(repo, "main^{commit}")).rejects.toThrow();
+    await expect(gitFullyQualifiedBranchRef(repo, "-main")).rejects.toThrow();
   });
 });
 
@@ -263,6 +272,119 @@ describe("SessionDiff service (services/diff.ts)", () => {
     rmSync(path.join(repo, "z.txt"));
     await run(diff.drop("s1"));
     expect((await listFiles(diff, "s1", repo)).files).toHaveLength(0);
+  });
+
+  it("Loop review base includes committed, staged, unstaged, and untracked deltas without polluting HEAD cache", async () => {
+    const repo = makeRepo();
+    git(repo, ["switch", "-c", "agent-deck/loop-review"]);
+    writeFileSync(path.join(repo, "committed.txt"), "committed Loop work\n");
+    git(repo, ["add", "committed.txt"]);
+    git(repo, ["commit", "-m", "Loop commit"]);
+    writeFileSync(path.join(repo, "staged.txt"), "staged Loop work\n");
+    git(repo, ["add", "staged.txt"]);
+    writeFileSync(path.join(repo, "a.txt"), "unstaged Loop work\n");
+    writeFileSync(path.join(repo, "untracked.txt"), "untracked Loop work\n");
+
+    const diff = makeSessionDiff();
+    // Normal sessions retain working-tree-vs-HEAD semantics and do not include
+    // the already committed branch delta.
+    const normal = await listFiles(diff, "shared-session", repo);
+    expect(normal.files.map((file) => file.path)).toEqual(["a.txt", "staged.txt", "untracked.txt"]);
+
+    // The same session id with an explicit INTERNAL base gets a distinct cache
+    // identity and includes all work since the source branch.
+    const reviewBase = "refs/heads/main";
+    const review = await listFiles(diff, "shared-session", repo, reviewBase);
+    expect(review.files.map((file) => file.path)).toEqual([
+      "a.txt",
+      "committed.txt",
+      "staged.txt",
+      "untracked.txt",
+    ]);
+    const committedPatch = await run(
+      diff.fileDiff("shared-session", repo, "committed.txt", reviewBase),
+    );
+    expect(committedPatch.diff).toContain("+committed Loop work");
+    writeFileSync(path.join(repo, "later.txt"), "later untracked work\n");
+    const refreshedReview = await run(diff.refresh("shared-session", repo, reviewBase));
+    expect(refreshedReview.set.files.map((file) => file.path)).toContain("committed.txt");
+    expect(refreshedReview.set.files.map((file) => file.path)).toContain("later.txt");
+
+    // Returning to the normal identity must serve its original HEAD-based set.
+    expect(
+      (await listFiles(diff, "shared-session", repo)).files.map((file) => file.path),
+    ).not.toContain("committed.txt");
+  });
+
+  it("refresh invalidates cached review patches when the source ref advances with unchanged stats", async () => {
+    const repo = makeRepo();
+    git(repo, ["switch", "-c", "agent-deck/loop-moving-base"]);
+    writeFileSync(path.join(repo, "b.txt"), "Loop branch version\n");
+    const diff = makeSessionDiff();
+    const reviewBase = "refs/heads/main";
+
+    const initial = await listFiles(diff, "moving-base", repo, reviewBase);
+    expect(initial.files).toEqual([
+      expect.objectContaining({ path: "b.txt", status: "M", insertions: 1, deletions: 1 }),
+    ]);
+    expect((await run(diff.fileDiff("moving-base", repo, "b.txt", reviewBase))).diff).toContain(
+      "-bye",
+    );
+
+    // Advance main from a second worktree. Relative to the Loop checkout b.txt
+    // remains M with 1 insertion / 1 deletion, so the old cheap fingerprint
+    // could not observe this base movement from status/counts alone.
+    const sourceWorktree = path.join(makeTempDir(), "source");
+    git(repo, ["worktree", "add", sourceWorktree, "main"]);
+    writeFileSync(path.join(sourceWorktree, "b.txt"), "Advanced source version\n");
+    git(sourceWorktree, ["add", "b.txt"]);
+    git(sourceWorktree, ["commit", "-m", "advance source"]);
+
+    const refreshed = await run(diff.refresh("moving-base", repo, reviewBase));
+    expect(refreshed.changed).toBe(true);
+    expect(refreshed.set.files).toEqual([
+      expect.objectContaining({ path: "b.txt", status: "M", insertions: 1, deletions: 1 }),
+    ]);
+    const updatedPatch = await run(diff.fileDiff("moving-base", repo, "b.txt", reviewBase));
+    expect(updatedPatch.diff).toContain("-Advanced source version");
+    expect(updatedPatch.diff).toContain("+Loop branch version");
+    expect(updatedPatch.diff).not.toContain("-bye");
+  });
+
+  it("listFiles re-resolves a moved review base when reopening without refresh", async () => {
+    const repo = makeRepo();
+    git(repo, ["switch", "-c", "agent-deck/loop-reopen"]);
+    writeFileSync(path.join(repo, "b.txt"), "Loop reopen version\n");
+    const diff = makeSessionDiff();
+    const reviewBase = "refs/heads/main";
+
+    expect((await listFiles(diff, "reopened-review", repo, reviewBase)).files).toEqual([
+      expect.objectContaining({ path: "b.txt", status: "M", insertions: 1, deletions: 1 }),
+    ]);
+    expect((await run(diff.fileDiff("reopened-review", repo, "b.txt", reviewBase))).diff).toContain(
+      "-bye",
+    );
+
+    const sourceWorktree = path.join(makeTempDir(), "source");
+    git(repo, ["worktree", "add", sourceWorktree, "main"]);
+    writeFileSync(path.join(sourceWorktree, "b.txt"), "Source moved while review was closed\n");
+    writeFileSync(path.join(sourceWorktree, "source-only.txt"), "new source evidence\n");
+    git(sourceWorktree, ["add", "-A"]);
+    git(sourceWorktree, ["commit", "-m", "move source while review closed"]);
+
+    // Reopening asks listFiles directly; no Loop turn remains to trigger refresh.
+    const reopened = await listFiles(diff, "reopened-review", repo, reviewBase);
+    expect(reopened.files).toEqual([
+      expect.objectContaining({ path: "b.txt", status: "M", insertions: 1, deletions: 1 }),
+      expect.objectContaining({ path: "source-only.txt", status: "D" }),
+    ]);
+    const updatedPatch = await run(diff.fileDiff("reopened-review", repo, "b.txt", reviewBase));
+    expect(updatedPatch.diff).toContain("-Source moved while review was closed");
+    expect(updatedPatch.diff).toContain("+Loop reopen version");
+    expect(updatedPatch.diff).not.toContain("-bye");
+    // listFiles also replaced the cached result/base fingerprints; an immediate
+    // explicit refresh over the same OID is therefore quiet.
+    expect((await run(diff.refresh("reopened-review", repo, reviewBase))).changed).toBe(false);
   });
 
   it("a fresh repo with no commits diffs staged files against the empty tree", async () => {

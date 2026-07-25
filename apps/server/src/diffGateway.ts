@@ -1,5 +1,7 @@
+import type { SessionMeta } from "@agent-deck/contracts";
 import { Effect } from "effect";
 import { runPromiseUnwrapped } from "./effectRun.ts";
+import { gitFullyQualifiedBranchRef } from "./git.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import {
   SessionDiff,
@@ -18,31 +20,53 @@ import {
 
 export interface DiffGateway {
   /** The session's changed-file set (cached; computes on first call). */
-  readonly listFiles: (sessionId: string, cwd: string) => Promise<DiffFileSet>;
+  readonly listFiles: (sessionId: string, cwd: string, base?: string) => Promise<DiffFileSet>;
   /** Recompute now (turn boundary / on demand); reports whether the set changed. */
-  readonly refresh: (sessionId: string, cwd: string) => Promise<DiffRefreshResult>;
+  readonly refresh: (sessionId: string, cwd: string, base?: string) => Promise<DiffRefreshResult>;
   /** One file's bounded unified diff (empty for unknown paths / binary files). */
-  readonly fileDiff: (sessionId: string, cwd: string, path: string) => Promise<FileDiffResult>;
+  readonly fileDiff: (
+    sessionId: string,
+    cwd: string,
+    path: string,
+    base?: string,
+  ) => Promise<FileDiffResult>;
   /** Drop the session's cache entry (session ended/destroyed). */
   readonly drop: (sessionId: string) => void;
 }
 
+/** Select a Loop review base exclusively from durable server-owned metadata. */
+export async function sessionDiffBase(meta: SessionMeta): Promise<string | undefined> {
+  if (!meta.loopReviewRunId) return undefined;
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      meta.loopReviewRunId,
+    ) ||
+    !meta.worktreePath ||
+    meta.cwd !== meta.worktreePath ||
+    !meta.worktreeBranch ||
+    !meta.worktreeSourceBranch
+  ) {
+    throw new Error("Loop review metadata is unavailable");
+  }
+  return gitFullyQualifiedBranchRef(meta.cwd, meta.worktreeSourceBranch);
+}
+
 export function createDiffGateway(runtime: ServerRuntime): DiffGateway {
   return {
-    listFiles: (sessionId, cwd) =>
+    listFiles: (sessionId, cwd, base) =>
       runPromiseUnwrapped(
         runtime,
-        Effect.flatMap(SessionDiff, (diff) => diff.listFiles(sessionId, cwd)),
+        Effect.flatMap(SessionDiff, (diff) => diff.listFiles(sessionId, cwd, base)),
       ),
-    refresh: (sessionId, cwd) =>
+    refresh: (sessionId, cwd, base) =>
       runPromiseUnwrapped(
         runtime,
-        Effect.flatMap(SessionDiff, (diff) => diff.refresh(sessionId, cwd)),
+        Effect.flatMap(SessionDiff, (diff) => diff.refresh(sessionId, cwd, base)),
       ),
-    fileDiff: (sessionId, cwd, path) =>
+    fileDiff: (sessionId, cwd, path, base) =>
       runPromiseUnwrapped(
         runtime,
-        Effect.flatMap(SessionDiff, (diff) => diff.fileDiff(sessionId, cwd, path)),
+        Effect.flatMap(SessionDiff, (diff) => diff.fileDiff(sessionId, cwd, path, base)),
       ),
     drop: (sessionId) =>
       runtime.runSync(Effect.flatMap(SessionDiff, (diff) => diff.drop(sessionId))),

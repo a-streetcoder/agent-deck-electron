@@ -21,6 +21,7 @@ export interface AgentDeckBridge {
     multiple?: boolean;
   }): Promise<string[]>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
+  revealLoopWorktree?(runId: string): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
   openAppMenu?(
     name: "file" | "edit" | "view" | "help",
@@ -59,6 +60,13 @@ export async function revealLoopArtifacts(runId: string): Promise<boolean> {
   const bridge = nativeBridge();
   if (!bridge?.revealLoopArtifacts) return false;
   return (await bridge.revealLoopArtifacts(runId)) === true;
+}
+
+/** Reveal a backend-validated retained Loop worktree through Electron. */
+export async function revealLoopWorktree(runId: string): Promise<boolean> {
+  const bridge = nativeBridge();
+  if (!bridge?.revealLoopWorktree) return false;
+  return (await bridge.revealLoopWorktree(runId)) === true;
 }
 
 /** Open an http(s) URL in the user's default browser through Electron. */

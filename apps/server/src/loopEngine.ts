@@ -227,6 +227,8 @@ export interface LoopEngineDeps {
 }
 
 export interface LoopStartOptions {
+  /** Server-preallocated identity used to durably mark the parent review session. */
+  runId?: string;
   projectId?: string;
   sessionId?: string;
   retryOf?: string;
@@ -1085,13 +1087,15 @@ export class LoopEngine {
     const invalid = loopDefinitionValidationError(loop);
     if (invalid) throw new Error(invalid);
     this.evictOldRuns();
+    const runId = options.runId ?? randomUUID();
+    if (this.runs.has(runId)) throw new Error("Loop run id is already in use");
     const now = this.now();
     const definitionSnapshot = snapshotDefinition(loop);
     const launchContext = normalizeLoopLaunchContext(loop.launchContext);
     if (loop.structure === "humanApproval") {
       const prompt = normalizeLoopCheckpointPrompt(loop.checkpointPrompt);
       const run: LoopRun = {
-        id: randomUUID(),
+        id: runId,
         catalogId: loop.id,
         loopName: loop.name,
         structure: "humanApproval",
@@ -1168,7 +1172,7 @@ export class LoopEngine {
     if (!executeRole && !executeAgent)
       throw new Error("no agent executor configured for this loop run");
     const run: LoopRun = {
-      id: randomUUID(),
+      id: runId,
       catalogId: loop.id,
       loopName: loop.name,
       structure: loop.structure,

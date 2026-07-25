@@ -237,6 +237,9 @@ export const SessionMeta = Schema.mutable(
     worktreePath: Schema.optional(Schema.String),
     worktreeBranch: Schema.optional(Schema.String),
     worktreeSourceBranch: Schema.optional(Schema.String),
+    /** Internal durable marker for a retained Loop review session. The renderer
+     * may observe this capability flag but cannot choose its diff revision. */
+    loopReviewRunId: Schema.optional(Schema.String),
   }),
 );
 export type SessionMeta = typeof SessionMeta.Type;

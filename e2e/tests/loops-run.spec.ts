@@ -580,6 +580,30 @@ test("retains and restores registered worktree evidence in the run panel", async
   await expect(page.getByTestId("loop-retained-worktree")).toContainText(
     "Review worktree retained.",
   );
+  await expect(page.getByTestId("loop-review-changes")).toBeVisible();
+  await expect(page.getByTestId("loop-reveal-worktree")).toBeVisible();
+
+  // A plain browser reports the desktop-only reveal capability without ever
+  // accepting a renderer-supplied path.
+  await page.getByTestId("loop-reveal-worktree").click();
+  await expect(page.getByTestId("loop-worktree-action-status")).toHaveText(
+    "Reveal Worktree is available in the desktop app.",
+  );
+
+  await page.getByTestId("loop-review-changes").click();
+  await expect(page.getByTestId("workspace-tab-diff")).toHaveAttribute("data-active", "true", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("diff-loop-review-banner")).toContainText("Read-only Loop review");
+  await expect(page.getByTestId("diff-merge")).toHaveCount(0);
+
+  await page.getByTestId("nav-git").click();
+  await expect(page.getByTestId("git-loop-review-banner")).toContainText("Read-only Loop review");
+  await expect(page.getByTestId("git-merge")).toHaveCount(0);
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-retained-worktree")).toContainText(
+    "Review worktree retained.",
+  );
 });
 
 test("authors, reorders, duplicates, runs, and restores an accessible Pipeline", async ({

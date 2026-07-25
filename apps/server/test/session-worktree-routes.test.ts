@@ -9,6 +9,14 @@ const gitMocks = vi.hoisted(() => ({
   createSessionWorktree: vi.fn(),
   gitWorktreeRemove: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
+  gitCommitAll: vi.fn(),
+  gitCommitsAhead: vi.fn(),
+  gitMerge: vi.fn(),
+}));
+
+vi.mock("@agent-deck/resources", () => ({
+  listProjectFiles: vi.fn(() => []),
+  scanPrompts: vi.fn(() => []),
 }));
 
 vi.mock("../src/git.ts", async (importOriginal) => ({
@@ -16,6 +24,9 @@ vi.mock("../src/git.ts", async (importOriginal) => ({
   createSessionWorktree: gitMocks.createSessionWorktree,
   gitWorktreeRemove: gitMocks.gitWorktreeRemove,
   gitDeleteOwnedWorktreeBranch: gitMocks.gitDeleteOwnedWorktreeBranch,
+  gitCommitAll: gitMocks.gitCommitAll,
+  gitCommitsAhead: gitMocks.gitCommitsAhead,
+  gitMerge: gitMocks.gitMerge,
 }));
 
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
@@ -31,6 +42,9 @@ interface Meta {
   projectId?: string;
   agentName?: string;
   worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeSourceBranch?: string;
+  loopReviewRunId?: string;
 }
 
 function makeRoute(
@@ -69,6 +83,7 @@ function makeRoute(
     destroy: vi.fn(async (id: string) => {
       state.live.delete(id);
     }),
+    removeLoopSessionSnapshot: vi.fn(),
   };
   const index = {
     list: vi.fn(() => [...state.index.values()]),
@@ -130,6 +145,9 @@ beforeEach(() => {
   gitMocks.createSessionWorktree.mockReset();
   gitMocks.gitWorktreeRemove.mockReset().mockResolvedValue(undefined);
   gitMocks.gitDeleteOwnedWorktreeBranch.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitCommitAll.mockReset().mockResolvedValue({ committed: true });
+  gitMocks.gitCommitsAhead.mockReset().mockResolvedValue(1);
+  gitMocks.gitMerge.mockReset().mockResolvedValue(undefined);
   gitMocks.createSessionWorktree.mockResolvedValue({
     path: WORKTREE_PATH,
     branch: "agent-deck/session-allocated",
@@ -282,6 +300,41 @@ describe("POST /sessions worktree transaction", () => {
     expect(sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: standalone, projectId: undefined }),
     );
+    await fastify.close();
+  });
+
+  it("refuses Loop review merge before any Git mutation", async () => {
+    const { fastify, state } = makeRoute();
+    state.index.set("loop-review-session", {
+      id: "loop-review-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeBranch: "agent-deck/loop-review",
+      worktreeSourceBranch: "main",
+      loopReviewRunId: "12345678-1234-4123-8123-123456789abc",
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/loop-review-session/merge",
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: "loop_review_read_only",
+      error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+    });
+    expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
+    expect(gitMocks.gitCommitsAhead).not.toHaveBeenCalled();
+    expect(gitMocks.gitMerge).not.toHaveBeenCalled();
+
+    const removed = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/loop-review-session",
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(gitMocks.gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     await fastify.close();
   });
 });

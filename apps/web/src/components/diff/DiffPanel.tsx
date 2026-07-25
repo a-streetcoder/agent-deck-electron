@@ -378,6 +378,7 @@ export function DiffPanel() {
   // branch → source toolbar with the primary Merge action.
   const worktreeBranch = useAppStore((state) => state.session?.worktreeBranch ?? null);
   const worktreeSourceBranch = useAppStore((state) => state.session?.worktreeSourceBranch ?? null);
+  const loopReviewRunId = useAppStore((state) => state.session?.loopReviewRunId ?? null);
   // The gitAutomation setting gates the Merge toolbar, matching the Git screen's
   // Merge banner (one consistent merge gate). `null` until it loads so the
   // toolbar never flashes before the gate is known. Read once on mount (the
@@ -642,20 +643,38 @@ export function DiffPanel() {
         </div>
       </div>
 
-      {gitAutomation === true && worktreeBranch !== null && worktreeSourceBranch !== null && (
-        <WorktreeMergeToolbar
-          sessionId={sessionId}
-          worktreeBranch={worktreeBranch}
-          worktreeSourceBranch={worktreeSourceBranch}
-        />
-      )}
+      {loopReviewRunId !== null ? (
+        <div
+          className="border-b border-border-subtle bg-surface px-3 py-2 text-detail text-text-secondary"
+          data-testid="diff-loop-review-banner"
+          role="status"
+        >
+          Read-only Loop review. Changes are compared with the retained worktree’s source branch;
+          merge, apply, and discard are unavailable here.
+        </div>
+      ) : null}
+
+      {loopReviewRunId === null &&
+        gitAutomation === true &&
+        worktreeBranch !== null &&
+        worktreeSourceBranch !== null && (
+          <WorktreeMergeToolbar
+            sessionId={sessionId}
+            worktreeBranch={worktreeBranch}
+            worktreeSourceBranch={worktreeSourceBranch}
+          />
+        )}
 
       {truncatedSet && (
         <NoticeBar>The changed-file list was truncated at the server limit.</NoticeBar>
       )}
 
       {files.length === 0 ? (
-        <CenteredState testId="diff-empty">No changes in the working tree.</CenteredState>
+        <CenteredState testId="diff-empty">
+          {loopReviewRunId
+            ? "No changes from the source branch."
+            : "No changes in the working tree."}
+        </CenteredState>
       ) : (
         <div
           className={cn(

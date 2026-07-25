@@ -76,6 +76,8 @@ export interface CreateSessionOptions {
   /** Set when this session runs in an isolated git worktree (cwd IS the worktree)
    *  so the fields persist WITH the initial meta — no orphan window. */
   worktree?: { path: string; branch: string; sourceBranch: string };
+  /** Server-owned marker for retained Loop review semantics. */
+  loopReviewRunId?: string;
   /** Route transaction seam: delay persistence/broadcast/receipt until the
    * caller has completed immediate setup and explicitly commits creation. */
   deferAnnouncement?: boolean;
@@ -359,6 +361,7 @@ export class SessionManager {
             worktreeSourceBranch: options.worktree.sourceBranch,
           }
         : {}),
+      ...(options.loopReviewRunId ? { loopReviewRunId: options.loopReviewRunId } : {}),
     };
     try {
       const session = this.launch(meta, options.plan, options.env, options.deferAnnouncement);

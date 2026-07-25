@@ -47,7 +47,7 @@ import {
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { useAgents } from "../state/useAgents.ts";
-import { revealLoopArtifacts } from "../lib/native.ts";
+import { revealLoopArtifacts, revealLoopWorktree } from "../lib/native.ts";
 import { switchToSession } from "../state/wsBridge.ts";
 
 /**
@@ -220,6 +220,7 @@ export function LoopsScreen() {
   const currentSessionId = useAppStore((state) => state.session?.id);
   const sessions = useAppStore((state) => state.sessions);
   const setView = useAppStore((state) => state.setView);
+  const openWorkspaceTab = useAppStore((state) => state.openWorkspaceTab);
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -245,6 +246,9 @@ export function LoopsScreen() {
   const [acknowledgePending, setAcknowledgePending] = useState(false);
   const [revealPending, setRevealPending] = useState(false);
   const [artifactActionMessage, setArtifactActionMessage] = useState<string | null>(null);
+  const [worktreeRevealPending, setWorktreeRevealPending] = useState(false);
+  const [reviewPending, setReviewPending] = useState(false);
+  const [worktreeActionMessage, setWorktreeActionMessage] = useState<string | null>(null);
   const runIdRef = useRef<string | null>(null);
   const runPendingRef = useRef(false);
   runPendingRef.current = runPending;
@@ -683,14 +687,40 @@ export function LoopsScreen() {
     }
   };
 
-  const openLoopSession = (run: LoopRun): void => {
+  const revealWorktree = async (run: LoopRun): Promise<void> => {
+    if (worktreeRevealPending || !isLoopRunTerminal(run.status) || !run.launch?.worktree) return;
+    setWorktreeRevealPending(true);
+    setWorktreeActionMessage(null);
+    try {
+      const revealed = await revealLoopWorktree(run.id);
+      setWorktreeActionMessage(
+        revealed
+          ? "Worktree revealed in the file manager."
+          : "Reveal Worktree is available in the desktop app.",
+      );
+    } catch (error) {
+      setWorktreeActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWorktreeRevealPending(false);
+    }
+  };
+
+  const openLoopSession = async (run: LoopRun, reviewChanges = false): Promise<void> => {
     const session = sessions.find((candidate) => candidate.id === run.sessionId);
     if (!session) {
-      setError("The durable Loop session is unavailable.");
+      if (reviewChanges) setWorktreeActionMessage("The durable Loop session is unavailable.");
+      else setError("The durable Loop session is unavailable.");
       return;
     }
+    if (reviewChanges) setReviewPending(true);
     setView("chat");
-    void switchToSession(session);
+    await switchToSession(session);
+    if (reviewChanges) {
+      const reopened = useAppStore.getState().session;
+      if (reopened?.id === session.id) openWorkspaceTab(session.id, "diff");
+      else setWorktreeActionMessage("The durable Loop session could not be reopened.");
+      setReviewPending(false);
+    }
   };
 
   const openRetry = (): void => {
@@ -1022,6 +1052,35 @@ export function LoopsScreen() {
                 </strong>{" "}
                 <span className="break-all">{activeRun.launch.worktree.path}</span>
                 <span className="block break-all">Branch: {activeRun.launch.worktree.branch}</span>
+                {isLoopRunTerminal(activeRun.status) ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {activeRun.sessionId ? (
+                      <ControlButton
+                        data-testid="loop-review-changes"
+                        disabled={reviewPending || worktreeRevealPending}
+                        onClick={() => void openLoopSession(activeRun, true)}
+                      >
+                        {reviewPending ? "Opening Review…" : "Review Changes"}
+                      </ControlButton>
+                    ) : null}
+                    <ControlButton
+                      data-testid="loop-reveal-worktree"
+                      disabled={worktreeRevealPending || reviewPending}
+                      onClick={() => void revealWorktree(activeRun)}
+                    >
+                      {worktreeRevealPending ? "Revealing…" : "Reveal Worktree"}
+                    </ControlButton>
+                  </div>
+                ) : null}
+                {worktreeActionMessage ? (
+                  <div
+                    role="status"
+                    className="mt-1 break-all"
+                    data-testid="loop-worktree-action-status"
+                  >
+                    {worktreeActionMessage}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
@@ -1141,7 +1200,7 @@ export function LoopsScreen() {
                 <ControlButton
                   data-testid="loop-open-session"
                   aria-label={`Open session for ${activeRun.loopName}`}
-                  onClick={() => openLoopSession(activeRun)}
+                  onClick={() => void openLoopSession(activeRun)}
                 >
                   Open Session
                 </ControlButton>

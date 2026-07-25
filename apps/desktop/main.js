@@ -461,6 +461,30 @@ ipcMain.handle("loops:revealArtifacts", async (_event, rawRunId) => {
   return true;
 });
 
+ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
+  const runId = typeof rawRunId === "string" ? rawRunId : "";
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    !serverPort ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+  ) {
+    throw new Error("Loop run is unavailable");
+  }
+  const response = await fetch(
+    `http://127.0.0.1:${serverPort}/loops/runs/${encodeURIComponent(runId)}/worktree-directory`,
+  );
+  if (!response.ok) {
+    throw new Error("The retained Loop worktree is unavailable for review");
+  }
+  const body = await response.json().catch(() => null);
+  if (!body || typeof body.directory !== "string" || !path.isAbsolute(body.directory)) {
+    throw new Error("The retained Loop worktree is unavailable for review");
+  }
+  shell.showItemInFolder(body.directory);
+  return true;
+});
+
 ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
   const properties = ["openDirectory", "createDirectory"];
   if (options.multiple) properties.push("multiSelections");

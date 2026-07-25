@@ -525,7 +525,20 @@ export function GitScreen() {
           </div>
         ) : null}
 
-        {gitActions === true && session?.worktreeBranch && session.worktreeSourceBranch ? (
+        {session?.loopReviewRunId ? (
+          <div
+            data-testid="git-loop-review-banner"
+            className="mb-3 mt-1 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-xs text-text-secondary"
+            role="status"
+          >
+            Read-only Loop review. Merge, apply, and discard actions are unavailable here.
+          </div>
+        ) : null}
+
+        {gitActions === true &&
+        !session?.loopReviewRunId &&
+        session?.worktreeBranch &&
+        session.worktreeSourceBranch ? (
           <div
             data-testid="git-worktree-banner"
             className="mb-3 mt-1 flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"

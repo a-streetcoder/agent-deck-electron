@@ -42,7 +42,7 @@ import {
   type ServerContext,
 } from "./context.ts";
 import { registerDeckBridgeTools } from "./bridgeTools.ts";
-import { createDiffGateway } from "./diffGateway.ts";
+import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
 import { createEditorLauncher } from "./editorLauncher.ts";
 import { createScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import { makeCheckpointRollback } from "./checkpointRollback.ts";
@@ -418,7 +418,8 @@ async function initServer(
     // turn reaches idle; when the set CHANGED vs the previous one, push it to
     // clients and emit the diff_refreshed receipt (tests synchronize on it).
     async (meta) => {
-      const { changed, set } = await diffs.refresh(meta.id, meta.cwd);
+      const base = await sessionDiffBase(meta);
+      const { changed, set } = await diffs.refresh(meta.id, meta.cwd, base);
       if (!changed) return;
       broadcastDiff({
         type: "diff_changed",

@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LOOP_PARALLEL_WRITE_TARGET_CODE, type LoopStructure } from "@agent-deck/domain";
@@ -14,11 +21,17 @@ import type { ServerContext } from "../src/context.ts";
 
 vi.mock("../src/git.ts", () => ({
   createLoopWorktree: vi.fn(),
+  gitWorktreeRegistrations: vi.fn(),
   gitWorktreeRemove: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
 }));
 
-import { createLoopWorktree, gitDeleteOwnedWorktreeBranch, gitWorktreeRemove } from "../src/git.ts";
+import {
+  createLoopWorktree,
+  gitDeleteOwnedWorktreeBranch,
+  gitWorktreeRegistrations,
+  gitWorktreeRemove,
+} from "../src/git.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
@@ -143,6 +156,7 @@ function makeRoutes(
     {
       canonicalCheckoutLockKey: canonicalCheckoutEffect,
       createLoopWorktree: createWorktreeEffect,
+      gitWorktreeRegistrations,
     },
   );
   return {
@@ -706,7 +720,7 @@ describe("loop route honesty gate", () => {
     let settle!: () => void;
     settledEngine.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)));
     startEngine.mockImplementation((_loop, _cwd, options) => ({
-      id: "retained-run",
+      id: options.runId,
       status: "completed",
       launch: options.launch,
     }));
@@ -722,11 +736,127 @@ describe("loop route honesty gate", () => {
       branch: worktree.branch,
       branchOwned: true,
     });
-    expect(indexRows.get("retained-parent")?.title).toBe("Loop: Retained Review Loop · retained");
+    expect(response.json().run.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ loopReviewRunId: response.json().run.id }),
+    );
+    expect(indexRows.get("retained-parent")?.title).toBe(
+      `Loop: Retained Review Loop · ${response.json().run.id.slice(0, 8)}`,
+    );
 
     settle();
     await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
     expect(indexRows.has("retained-parent")).toBe(true);
+    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+  });
+
+  it("reveals only terminal worktrees with complete current ownership proof", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-review-proof-"));
+    const { fastify, getEngine } = makeRoutes(home);
+    const ownershipId = "12345678-1234-4123-8123-123456789abc";
+    const worktreeRoot = path.join(home, "managed-worktrees", "loop");
+    const worktreePath = path.join(worktreeRoot, `loop-${ownershipId}`);
+    mkdirSync(worktreePath);
+    const sentinel = path.join(worktreePath, "review.txt");
+    writeFileSync(sentinel, "retained evidence");
+    const branch = "agent-deck/loop-Review-Proof-12345678";
+    const run = {
+      id: "87654321-4321-4321-8321-cba987654321",
+      loopName: "Review Proof",
+      projectId: "project",
+      status: "completed",
+      launch: {
+        sessionId: "review-session",
+        writeTarget: "newWorktree",
+        worktree: {
+          ownershipVersion: 1,
+          ownershipId,
+          projectRoot: canonicalCheckoutLockKey(home),
+          path: worktreePath,
+          branch,
+          sourceBranch: "main",
+          branchOwned: true,
+        },
+      },
+    };
+    getEngine.mockReturnValue(run);
+    vi.mocked(gitWorktreeRegistrations).mockResolvedValue([{ path: worktreePath, branch }]);
+
+    const accepted = await fastify.inject({
+      method: "GET",
+      url: `/loops/runs/${run.id}/worktree-directory`,
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toEqual({ directory: canonicalCheckoutLockKey(worktreePath) });
+
+    vi.mocked(gitWorktreeRegistrations).mockResolvedValue([]);
+    const stale = await fastify.inject({
+      method: "GET",
+      url: `/loops/runs/${run.id}/worktree-directory`,
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.body).not.toContain(home);
+
+    vi.mocked(gitWorktreeRegistrations).mockResolvedValue([{ path: worktreePath, branch }]);
+    for (const worktree of [
+      { ...run.launch.worktree, projectRoot: path.join(home, "other-project") },
+      { ...run.launch.worktree, path: path.join(worktreeRoot, "loop-other") },
+      { ...run.launch.worktree, ownershipVersion: 2 },
+      { ...run.launch.worktree, branch: "agent-deck/loop-tampered" },
+    ]) {
+      getEngine.mockReturnValue({ ...run, launch: { ...run.launch, worktree } });
+      const tampered = await fastify.inject({
+        method: "GET",
+        url: `/loops/runs/${run.id}/worktree-directory`,
+      });
+      expect(tampered.statusCode).toBe(409);
+      expect(tampered.body).not.toContain(home);
+    }
+
+    getEngine.mockReturnValue({ ...run, status: "running" });
+    expect(
+      (
+        await fastify.inject({
+          method: "GET",
+          url: `/loops/runs/${run.id}/worktree-directory`,
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    getEngine.mockReturnValue(run);
+    if (process.platform !== "win32") {
+      const retainedTarget = `${worktreePath}-retained`;
+      renameSync(worktreePath, retainedTarget);
+      symlinkSync(retainedTarget, worktreePath, "dir");
+      expect(
+        (
+          await fastify.inject({
+            method: "GET",
+            url: `/loops/runs/${run.id}/worktree-directory`,
+          })
+        ).statusCode,
+      ).toBe(409);
+    }
+
+    getEngine.mockReturnValue({
+      ...run,
+      launch: {
+        ...run.launch,
+        worktree: { ...run.launch.worktree, branch: "agent-deck/loop-tampered" },
+      },
+    });
+    const refused = await fastify.inject({
+      method: "GET",
+      url: `/loops/runs/${run.id}/worktree-directory`,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({
+      code: "loop_worktree_unavailable",
+      error: "The retained Loop worktree is unavailable for review.",
+    });
+    expect(refused.body).not.toContain(home);
+    expect(readFileSync(sentinel, "utf8")).toBe("retained evidence");
     expect(gitWorktreeRemove).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });

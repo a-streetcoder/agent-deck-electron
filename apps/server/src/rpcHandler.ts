@@ -7,7 +7,7 @@ import {
 import { Either, Schema } from "effect";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
-import type { DiffGateway } from "./diffGateway.ts";
+import { sessionDiffBase, type DiffGateway } from "./diffGateway.ts";
 import type { EditorLauncher } from "./editorLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
@@ -419,8 +419,9 @@ export function createRpcConnection(deps: {
         return;
       }
       try {
+        const base = await sessionDiffBase(session.meta);
         if (request.type === "diff_files") {
-          const set = await diffs.listFiles(session.meta.id, session.meta.cwd);
+          const set = await diffs.listFiles(session.meta.id, session.meta.cwd, base);
           send({
             kind: "diff_files_ok",
             id,
@@ -429,7 +430,12 @@ export function createRpcConnection(deps: {
             truncated: set.truncated,
           });
         } else {
-          const result = await diffs.fileDiff(session.meta.id, session.meta.cwd, request.path);
+          const result = await diffs.fileDiff(
+            session.meta.id,
+            session.meta.cwd,
+            request.path,
+            base,
+          );
           send({
             kind: "diff_file_ok",
             id,
