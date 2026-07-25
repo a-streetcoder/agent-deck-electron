@@ -8,12 +8,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // File-wide headroom per the diff/skill-repo-import precedent.
 vi.setConfig({ testTimeout: 20_000 });
 import {
+  hasEffectiveEnvValue,
   MIN_NODE_VERSION,
   meetsMinNode,
   parseNodeVersion,
   probeVersion,
   runDoctor,
   summarizeSettings,
+  webAccessChecks,
 } from "../src/doctor.ts";
 
 /**
@@ -97,6 +99,50 @@ describe("runDoctor", () => {
     // The test runner necessarily runs on Node ≥ pi's minimum, so this is "ok".
     expect(node!.status).toBe("ok");
     expect(node!.detail).toContain(MIN_NODE_VERSION);
+  });
+});
+
+describe("Web Access doctor checks", () => {
+  const global = (masked: string, overridden = false) => ({
+    key: "EXA_API_KEY",
+    masked,
+    overridden,
+  });
+  const project = (masked: string) => ({ key: "EXA_API_KEY", masked, overridden: false });
+
+  it.each([
+    ["absent", [], false],
+    ["blank global", [global("")], false],
+    ["configured global", [global("••••••••cdef")], true],
+    ["configured project override", [global("••••••••obal", true), project("••••••••ject")], true],
+    ["blank project override", [global("••••••••obal", true), project("")], false],
+  ] as const)("detects %s configuration without reading a value", (_name, entries, expected) => {
+    expect(hasEffectiveEnvValue(entries, "EXA_API_KEY")).toBe(expected);
+  });
+
+  it("always warns truthfully and never leaks env metadata or a secret", () => {
+    const secret = "exa-super-secret-credential";
+    const checks = webAccessChecks(hasEffectiveEnvValue([global("••••••••Z9Q7")], "EXA_API_KEY"));
+    const serialized = JSON.stringify(checks);
+
+    expect(checks.map((check) => check.id)).toEqual(["web-access-exa", "web-access-url-fetch"]);
+    expect(checks.every((check) => check.status === "warn")).toBe(true);
+    expect(checks[0]!.detail).toMatch(/configured/i);
+    expect(checks[0]!.detail).toMatch(/unavailable.*Electron build/i);
+    expect(checks[0]!.detail).toMatch(/no network or credential validity test ran/i);
+    expect(checks[1]!.detail).toMatch(/known-URL fetching is unavailable/i);
+    expect(checks[1]!.detail).toMatch(/no network test ran/i);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("Z9Q7");
+    expect(serialized).not.toContain("source");
+    expect(checks.every((check) => check.fixCommand === undefined)).toBe(true);
+  });
+
+  it("directs an unconfigured user to Environment and calls the key optional", () => {
+    const exa = webAccessChecks(false)[0]!;
+    expect(exa.detail).toMatch(/optional/i);
+    expect(exa.detail).toContain("EXA_API_KEY");
+    expect(exa.detail).toContain("Environment");
   });
 });
 

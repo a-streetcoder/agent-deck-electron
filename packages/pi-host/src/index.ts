@@ -21,7 +21,15 @@ export {
   type PiAddressedResponse,
   type PiClassifiedLine,
 } from "./rpcProtocol.ts";
-export { runDoctor, type CheckStatus, type DoctorReport, type HealthCheck } from "./doctor.ts";
+export {
+  hasEffectiveEnvValue,
+  runDoctor,
+  webAccessChecks,
+  type CheckStatus,
+  type DoctorEnvEntry,
+  type DoctorReport,
+  type HealthCheck,
+} from "./doctor.ts";
 export {
   writeBridgeExtension,
   type BridgeCallRequest,

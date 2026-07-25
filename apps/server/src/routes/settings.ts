@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
-import { runDoctor } from "@agent-deck/pi-host";
+import { hasEffectiveEnvValue, runDoctor, webAccessChecks } from "@agent-deck/pi-host";
 import { listProviders, logoutProvider, scanEnv, writeEnvVar } from "@agent-deck/resources";
 import {
   isKeybindingCommand,
@@ -82,8 +82,11 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
-  fastify.get("/runtime/doctor", async () => {
+  fastify.get("/runtime/doctor", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
     const report = await runDoctor(resourceHome());
+    const envEntries = scanEnv(rootsFor(projectId));
+    report.checks.push(...webAccessChecks(hasEffectiveEnvValue(envEntries, "EXA_API_KEY")));
     const connectedProviders = (await listProviders(rootsFor())).filter(
       (provider) => provider.signedIn || provider.configured,
     );

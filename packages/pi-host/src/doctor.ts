@@ -27,6 +27,44 @@ export interface DoctorReport {
   signedInProviders: string[];
 }
 
+/** The presence-only env fields Doctor needs; secret values and sources stay out. */
+export interface DoctorEnvEntry {
+  key: string;
+  masked: string;
+  overridden: boolean;
+}
+
+/**
+ * Whether the effective (non-shadowed) value is non-empty. This intentionally
+ * operates only on scanEnv's masked metadata, never on a credential value.
+ */
+export function hasEffectiveEnvValue(entries: readonly DoctorEnvEntry[], key: string): boolean {
+  return entries.some(
+    (entry) => entry.key === key && !entry.overridden && entry.masked.trim().length > 0,
+  );
+}
+
+/** Honest, platform-neutral web diagnostics. These checks never access a network. */
+export function webAccessChecks(exaConfigured: boolean): HealthCheck[] {
+  return [
+    {
+      id: "web-access-exa",
+      label: "Web Access — Exa search",
+      status: "warn",
+      detail: exaConfigured
+        ? "EXA_API_KEY is configured, but Exa web tools are unavailable in this Electron build. No network or credential validity test ran."
+        : "Optional: add EXA_API_KEY in Environment. Exa web tools are unavailable in this Electron build, and no network or credential validity test ran.",
+    },
+    {
+      id: "web-access-url-fetch",
+      label: "Web Access — URL fetch",
+      status: "warn",
+      detail:
+        "Optional known-URL fetching is unavailable in this Electron build. No network test ran.",
+    },
+  ];
+}
+
 /** pi's minimum supported Node (package.json engines: node >=22.19.0). */
 export const MIN_NODE_VERSION = "22.19.0";
 const MIN_NODE_PARTS = MIN_NODE_VERSION.split(".").map(Number) as [number, number, number];
