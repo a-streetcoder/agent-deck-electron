@@ -26,7 +26,16 @@ describe("parseModelCatalog", () => {
         `  ${HEADER}  `,
         "mock     mock-model       128K   4K       yes       yes",
       ]),
-    ).toEqual([{ provider: "mock", id: "mock-model" }]);
+    ).toEqual([
+      {
+        provider: "mock",
+        id: "mock-model",
+        contextWindow: 128_000,
+        maxTokens: 4_000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+    ]);
     expect(() => parseModelCatalog(["provider model context max-out thinking"])).toThrow(
       ModelCatalogError,
     );
@@ -53,11 +62,37 @@ describe("parseModelCatalog", () => {
     ).toThrow(ModelCatalogError);
   });
 
-  it("rejects malformed rows instead of guessing columns", () => {
-    expect(() => parseModelCatalog([HEADER, "mock model 128K 4K yes"])).toThrow(ModelCatalogError);
-    expect(() => parseModelCatalog([HEADER, "mock model 128K 4K yes yes extra"])).toThrow(
-      ModelCatalogError,
+  it("parses integer and decimal K/M display counts plus strict yes/no metadata", () => {
+    expect(parseModelCatalog([HEADER, "mock model 1500000 1.5K no no"])).toEqual([
+      {
+        provider: "mock",
+        id: "model",
+        contextWindow: 1_500_000,
+        maxTokens: 1_500,
+        reasoning: false,
+        input: ["text"],
+      },
+    ]);
+    expect(parseModelCatalog([HEADER, "mock model 1.25M 2K yes no"])[0]?.contextWindow).toBe(
+      1_250_000,
     );
+  });
+
+  it.each([
+    "mock model 128K 4K yes",
+    "mock model 128K 4K yes yes extra",
+    "mock model 0 4K yes yes",
+    "mock model -1K 4K yes yes",
+    "mock model 01K 4K yes yes",
+    "mock model 1.2 4K yes yes",
+    "mock model 1e3 4K yes yes",
+    "mock model 1KB 4K yes yes",
+    "mock model 0.0001K 4K yes yes",
+    "mock model Infinity 4K yes yes",
+    "mock model 128K 4K true yes",
+    "mock model 128K 4K yes YES",
+  ])("rejects malformed row %s", (row) => {
+    expect(() => parseModelCatalog([HEADER, row])).toThrow(ModelCatalogError);
   });
 });
 
@@ -80,7 +115,16 @@ describe("discoverModelCatalog", () => {
       },
     });
 
-    await expect(result).resolves.toEqual([{ provider: "mock", id: "mock-model" }]);
+    await expect(result).resolves.toEqual([
+      {
+        provider: "mock",
+        id: "mock-model",
+        contextWindow: 128_000,
+        maxTokens: 4_000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+    ]);
     expect(spawned?.args).toEqual([
       "--list-models",
       "--no-extensions",

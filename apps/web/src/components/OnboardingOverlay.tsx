@@ -156,6 +156,7 @@ interface CatalogModel {
   provider: string;
   id: string;
   name?: string;
+  disabled?: boolean;
 }
 
 // Native SetupCheckStatus mapping: ok → Ready, warn → Optional, error → Missing.
@@ -394,7 +395,7 @@ export function OnboardingOverlay() {
       })
       .then((data) => {
         if (req !== modelReq.current || controller.signal.aborted) return;
-        setModels(data.models);
+        setModels(data.models.filter((model) => !model.disabled));
         setModelState("success");
         if (restoreSelectFocus) {
           window.requestAnimationFrame(() => {

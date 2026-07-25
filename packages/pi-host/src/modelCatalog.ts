@@ -9,6 +9,12 @@ export interface CatalogModel {
   provider: string;
   id: string;
   name?: string;
+  /** Approximate display-grade counts reported by Pi's model catalog. */
+  contextWindow: number;
+  /** Approximate display-grade counts reported by Pi's model catalog. */
+  maxTokens: number;
+  reasoning: boolean;
+  input: string[];
 }
 
 export type ModelCatalogErrorCode =
@@ -54,6 +60,24 @@ export interface DiscoverModelCatalogOptions {
   processFactory?: ProcessFactory;
 }
 
+function parseDisplayCount(value: string): number | null {
+  // Pi displays whole counts directly and abbreviates larger values with K/M.
+  // Keep this deliberately narrower than Number(): signs, exponents, decimals
+  // without units, and non-positive/non-integral results are malformed output.
+  const match = /^(?:([1-9]\d*)|((?:[1-9]\d*(?:\.\d+)?|0\.\d+))([KM]))$/.exec(value);
+  if (!match) return null;
+  const count = match[1]
+    ? Number(match[1])
+    : Number(match[2]) * (match[3] === "K" ? 1_000 : 1_000_000);
+  return Number.isFinite(count) && Number.isInteger(count) && count > 0 ? count : null;
+}
+
+function parseYesNo(value: string): boolean | null {
+  if (value === "yes") return true;
+  if (value === "no") return false;
+  return null;
+}
+
 export function parseModelCatalog(lines: readonly string[]): CatalogModel[] {
   const nonblank = lines.filter((line) => line.trim().length > 0);
   const trimmed = nonblank.map((line) => line.trim());
@@ -79,7 +103,21 @@ export function parseModelCatalog(lines: readonly string[]): CatalogModel[] {
     if (columns.length !== HEADER.length || !columns[0] || !columns[1]) {
       throw new ModelCatalogError("malformed_output", "Pi returned an invalid model catalog");
     }
-    models.push({ provider: columns[0], id: columns[1] });
+    const contextWindow = parseDisplayCount(columns[2]!);
+    const maxTokens = parseDisplayCount(columns[3]!);
+    const reasoning = parseYesNo(columns[4]!);
+    const images = parseYesNo(columns[5]!);
+    if (contextWindow === null || maxTokens === null || reasoning === null || images === null) {
+      throw new ModelCatalogError("malformed_output", "Pi returned an invalid model catalog");
+    }
+    models.push({
+      provider: columns[0],
+      id: columns[1],
+      contextWindow,
+      maxTokens,
+      reasoning,
+      input: images ? ["text", "image"] : ["text"],
+    });
   }
   return models;
 }

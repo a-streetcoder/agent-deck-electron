@@ -85,14 +85,42 @@ test("discovers the configured model without creating a session", async () => {
     body: "{}",
   });
   expect(response.ok).toBe(true);
-  const body = (await response.json()) as { models: Array<{ provider: string; id: string }> };
-  expect(body.models).toContainEqual({ provider: "mock", id: "mock-model" });
+  const body = (await response.json()) as {
+    models: Array<{
+      provider: string;
+      id: string;
+      contextWindow: number;
+      maxTokens: number;
+      reasoning: boolean;
+      input: string[];
+      disabled: boolean;
+    }>;
+  };
+  expect(body.models).toContainEqual(
+    expect.objectContaining({
+      provider: "mock",
+      id: "mock-model",
+      contextWindow: 128_000,
+      maxTokens: 4_100,
+      reasoning: true,
+      input: ["text", "image"],
+      disabled: false,
+    }),
+  );
   // This provider comes from a normally discovered/enabled global extension,
   // not AGENT_DECK_PROVIDER_EXTENSIONS. Discovery must match ordinary sessions.
-  expect(body.models).toContainEqual({ provider: "ordinary", id: "ordinary-model" });
+  expect(body.models).toContainEqual(
+    expect.objectContaining({ provider: "ordinary", id: "ordinary-model", disabled: false }),
+  );
   // This provider is only in AGENT_DECK_DEFAULT_EXTENSIONS (the harness's
   // extraExtensions seam), not the scanned catalog or providerExtensions.
-  expect(body.models).toContainEqual({ provider: "default-only", id: "default-only-model" });
+  expect(body.models).toContainEqual(
+    expect.objectContaining({
+      provider: "default-only",
+      id: "default-only-model",
+      disabled: false,
+    }),
+  );
 
   const disable = async (disabled: boolean): Promise<void> => {
     const result = await fetch(`${harness.baseUrl}/runtime/models/disabled`, {
@@ -109,9 +137,11 @@ test("discovers the configured model without creating a session", async () => {
     body: "{}",
   });
   const filteredBody = (await filtered.json()) as {
-    models: Array<{ provider: string; id: string }>;
+    models: Array<{ provider: string; id: string; disabled: boolean }>;
   };
-  expect(filteredBody.models).not.toContainEqual({ provider: "mock", id: "mock-model" });
+  expect(filteredBody.models).toContainEqual(
+    expect.objectContaining({ provider: "mock", id: "mock-model", disabled: true }),
+  );
   await disable(false);
 
   const sessions = (await (await fetch(`${harness.baseUrl}/sessions`)).json()) as {
@@ -162,6 +192,16 @@ test("walks the tour, runs setup, and gates entry until required setup is ready"
 });
 
 test("reaches preferences and discovers/persists a model before any session", async ({ page }) => {
+  const setBasicDisabled = async (disabled: boolean): Promise<void> => {
+    const response = await fetch(`${harness.baseUrl}/runtime/models/disabled`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "mock", id: "basic-model", disabled }),
+    });
+    expect(response.ok).toBe(true);
+  };
+  await setBasicDisabled(true);
+
   await page.route("**/runtime/doctor", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -201,6 +241,7 @@ test("reaches preferences and discovers/persists a model before any session", as
   const model = page.getByTestId("pref-model");
   await expect(model).toBeEnabled();
   await expect(model.locator('option[value="mock:mock-model"]')).toHaveCount(1);
+  await expect(model.locator('option[value="mock:basic-model"]')).toHaveCount(0);
   await model.selectOption("mock:mock-model");
   await expect(model).toHaveValue("mock:mock-model");
 
@@ -211,6 +252,7 @@ test("reaches preferences and discovers/persists a model before any session", as
       return body.settings.defaultModel;
     })
     .toBe("mock:mock-model");
+  await setBasicDisabled(false);
 });
 
 test("shows discovery errors and retries from the keyboard", async ({ page }) => {

@@ -37,7 +37,14 @@ describe(`real Pi model catalog (${resolved.path}, source: ${resolved.source})`,
       },
     });
 
-    expect(models).toContainEqual({ provider: "mock", id: MOCK_MODEL_ID });
+    expect(models).toContainEqual({
+      provider: "mock",
+      id: MOCK_MODEL_ID,
+      contextWindow: 128_000,
+      maxTokens: 4_100,
+      reasoning: true,
+      input: ["text", "image"],
+    });
     expect(launched.at(-1)?.isRunning).toBe(false);
     expect(readdirSync(home)).not.toContain("sessions");
   });

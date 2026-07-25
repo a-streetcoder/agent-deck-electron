@@ -297,7 +297,12 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         signal: controller.signal,
       });
       const disabled = new Set(settings.get().disabledModels);
-      return { models: models.filter((model) => !disabled.has(`${model.provider}:${model.id}`)) };
+      return {
+        models: models.map((model) => ({
+          ...model,
+          disabled: disabled.has(`${model.provider}:${model.id}`),
+        })),
+      };
     } catch (error) {
       if (error instanceof ModelCatalogError) {
         if (error.code === "aborted") {
