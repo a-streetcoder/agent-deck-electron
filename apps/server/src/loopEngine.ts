@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import {
   clampMaxIterations,
@@ -22,73 +30,162 @@ import {
   type LoopRunIteration,
   type LoopRunLaunchOwnership,
   type LoopRunStatus,
+  type LoopValidationResult,
   type LoopStopReason,
 } from "@agent-deck/domain";
 import { z } from "zod";
 
-export interface ValidationResult {
+export interface ValidationResult extends LoopValidationResult {
+  evidence: string;
+}
+interface LegacyValidationResult {
   passed: boolean;
   evidence: string;
 }
 
-/** Shell validation with abort and process-tree termination. Output is bounded. */
+const VALIDATION_OUTPUT_LIMIT = 16 * 1024;
+function appendBounded(current: string, chunk: Buffer): string {
+  const next = current + chunk.toString("utf8");
+  return next.length > VALIDATION_OUTPUT_LIMIT
+    ? `${next.slice(0, VALIDATION_OUTPUT_LIMIT)}\n… output truncated …`
+    : next;
+}
+
+/** Shell validation with separate bounded streams and awaited process-tree termination. */
 export async function runValidationCommand(
   cwd: string,
   command: string,
   signal?: AbortSignal,
+  outputDirectory?: string,
+  timeoutMs = 120_000,
 ): Promise<ValidationResult> {
-  return await new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    const append = (chunk: Buffer): void => {
-      output = (output + chunk.toString("utf8")).slice(-32_000);
-    };
-    child.stdout?.on("data", append);
-    child.stderr?.on("data", append);
-    const timer = setTimeout(() => terminateProcessTree(child.pid), 120_000);
-    const abort = (): void => terminateProcessTree(child.pid);
-    signal?.addEventListener("abort", abort, { once: true });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      resolve({ passed: false, evidence: error.message });
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      resolve({ passed: code === 0, evidence: output.trim() || `exit ${code ?? "unknown"}` });
-    });
-  });
-}
-
-function terminateProcessTree(pid: number | undefined): void {
-  if (!pid) return;
+  const started = Date.now();
+  let workingDirectory: string;
   try {
-    if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      killer.unref();
-    } else {
-      process.kill(-pid, "SIGTERM");
-      setTimeout(() => {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
-          // Already exited.
-        }
-      }, 2_000).unref();
-    }
-  } catch {
-    // Already exited.
+    workingDirectory = realpathSync.native(cwd);
+  } catch (error) {
+    const stderr = error instanceof Error ? error.message : String(error);
+    return {
+      command,
+      workingDirectory: cwd,
+      exitCode: null,
+      durationMs: Date.now() - started,
+      stdout: "",
+      stderr,
+      classification: "spawnError",
+      passed: false,
+      evidence: stderr,
+    };
   }
+  return await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let classification: ValidationResult["classification"] = "completed";
+    let settled = false;
+    let child: ReturnType<typeof spawn>;
+    const finish = (exitCode: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      let stdoutPath: string | undefined;
+      let stderrPath: string | undefined;
+      if (outputDirectory) {
+        try {
+          mkdirSync(outputDirectory, { recursive: true });
+          stdoutPath = path.join(outputDirectory, `${randomUUID()}-stdout.txt`);
+          stderrPath = path.join(outputDirectory, `${randomUUID()}-stderr.txt`);
+          writeFileSync(stdoutPath, stdout);
+          writeFileSync(stderrPath, stderr);
+        } catch (error) {
+          classification = "spawnError";
+          stderr = `${stderr}${stderr ? "\n" : ""}${error instanceof Error ? error.message : String(error)}`;
+          stdoutPath = undefined;
+          stderrPath = undefined;
+        }
+      }
+      const evidence = [
+        `exit ${exitCode ?? "unavailable"}`,
+        stdout.trim() ? `stdout:\n${stdout.trim()}` : "",
+        stderr.trim() ? `stderr:\n${stderr.trim()}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      resolve({
+        command,
+        workingDirectory,
+        exitCode,
+        durationMs: Date.now() - started,
+        stdout,
+        stderr,
+        stdoutPath,
+        stderrPath,
+        classification,
+        passed: classification === "completed" && exitCode === 0,
+        evidence,
+      });
+    };
+    const terminate = (): void => {
+      if (!child.pid) return;
+      try {
+        if (process.platform === "win32") {
+          const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+            windowsHide: true,
+            stdio: "ignore",
+          });
+          killer.once("error", () => {});
+        } else {
+          process.kill(-child.pid, "SIGTERM");
+          setTimeout(() => {
+            try {
+              process.kill(-child.pid!, "SIGKILL");
+            } catch {
+              // Already exited.
+            }
+          }, 2_000).unref();
+        }
+      } catch {
+        // Already exited.
+      }
+    };
+    const abort = (): void => {
+      classification = "cancelled";
+      terminate();
+    };
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      child = spawn(command, {
+        cwd: workingDirectory,
+        shell: true,
+        windowsHide: true,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout = appendBounded(stdout, chunk);
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr = appendBounded(stderr, chunk);
+      });
+      timer = setTimeout(() => {
+        classification = "timeout";
+        terminate();
+      }, timeoutMs);
+      signal?.addEventListener("abort", abort, { once: true });
+      child.once("error", (error) => {
+        classification = "spawnError";
+        stderr = appendBounded(stderr, Buffer.from(error.message));
+        finish(null);
+      });
+      child.once("close", (code) => finish(code));
+      if (signal?.aborted) abort();
+    } catch (error) {
+      timer = setTimeout(() => {}, 0);
+      classification = "spawnError";
+      stderr = error instanceof Error ? error.message : String(error);
+      finish(null);
+    }
+  });
 }
 
 export type ExecuteAgent = (
@@ -103,6 +200,9 @@ export type ExecuteLoopRole = (request: {
   phase: "maker" | "checker" | "stage" | "branch" | "triage" | "evaluator";
   stageIndex?: number;
   branchIndex?: number;
+  provider?: string;
+  model?: string;
+  thinking?: string;
   cwd: string;
   projectId?: string;
   signal: AbortSignal;
@@ -115,7 +215,8 @@ export interface LoopEngineDeps {
     cwd: string,
     command: string,
     signal?: AbortSignal,
-  ) => Promise<boolean | ValidationResult>;
+    outputDirectory?: string,
+  ) => Promise<boolean | LegacyValidationResult | ValidationResult>;
   now?: () => string;
   /** App data directory. Omit only for hermetic in-memory tests. */
   dataDir?: string;
@@ -282,7 +383,7 @@ const persistedRunSchema = z
       z
         .object({
           id: z.string().min(1),
-          index: z.number().int().positive(),
+          index: z.number().int().nonnegative(),
           startedAt: z.string(),
           output: z.string(),
           validationPassed: z.boolean().nullable(),
@@ -350,6 +451,7 @@ const persistedRunSchema = z
                     "branch",
                     "triage",
                     "checkpoint",
+                    "validation",
                     "evaluator",
                   ]),
                   filename: z.string(),
@@ -369,6 +471,22 @@ const persistedRunSchema = z
   })
   .passthrough();
 const persistedRunsSchema = z.array(persistedRunSchema);
+
+class LoopToolFailureError extends Error {}
+
+function unconfiguredValidation(cwd: string): ValidationResult {
+  return {
+    command: "",
+    workingDirectory: cwd,
+    exitCode: null,
+    durationMs: 0,
+    stdout: "",
+    stderr: "",
+    classification: "completed",
+    passed: true,
+    evidence: "no validation command was configured",
+  };
+}
 
 function exactFirstLine<T extends string>(text: string, allowed: Set<T>): T | undefined {
   const first = text
@@ -522,6 +640,55 @@ export class LoopEngine {
     run.launch.checkoutAcknowledgedAt ??= this.now();
     run.updatedAt = this.now();
     this.persist();
+    return run;
+  }
+
+  /** Persist a pre-allocation failure after definition/project validation. */
+  recordFailedStart(
+    loop: LoopDefinition,
+    cwd: string,
+    reason: Extract<LoopStopReason, "unsafeWriteTarget" | "toolFailed">,
+    summary: string,
+    projectId?: string,
+    launch?: LoopRunLaunchOwnership,
+  ): LoopRun {
+    this.evictOldRuns();
+    const now = this.now();
+    const run: LoopRun = {
+      id: randomUUID(),
+      catalogId: loop.id,
+      loopName: loop.name,
+      structure: loop.structure,
+      projectId,
+      definitionSnapshot: snapshotDefinition(loop),
+      launch,
+      launchContext: normalizeLoopLaunchContext(loop.launchContext),
+      launchContextScope: loop.launchContextScope,
+      status: "failed",
+      stopReason: reason,
+      currentIteration: 0,
+      maxIterations: clampMaxIterations(loop.maxIterations),
+      iterations: [
+        {
+          id: randomUUID(),
+          index: 0,
+          startedAt: now,
+          endedAt: now,
+          output: summary,
+          validationPassed: null,
+          timeline: [],
+          children: [],
+          artifacts: [],
+        },
+      ],
+      startedAt: now,
+      updatedAt: now,
+      endedAt: now,
+    };
+    void cwd;
+    this.runs.set(run.id, run);
+    this.persist();
+    this.settledPromises.set(run.id, Promise.resolve());
     return run;
   }
 
@@ -781,6 +948,9 @@ export class LoopEngine {
             phase,
             stageIndex,
             branchIndex,
+            provider: phase === "evaluator" ? loop.evaluatorProvider : undefined,
+            model: phase === "evaluator" ? loop.evaluatorModel : undefined,
+            thinking: phase === "evaluator" ? loop.evaluatorThinkingLevel : undefined,
             cwd,
             projectId,
             signal,
@@ -940,7 +1110,6 @@ export class LoopEngine {
   ): void {
     if (!this.artifactsRoot || isLoopRunTerminal(run.status)) return;
     const directory = path.join(this.artifactsRoot, run.id);
-    mkdirSync(directory, { recursive: true });
     const filename =
       phase === "stage"
         ? `iteration-${iteration.index}-stage-${(stageIndex ?? 0) + 1}.md`
@@ -950,10 +1119,19 @@ export class LoopEngine {
     const filePath = path.join(directory, filename);
     const temp = `${filePath}.${randomUUID()}.tmp`;
     try {
+      mkdirSync(directory, { recursive: true });
       writeFileSync(temp, output, "utf8");
       renameSync(temp, filePath);
+    } catch (error) {
+      throw new LoopToolFailureError(
+        `Loop artifact persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
-      rmSync(temp, { force: true });
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        // The primary persistence error above remains authoritative.
+      }
     }
     const artifact: LoopRunArtifact = {
       id: randomUUID(),
@@ -996,11 +1174,42 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
-      const result = await this.runValidation(cwd, command, signal);
-      const normalized =
-        typeof result === "boolean"
-          ? { passed: result, evidence: result ? "passed" : "failed" }
+      const result = await this.runValidation(
+        cwd,
+        command,
+        signal,
+        this.artifactsRoot ? path.join(this.artifactsRoot, run.id, "validation") : undefined,
+      );
+      const normalized: ValidationResult =
+        typeof result === "boolean" || !("classification" in result)
+          ? {
+              command,
+              workingDirectory: cwd,
+              exitCode: (typeof result === "boolean" ? result : result.passed) ? 0 : 1,
+              durationMs: 0,
+              stdout: "",
+              stderr: "",
+              classification: "completed",
+              passed: typeof result === "boolean" ? result : result.passed,
+              evidence:
+                typeof result === "boolean" ? (result ? "passed" : "failed") : result.evidence,
+            }
           : result;
+      iteration.validationResult = normalized;
+      for (const [stream, filePath] of [
+        ["stdout", normalized.stdoutPath],
+        ["stderr", normalized.stderrPath],
+      ] as const) {
+        if (!filePath) continue;
+        iteration.artifacts.push({
+          id: randomUUID(),
+          phase: "validation",
+          filename: path.basename(filePath),
+          filePath,
+          bytes: Buffer.byteLength(stream === "stdout" ? normalized.stdout : normalized.stderr),
+          createdAt: this.now(),
+        });
+      }
       if (!signal.aborted && !isLoopRunTerminal(run.status)) {
         iteration.timeline.push({
           id: randomUUID(),
@@ -1013,7 +1222,20 @@ export class LoopEngine {
       }
       return normalized;
     } catch (error) {
-      return { passed: false, evidence: error instanceof Error ? error.message : String(error) };
+      const stderr = error instanceof Error ? error.message : String(error);
+      const failed: ValidationResult = {
+        command,
+        workingDirectory: cwd,
+        exitCode: null,
+        durationMs: 0,
+        stdout: "",
+        stderr,
+        classification: "spawnError",
+        passed: false,
+        evidence: stderr,
+      };
+      iteration.validationResult = failed;
+      return failed;
     }
   }
 
@@ -1155,7 +1377,7 @@ export class LoopEngine {
             );
           }
 
-          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          let validation: ValidationResult = unconfiguredValidation(cwd);
           if (loop.validationCommand) {
             validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
           }
@@ -1165,6 +1387,7 @@ export class LoopEngine {
 
           const evaluatorPrompt = [
             `Goal: ${loop.goal}`,
+            `Success condition: ${loop.successCondition || loop.goal}`,
             `Iteration: ${index}`,
             "Evaluate the completed report-only parallel investigation; do not edit project files.",
             `Parallel branch reports in configured order:\n${boundedPipelineEvidence(aggregate)}`,
@@ -1186,16 +1409,24 @@ export class LoopEngine {
           );
           if (this.stopped(run, signal)) return;
           this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision = exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS);
-          if (goalDecision) iteration.goalDecision = goalDecision;
+          const goalDecision =
+            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
           if (results.some((branch) => branch.error)) {
             this.finalize(run, "failed", "agentFailed");
             return;
           }
-          if (!goalDecision || goalDecision === "FAIL") {
+          if (goalDecision === "FAIL") {
             this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (
+            validation.classification === "spawnError" ||
+            validation.classification === "timeout"
+          ) {
+            this.finalize(run, "failed", "toolFailed");
             return;
           }
           if (goalDecision === "SUCCESS" && validation.passed) {
@@ -1261,7 +1492,7 @@ export class LoopEngine {
             triageAgent,
           );
 
-          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          let validation: ValidationResult = unconfiguredValidation(cwd);
           if (loop.validationCommand) {
             validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
           }
@@ -1271,6 +1502,7 @@ export class LoopEngine {
 
           const evaluatorPrompt = [
             `Goal: ${loop.goal}`,
+            `Success condition: ${loop.successCondition || loop.goal}`,
             `Iteration: ${index}`,
             "Evaluate the discovery and classification report only; do not edit project files.",
             `Classification prompt: ${classificationPrompt}`,
@@ -1296,18 +1528,19 @@ export class LoopEngine {
           if (loop.writeTarget === "artifactMarkdown") {
             this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
           }
-          const goalDecision = exactFirstLine(evaluatorOutput, GOAL_DECISIONS);
-          if (!goalDecision) {
-            iteration.endedAt = this.now();
-            this.changed(run);
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
+          const goalDecision = exactFirstLine(evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
           if (goalDecision === "FAIL") {
             this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (
+            validation.classification === "spawnError" ||
+            validation.classification === "timeout"
+          ) {
+            this.finalize(run, "failed", "toolFailed");
             return;
           }
           if (goalDecision === "SUCCESS" && validation.passed) {
@@ -1370,7 +1603,7 @@ export class LoopEngine {
             }
           }
 
-          let validation: ValidationResult = { passed: true, evidence: "not configured" };
+          let validation: ValidationResult = unconfiguredValidation(cwd);
           if (loop.validationCommand) {
             validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
           }
@@ -1386,6 +1619,7 @@ export class LoopEngine {
             .join("\n\n");
           const evaluatorPrompt = [
             `Goal: ${loop.goal}`,
+            `Success condition: ${loop.successCondition || loop.goal}`,
             `Iteration: ${index}`,
             "Evaluate the completed pipeline only; do not edit project files.",
             `Ordered pipeline reports:\n${boundedPipelineEvidence(reports)}`,
@@ -1409,18 +1643,20 @@ export class LoopEngine {
           if (loop.writeTarget === "artifactMarkdown") {
             this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
           }
-          const goalDecision = exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS);
-          if (!goalDecision) {
-            iteration.endedAt = this.now();
-            this.changed(run);
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
+          const goalDecision =
+            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
           if (goalDecision === "FAIL") {
             this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (
+            validation.classification === "spawnError" ||
+            validation.classification === "timeout"
+          ) {
+            this.finalize(run, "failed", "toolFailed");
             return;
           }
           if (goalDecision === "SUCCESS" && validation.passed) {
@@ -1436,6 +1672,7 @@ export class LoopEngine {
         const makerName = loop.makerName || loop.agentName;
         const makerPrompt = [
           `Goal: ${loop.goal}`,
+          `Success condition: ${loop.successCondition || loop.goal}`,
           `Iteration: ${index}`,
           loop.structure === "makerChecker"
             ? "You are the maker. Perform one implementation pass."
@@ -1463,34 +1700,64 @@ export class LoopEngine {
         }
 
         if (loop.structure === "singleAgent") {
-          if (!loop.validationCommand) {
-            iteration.endedAt = this.now();
-            this.changed(run);
-            this.finalize(run, "failed", "validationUnavailable");
-            return;
+          let validation = unconfiguredValidation(cwd);
+          if (loop.validationCommand) {
+            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
           }
-          const validation = await this.validation(
+          if (this.stopped(run, signal)) return;
+          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+          iteration.validationEvidence = validation.evidence;
+          const evaluatorPrompt = [
+            "You are Agent Deck's report-only natural-language goal evaluator. Review only; do not edit project files.",
+            `Loop goal: ${loop.goal}`,
+            `Success condition: ${loop.successCondition || loop.goal}`,
+            `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
+            `Iteration summary:\n${boundedPipelineEvidence(iteration.output)}`,
+            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+            "Decide whether the success condition is met from the available evidence. Start your final response with exactly one decision line: SUCCESS, CONTINUE, or FAIL. Use SUCCESS only when the success condition is satisfied, CONTINUE when more iterations should try again, and FAIL when the loop should stop as agent failed. Then provide concise Markdown rationale.",
+          ].join("\n\n");
+          iteration.evaluatorOutput = await this.role(
             run,
             iteration,
+            loop,
+            "evaluator",
+            evaluatorPrompt,
+            undefined,
             cwd,
-            loop.validationCommand,
+            run.projectId,
             signal,
+            executeRole,
+            executeAgent,
           );
           if (this.stopped(run, signal)) return;
-          iteration.validationPassed = validation.passed;
-          iteration.validationEvidence = validation.evidence;
+          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
+          const goalDecision =
+            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
-          if (validation.passed) {
+          if (goalDecision === "FAIL") {
+            this.finalize(run, "failed", "agentFailed");
+            return;
+          }
+          if (
+            validation.classification === "spawnError" ||
+            validation.classification === "timeout"
+          ) {
+            this.finalize(run, "failed", "toolFailed");
+            return;
+          }
+          if (goalDecision === "SUCCESS" && validation.passed) {
             this.finalize(run, "completed", "success");
             return;
           }
-          feedback = validation.evidence;
+          feedback = [iteration.evaluatorOutput, validation.evidence].join("\n\n");
           continue;
         }
 
         const checkerPrompt = [
           `Goal: ${loop.goal}`,
+          `Success condition: ${loop.successCondition || loop.goal}`,
           `Iteration: ${index}`,
           "Review only; do not edit project files.",
           `Review criteria: ${loop.checkerRubric}`,
@@ -1529,7 +1796,7 @@ export class LoopEngine {
           return;
         }
 
-        let validation: ValidationResult = { passed: true, evidence: "not configured" };
+        let validation: ValidationResult = unconfiguredValidation(cwd);
         if (loop.validationCommand)
           validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
         if (this.stopped(run, signal)) return;
@@ -1538,6 +1805,7 @@ export class LoopEngine {
 
         const evaluatorPrompt = [
           `Goal: ${loop.goal}`,
+          `Success condition: ${loop.successCondition || loop.goal}`,
           `Iteration: ${index}`,
           "Evaluate only; do not edit project files.",
           `Maker report:\n${iteration.output}`,
@@ -1562,18 +1830,17 @@ export class LoopEngine {
         if (loop.writeTarget === "artifactMarkdown") {
           this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
         }
-        const goalDecision = exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS);
-        if (!goalDecision) {
-          iteration.endedAt = this.now();
-          this.changed(run);
-          this.finalize(run, "failed", "agentFailed");
-          return;
-        }
+        const goalDecision =
+          exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
         iteration.goalDecision = goalDecision;
         iteration.endedAt = this.now();
         this.changed(run);
         if (goalDecision === "FAIL") {
           this.finalize(run, "failed", "agentFailed");
+          return;
+        }
+        if (validation.classification === "spawnError" || validation.classification === "timeout") {
+          this.finalize(run, "failed", "toolFailed");
           return;
         }
         if (goalDecision === "SUCCESS" && validation.passed) {
@@ -1597,13 +1864,17 @@ export class LoopEngine {
           iteration.output = error instanceof Error ? error.message : String(error);
         iteration.endedAt = this.now();
         this.changed(run);
-        this.finalize(run, "failed", "agentFailed");
+        this.finalize(
+          run,
+          "failed",
+          error instanceof LoopToolFailureError ? "toolFailed" : "agentFailed",
+        );
         return;
       }
     }
     this.finalize(
       run,
-      loop.structure === "singleAgent" ? "failed" : "notAchieved",
+      "notAchieved",
       loop.validationCommand && run.iterations.at(-1)?.validationPassed === false
         ? "validationFailedAfterFinalIteration"
         : "maxIterationsReached",

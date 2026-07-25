@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -16,13 +23,14 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 /**
  * Loop run engine end-to-end against real pi: POST /loops/:name/run drives the
  * loop's agent (a real pi subagent, mock provider) each iteration and runs the
- * validation command. `exit 0` completes after one iteration; `exit 1` runs to
- * maxIterations then fails — the exit code is the deterministic stop control.
+ * validation command. Completion requires evaluator SUCCESS plus any configured
+ * validation; a failing validation runs to maxIterations as not achieved.
  */
 
 process.env.AGENT_DECK_TEST = "1";
 
 let mock: MockProviderServer;
+let evaluatorMock: MockProviderServer;
 let server: AgentDeckServer;
 let projectId: string;
 let base: string;
@@ -68,7 +76,10 @@ beforeAll(async () => {
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker streamed concrete ordered evidence before approving.";
       }
-      if (message.includes("exact first non-empty line must be SUCCESS")) {
+      if (
+        message.includes("report-only natural-language goal evaluator") ||
+        message.includes("exact first non-empty line must be SUCCESS")
+      ) {
         return "SUCCESS\nEvaluator streamed independent ordered evidence of completion.";
       }
       if (message.includes("You are performing discovery and triage")) {
@@ -87,7 +98,22 @@ beforeAll(async () => {
       return "Maker streamed several ordered implementation delta words.";
     },
   });
-  process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
+  evaluatorMock = await startMockProvider({
+    chunkDelayMs: 15,
+    reply: () => "SUCCESS\nCross-provider evaluator reached the selected provider.",
+  });
+  const evaluatorExtension = writeMockProviderExtension(evaluatorMock.baseUrl);
+  writeFileSync(
+    evaluatorExtension,
+    readFileSync(evaluatorExtension, "utf8").replace(
+      `pi.registerProvider(${JSON.stringify(MOCK_PROVIDER_ID)}`,
+      `pi.registerProvider("evaluator-mock"`,
+    ),
+  );
+  process.env.AGENT_DECK_PROVIDER_EXTENSIONS = [
+    writeMockProviderExtension(mock.baseUrl),
+    evaluatorExtension,
+  ].join(path.delimiter);
   server = await startServer({ dataDir });
   base = `http://127.0.0.1:${server.port}`;
   const created = (await (
@@ -103,6 +129,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await server.close();
   await mock.close();
+  await evaluatorMock.close();
   delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
   delete process.env.AGENT_DECK_PI_ENV;
 });
@@ -111,6 +138,7 @@ async function putLoop(
   name: string,
   validationCommand: string,
   maxIterations: number,
+  evaluator?: { provider: string; model: string; thinking: string },
 ): Promise<void> {
   const res = await fetch(`${base}/loops`, {
     method: "PUT",
@@ -121,6 +149,9 @@ async function putLoop(
       agentName: "Agent A",
       validationCommand,
       maxIterations,
+      evaluatorProvider: evaluator?.provider,
+      evaluatorModel: evaluator?.model,
+      evaluatorThinkingLevel: evaluator?.thinking,
     }),
   });
   expect(res.ok).toBe(true);
@@ -142,7 +173,7 @@ async function startRun(
       projectId,
       provider: MOCK_PROVIDER_ID,
       model: MOCK_MODEL_ID,
-      extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+      extensions: process.env.AGENT_DECK_PROVIDER_EXTENSIONS?.split(path.delimiter).filter(Boolean),
       env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
       currentCheckoutConfirmed: true,
       ...overrides,
@@ -224,9 +255,13 @@ describe("loop run engine (real pi)", () => {
         launchContextScope: scope,
       });
       const requests = mock.requests.slice(requestStart);
-      const contextRequests = requests.filter((request) =>
-        JSON.stringify(request.messages).includes(`UNIQUE_CONTEXT_${scope}`),
-      );
+      const contextRequests = requests.filter((request) => {
+        const messages = JSON.stringify(request.messages);
+        return (
+          messages.includes(`UNIQUE_CONTEXT_${scope}`) &&
+          !messages.includes("report-only natural-language goal evaluator")
+        );
+      });
       expect(contextRequests).toHaveLength(scope === "everyIteration" ? 2 : 1);
       for (
         let requestIndex = requestStart;
@@ -243,12 +278,29 @@ describe("loop run engine (real pi)", () => {
   });
 
   it("completes after one iteration when validation passes (exit 0)", async () => {
-    await putLoop("pass-loop", "exit 0", 5);
+    await putLoop("pass-loop", "exit 0", 5, {
+      provider: "evaluator-mock",
+      model: MOCK_MODEL_ID,
+      thinking: "high",
+    });
+    const evaluatorRequestStart = evaluatorMock.requests.length;
     const run = await waitTerminal(await startRun("pass-loop"));
     expect(run.status).toBe("completed");
     expect(run.stopReason).toBe("success");
     expect(run.iterations).toHaveLength(1);
     expect(run.iterations[0]).toMatchObject({ index: 1, validationPassed: true });
+    expect(run.definitionSnapshot).toMatchObject({
+      evaluatorProvider: "evaluator-mock",
+      evaluatorModel: MOCK_MODEL_ID,
+      evaluatorThinkingLevel: "high",
+    });
+    const evaluatorRequest = evaluatorMock.requests
+      .slice(evaluatorRequestStart)
+      .find((request) =>
+        JSON.stringify(request.messages).includes("report-only natural-language goal evaluator"),
+      );
+    expect(evaluatorRequest).toMatchObject({ model: MOCK_MODEL_ID });
+    expect(evaluatorMock.requests).toHaveLength(evaluatorRequestStart + 1);
     // The agent actually ran (a real pi subagent produced output).
     expect(run.iterations[0]!.output.length).toBeGreaterThan(0);
   });
@@ -306,7 +358,13 @@ describe("loop run engine (real pi)", () => {
     expect(toolsFor("Review only")).toEqual(["read", "grep"]);
     expect(toolsFor("Evaluate only")).toEqual([]);
     const artifacts = run.iterations[0]!.artifacts;
-    expect(artifacts.map((artifact) => artifact.phase)).toEqual(["maker", "checker", "evaluator"]);
+    expect(artifacts.map((artifact) => artifact.phase)).toEqual([
+      "maker",
+      "checker",
+      "validation",
+      "validation",
+      "evaluator",
+    ]);
     for (const artifact of artifacts) {
       expect(artifact.filePath.startsWith(project + path.sep)).toBe(false);
       expect(existsSync(artifact.filePath)).toBe(true);
@@ -392,11 +450,13 @@ describe("loop run engine (real pi)", () => {
       });
       expect(names).toEqual(["read", "grep"]);
     }
-    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
-      "iteration-1-stage-1.md",
-      "iteration-1-stage-2.md",
-      "iteration-1-stage-3.md",
-      "iteration-1-evaluator.md",
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.phase)).toEqual([
+      "stage",
+      "stage",
+      "stage",
+      "validation",
+      "validation",
+      "evaluator",
     ]);
     expect(
       run.iterations[0]!.artifacts.every(
@@ -530,11 +590,13 @@ describe("loop run engine (real pi)", () => {
     const evaluatorPrompt = JSON.stringify(evaluator?.messages.at(-1)?.content);
     expect(evaluatorPrompt).toMatch(/- Agent A:.*- Agent B:.*- Agent C:/s);
     expect(Array.isArray(evaluator?.tools) ? evaluator.tools : []).toEqual([]);
-    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
-      "iteration-1-branch-1.md",
-      "iteration-1-branch-2.md",
-      "iteration-1-branch-3.md",
-      "iteration-1-evaluator.md",
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.phase)).toEqual([
+      "branch",
+      "branch",
+      "branch",
+      "validation",
+      "validation",
+      "evaluator",
     ]);
     expect(
       run.iterations[0]!.artifacts.every(
@@ -613,16 +675,18 @@ describe("loop run engine (real pi)", () => {
         ? roleRequests[evaluatorOffset]!.tools
         : [],
     ).toEqual([]);
-    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.filename)).toEqual([
-      "iteration-1-triage.md",
-      "iteration-1-evaluator.md",
+    expect(run.iterations[0]!.artifacts.map((artifact) => artifact.phase)).toEqual([
+      "triage",
+      "validation",
+      "validation",
+      "evaluator",
     ]);
   });
 
   it("runs every iteration then fails when validation never passes (exit 1)", async () => {
     await putLoop("fail-loop", "exit 1", 2);
     const run = await waitTerminal(await startRun("fail-loop"));
-    expect(run.status).toBe("failed");
+    expect(run.status).toBe("notAchieved");
     expect(run.stopReason).toBe("validationFailedAfterFinalIteration");
     expect(run.iterations).toHaveLength(2);
     expect(run.iterations.every((i) => i.validationPassed === false)).toBe(true);
@@ -673,7 +737,9 @@ describe("loop run engine (real pi)", () => {
         projectId: wtProjectId,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,
-        extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+        extensions: process.env.AGENT_DECK_PROVIDER_EXTENSIONS?.split(path.delimiter).filter(
+          Boolean,
+        ),
         env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
       }),
     });

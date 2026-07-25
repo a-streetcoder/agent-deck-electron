@@ -21,6 +21,7 @@ import {
   type ModelSelection,
   type PiInboundEvent,
   type PiProcessExit,
+  type ThinkingLevel,
 } from "@agent-deck/pi-host";
 import type { Scope } from "effect";
 import { Context, Duration, Effect, Fiber, Layer, Option, Stream } from "effect";
@@ -237,6 +238,7 @@ export interface ManagedSessionRuntime {
     task: string,
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
+    overrides?: ChildLaunchOverrides,
   ) => Effect.Effect<string, Error>;
 
   /** Subscribe to process exit; fires immediately if already exited. */
@@ -663,7 +665,7 @@ export const makeManagedSessionRuntime = (
           onMetaChange(meta);
         }),
 
-      runChildAgent: (task, agentName, toolPolicy) =>
+      runChildAgent: (task, agentName, toolPolicy, overrides) =>
         runChildAgent({
           piHost,
           helperContext,
@@ -673,6 +675,7 @@ export const makeManagedSessionRuntime = (
           task,
           agentName,
           toolPolicy,
+          overrides,
         }),
 
       onExit: (listener) => {
@@ -750,6 +753,12 @@ export const runOneShotHelper = (opts: RunHelperOptions): Effect.Effect<string, 
     ),
   );
 
+export interface ChildLaunchOverrides {
+  provider?: string;
+  model?: string;
+  thinking?: ThinkingLevel;
+}
+
 interface RunChildArgs {
   readonly piHost: Context.Tag.Service<PiHost>;
   readonly helperContext: HelperContext;
@@ -759,6 +768,7 @@ interface RunChildArgs {
   readonly task: string;
   readonly agentName?: string;
   readonly toolPolicy?: ChildToolPolicy;
+  readonly overrides?: ChildLaunchOverrides;
 }
 
 /**
@@ -769,7 +779,8 @@ interface RunChildArgs {
  * cell id and the bus stamps interleaved deltas in arrival order.
  */
 const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
-  const { piHost, helperContext, meta, params, emit, task, agentName, toolPolicy } = args;
+  const { piHost, helperContext, meta, params, emit, task, agentName, toolPolicy, overrides } =
+    args;
   return Effect.gen(function* () {
     const resolved = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
     if (agentName && !resolved) {
@@ -814,9 +825,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
             kind: "agent",
             systemPrompt: { mode: "replace", text: promptFile },
             tools: childTools,
-            provider: helperContext.provider,
-            model: resolved?.model ?? helperContext.model,
-            thinking: resolved?.thinking,
+            provider: overrides?.provider ?? helperContext.provider,
+            model: overrides?.model ?? resolved?.model ?? helperContext.model,
+            thinking: overrides?.thinking ?? resolved?.thinking,
             skills: resolved?.skillDirs,
             extensions: childBridge
               ? [...(helperContext.extensions ?? []), childBridge.extension]

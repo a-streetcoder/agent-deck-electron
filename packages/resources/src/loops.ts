@@ -7,6 +7,7 @@ import {
   normalizeLoopClassificationPrompt,
   normalizeLoopLaunchContext,
   normalizeLoopProjectPaths,
+  normalizeLoopSuccessCondition,
   normalizeParallelBranches,
   LOOP_STRUCTURES,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
@@ -14,6 +15,7 @@ import {
   type LoopDefinition,
   type LoopDefinitionAvailability,
   type LoopLaunchContextScope,
+  type LoopSuccessConditionSource,
   type LoopStructure,
   type LoopWriteTarget,
 } from "@agent-deck/domain";
@@ -161,6 +163,14 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
   const base = basename.replace(/\.loop\.md$/i, "");
   const launchContext =
     decodeJSONStringLine(content, "launchContextJSON") ?? asString(frontmatter.launchContext);
+  const hasCustomSuccessCondition =
+    Object.prototype.hasOwnProperty.call(frontmatter, "successConditionJSON") ||
+    Object.prototype.hasOwnProperty.call(frontmatter, "successCondition");
+  const successCondition = normalizeLoopSuccessCondition(
+    decodeJSONStringLine(content, "successConditionJSON") ?? asString(frontmatter.successCondition),
+    body,
+  );
+  const evaluatorModel = asString(frontmatter.evaluatorModel)?.trim() || undefined;
   const projectPaths =
     decodeJSONStringArrayLine(content, "projectPathsJSON") ??
     asProjectPaths(frontmatter.projectPaths) ??
@@ -194,6 +204,13 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
       frontmatter.maxIterations === undefined ? Number.NaN : Number(frontmatter.maxIterations),
     ),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
+    successCondition,
+    successConditionSource: hasCustomSuccessCondition ? "custom" : "goal",
+    evaluatorProvider: evaluatorModel
+      ? asString(frontmatter.evaluatorProvider)?.trim() || undefined
+      : undefined,
+    evaluatorModel,
+    evaluatorThinkingLevel: asString(frontmatter.evaluatorThinkingLevel)?.trim() || undefined,
     writeTarget: asWriteTarget(frontmatter.writeTarget),
     source: "user",
     availability: asAvailability(frontmatter.availability),
@@ -252,6 +269,11 @@ export interface LoopEdit {
   launchContextScope?: LoopLaunchContextScope;
   maxIterations?: number;
   validationCommand?: string;
+  successCondition?: string;
+  successConditionSource?: LoopSuccessConditionSource;
+  evaluatorProvider?: string;
+  evaluatorModel?: string;
+  evaluatorThinkingLevel?: string;
   writeTarget?: LoopWriteTarget;
   availability?: LoopDefinitionAvailability;
   projectPaths?: string[];
@@ -268,6 +290,10 @@ const LOOP_FIELD_ORDER = [
   "writeTarget",
   "maxIterations",
   "validationCommand",
+  "successConditionJSON",
+  "evaluatorProvider",
+  "evaluatorModel",
+  "evaluatorThinkingLevel",
   "agentName",
   "makerName",
   "checkerName",
@@ -302,7 +328,9 @@ function serializeFrontmatter(record: Record<string, unknown>): string {
         ? `classificationPrompt: ${normalizeLoopClassificationPrompt(asString(value))}`
         : key === "checkpointPrompt"
           ? `checkpointPrompt: ${normalizeLoopCheckpointPrompt(asString(value))}`
-          : key === "launchContextJSON" || key === "projectPathsJSON"
+          : key === "launchContextJSON" ||
+              key === "projectPathsJSON" ||
+              key === "successConditionJSON"
             ? `${key}: ${JSON.stringify(value)}`
             : YAML.stringify({ [key]: value }).trimEnd(),
     )
@@ -440,6 +468,32 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   if (edit.validationCommand !== undefined) {
     if (edit.validationCommand) frontmatter.validationCommand = edit.validationCommand;
     else delete frontmatter.validationCommand;
+  }
+  if (edit.successCondition !== undefined || edit.successConditionSource !== undefined) {
+    const existingCustom =
+      Object.prototype.hasOwnProperty.call(frontmatter, "successConditionJSON") ||
+      Object.prototype.hasOwnProperty.call(frontmatter, "successCondition");
+    const source =
+      edit.successConditionSource ??
+      (edit.successCondition !== undefined ? "custom" : existingCustom ? "custom" : "goal");
+    delete frontmatter.successCondition;
+    delete frontmatter.successConditionJSON;
+    if (source === "custom") {
+      frontmatter.successConditionJSON = normalizeLoopSuccessCondition(
+        edit.successCondition,
+        edit.goal ?? body,
+      );
+    }
+  }
+  for (const key of ["evaluatorProvider", "evaluatorModel", "evaluatorThinkingLevel"] as const) {
+    if (edit[key] !== undefined) {
+      const value = edit[key]?.trim();
+      if (value) frontmatter[key] = value;
+      else delete frontmatter[key];
+    }
+  }
+  if (edit.evaluatorModel !== undefined && !edit.evaluatorModel.trim()) {
+    delete frontmatter.evaluatorProvider;
   }
   if (edit.writeTarget !== undefined) frontmatter.writeTarget = edit.writeTarget;
   if (edit.availability !== undefined) frontmatter.availability = edit.availability;

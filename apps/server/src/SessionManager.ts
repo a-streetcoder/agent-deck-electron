@@ -23,6 +23,7 @@ import {
   SessionManagerService,
   type ChildBridgeFactory,
   type ChildToolPolicy,
+  type ChildLaunchOverrides,
   type ManagedSessionRuntime,
   type RunHelperOptions,
   type SpawnSessionParams,
@@ -170,10 +171,11 @@ export class ManagedSession {
     task: string,
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
+    overrides?: ChildLaunchOverrides,
   ): Promise<string> {
     return await runPromiseUnwrapped(
       this.runtime,
-      this.rt.runChildAgent(task, agentName, toolPolicy),
+      this.rt.runChildAgent(task, agentName, toolPolicy, overrides),
     );
   }
 
@@ -636,10 +638,11 @@ export class SessionManager {
     task: string,
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
+    overrides?: ChildLaunchOverrides,
   ): Promise<string> {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
-    return await parent.runChildAgent(task, agentName, toolPolicy);
+    return await parent.runChildAgent(task, agentName, toolPolicy, overrides);
   }
 
   /**

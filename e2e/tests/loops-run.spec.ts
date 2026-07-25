@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -39,7 +39,10 @@ test.beforeAll(async () => {
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker found concrete passing evidence.";
       }
-      if (message.includes("exact first non-empty line must be SUCCESS")) {
+      if (
+        message.includes("report-only natural-language goal evaluator") ||
+        message.includes("exact first non-empty line must be SUCCESS")
+      ) {
         return "SUCCESS\nGoal evaluator confirmed the requested outcome.";
       }
       return "Maker produced a detailed streamed implementation report.";
@@ -96,6 +99,13 @@ test.beforeAll(async () => {
     agentName: "Agent A",
     validationCommand: "exit 0",
     maxIterations: 3,
+  });
+  await putLoop({
+    name: "Bounded Validation",
+    goal: "Capture bounded validation diagnostics.",
+    agentName: "Agent A",
+    validationCommand: `${process.execPath} -e "process.stdout.write('x'.repeat(20000));process.stderr.write('bounded stderr')"`,
+    maxIterations: 1,
   });
   await putLoop({
     name: "Retained Worktree",
@@ -446,6 +456,16 @@ test("authors project availability and uses an accessible responsive launch over
   await runButton.click();
   await page.getByTestId("loop-launch-goal").fill("Run-only goal override");
   await expect(page.getByTestId("loop-launch-goal")).toHaveValue("Run-only goal override");
+  await expect(page.getByTestId("loop-launch-success-condition")).toHaveValue(
+    "Run-only goal override",
+  );
+  await page
+    .getByTestId("loop-launch-success-condition")
+    .fill("Run-only explicit success condition");
+  await page
+    .getByTestId("loop-launch-evaluator-model")
+    .selectOption(JSON.stringify(["mock", "mock-model"]));
+  await page.getByTestId("loop-launch-evaluator-thinking").selectOption("high");
   await page.getByTestId("loop-launch-context-override").fill("RUN_ONLY_CONTEXT");
   await expect(page.getByTestId("loop-launch-context-override")).toHaveValue("RUN_ONLY_CONTEXT");
   await page.getByTestId("loop-launch-scope-override").selectOption("everyIteration");
@@ -466,6 +486,11 @@ test("authors project availability and uses an accessible responsive launch over
     goal: "Run-only goal override",
     launchContext: "RUN_ONLY_CONTEXT",
     launchContextScope: "everyIteration",
+    successCondition: "Run-only explicit success condition",
+    successConditionSource: "custom",
+    evaluatorProvider: "mock",
+    evaluatorModel: "mock-model",
+    evaluatorThinkingLevel: "high",
     maxIterations: 0,
   });
 });
@@ -477,6 +502,27 @@ test("runs a single-agent loop to completion", async ({ page }) => {
     timeout: 30_000,
   });
   await expect(page.getByTestId("loop-run-iterations")).toContainText("✓ passed");
+  const validation = page.getByTestId("loop-validation-evidence").first();
+  await expect(validation).toHaveAccessibleName("Validation for iteration 1");
+  await expect(validation).toContainText("exit 0");
+  await expect(validation).toContainText("completed");
+});
+
+test("renders bounded rich validation output, working directory, and artifacts", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await launchLoop(page, "Bounded Validation");
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const validation = page.getByTestId("loop-validation-evidence").first();
+  await expect(validation).toContainText(`Working directory: ${realpathSync.native(project)}`);
+  await expect(validation.getByLabel("Validation output artifacts")).toContainText("stdout.txt");
+  await expect(validation.getByLabel("Validation output artifacts")).toContainText("stderr.txt");
+  const stdout = validation.getByLabel("Validation stdout");
+  await expect(stdout).toContainText("output truncated");
+  expect((await stdout.textContent())?.length).toBeLessThan(16_500);
 });
 
 test("retains and restores registered worktree evidence in the run panel", async ({ page }) => {

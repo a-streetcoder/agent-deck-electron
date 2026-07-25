@@ -42,6 +42,14 @@ export function isRunnableLoopStructure(structure: LoopStructure): boolean {
 export const LOOP_DEFAULT_CLASSIFICATION_PROMPT =
   "Classify findings by severity and summarize recommended next action.";
 export const LOOP_DEFAULT_CHECKPOINT_PROMPT = "Review the proposal before continuing.";
+export const LOOP_EVALUATOR_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 
 /** Native LoopDiscoveryTriageConfig normalization, including CR-only input. */
 export function normalizeLoopClassificationPrompt(value: string | undefined): string {
@@ -234,6 +242,12 @@ export function normalizeLoopLaunchContext(value: string | undefined): string | 
   return normalized || undefined;
 }
 
+export type LoopSuccessConditionSource = "goal" | "custom";
+
+export function normalizeLoopSuccessCondition(value: string | undefined, goal: string): string {
+  return value?.trim() || goal.trim();
+}
+
 /** Paths are opaque equality metadata. They are never resolved or used for filesystem access. */
 export function normalizeLoopProjectPaths(paths: readonly string[] | undefined): string[] {
   const seen = new Set<string>();
@@ -280,8 +294,16 @@ export interface LoopDefinition {
   launchContextScope: LoopLaunchContextScope;
   /** 0 means unlimited; positive values are clamped to 1..LOOP_MAX_ITERATIONS_LIMIT. */
   maxIterations: number;
-  /** Shell command whose exit 0 stops the loop early (the success condition). */
+  /** Shell command whose exit 0 satisfies the optional validation requirement. */
   validationCommand: string;
+  /** Natural-language outcome condition; defaults to the effective goal. */
+  successCondition?: string;
+  /** Whether the condition follows the launch goal or was explicitly authored. */
+  successConditionSource?: LoopSuccessConditionSource;
+  /** Optional report-only evaluator launch overrides. */
+  evaluatorProvider?: string;
+  evaluatorModel?: string;
+  evaluatorThinkingLevel?: string;
   writeTarget: LoopWriteTarget;
   source: LoopSource;
   availability: LoopDefinitionAvailability;
@@ -319,6 +341,8 @@ export type LoopStopReason =
   | "maxIterationsReached"
   | "validationFailedAfterFinalIteration"
   | "validationUnavailable"
+  | "unsafeWriteTarget"
+  | "toolFailed"
   | "agentFailed"
   | "humanInputRequired"
   | "humanApproved"
@@ -350,7 +374,15 @@ export interface LoopTimelineEvent {
 
 export interface LoopRunArtifact {
   id: string;
-  phase: "maker" | "checker" | "stage" | "branch" | "triage" | "checkpoint" | "evaluator";
+  phase:
+    | "maker"
+    | "checker"
+    | "stage"
+    | "branch"
+    | "triage"
+    | "checkpoint"
+    | "evaluator"
+    | "validation";
   stageIndex?: number;
   branchIndex?: number;
   agentName?: string;
@@ -392,6 +424,21 @@ export interface LoopParallelBranchOutput {
   error?: string;
 }
 
+export type LoopValidationClassification = "completed" | "timeout" | "spawnError" | "cancelled";
+
+export interface LoopValidationResult {
+  command: string;
+  workingDirectory: string;
+  exitCode: number | null;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  stdoutPath?: string;
+  stderrPath?: string;
+  classification: LoopValidationClassification;
+  passed: boolean;
+}
+
 export interface LoopRunIteration {
   id: string;
   index: number;
@@ -409,6 +456,7 @@ export interface LoopRunIteration {
   classificationOutput?: string;
   validationPassed: boolean | null;
   validationEvidence?: string;
+  validationResult?: LoopValidationResult;
   timeline: LoopTimelineEvent[];
   children: LoopChildRecord[];
   artifacts: LoopRunArtifact[];

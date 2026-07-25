@@ -1,10 +1,17 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { cwd } from "node:process";
 import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
 import { describe, expect, it, vi } from "vitest";
-import { LoopEngine } from "../src/loopEngine.ts";
+import { LoopEngine, runValidationCommand } from "../src/loopEngine.ts";
 
 /**
  * Loop engine control flow, hermetic: the agent executor is injected (no pi),
@@ -46,9 +53,9 @@ describe("loop engine (single-agent)", () => {
       const prompts: string[] = [];
       let validations = 0;
       const engine = new LoopEngine({
-        executeRole: async ({ prompt }) => {
-          prompts.push(prompt);
-          return "report";
+        executeRole: async ({ prompt, phase }) => {
+          if (phase === "maker") prompts.push(prompt);
+          return phase === "evaluator" ? "CONTINUE\nMore work." : "report";
         },
         runValidation: async () => ++validations >= 2,
       });
@@ -595,6 +602,24 @@ describe("loop engine (single-agent)", () => {
     });
   });
 
+  it("normalizes malformed Parallel evaluator output to durable CONTINUE", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "not a decision" : "report"),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A"],
+        writeTarget: "artifactMarkdown",
+        maxIterations: 1,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "notAchieved", stopReason: "maxIterationsReached" });
+    expect(run.iterations[0]?.goalDecision).toBe("CONTINUE");
+  });
+
   it("cancels all active Parallel branches, awaits cleanup, and prevents post-terminal mutation", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-parallel-stop-"));
     const started: number[] = [];
@@ -741,7 +766,11 @@ describe("loop engine (single-agent)", () => {
         cwd(),
       );
       await engine.settled(run.id);
-      expect(run).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+      expect(run).toMatchObject(
+        evaluatorOutput.startsWith("FAIL")
+          ? { status: "failed", stopReason: "agentFailed" }
+          : { status: "notAchieved", stopReason: "maxIterationsReached" },
+      );
     },
   );
 
@@ -993,19 +1022,57 @@ describe("loop engine (single-agent)", () => {
     expect(run).toMatchObject({ status: "stopped", stopReason: "humanInputRequired" });
   });
 
+  it("uses the configured success condition and evaluator launch overrides for Single Agent", async () => {
+    const evaluatorCalls: Array<{
+      prompt: string;
+      provider?: string;
+      model?: string;
+      thinking?: string;
+    }> = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, prompt, provider, model, thinking }) => {
+        if (phase === "evaluator") {
+          evaluatorCalls.push({ prompt, provider, model, thinking });
+          return "  success  \nSatisfied.";
+        }
+        return "work";
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        successCondition: "Acceptance condition.",
+        evaluatorProvider: "evaluator-provider",
+        evaluatorModel: "evaluator-model",
+        evaluatorThinkingLevel: "high",
+        validationCommand: "",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "completed", stopReason: "success" });
+    expect(evaluatorCalls).toEqual([
+      expect.objectContaining({
+        provider: "evaluator-provider",
+        model: "evaluator-model",
+        thinking: "high",
+      }),
+    ]);
+    expect(evaluatorCalls[0]?.prompt).toContain("Success condition: Acceptance condition.");
+  });
+
   it("stops on the first passing validation (exit 0)", async () => {
     let calls = 0;
     const engine = new LoopEngine({
-      executeAgent: async () => {
+      executeRole: async ({ phase }) => {
         calls += 1;
-        return "agent output";
+        return phase === "evaluator" ? "SUCCESS\nCondition met." : "agent output";
       },
     });
     const run = engine.start(makeLoop({ validationCommand: "exit 0", maxIterations: 5 }), cwd());
     await engine.settled(run.id);
     expect(run.status).toBe("completed");
     expect(run.stopReason).toBe("success");
-    expect(calls).toBe(1); // stopped after the first passing iteration
+    expect(calls).toBe(2); // one agent plus the required evaluator
     expect(run.iterations).toHaveLength(1);
     expect(run.iterations[0]).toMatchObject({ index: 1, validationPassed: true });
     expect(run.endedAt).toBeDefined();
@@ -1014,26 +1081,90 @@ describe("loop engine (single-agent)", () => {
   it("runs every iteration then fails when validation never passes (exit 1)", async () => {
     let calls = 0;
     const engine = new LoopEngine({
-      executeAgent: async () => {
+      executeRole: async ({ phase }) => {
         calls += 1;
-        return "out";
+        return phase === "evaluator" ? "SUCCESS\nCondition met." : "out";
       },
     });
     const run = engine.start(makeLoop({ validationCommand: "exit 1", maxIterations: 3 }), cwd());
     await engine.settled(run.id);
-    expect(run.status).toBe("failed");
+    expect(run.status).toBe("notAchieved");
     expect(run.stopReason).toBe("validationFailedAfterFinalIteration");
-    expect(calls).toBe(3);
+    expect(calls).toBe(6);
     expect(run.iterations.map((i) => i.validationPassed)).toEqual([false, false, false]);
   });
 
-  it("fails immediately with no validation command (native validationUnavailable)", async () => {
-    const engine = new LoopEngine({ executeAgent: async () => "out" });
+  it("completes from evaluator SUCCESS when no validation command is configured", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS\nCondition met." : "out"),
+    });
     const run = engine.start(makeLoop({ validationCommand: "", maxIterations: 4 }), cwd());
     await engine.settled(run.id);
-    expect(run.status).toBe("failed");
-    expect(run.stopReason).toBe("validationUnavailable");
+    expect(run.status).toBe("completed");
+    expect(run.stopReason).toBe("success");
     expect(run.iterations).toHaveLength(1);
+    expect(run.iterations[0]?.validationResult).toBeUndefined();
+  });
+
+  it("persists rich separate validation evidence and stream artifacts", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-rich-validation-"));
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) =>
+        phase === "evaluator" ? "SUCCESS\nCondition met." : "work",
+    });
+    const command = `${process.execPath} -e "process.stdout.write('OUT');process.stderr.write('ERR');process.exit(7)"`;
+    const run = engine.start(makeLoop({ validationCommand: command, maxIterations: 1 }), cwd());
+    await engine.settled(run.id);
+    const result = run.iterations[0]?.validationResult;
+    expect(result).toMatchObject({
+      command,
+      exitCode: 7,
+      classification: "completed",
+      passed: false,
+      stdout: "OUT",
+      stderr: "ERR",
+    });
+    expect(result?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result?.workingDirectory).toBe(realpathSync.native(cwd()));
+    expect(result?.stdoutPath && existsSync(result.stdoutPath)).toBe(true);
+    expect(result?.stderrPath && existsSync(result.stderrPath)).toBe(true);
+    expect(
+      run.iterations[0]?.artifacts.filter((artifact) => artifact.phase === "validation"),
+    ).toHaveLength(2);
+
+    const restoredEngine = new LoopEngine({ dataDir });
+    const restored = restoredEngine.get(run.id);
+    expect(restored?.iterations[0]?.validationResult).toMatchObject({
+      stdout: "OUT",
+      stderr: "ERR",
+      exitCode: 7,
+    });
+    expect(
+      restored?.iterations[0]?.artifacts.filter((artifact) => artifact.phase === "validation"),
+    ).toHaveLength(2);
+    expect(readdirSync(dataDir).some((name) => name.includes(".corrupt-"))).toBe(false);
+  });
+
+  it("classifies validation timeout and cancellation without late success", async () => {
+    const timeout = await runValidationCommand(
+      cwd(),
+      `${process.execPath} -e "setTimeout(()=>{},5000)"`,
+      undefined,
+      undefined,
+      20,
+    );
+    expect(timeout).toMatchObject({ classification: "timeout", exitCode: null, passed: false });
+
+    const controller = new AbortController();
+    const pending = runValidationCommand(
+      cwd(),
+      `${process.execPath} -e "setTimeout(()=>{},5000)"`,
+      controller.signal,
+    );
+    controller.abort();
+    const cancelled = await pending;
+    expect(cancelled).toMatchObject({ classification: "cancelled", exitCode: null, passed: false });
   });
 
   it("fails when the agent throws (agentFailed), recording the error", async () => {
@@ -1049,8 +1180,10 @@ describe("loop engine (single-agent)", () => {
     expect(run.iterations[0]).toMatchObject({ output: "agent exploded", validationPassed: null });
   });
 
-  it("a throwing validation runner is treated as a failure, never stuck as running", async () => {
+  it("a throwing validation runner is treated as a durable tool failure", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-validation-start-failure-"));
     const engine = new LoopEngine({
+      dataDir,
       executeAgent: async () => "out",
       runValidation: async () => {
         throw new Error("validation runner blew up");
@@ -1058,11 +1191,14 @@ describe("loop engine (single-agent)", () => {
     });
     const run = engine.start(makeLoop({ validationCommand: "whatever", maxIterations: 2 }), cwd());
     await engine.settled(run.id);
-    // Both iterations ran (validation never "passed"), and the run reached a
-    // terminal state instead of hanging on "running".
     expect(run.status).toBe("failed");
-    expect(run.stopReason).toBe("validationFailedAfterFinalIteration");
-    expect(run.iterations.map((i) => i.validationPassed)).toEqual([false, false]);
+    expect(run.stopReason).toBe("toolFailed");
+    expect(run.iterations.map((i) => i.validationPassed)).toEqual([false]);
+    expect(new LoopEngine({ dataDir }).get(run.id)).toMatchObject({
+      status: "failed",
+      stopReason: "toolFailed",
+      iterations: [{ validationResult: { classification: "spawnError" } }],
+    });
   });
 
   it.each(["maker", "checker", "validation", "evaluator"] as const)(
@@ -1108,6 +1244,22 @@ describe("loop engine (single-agent)", () => {
     },
   );
 
+  it("durably records toolFailed when artifact infrastructure cannot start", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-start-failure-"));
+    writeFileSync(path.join(dataDir, "loop-artifacts"), "not a directory");
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "work"),
+    });
+    const run = engine.start(makeLoop({ writeTarget: "artifactMarkdown" }), cwd());
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "failed", stopReason: "toolFailed" });
+    expect(new LoopEngine({ dataDir }).get(run.id)).toMatchObject({
+      status: "failed",
+      stopReason: "toolFailed",
+    });
+  });
+
   it("persists report-only artifacts outside the project for every role", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifacts-data-"));
     const project = mkdtempSync(path.join(tmpdir(), "loop-artifacts-project-"));
@@ -1148,6 +1300,30 @@ describe("loop engine (single-agent)", () => {
     expect(artifacts.map((artifact) => readFileSync(artifact.filePath, "utf8"))).toEqual(
       terminalArtifacts,
     );
+  });
+
+  it("restores durable toolFailed startup audits without quarantine", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-tool-failed-restart-"));
+    const engine = new LoopEngine({ dataDir });
+    const failed = engine.recordFailedStart(
+      makeLoop({ successCondition: "Custom", successConditionSource: "custom" }),
+      cwd(),
+      "toolFailed",
+      "parent session creation failed",
+      "project",
+    );
+
+    const restoredEngine = new LoopEngine({ dataDir });
+    expect(restoredEngine.get(failed.id)).toMatchObject({
+      status: "failed",
+      stopReason: "toolFailed",
+      definitionSnapshot: {
+        successCondition: "Custom",
+        successConditionSource: "custom",
+      },
+      iterations: [{ index: 0, output: "parent session creation failed" }],
+    });
+    expect(readdirSync(dataDir).some((name) => name.includes(".corrupt-"))).toBe(false);
   });
 
   it.each([

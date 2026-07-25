@@ -29,6 +29,17 @@ test.afterAll(async () => {
 });
 
 test("creates, edits, and deletes a loop through the Bank", async ({ page }) => {
+  await page.route("**/sessions/*/models", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        models: [
+          { provider: "provider-a", id: "shared-model", name: "Shared A" },
+          { provider: "provider-b", id: "shared-model", name: "Shared B" },
+        ],
+      }),
+    });
+  });
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-empty")).toBeVisible();
@@ -59,6 +70,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   await newLoop.click();
   await page.getByTestId("loop-name").fill("Green Suite");
   await page.getByTestId("loop-goal").fill("Make the test suite pass.");
+  await expect(page.getByTestId("loop-success-condition")).toHaveValue("Make the test suite pass.");
   await expect(page.getByTestId("loop-structure").locator("option")).toHaveText([
     "Single agent",
     "Maker / checker",
@@ -69,6 +81,15 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   ]);
   await page.getByTestId("loop-agent").selectOption("Agent A");
   await page.getByTestId("loop-max-iterations").fill("6");
+  await page.getByTestId("loop-success-condition").fill("All acceptance checks are green.");
+  const evaluatorModelSelect = page.getByTestId("loop-evaluator-model");
+  await expect(evaluatorModelSelect.locator("option")).toContainText([
+    "Inherited model",
+    "Shared A · provider-a/shared-model",
+    "Shared B · provider-b/shared-model",
+  ]);
+  await evaluatorModelSelect.selectOption(JSON.stringify(["provider-b", "shared-model"]));
+  await page.getByTestId("loop-evaluator-thinking").selectOption("high");
   await page.getByTestId("loop-validation").fill("pnpm test");
   await page.getByTestId("loop-save").click();
 
@@ -83,15 +104,33 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   const raw = readFileSync(loopFile(), "utf8");
   expect(raw).toContain("name: Green Suite");
   expect(raw).toContain("maxIterations: 6");
+  expect(raw).toContain('successConditionJSON: "All acceptance checks are green."');
+  expect(raw).toContain("evaluatorProvider: provider-b");
+  expect(raw).toContain("evaluatorModel: shared-model");
+  expect(raw).toContain("evaluatorThinkingLevel: high");
   expect(raw).toContain("Make the test suite pass.");
 
   // Edit: reopen (name is fixed once created), bump iterations.
   await rowButton.click();
   await expect(page.getByTestId("loop-name")).toBeDisabled();
+  await expect(page.getByTestId("loop-success-condition")).toHaveValue(
+    "All acceptance checks are green.",
+  );
+  await expect(page.getByTestId("loop-evaluator-model")).toHaveValue(
+    JSON.stringify(["provider-b", "shared-model"]),
+  );
+  await expect(page.getByTestId("loop-evaluator-thinking")).toHaveValue("high");
+  await page.getByTestId("loop-goal").fill("Updated goal.");
+  await expect(page.getByTestId("loop-success-condition")).toHaveValue(
+    "All acceptance checks are green.",
+  );
+  await page.getByTestId("loop-success-condition-reset").click();
+  await expect(page.getByTestId("loop-success-condition")).toHaveValue("Updated goal.");
   await page.getByTestId("loop-max-iterations").fill("10");
   await page.getByTestId("loop-save").click();
   await expect(row).toContainText("10×");
   expect(readFileSync(loopFile(), "utf8")).toContain("maxIterations: 10");
+  expect(readFileSync(loopFile(), "utf8")).not.toContain("successConditionJSON:");
 
   // Duplicate → a "Copy of …" appears alongside the original.
   await row.getByTitle("Duplicate loop").click();
@@ -145,6 +184,35 @@ test("wraps a long unbroken saved loop name inside the narrow editor", async ({ 
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId(`loop-delete-${longName}`).click();
   await expect(row).toHaveCount(0);
+});
+
+test("preserves legacy unavailable evaluator settings until explicit repair", async ({ page }) => {
+  const dir = path.dirname(loopFile());
+  const legacyFile = path.join(dir, "legacy-evaluator.loop.md");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    legacyFile,
+    "---\nname: Legacy Evaluator Settings\nagentName: Agent A\nevaluatorProvider: retired-provider\nevaluatorModel: retired-model\nevaluatorThinkingLevel: extreme\n---\n\nRepair evaluator settings.\n",
+  );
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-loops").click();
+  await page.getByTestId("loop-open-Legacy Evaluator Settings").click();
+  await expect(page.getByTestId("loop-evaluator-model")).toHaveValue(
+    JSON.stringify(["retired-provider", "retired-model"]),
+  );
+  await expect(page.getByTestId("loop-evaluator-model").locator("option:checked")).toContainText(
+    "unavailable",
+  );
+  await expect(page.getByTestId("loop-evaluator-thinking")).toHaveValue("extreme");
+  await expect(page.getByRole("alert")).toContainText("Evaluator");
+  await expect(page.getByTestId("loop-save")).toBeDisabled();
+  await page.getByTestId("loop-evaluator-model").selectOption("");
+  await page.getByTestId("loop-evaluator-thinking").selectOption("high");
+  await page.getByTestId("loop-save").click();
+  expect(readFileSync(legacyFile, "utf8")).not.toContain("retired-provider");
+  expect(readFileSync(legacyFile, "utf8")).not.toContain("retired-model");
+  expect(readFileSync(legacyFile, "utf8")).toContain("evaluatorThinkingLevel: high");
 });
 
 test("loads a native-shaped Maker+Checker definition without conversion", async ({ page }) => {

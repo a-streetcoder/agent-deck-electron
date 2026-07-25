@@ -11,6 +11,7 @@ import {
   loopDefinitionValidationError,
   LOOP_AGENT_PREFLIGHT_CODE,
   LOOP_CURRENT_CHECKOUT_CONFIRMATION_CODE,
+  LOOP_EVALUATOR_THINKING_LEVELS,
   LOOP_PARALLEL_WRITE_TARGET_CODE,
   LOOP_STRUCTURE_LABEL,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
@@ -26,6 +27,7 @@ import {
   scanLoops,
   writeLoopFile,
 } from "@agent-deck/resources";
+import type { ThinkingLevel } from "@agent-deck/pi-host";
 import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { createLoopWorktree, type GitWorktree, type OwnedLoopWorktreeProof } from "../git.ts";
@@ -172,6 +174,13 @@ export function registerLoopRoutes(
     launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
+    successCondition: z.string().max(50_000).optional(),
+    successConditionSource: z.enum(["goal", "custom"]).optional(),
+    evaluatorProvider: z.string().max(500).optional(),
+    evaluatorModel: z.string().max(500).optional(),
+    evaluatorThinkingLevel: z
+      .union([z.literal(""), z.enum(LOOP_EVALUATOR_THINKING_LEVELS)])
+      .optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
     availability: z.enum(["allProjects", "projectPaths"]).optional(),
     projectPaths: z.array(z.string().max(10_000)).max(1_000).optional(),
@@ -308,6 +317,13 @@ export function registerLoopRoutes(
         goal: z.string().max(50_000).optional(),
         launchContext: z.string().max(50_000).optional(),
         launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
+        successCondition: z.string().max(50_000).optional(),
+        successConditionSource: z.enum(["goal", "custom"]).optional(),
+        evaluatorProvider: z.string().max(500).optional(),
+        evaluatorModel: z.string().max(500).optional(),
+        evaluatorThinkingLevel: z
+          .union([z.literal(""), z.enum(LOOP_EVALUATOR_THINKING_LEVELS)])
+          .optional(),
         provider: z.string().optional(),
         model: z.string().optional(),
         extensions: z.array(z.string()).optional(),
@@ -376,6 +392,33 @@ export function registerLoopRoutes(
             ? loop.launchContext
             : normalizeLoopLaunchContext(body.launchContext),
         launchContextScope: body.launchContextScope ?? loop.launchContextScope,
+        successConditionSource:
+          body.successConditionSource ??
+          (body.successCondition !== undefined
+            ? "custom"
+            : (loop.successConditionSource ?? "goal")),
+        successCondition:
+          body.successConditionSource === "goal" ||
+          (body.successCondition === undefined &&
+            (loop.successConditionSource ?? "goal") === "goal")
+            ? (body.goal ?? loop.goal)
+            : body.successCondition === undefined
+              ? loop.successCondition
+              : body.successCondition.trim() || (body.goal ?? loop.goal),
+        evaluatorProvider:
+          body.evaluatorModel === undefined
+            ? loop.evaluatorProvider
+            : body.evaluatorModel.trim()
+              ? body.evaluatorProvider?.trim() || undefined
+              : undefined,
+        evaluatorModel:
+          body.evaluatorModel === undefined
+            ? loop.evaluatorModel
+            : body.evaluatorModel.trim() || undefined,
+        evaluatorThinkingLevel:
+          body.evaluatorThinkingLevel === undefined
+            ? loop.evaluatorThinkingLevel
+            : body.evaluatorThinkingLevel.trim() || undefined,
       };
     }
     if (!isRunnableLoopStructure(loop.structure)) {
@@ -385,6 +428,17 @@ export function registerLoopRoutes(
       return reply.status(422).send({
         code: LOOP_PARALLEL_WRITE_TARGET_CODE,
         error: "Parallel agents are report-only and require the Artifact (markdown) write target.",
+      });
+    }
+    if (
+      loop.evaluatorThinkingLevel &&
+      !LOOP_EVALUATOR_THINKING_LEVELS.includes(
+        loop.evaluatorThinkingLevel as (typeof LOOP_EVALUATOR_THINKING_LEVELS)[number],
+      )
+    ) {
+      return reply.status(422).send({
+        code: "loop_definition_invalid",
+        error: `Evaluator thinking level "${loop.evaluatorThinkingLevel}" is unavailable.`,
       });
     }
     const requiredRoles = loopRequiredAgentRoles(loop);
@@ -446,9 +500,19 @@ export function registerLoopRoutes(
       try {
         checkoutLockKey = routeDependencies.canonicalCheckoutLockKey(project.path);
       } catch {
+        const error =
+          "The project checkout could not be identified safely. No agent resources were allocated.";
+        const run = loopEngine.recordFailedStart(
+          loop,
+          project.path,
+          "unsafeWriteTarget",
+          error,
+          body.projectId,
+        );
         return reply.status(409).send({
           code: "loop_checkout_canonicalization_failed",
-          error: "The project checkout could not be identified safely. No Loop was started.",
+          error,
+          run,
         });
       }
     }
@@ -502,9 +566,15 @@ export function registerLoopRoutes(
         cwd = target;
       } catch (error) {
         releaseCheckoutLock();
-        return reply.status(400).send({
-          error: `Couldn't create a worktree for this loop: ${error instanceof Error ? error.message : String(error)}`,
-        });
+        const summary = `Couldn't establish a safe worktree for this Loop: ${error instanceof Error ? error.message : String(error)}`;
+        const run = loopEngine.recordFailedStart(
+          loop,
+          project.path,
+          "unsafeWriteTarget",
+          summary,
+          body.projectId,
+        );
+        return reply.status(400).send({ code: "loop_unsafe_write_target", error: summary, run });
       }
     }
     // Default to the configured default + provider-registration extensions so a
@@ -536,6 +606,22 @@ export function registerLoopRoutes(
         // has accepted the run, giving startup a rollback-safe commit point.
         deferAnnouncement: true,
       });
+      // A Loop has no independent pre-allocation model catalog. Validate against
+      // the exact transient parent Pi session after allocation, but before the
+      // engine can dispatch maker/stage/branch work.
+      if (loop.evaluatorModel) {
+        const availableModels = await parent.getAvailableModels();
+        const evaluatorProvider = loop.evaluatorProvider ?? body.provider ?? defaults.provider;
+        if (
+          !availableModels.some(
+            (model) => model.provider === evaluatorProvider && model.id === loop.evaluatorModel,
+          )
+        ) {
+          throw new Error(
+            `Evaluator model "${evaluatorProvider}/${loop.evaluatorModel}" is unavailable.`,
+          );
+        }
+      }
       run = loopEngine.start(loop, cwd, {
         projectId: body.projectId,
         retryOf: body.retryOf,
@@ -545,14 +631,26 @@ export function registerLoopRoutes(
           checkoutLockKey,
           ...(worktreeOwnership ? { worktree: worktreeOwnership } : {}),
         },
-        executeRole: ({ prompt, agentName, phase }) => {
+        executeRole: ({ prompt, agentName, phase, provider, model, thinking }) => {
           const toolPolicy =
             phase === "evaluator"
               ? "none"
               : phase === "checker" || loop.writeTarget === "artifactMarkdown"
                 ? "readOnly"
                 : "configured";
-          return sessions.runSubagent(parent!.meta.id, prompt, agentName || undefined, toolPolicy);
+          const overrides =
+            provider || model || thinking
+              ? { provider, model, thinking: thinking as ThinkingLevel | undefined }
+              : undefined;
+          return overrides
+            ? sessions.runSubagent(
+                parent!.meta.id,
+                prompt,
+                agentName || undefined,
+                toolPolicy,
+                overrides,
+              )
+            : sessions.runSubagent(parent!.meta.id, prompt, agentName || undefined, toolPolicy);
         },
         cancel: () => sessions.destroy(parent!.meta.id),
       });
@@ -595,9 +693,31 @@ export function registerLoopRoutes(
       const retainedReview = worktreeOwnership
         ? ` Registered review worktree retained at ${worktreeOwnership.path} on branch ${worktreeOwnership.branch}.`
         : "";
+      const detail = error instanceof Error ? error.message : String(error);
+      let failedRun: ReturnType<typeof loopEngine.recordFailedStart> | undefined;
+      try {
+        failedRun = loopEngine.recordFailedStart(
+          loop,
+          cwd,
+          "toolFailed",
+          `The Loop couldn't be started safely: ${detail}`,
+          body.projectId,
+          worktreeOwnership && partialId
+            ? {
+                sessionId: partialId,
+                writeTarget: loop.writeTarget,
+                worktree: worktreeOwnership,
+                sessionReconciledAt: new Date().toISOString(),
+              }
+            : undefined,
+        );
+      } catch (auditError) {
+        fastify.log.error({ err: auditError }, "failed to persist Loop startup failure audit");
+      }
       return reply.status(500).send({
         code: "loop_start_failed",
-        error: `The Loop couldn't be started safely.${retainedReview} Fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
+        error: `The Loop couldn't be started safely.${retainedReview} Fix the launch error and try again: ${detail}`,
+        ...(failedRun ? { run: failedRun } : {}),
       });
     }
     // Reconcile only the transient parent after settlement. A registered Loop

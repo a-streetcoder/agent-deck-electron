@@ -54,6 +54,12 @@ function makeRoutes(
   const runSubagent = vi.fn();
   const announceCreated = vi.fn();
   const startEngine = vi.fn();
+  const recordFailedStart = vi.fn((_loop, _cwd, reason, summary) => ({
+    id: "failed-start",
+    status: "failed",
+    stopReason: reason,
+    iterations: [{ output: summary }],
+  }));
   const stopEngine = vi.fn();
   const settledEngine = vi.fn();
   const rollbackEngine = vi.fn();
@@ -108,6 +114,7 @@ function makeRoutes(
       projects: { find: findProject },
       loopEngine: {
         start: startEngine,
+        recordFailedStart,
         stop: stopEngine,
         settled: settledEngine,
         rollbackStart: rollbackEngine,
@@ -138,6 +145,7 @@ function makeRoutes(
     runSubagent,
     announceCreated,
     startEngine,
+    recordFailedStart,
     stopEngine,
     settledEngine,
     rollbackEngine,
@@ -319,8 +327,15 @@ describe("loop route honesty gate", () => {
         writeTarget: "newWorktree",
       },
     );
-    const { fastify, createSession, startEngine, broadcast, bridgeTokens, indexRows } =
-      makeRoutes(home);
+    const {
+      fastify,
+      createSession,
+      startEngine,
+      recordFailedStart,
+      broadcast,
+      bridgeTokens,
+      indexRows,
+    } = makeRoutes(home);
     const order: string[] = [];
     vi.mocked(createLoopWorktree).mockImplementation(async (_project, target, branch) => ({
       path: target,
@@ -364,9 +379,208 @@ describe("loop route honesty gate", () => {
       /^loop-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     expect(startEngine).not.toHaveBeenCalled();
+    expect(recordFailedStart).toHaveBeenCalledOnce();
+    expect(recordFailedStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Rollback Loop" }),
+      expect.any(String),
+      "toolFailed",
+      expect.stringContaining("Pi startup failed"),
+      "project",
+      expect.objectContaining({
+        sessionId: "failed-parent",
+        sessionReconciledAt: expect.any(String),
+      }),
+    );
+    expect(response.json()).toMatchObject({ run: { status: "failed", stopReason: "toolFailed" } });
     expect(bridgeTokens.size).toBe(0);
     expect(indexRows.size).toBe(0);
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("makes a goal-only API override the effective default success condition", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-goal-default-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Goal Default",
+        structure: "singleAgent",
+        goal: "Saved goal.",
+        agentName: "Agent A",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine } = makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: {
+        id: "goal-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    });
+    startEngine.mockReturnValue({ id: "goal-run", status: "running" });
+    settledEngine.mockResolvedValue(undefined);
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Goal Default", "run"),
+      payload: { projectId: "project", goal: "Effective goal." },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(startEngine.mock.calls[0]?.[0]).toMatchObject({
+      goal: "Effective goal.",
+      successCondition: "Effective goal.",
+      successConditionSource: "goal",
+    });
+  });
+
+  it("validates an evaluator model against the allocated parent before engine work and audits failure", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-evaluator-model-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Unavailable Evaluator",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        agentName: "Agent A",
+        evaluatorProvider: "missing-provider",
+        evaluatorModel: "missing-model",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, destroySession, startEngine, runSubagent, recordFailedStart } =
+      makeRoutes(home);
+    destroySession.mockResolvedValue(undefined);
+    const getAvailableModels = vi.fn(async () => [
+      { provider: "mock-provider", id: "available-model", name: "Available" },
+    ]);
+    createSession.mockReturnValue({
+      meta: {
+        id: "model-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+      getAvailableModels,
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Unavailable Evaluator", "run"),
+      payload: {
+        projectId: "project",
+        provider: "mock-provider",
+        currentCheckoutConfirmed: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      code: "loop_start_failed",
+      run: { status: "failed", stopReason: "toolFailed" },
+    });
+    expect(response.json().error).toContain(
+      'Evaluator model "missing-provider/missing-model" is unavailable',
+    );
+    expect(getAvailableModels).toHaveBeenCalledOnce();
+    expect(startEngine).not.toHaveBeenCalled();
+    expect(runSubagent).not.toHaveBeenCalled();
+    expect(destroySession).toHaveBeenCalledWith("model-parent");
+    expect(recordFailedStart).toHaveBeenCalledOnce();
+  });
+
+  it("validates and launches a collision-safe cross-provider evaluator pair", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-evaluator-provider-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Cross-provider Evaluator",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        agentName: "Agent A",
+        evaluatorProvider: "provider-b",
+        evaluatorModel: "shared-model",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine, runSubagent } = makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: {
+        id: "provider-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+      getAvailableModels: vi.fn(async () => [
+        { provider: "provider-a", id: "shared-model", name: "Shared A" },
+        { provider: "provider-b", id: "shared-model", name: "Shared B" },
+      ]),
+    });
+    startEngine.mockReturnValue({ id: "provider-run", status: "running" });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    runSubagent.mockResolvedValue("SUCCESS");
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Cross-provider Evaluator", "run"),
+      payload: { projectId: "project", provider: "provider-a" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(startEngine.mock.calls[0]?.[0]).toMatchObject({
+      evaluatorProvider: "provider-b",
+      evaluatorModel: "shared-model",
+    });
+    const options = startEngine.mock.calls[0]?.[2];
+    await options.executeRole({
+      prompt: "evaluate",
+      phase: "evaluator",
+      provider: "provider-b",
+      model: "shared-model",
+    });
+    expect(runSubagent).toHaveBeenCalledWith("provider-parent", "evaluate", undefined, "none", {
+      provider: "provider-b",
+      model: "shared-model",
+      thinking: undefined,
+    });
+  });
+
+  it("keeps legacy model-only evaluators on the launch provider", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-evaluator-legacy-provider-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Legacy model-only Evaluator",
+        goal: "Run safely.",
+        evaluatorModel: "shared-model",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine } = makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: {
+        id: "legacy-provider-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+      getAvailableModels: vi.fn(async () => [
+        { provider: "launch-provider", id: "shared-model", name: "Shared" },
+      ]),
+    });
+    startEngine.mockReturnValue({ id: "legacy-provider-run", status: "running" });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Legacy model-only Evaluator", "run"),
+      payload: { projectId: "project", provider: "launch-provider" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(startEngine.mock.calls[0]?.[0]).toMatchObject({ evaluatorModel: "shared-model" });
+    expect(startEngine.mock.calls[0]?.[0].evaluatorProvider).toBeUndefined();
   });
 
   it("stops and settles an accepted run before destroying startup resources when announcement fails", async () => {
@@ -389,6 +603,7 @@ describe("loop route honesty gate", () => {
       stopEngine,
       settledEngine,
       rollbackEngine,
+      recordFailedStart,
     } = makeRoutes(home);
     const order: string[] = [];
     let resolveSettled!: () => void;
@@ -445,6 +660,8 @@ describe("loop route honesty gate", () => {
     expect(settledEngine).toHaveBeenCalledOnce();
     expect(rollbackEngine).toHaveBeenCalledWith("run-in-flight");
     expect(destroySession).toHaveBeenCalledOnce();
+    expect(recordFailedStart).toHaveBeenCalledOnce();
+    expect(response.json()).toMatchObject({ run: { status: "failed", stopReason: "toolFailed" } });
     expect(gitWorktreeRemove).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
@@ -954,7 +1171,8 @@ describe("loop route honesty gate", () => {
         writeTarget: "currentCheckout",
       },
     );
-    const { fastify, createSession, startEngine, findProject } = makeRoutes(home);
+    const { fastify, createSession, startEngine, recordFailedStart, findProject } =
+      makeRoutes(home);
     findProject.mockReturnValue({ id: "project", path: path.join(home, "does-not-exist") });
 
     const response = await fastify.inject({
@@ -964,7 +1182,17 @@ describe("loop route honesty gate", () => {
     });
 
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: "loop_checkout_canonicalization_failed" });
+    expect(response.json()).toMatchObject({
+      code: "loop_checkout_canonicalization_failed",
+      run: { status: "failed", stopReason: "unsafeWriteTarget" },
+    });
+    expect(recordFailedStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Missing Checkout" }),
+      path.join(home, "does-not-exist"),
+      "unsafeWriteTarget",
+      expect.stringContaining("No agent resources were allocated"),
+      "project",
+    );
     expect(createSession).not.toHaveBeenCalled();
     expect(startEngine).not.toHaveBeenCalled();
   });
@@ -1249,7 +1477,13 @@ describe("loop route honesty gate", () => {
     const first = await routes.fastify.inject({
       method: "POST",
       url: `/loops/${encodeURIComponent(definition.id)}/run`,
-      payload: { projectId: "project", goal: "run-only goal", launchContext: "run-only context" },
+      payload: {
+        projectId: "project",
+        goal: "run-only goal",
+        launchContext: "run-only context",
+        evaluatorProvider: "provider-b",
+        evaluatorModel: "shared-model",
+      },
     });
     expect(first.statusCode).toBe(201);
     const firstRun = first.json().run;
@@ -1257,6 +1491,8 @@ describe("loop route honesty gate", () => {
       goal: "run-only goal",
       launchContext: "run-only context",
       launchContextScope: "everyIteration",
+      evaluatorProvider: "provider-b",
+      evaluatorModel: "shared-model",
     });
 
     writeLoopFile(
@@ -1280,6 +1516,8 @@ describe("loop route honesty gate", () => {
         goal: "run-only goal",
         launchContext: "run-only context",
         launchContextScope: "everyIteration",
+        evaluatorProvider: "provider-b",
+        evaluatorModel: "shared-model",
       },
     });
   });

@@ -33,6 +33,7 @@ import {
   LOOP_DEFAULT_CHECKPOINT_PROMPT,
   LOOP_DEFAULT_CLASSIFICATION_PROMPT,
   LOOP_DEFAULT_MAX_ITERATIONS,
+  LOOP_EVALUATOR_THINKING_LEVELS,
   LOOP_MAX_ITERATIONS_LIMIT,
   LOOP_STRUCTURE_LABEL,
   RUNNABLE_LOOP_STRUCTURES,
@@ -50,8 +51,8 @@ import { useAgents } from "../state/useAgents.ts";
 /**
  * Loop Bank (native LoopBankScreen): the library of saved loop definitions —
  * create, edit, delete, and RUN. Running a loop iterates its agent (via the
- * server's run engine) until the validation command exits 0; a live panel polls
- * the run state and can stop it.
+ * server's run engine) until its evaluator reports SUCCESS and any configured
+ * validation passes; a live panel polls the run state and can stop it.
  */
 const RUN_STATUS_LABEL: Record<LoopRun["status"], string> = {
   running: "Running",
@@ -67,6 +68,8 @@ const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, stri
   maxIterationsReached: "Maximum iterations reached",
   validationFailedAfterFinalIteration: "Validation failed after final iteration",
   validationUnavailable: "Validation unavailable",
+  unsafeWriteTarget: "Unsafe write target",
+  toolFailed: "Tool or validation process failed",
   agentFailed: "Agent failed",
   humanInputRequired: "Human input required",
   humanApproved: "Approval recorded",
@@ -131,6 +134,11 @@ interface LoopDraft {
   launchContextScope: LoopDefinition["launchContextScope"];
   maxIterations: number;
   validationCommand: string;
+  successCondition: string;
+  successConditionSource: "goal" | "custom";
+  evaluatorProvider: string;
+  evaluatorModel: string;
+  evaluatorThinkingLevel: string;
   writeTarget: LoopDefinition["writeTarget"];
   availability: LoopDefinition["availability"];
   projectPaths: string[];
@@ -142,6 +150,11 @@ interface LoopLaunchDraft {
   goal: string;
   launchContext: string;
   launchContextScope: LoopDefinition["launchContextScope"];
+  successCondition: string;
+  successConditionSource: "goal" | "custom";
+  evaluatorProvider: string;
+  evaluatorModel: string;
+  evaluatorThinkingLevel: string;
   currentCheckoutConfirmed: boolean;
 }
 
@@ -184,6 +197,11 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     launchContextScope: loop?.launchContextScope ?? "firstIterationOnly",
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
+    successCondition: loop?.successCondition ?? loop?.goal ?? "",
+    successConditionSource: loop?.successConditionSource ?? "goal",
+    evaluatorProvider: loop?.evaluatorProvider ?? "",
+    evaluatorModel: loop?.evaluatorModel ?? "",
+    evaluatorThinkingLevel: loop?.evaluatorThinkingLevel ?? "",
     writeTarget:
       loop?.structure === "parallelAgents"
         ? "artifactMarkdown"
@@ -197,6 +215,7 @@ export function LoopsScreen() {
   const setError = useAppStore((state) => state.setError);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const currentSessionId = useAppStore((state) => state.session?.id);
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -204,6 +223,9 @@ export function LoopsScreen() {
   const agents = allAgents.filter((agent) => !agent.shadowed && !agent.disabled);
   const availableAgentNames = new Set(agents.map((agent) => agent.name));
   const [loops, setLoops] = useState<LoopDefinition[]>([]);
+  const [evaluatorModels, setEvaluatorModels] = useState<
+    Array<{ provider: string; id: string; name?: string }>
+  >([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState<LoopDraft | null>(null);
   const [launchDraft, setLaunchDraft] = useState<LoopLaunchDraft | null>(null);
@@ -271,6 +293,27 @@ export function LoopsScreen() {
     void load();
   }, [load, resourcesVersion]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setEvaluatorModels([]);
+    if (!currentSessionId) return () => undefined;
+    void (async () => {
+      try {
+        const response = await fetch(`/sessions/${encodeURIComponent(currentSessionId)}/models`);
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          models: Array<{ provider: string; id: string; name?: string; disabled?: boolean }>;
+        };
+        if (!cancelled) setEvaluatorModels(data.models.filter((model) => !model.disabled));
+      } catch {
+        // Launch validates against the newly allocated parent session's own catalog.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSessionId]);
+
   const openEditor = (loop: LoopDefinition | null): void => {
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -336,6 +379,11 @@ export function LoopsScreen() {
       goal: loop.goal,
       launchContext: loop.launchContext ?? "",
       launchContextScope: loop.launchContextScope,
+      successCondition: loop.successCondition ?? loop.goal,
+      successConditionSource: loop.successConditionSource ?? "goal",
+      evaluatorProvider: loop.evaluatorProvider ?? "",
+      evaluatorModel: loop.evaluatorModel ?? "",
+      evaluatorThinkingLevel: loop.evaluatorThinkingLevel ?? "",
       currentCheckoutConfirmed: false,
     });
   };
@@ -419,6 +467,11 @@ export function LoopsScreen() {
           launchContextScope: draft.launchContextScope,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
+          successCondition: draft.successCondition,
+          successConditionSource: draft.successConditionSource,
+          evaluatorProvider: draft.evaluatorProvider,
+          evaluatorModel: draft.evaluatorModel,
+          evaluatorThinkingLevel: draft.evaluatorThinkingLevel,
           writeTarget: draft.writeTarget,
           availability: draft.availability,
           projectPaths:
@@ -467,8 +520,19 @@ export function LoopsScreen() {
 
   const startRun = async (): Promise<void> => {
     if (!currentProjectId || !launchDraft || runPending) return;
-    const { loop, retryOf, goal, launchContext, launchContextScope, currentCheckoutConfirmed } =
-      launchDraft;
+    const {
+      loop,
+      retryOf,
+      goal,
+      launchContext,
+      launchContextScope,
+      successCondition,
+      successConditionSource,
+      evaluatorProvider,
+      evaluatorModel,
+      evaluatorThinkingLevel,
+      currentCheckoutConfirmed,
+    } = launchDraft;
     setError(null);
     setLaunchError(null);
     setRunPending(true);
@@ -488,6 +552,11 @@ export function LoopsScreen() {
                   goal,
                   launchContext,
                   launchContextScope,
+                  successCondition,
+                  successConditionSource,
+                  evaluatorProvider,
+                  evaluatorModel,
+                  evaluatorThinkingLevel,
                   currentCheckoutConfirmed,
                 },
           ),
@@ -583,6 +652,11 @@ export function LoopsScreen() {
       goal: loop.goal,
       launchContext: loop.launchContext ?? "",
       launchContextScope: loop.launchContextScope,
+      successCondition: loop.successCondition ?? loop.goal,
+      successConditionSource: loop.successConditionSource ?? "goal",
+      evaluatorProvider: loop.evaluatorProvider ?? "",
+      evaluatorModel: loop.evaluatorModel ?? "",
+      evaluatorThinkingLevel: loop.evaluatorThinkingLevel ?? "",
       currentCheckoutConfirmed: false,
     });
   };
@@ -639,18 +713,80 @@ export function LoopsScreen() {
     );
   }, [activeRun]);
 
+  const validThinkingLevels: readonly string[] = ["", ...LOOP_EVALUATOR_THINKING_LEVELS];
+  const evaluatorModelValue = (provider: string, model: string): string =>
+    model ? JSON.stringify([provider, model]) : "";
+  const evaluatorModelPairs = new Set(
+    evaluatorModels.map((model) => evaluatorModelValue(model.provider, model.id)),
+  );
+  const evaluatorModelAvailable = (provider: string, model: string): boolean =>
+    provider
+      ? evaluatorModelPairs.has(evaluatorModelValue(provider, model))
+      : evaluatorModels.some((candidate) => candidate.id === model);
+  const renderEvaluatorModelOptions = (provider: string, model: string) => {
+    const selected = evaluatorModelValue(provider, model);
+    return (
+      <>
+        <option value="">Inherited model</option>
+        {selected && !evaluatorModelPairs.has(selected) ? (
+          <option value={selected}>
+            {provider
+              ? `${provider}/${model} (unavailable)`
+              : `${model} (launch provider${evaluatorModelAvailable(provider, model) ? "" : " unavailable"})`}
+          </option>
+        ) : null}
+        {evaluatorModels.map((candidate) => (
+          <option
+            key={evaluatorModelValue(candidate.provider, candidate.id)}
+            value={evaluatorModelValue(candidate.provider, candidate.id)}
+          >
+            {candidate.name ? `${candidate.name} · ` : ""}
+            {candidate.provider}/{candidate.id}
+          </option>
+        ))}
+      </>
+    );
+  };
+  const parseEvaluatorModelValue = (value: string): [string, string] => {
+    if (!value) return ["", ""];
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) && parsed.length === 2
+        ? [String(parsed[0]), String(parsed[1])]
+        : ["", ""];
+    } catch {
+      return ["", ""];
+    }
+  };
   const draftAgentIssues = draft ? unavailableAgentRoles(draft, availableAgentNames) : [];
+  const draftEvaluatorModelInvalid = Boolean(
+    draft?.evaluatorModel &&
+      evaluatorModels.length > 0 &&
+      !evaluatorModelAvailable(draft.evaluatorProvider, draft.evaluatorModel),
+  );
   const draftError = draft
     ? draft.availability === "projectPaths" && !normalizeLoopProjectPaths(draft.projectPaths).length
       ? "Select at least one registered project."
-      : (loopDefinitionValidationError(draft) ??
-        (draftAgentIssues.length
-          ? `Repair unavailable agent roles: ${draftAgentIssues.map(agentUnavailableText).join(" ")}`
-          : undefined))
+      : draftEvaluatorModelInvalid
+        ? `Evaluator model “${draft.evaluatorProvider ? `${draft.evaluatorProvider}/` : ""}${draft.evaluatorModel}” is unavailable. Choose an inherited or available model.`
+        : !validThinkingLevels.includes(draft.evaluatorThinkingLevel)
+          ? `Evaluator thinking “${draft.evaluatorThinkingLevel}” is unavailable. Choose a supported level.`
+          : (loopDefinitionValidationError(draft) ??
+            (draftAgentIssues.length
+              ? `Repair unavailable agent roles: ${draftAgentIssues.map(agentUnavailableText).join(" ")}`
+              : undefined))
     : undefined;
   const launchAgentIssues = launchDraft
     ? unavailableAgentRoles(launchDraft.loop, availableAgentNames)
     : [];
+  const launchEvaluatorModelInvalid = Boolean(
+    launchDraft?.evaluatorModel &&
+      evaluatorModels.length > 0 &&
+      !evaluatorModelAvailable(launchDraft.evaluatorProvider, launchDraft.evaluatorModel),
+  );
+  const launchEvaluatorInvalid = Boolean(
+    launchDraft && !validThinkingLevels.includes(launchDraft.evaluatorThinkingLevel),
+  );
   const launchNeedsCheckoutConfirmation = launchDraft?.loop.writeTarget === "currentCheckout";
   const renderAgentOptions = (selected: string) => (
     <>
@@ -1012,7 +1148,50 @@ export function LoopsScreen() {
                           : ""}
                       </div>
                     ) : null}
-                    {iteration.validationEvidence ? (
+                    {iteration.validationResult ? (
+                      <section
+                        data-testid="loop-validation-evidence"
+                        aria-label={`Validation for iteration ${iteration.index}`}
+                        className="space-y-1"
+                      >
+                        <div>
+                          Validation: {iteration.validationResult.command} · exit{" "}
+                          {iteration.validationResult.exitCode ?? "unavailable"} ·{" "}
+                          {iteration.validationResult.durationMs}ms ·{" "}
+                          {iteration.validationResult.classification}
+                        </div>
+                        <div className="break-all">
+                          Working directory: {iteration.validationResult.workingDirectory}
+                        </div>
+                        {iteration.artifacts.some((artifact) => artifact.phase === "validation") ? (
+                          <ul aria-label="Validation output artifacts">
+                            {iteration.artifacts
+                              .filter((artifact) => artifact.phase === "validation")
+                              .map((artifact) => (
+                                <li key={artifact.id} className="break-all">
+                                  {artifact.filename} · {artifact.bytes} bytes
+                                </li>
+                              ))}
+                          </ul>
+                        ) : null}
+                        {iteration.validationResult.stdout ? (
+                          <pre
+                            className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
+                            aria-label="Validation stdout"
+                          >
+                            {iteration.validationResult.stdout}
+                          </pre>
+                        ) : null}
+                        {iteration.validationResult.stderr ? (
+                          <pre
+                            className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
+                            aria-label="Validation stderr"
+                          >
+                            {iteration.validationResult.stderr}
+                          </pre>
+                        ) : null}
+                      </section>
+                    ) : iteration.validationEvidence ? (
                       <div data-testid="loop-validation-evidence">
                         Validation evidence: {iteration.validationEvidence}
                       </div>
@@ -1219,7 +1398,21 @@ export function LoopsScreen() {
                 data-testid="loop-goal"
                 className={`${inputClass} min-h-[100px] font-mono text-caption`}
                 value={draft.goal}
-                onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
+                onChange={(event) => {
+                  const goal = event.target.value;
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          goal,
+                          successCondition:
+                            current.successConditionSource === "goal"
+                              ? goal
+                              : current.successCondition,
+                        }
+                      : current,
+                  );
+                }}
               />
             </label>
             <label className="block text-xs text-text-muted">
@@ -1786,7 +1979,97 @@ export function LoopsScreen() {
               </label>
             </div>
             <label className="block text-xs text-text-muted">
-              Validation command (exit 0 stops the loop early)
+              Success condition
+              <ControlTextArea
+                data-testid="loop-success-condition"
+                className={`${inputClass} min-h-[80px]`}
+                value={draft.successCondition}
+                placeholder="Defaults to the Loop goal"
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          successCondition: event.target.value,
+                          successConditionSource: "custom",
+                        }
+                      : current,
+                  )
+                }
+              />
+              <span className="mt-1 flex items-center justify-between gap-2 text-detail">
+                <span>
+                  {draft.successConditionSource === "goal"
+                    ? "Tracks the Loop goal."
+                    : "Uses an explicit custom condition."}
+                </span>
+                {draft.successConditionSource === "custom" ? (
+                  <ControlButton
+                    type="button"
+                    data-testid="loop-success-condition-reset"
+                    onClick={() =>
+                      setDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              successCondition: current.goal,
+                              successConditionSource: "goal",
+                            }
+                          : current,
+                      )
+                    }
+                  >
+                    Reset to goal
+                  </ControlButton>
+                ) : null}
+              </span>
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-xs text-text-muted">
+                Evaluator model override
+                <ControlSelect
+                  data-testid="loop-evaluator-model"
+                  className={inputClass}
+                  value={evaluatorModelValue(draft.evaluatorProvider, draft.evaluatorModel)}
+                  onChange={(event) => {
+                    const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
+                      event.target.value,
+                    );
+                    setDraft({ ...draft, evaluatorProvider, evaluatorModel });
+                  }}
+                >
+                  {renderEvaluatorModelOptions(draft.evaluatorProvider, draft.evaluatorModel)}
+                </ControlSelect>
+              </label>
+              <label className="block text-xs text-text-muted">
+                Evaluator thinking override
+                <ControlSelect
+                  data-testid="loop-evaluator-thinking"
+                  className={inputClass}
+                  value={draft.evaluatorThinkingLevel}
+                  onChange={(event) =>
+                    setDraft({ ...draft, evaluatorThinkingLevel: event.target.value })
+                  }
+                >
+                  <option value="">Default</option>
+                  {LOOP_EVALUATOR_THINKING_LEVELS.map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                  {draft.evaluatorThinkingLevel &&
+                  !LOOP_EVALUATOR_THINKING_LEVELS.includes(
+                    draft.evaluatorThinkingLevel as (typeof LOOP_EVALUATOR_THINKING_LEVELS)[number],
+                  ) ? (
+                    <option value={draft.evaluatorThinkingLevel} disabled>
+                      {draft.evaluatorThinkingLevel} (unavailable)
+                    </option>
+                  ) : null}
+                </ControlSelect>
+              </label>
+            </div>
+            <label className="block text-xs text-text-muted">
+              Validation command (optional; exit 0 satisfies validation)
               <ControlInput
                 data-testid="loop-validation"
                 className={`${inputClass} font-mono text-caption`}
@@ -1881,7 +2164,18 @@ export function LoopsScreen() {
                 disabled={runPending || Boolean(launchDraft.retryOf)}
                 onChange={(event) => {
                   const goal = event.target.value;
-                  setLaunchDraft((current) => (current ? { ...current, goal } : current));
+                  setLaunchDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          goal,
+                          successCondition:
+                            current.successConditionSource === "goal"
+                              ? goal
+                              : current.successCondition,
+                        }
+                      : current,
+                  );
                 }}
               />
             </label>
@@ -1917,6 +2211,110 @@ export function LoopsScreen() {
                 <option value="everyIteration">Every iteration</option>
               </ControlSelect>
             </label>
+            <label className="block text-xs text-text-muted">
+              Success condition
+              <ControlTextArea
+                data-testid="loop-launch-success-condition"
+                className={`${inputClass} min-h-[80px]`}
+                value={launchDraft.successCondition}
+                disabled={runPending || Boolean(launchDraft.retryOf)}
+                onChange={(event) => {
+                  const successCondition = event.target.value;
+                  setLaunchDraft((current) =>
+                    current
+                      ? { ...current, successCondition, successConditionSource: "custom" }
+                      : current,
+                  );
+                }}
+              />
+              <span className="mt-1 flex items-center justify-between gap-2 text-detail">
+                <span>
+                  {launchDraft.successConditionSource === "goal"
+                    ? "Tracks the effective launch goal."
+                    : "Uses an explicit custom condition."}
+                </span>
+                {launchDraft.successConditionSource === "custom" && !launchDraft.retryOf ? (
+                  <ControlButton
+                    type="button"
+                    data-testid="loop-launch-success-condition-reset"
+                    disabled={runPending}
+                    onClick={() =>
+                      setLaunchDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              successCondition: current.goal,
+                              successConditionSource: "goal",
+                            }
+                          : current,
+                      )
+                    }
+                  >
+                    Reset to goal
+                  </ControlButton>
+                ) : null}
+              </span>
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-xs text-text-muted">
+                Evaluator model
+                <ControlSelect
+                  data-testid="loop-launch-evaluator-model"
+                  className={inputClass}
+                  value={evaluatorModelValue(
+                    launchDraft.evaluatorProvider,
+                    launchDraft.evaluatorModel,
+                  )}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
+                  onChange={(event) => {
+                    const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
+                      event.target.value,
+                    );
+                    setLaunchDraft((current) =>
+                      current ? { ...current, evaluatorProvider, evaluatorModel } : current,
+                    );
+                  }}
+                >
+                  {renderEvaluatorModelOptions(
+                    launchDraft.evaluatorProvider,
+                    launchDraft.evaluatorModel,
+                  )}
+                </ControlSelect>
+              </label>
+              <label className="block text-xs text-text-muted">
+                Evaluator thinking
+                <ControlSelect
+                  data-testid="loop-launch-evaluator-thinking"
+                  className={inputClass}
+                  value={launchDraft.evaluatorThinkingLevel}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
+                  onChange={(event) => {
+                    const evaluatorThinkingLevel = event.target.value;
+                    setLaunchDraft((current) =>
+                      current ? { ...current, evaluatorThinkingLevel } : current,
+                    );
+                  }}
+                >
+                  <option value="">Default</option>
+                  {validThinkingLevels.slice(1).map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                  {launchEvaluatorInvalid ? (
+                    <option value={launchDraft.evaluatorThinkingLevel} disabled>
+                      {launchDraft.evaluatorThinkingLevel} (unavailable)
+                    </option>
+                  ) : null}
+                </ControlSelect>
+              </label>
+            </div>
+            {launchEvaluatorModelInvalid || launchEvaluatorInvalid ? (
+              <p role="alert" className="text-xs text-danger">
+                The saved evaluator {launchEvaluatorModelInvalid ? "model" : "thinking level"} is
+                unavailable. Repair it before launch.
+              </p>
+            ) : null}
             {launchAgentIssues.length ? (
               <div
                 id="loop-launch-agent-errors"
@@ -1981,6 +2379,8 @@ export function LoopsScreen() {
                 disabled={
                   runPending ||
                   launchAgentIssues.length > 0 ||
+                  launchEvaluatorModelInvalid ||
+                  launchEvaluatorInvalid ||
                   (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim()) ||
                   (launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed)
                 }

@@ -221,6 +221,85 @@ describe("loop definition store", () => {
     expect(existsSync(nativePath)).toBe(false);
   });
 
+  it("round-trips native goal evaluator JSON, legacy/default values, and overrides", () => {
+    const roots = { home: makeHome() };
+    saveLoopFile(roots, {
+      name: "Evaluator Config",
+      goal: "Ship safely.",
+      agentName: "Agent A",
+      successCondition: "Tests pass.\nNo regressions.",
+      successConditionSource: "custom",
+      evaluatorProvider: "mock-provider-b",
+      evaluatorModel: "mock-evaluator",
+      evaluatorThinkingLevel: "high",
+    });
+    const saved = scanLoops(roots).find((loop) => loop.name === "Evaluator Config")!;
+    expect(saved).toMatchObject({
+      successCondition: "Tests pass.\nNo regressions.",
+      successConditionSource: "custom",
+      evaluatorProvider: "mock-provider-b",
+      evaluatorModel: "mock-evaluator",
+      evaluatorThinkingLevel: "high",
+    });
+    expect(readFileSync(saved.filePath, "utf8")).toContain("evaluatorProvider: mock-provider-b");
+    expect(readFileSync(saved.filePath, "utf8")).toContain(
+      'successConditionJSON: "Tests pass.\\nNo regressions."',
+    );
+    saveLoopFile(roots, {
+      id: saved.id,
+      name: saved.name,
+      evaluatorModel: "",
+    });
+    expect(readFileSync(saved.filePath, "utf8")).not.toContain("evaluatorProvider:");
+    expect(scanLoops(roots).find((loop) => loop.id === saved.id)).toMatchObject({
+      evaluatorProvider: undefined,
+      evaluatorModel: undefined,
+    });
+
+    const directory = loopsDir(roots);
+    writeFileSync(
+      path.join(directory, "legacy-evaluator.loop.md"),
+      "---\nname: Legacy Evaluator\nagentName: Agent A\nsuccessCondition: Legacy done\n---\nDefault goal\n",
+    );
+    writeFileSync(
+      path.join(directory, "default-evaluator.loop.md"),
+      "---\nname: Default Evaluator\nagentName: Agent A\n---\nBody is success\n",
+    );
+    expect(scanLoops(roots).find((loop) => loop.name === "Legacy Evaluator")).toMatchObject({
+      successCondition: "Legacy done",
+      successConditionSource: "custom",
+    });
+    expect(scanLoops(roots).find((loop) => loop.name === "Default Evaluator")).toMatchObject({
+      successCondition: "Body is success",
+      successConditionSource: "goal",
+    });
+
+    saveLoopFile(roots, {
+      name: "Explicit Equal",
+      goal: "Same text",
+      agentName: "Agent A",
+      successCondition: "Same text",
+      successConditionSource: "custom",
+    });
+    const explicit = scanLoops(roots).find((loop) => loop.name === "Explicit Equal")!;
+    expect(explicit).toMatchObject({
+      successCondition: "Same text",
+      successConditionSource: "custom",
+    });
+    expect(readFileSync(explicit.filePath, "utf8")).toContain('successConditionJSON: "Same text"');
+
+    saveLoopFile(roots, {
+      id: explicit.id,
+      name: explicit.name,
+      goal: "New goal",
+      successCondition: "New goal",
+      successConditionSource: "goal",
+    });
+    const reset = scanLoops(roots).find((loop) => loop.name === "Explicit Equal")!;
+    expect(reset).toMatchObject({ successCondition: "New goal", successConditionSource: "goal" });
+    expect(readFileSync(reset.filePath, "utf8")).not.toContain("successConditionJSON:");
+  });
+
   it("falls back from valid JSON with wrong metadata types without hiding the Loop", () => {
     const roots = { home: makeHome() };
     const directory = loopsDir(roots);
