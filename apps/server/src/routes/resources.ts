@@ -37,12 +37,14 @@ import {
 } from "@agent-deck/resources";
 import { z } from "zod";
 import {
+  gitBlobAtCommit,
   gitClonePersistent,
   gitHead,
   gitHeadMatchesRef,
   gitLsRemote,
   gitOriginRemote,
   gitPullFfInto,
+  gitRepoRelativePosixPath,
   gitStatus,
 } from "../git.ts";
 import type { ImportedSkillRepository } from "../persistence.ts";
@@ -122,14 +124,6 @@ function subdirScanPath(clonePath: string, subdir?: string): string {
   const base = nodePath.resolve(clonePath);
   const resolved = nodePath.resolve(clonePath, subdir);
   return resolved === base || resolved.startsWith(base + nodePath.sep) ? resolved : clonePath;
-}
-
-function fileSha256(file: string): string | undefined {
-  try {
-    return createHash("sha256").update(readFileSync(file)).digest("hex");
-  } catch {
-    return undefined;
-  }
 }
 
 function legacySourceRoots(clonePath: string, subdir: string | undefined, remoteUrl: string) {
@@ -749,17 +743,45 @@ export function registerResourceRoutes(ctx: ServerContext): void {
             if (isSkillTreeFingerprint(old)) continue;
             const matches = sourceRoots?.byName.get(name);
             const sourceRoot = matches?.length === 1 ? matches[0] : undefined;
-            const oldHashVerified =
-              old === undefined ||
-              (sourceRoot !== undefined &&
-                fileSha256(nodePath.join(sourceRoot, "SKILL.md")) === old);
-            if (sourceRoot && oldHashVerified) {
+            if (sourceRoot) {
               try {
-                stored[name] = skillTreeFingerprint(sourceRoot);
-                migrationChanged = true;
-                continue;
+                const skillPath = gitRepoRelativePosixPath(
+                  currentRecord.clonePath,
+                  nodePath.join(sourceRoot, "SKILL.md"),
+                );
+                const canonicalSkill = await gitBlobAtCommit(
+                  currentRecord.clonePath,
+                  currentRecord.lastSyncedCommit,
+                  skillPath,
+                );
+                const oldHashVerified =
+                  old === undefined ||
+                  createHash("sha256").update(canonicalSkill).digest("hex") === old;
+                if (oldHashVerified) {
+                  const checkoutFingerprint = skillTreeFingerprint(sourceRoot);
+                  const canonicalFingerprint = skillTreeFingerprint(sourceRoot, {
+                    canonicalFileContent: new Map([["SKILL.md", canonicalSkill]]),
+                  });
+                  let catalogFingerprint: string | undefined;
+                  try {
+                    catalogFingerprint = catalogSkillTreeFingerprint(
+                      roots,
+                      currentRecord.scope,
+                      name,
+                    );
+                  } catch {
+                    // The later conflict scan handles an unsafe or unreadable catalog tree.
+                  }
+                  stored[name] =
+                    catalogFingerprint === checkoutFingerprint
+                      ? checkoutFingerprint
+                      : canonicalFingerprint;
+                  migrationChanged = true;
+                  continue;
+                }
               } catch {
-                // An unreadable, linked, special, or raced source cannot prove a baseline.
+                // An invalid path/blob or unreadable, linked, special, or raced source
+                // cannot prove a baseline.
               }
             }
             forcedConflicts.add(name);

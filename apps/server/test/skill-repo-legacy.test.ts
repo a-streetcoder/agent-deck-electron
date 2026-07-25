@@ -176,6 +176,31 @@ describe("legacy copied skill repository compatibility", () => {
     }
   });
 
+  it("migrates a canonical legacy hash when checkout line endings differ", async () => {
+    const fixture = await legacyFixture();
+    try {
+      git(fixture.clonePath, ["config", "core.autocrlf", "true"]);
+      rmSync(path.join(fixture.clonePath, "SKILL.md"));
+      git(fixture.clonePath, ["checkout", "HEAD", "--", "SKILL.md"]);
+      const checkoutBytes = readFileSync(path.join(fixture.clonePath, "SKILL.md"));
+      expect(checkoutBytes.includes(Buffer.from("\r\n"))).toBe(true);
+      expect(git(fixture.clonePath, ["status", "--porcelain"])).toBe("");
+
+      const response = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ updated: true, conflicts: [] });
+      expect(readFileSync(fixture.copiedSkill, "utf8")).toContain("Upstream body.");
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).toMatch(
+        /^tree-v1:[0-9a-f]{64}$/,
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it.each(["modify", "add", "delete", "reserved-git"] as const)(
     "holds an asset %s as a whole-skill conflict",
     async (change) => {

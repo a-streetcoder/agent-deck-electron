@@ -5,10 +5,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createSessionWorktree,
+  gitBlobAtCommit,
   gitCreateAndPushReleaseTag,
   gitLocalTagExists,
   gitReleaseSynchronization,
   gitRemoteTagExists,
+  gitRepoRelativePosixPath,
   parseStatus,
 } from "../src/git.ts";
 
@@ -67,6 +69,32 @@ function branches(repo: string): string[] {
     .split("\n")
     .filter(Boolean);
 }
+
+describe("git commit blobs", () => {
+  it("reads exact committed bytes instead of checkout-filtered bytes", async () => {
+    const repo = makeRepo();
+    const commit = git(repo, ["rev-parse", "HEAD"]).trim();
+    writeFileSync(path.join(repo, "README.md"), "test\r\n");
+
+    const relative = gitRepoRelativePosixPath(repo, path.join(repo, "README.md"));
+    expect(relative).toBe("README.md");
+    expect(await gitBlobAtCommit(repo, commit, relative)).toEqual(Buffer.from("test\n"));
+  });
+
+  it("rejects malformed, ambiguous, and out-of-root blob paths", async () => {
+    const repo = makeRepo();
+    const commit = git(repo, ["rev-parse", "HEAD"]).trim();
+    expect(() => gitRepoRelativePosixPath(repo, path.join(repo, "..", "outside"))).toThrow(
+      "git_blob_path_outside_repository",
+    );
+    for (const candidate of ["../README.md", "/README.md", "a\\README.md", "HEAD:README.md"]) {
+      await expect(gitBlobAtCommit(repo, commit, candidate)).rejects.toThrow(
+        "invalid_git_blob_path",
+      );
+    }
+    await expect(gitBlobAtCommit(repo, "HEAD", "README.md")).rejects.toThrow("invalid_git_commit");
+  });
+});
 
 describe("git porcelain parsing", () => {
   it("parses the branch and file changes", () => {

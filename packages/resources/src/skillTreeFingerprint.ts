@@ -106,6 +106,11 @@ export interface SkillTreeFingerprintOptions {
    * stable presence/type marker so a user-added reserved entry is not erased.
    */
   reservedGit?: "exclude" | "presence";
+  /**
+   * Canonical Git blob bytes for selected regular files. The checkout file is
+   * still opened and race-validated before its content is replaced in the hash.
+   */
+  canonicalFileContent?: ReadonlyMap<string, Buffer>;
 }
 
 /**
@@ -183,10 +188,11 @@ export function skillTreeFingerprint(
         entries.push({ relativePath: relative, type: "directory" });
         walk(absolute, relative, entry);
       } else if (entry.isFile()) {
+        const checkoutContent = readRegularFile(absolute, entry);
         entries.push({
           relativePath: relative,
           type: "file",
-          content: readRegularFile(absolute, entry),
+          content: options.canonicalFileContent?.get(relative) ?? checkoutContent,
         });
       } else {
         throw new SkillTreeFingerprintError("skill tree contains an unsupported entry type");

@@ -89,6 +89,33 @@ describe("skillTreeFingerprint", () => {
     expect(() => skillTreeFingerprint(root)).toThrow(SkillTreeFingerprintError);
   });
 
+  const windowsIt = process.platform === "win32" ? it : it.skip;
+  windowsIt("rejects a directory junction before reading outside the payload", () => {
+    const root = tree();
+    const outside = tree();
+    writeFileSync(path.join(outside, "sentinel"), "outside bytes");
+    const junction = path.join(root, "junction");
+    execFileSync("cmd.exe", ["/d", "/s", "/c", `mklink /J "${junction}" "${outside}"`], {
+      stdio: "ignore",
+    });
+
+    expect(() => skillTreeFingerprint(root)).toThrow(/symbolic link or junction/);
+  });
+
+  windowsIt("marks a reserved .git junction without traversing its target", () => {
+    const root = tree();
+    const outside = tree();
+    writeFileSync(path.join(outside, "sentinel"), "first outside bytes");
+    const junction = path.join(root, ".git");
+    execFileSync("cmd.exe", ["/d", "/s", "/c", `mklink /J "${junction}" "${outside}"`], {
+      stdio: "ignore",
+    });
+
+    const first = skillTreeFingerprint(root, { reservedGit: "presence" });
+    writeFileSync(path.join(outside, "sentinel"), "changed outside bytes");
+    expect(skillTreeFingerprint(root, { reservedGit: "presence" })).toBe(first);
+  });
+
   const unixIt = process.platform === "win32" ? it.skip : it;
   unixIt("fails closed on special files", () => {
     const root = tree();
