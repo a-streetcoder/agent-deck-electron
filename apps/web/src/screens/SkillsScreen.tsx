@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { SkillInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 
 /** A git-imported skill repo (native ImportedSkillRepository), for re-sync. */
 interface SkillRepo {
@@ -126,7 +127,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           edit: { description: form.description, body: form.body },
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       onClose();
     } catch (err) {
       setError(String(err));
@@ -379,6 +380,8 @@ export function SkillsScreen() {
   // Per-repo unresolved conflicts (skills the user edited locally that an update
   // held back rather than overwriting) — native Keep Mine / Take Remote.
   const [conflicts, setConflicts] = useState<Record<string, string[]>>({});
+  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
+  const resolvingConflictRef = useRef<string | null>(null);
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
@@ -508,7 +511,7 @@ export function SkillsScreen() {
     setRepoBusy(id);
     try {
       const res = await fetch(`/resources/skill-repos/${id}/update`, { method: "POST" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorMessage(res));
       const data = (await res.json()) as { conflicts?: string[] };
       // Clear the badge; the resources_changed broadcast refetches the skills.
       setUpdatable((prev) => {
@@ -535,13 +538,17 @@ export function SkillsScreen() {
     name: string,
     resolution: "mine" | "remote",
   ): Promise<void> => {
+    const key = `${id}\0${name}`;
+    if (resolvingConflictRef.current === key) return;
+    resolvingConflictRef.current = key;
+    setResolvingConflict(key);
     try {
       const res = await fetch(`/resources/skill-repos/${id}/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name, resolution }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorMessage(res));
       setConflicts((prev) => {
         const remaining = (prev[id] ?? []).filter((n) => n !== name);
         const next = { ...prev };
@@ -551,6 +558,9 @@ export function SkillsScreen() {
       });
     } catch (err) {
       setGlobalError(String(err));
+    } finally {
+      if (resolvingConflictRef.current === key) resolvingConflictRef.current = null;
+      setResolvingConflict((current) => (current === key ? null : current));
     }
   };
 
@@ -780,27 +790,36 @@ export function SkillsScreen() {
                     <div className="text-micro text-text-muted">
                       Locally edited — your version was kept. Resolve:
                     </div>
-                    {conflicts[repo.id]!.map((name) => (
-                      <div key={name} className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary">
-                          {name}
-                        </span>
-                        <ControlButton
-                          data-testid={`skill-conflict-mine-${repo.id}-${name}`}
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                          onClick={() => void resolveConflict(repo.id, name, "mine")}
+                    {conflicts[repo.id]!.map((name) => {
+                      const conflictBusy = resolvingConflict === `${repo.id}\0${name}`;
+                      return (
+                        <div
+                          key={name}
+                          className="flex items-center gap-2"
+                          aria-busy={conflictBusy}
                         >
-                          Keep mine
-                        </ControlButton>
-                        <ControlButton
-                          data-testid={`skill-conflict-remote-${repo.id}-${name}`}
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                          onClick={() => void resolveConflict(repo.id, name, "remote")}
-                        >
-                          Take remote
-                        </ControlButton>
-                      </div>
-                    ))}
+                          <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary">
+                            {name}
+                          </span>
+                          <ControlButton
+                            data-testid={`skill-conflict-mine-${repo.id}-${name}`}
+                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            disabled={conflictBusy}
+                            onClick={() => void resolveConflict(repo.id, name, "mine")}
+                          >
+                            {conflictBusy ? "Resolving…" : "Keep mine"}
+                          </ControlButton>
+                          <ControlButton
+                            data-testid={`skill-conflict-remote-${repo.id}-${name}`}
+                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            disabled={conflictBusy}
+                            onClick={() => void resolveConflict(repo.id, name, "remote")}
+                          >
+                            {conflictBusy ? "Resolving…" : "Take remote"}
+                          </ControlButton>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>

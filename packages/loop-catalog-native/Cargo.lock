@@ -259,10 +259,13 @@ version = "0.0.1"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
+ "getrandom",
+ "libc",
  "napi",
  "napi-build",
  "napi-derive",
  "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

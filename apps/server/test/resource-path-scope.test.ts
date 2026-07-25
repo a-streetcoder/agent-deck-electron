@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -78,6 +85,26 @@ describe("resource write scope compatibility", () => {
       edit: { body: "Changed." },
     });
     expect(response.status).toBe(409);
+  });
+
+  const unixIt = process.platform === "win32" ? it.skip : it;
+  unixIt("maps linked catalog failures to 409 and leaves the outside file unchanged", async () => {
+    const prompts = path.join(resourceHome, ".pi", "agent", "prompts");
+    mkdirSync(prompts, { recursive: true });
+    const sentinel = path.join(dataDir, "resource-sentinel");
+    writeFileSync(sentinel, "outside-safe");
+    symlinkSync(sentinel, path.join(prompts, "linked-route.md"));
+
+    const response = await put("/resources/prompts", {
+      scope: "global",
+      name: "linked-route",
+      edit: { body: "bad" },
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()) as { error: string }).toEqual(
+      expect.objectContaining({ error: expect.stringContaining("unsafe or linked") }),
+    );
+    expect(readFileSync(sentinel, "utf8")).toBe("outside-safe");
   });
 
   it.each([

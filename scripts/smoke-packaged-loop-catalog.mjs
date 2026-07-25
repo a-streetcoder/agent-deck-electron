@@ -117,6 +117,21 @@ if (
 }
 
 const sandbox = mkdtempSync(path.join(tmpdir(), "agent-deck-packaged-electron-loop-"));
+const resourceSmoke = spawnSync(
+  executable,
+  [
+    "-e",
+    `const fs=require("node:fs"),path=require("node:path"),b=require(process.argv[1]),home=process.argv[2],src=path.join(home,"source");fs.mkdirSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"SKILL.md"),"one");fs.writeFileSync(path.join(src,"asset","stale"),"stale");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,false);fs.rmSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"asset"),"now-file");fs.writeFileSync(path.join(src,"SKILL.md"),"two");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,true);if(b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","asset"])!=="now-file"||b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","SKILL.md"])!=="two")throw new Error("existing resource replacement failed");`,
+    addonPath,
+    sandbox,
+  ],
+  { env: baseEnvironment, encoding: "utf8" },
+);
+if (resourceSmoke.status !== 0) {
+  throw new Error(
+    `packaged Electron resource replacement smoke failed:\n${resourceSmoke.stdout}${resourceSmoke.stderr}`,
+  );
+}
 const serverEntry = path.join(asarPath, "dist", "server", "index.mjs");
 const serverEnvironment = {
   ...baseEnvironment,

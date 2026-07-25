@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Globe, MessageSquareText, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { PromptInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
 
@@ -153,7 +154,7 @@ export function PromptsScreen() {
           edit: { description: draft.description, body: draft.body },
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       setDraft(null);
       await load();
     } catch (err) {
@@ -180,8 +181,7 @@ export function PromptsScreen() {
         }),
       });
       if (!response.ok) {
-        const { error } = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(error ?? "Couldn't rename the prompt.");
+        throw new Error(await responseErrorMessage(response, "Couldn't rename the prompt."));
       }
       setRenaming(null);
       await load();
@@ -201,7 +201,7 @@ export function PromptsScreen() {
           name: prompt.name,
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       await load();
     } catch (err) {
       setError(String(err));

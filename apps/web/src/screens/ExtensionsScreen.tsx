@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Plug, Plus, Trash2 } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
 
 /**
@@ -124,7 +125,7 @@ export function ExtensionsScreen() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       setDraft("");
       setAdding(false);
       await load();

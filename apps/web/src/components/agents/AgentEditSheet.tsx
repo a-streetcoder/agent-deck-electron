@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../../state/store.ts";
 import { AgentAvatar } from "./AgentAvatar.tsx";
 
@@ -178,7 +179,7 @@ export function AgentEditSheet({
           },
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       onClose();
     } catch (err) {
       setError(String(err));

@@ -4,6 +4,7 @@ import {
   ControlTextArea,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useState } from "react";
 import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
@@ -62,7 +63,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
           },
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       onClose();
     } catch (err) {
       setError(String(err));

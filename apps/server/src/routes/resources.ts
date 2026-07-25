@@ -16,6 +16,7 @@ import {
   parseAgentFile,
   readAgentOverrides,
   renameAgentFile,
+  ResourceCatalogCapabilityError,
   renamePromptFile,
   renameSkillDir,
   resolveSkillSource,
@@ -140,6 +141,57 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     extensionBridgeConflictAt,
   } = ctx;
 
+  const resourceMutationFailure = (error: unknown): { status: number; error: string } => {
+    if (!(error instanceof ResourceCatalogCapabilityError)) {
+      return { status: 500, error: error instanceof Error ? error.message : String(error) };
+    }
+    if (error.code === "RESOURCE_NATIVE_UNAVAILABLE") {
+      return {
+        status: 503,
+        error:
+          "Resource changes are unavailable because the native catalog safety component could not load.",
+      };
+    }
+    if (error.code === "RESOURCE_NOT_FOUND") {
+      return { status: 404, error: "The resource no longer exists." };
+    }
+    if (error.code === "RESOURCE_ALREADY_EXISTS") {
+      return { status: 409, error: "A resource already exists at that catalog location." };
+    }
+    if (error.code === "RESOURCE_BUSY") {
+      return {
+        status: 409,
+        error: "The resource is in use by another application. Close it and retry the update.",
+      };
+    }
+    if (error.code === "RESOURCE_RECONCILE_INCOMPLETE") {
+      return {
+        status: 409,
+        error:
+          "The resource update was interrupted after it began. Retry the update to finish reconciling the resource safely.",
+      };
+    }
+    if (
+      error.code === "RESOURCE_UNSAFE_COMPONENT" ||
+      error.code === "RESOURCE_INVALID_PATH" ||
+      error.code === "RESOURCE_INVALID_UTF8"
+    ) {
+      return {
+        status: 409,
+        error:
+          "The resource change was refused because its catalog path is unsafe or linked. Remove the link or choose a portable resource name and try again.",
+      };
+    }
+    return { status: 500, error: "The resource catalog operation failed." };
+  };
+  const sendResourceMutationFailure = (
+    reply: { status(code: number): { send(body: { error: string }): unknown } },
+    error: unknown,
+  ): unknown => {
+    const failure = resourceMutationFailure(error);
+    return reply.status(failure.status).send({ error: failure.error });
+  };
+
   const repositoryOperations = new Set<string>();
   const withRepositoryLock = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     if (repositoryOperations.has(key)) throw new Error("repository_busy");
@@ -232,7 +284,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         }
       }
     } catch (error) {
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
@@ -268,7 +320,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (message === "skill_not_found") {
         return reply.status(404).send({ error: `No ${scope} skill named "${name}".` });
       }
-      return reply.status(500).send({ error: message });
+      return sendResourceMutationFailure(reply, error);
     }
     // Re-point references. A project skill is visible only to its own project; a
     // global one, only where a same-named project skill doesn't shadow it.
@@ -331,7 +383,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           .status(400)
           .send({ error: "Couldn't derive a valid skill name from the file." });
       }
-      return reply.status(500).send({ error: message });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true, name };
@@ -488,7 +540,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
             "Couldn't clone that repository — check the URL (private repos aren't supported yet).",
         });
       }
-      return reply.status(500).send({ error: message });
+      return sendResourceMutationFailure(reply, error);
     }
   });
 
@@ -623,7 +675,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
               "The managed skill collection has local changes. Commit or discard them before updating.",
           });
         }
-        return reply.status(500).send({ error: message });
+        return sendResourceMutationFailure(reply, error);
       }
     }
     if (!existsSync(record.clonePath)) {
@@ -681,8 +733,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         ) {
           try {
             deleteSkillDir(roots, record.scope, name);
-          } catch {
-            // Best-effort — a skill the user already removed is fine.
+          } catch (error) {
+            if (
+              !(error instanceof ResourceCatalogCapabilityError) ||
+              error.code !== "RESOURCE_NOT_FOUND"
+            ) {
+              throw error;
+            }
           }
         }
       }
@@ -705,9 +762,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         conflicts: heldConflicts,
       };
     } catch (error) {
-      return reply
-        .status(500)
-        .send({ error: error instanceof Error ? error.message : String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
   });
 
@@ -736,39 +791,48 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "The clone is missing — re-import the repository." });
     }
     const { name, resolution } = parsed.data;
-    const skillHashes = { ...(record.skillHashes ?? {}) };
-    let skillNames = record.skillNames;
-    if (resolution === "remote") {
-      // Take upstream: overwrite the catalog copy with the clone's version.
-      const scanDir = subdirScanPath(record.clonePath, record.subdir);
-      const result = importSkillsFromClone(
-        roots,
-        record.scope,
-        scanDir,
-        skillRepoName(record.remoteUrl),
-        true,
-        { only: new Set([name]) },
-      );
-      if (result.hashes[name]) {
-        skillHashes[name] = result.hashes[name];
-      } else {
-        // Upstream removed this skill — "take remote" means take the deletion.
-        try {
-          deleteSkillDir(roots, record.scope, name);
-        } catch {
-          // Already gone — fine.
+    try {
+      const skillHashes = { ...(record.skillHashes ?? {}) };
+      let skillNames = record.skillNames;
+      if (resolution === "remote") {
+        // Take upstream: overwrite the catalog copy with the clone's version.
+        const scanDir = subdirScanPath(record.clonePath, record.subdir);
+        const result = importSkillsFromClone(
+          roots,
+          record.scope,
+          scanDir,
+          skillRepoName(record.remoteUrl),
+          true,
+          { only: new Set([name]) },
+        );
+        if (result.hashes[name]) {
+          skillHashes[name] = result.hashes[name];
+        } else {
+          // Upstream removed this skill — "take remote" means take the deletion.
+          try {
+            deleteSkillDir(roots, record.scope, name);
+          } catch (error) {
+            if (
+              !(error instanceof ResourceCatalogCapabilityError) ||
+              error.code !== "RESOURCE_NOT_FOUND"
+            ) {
+              throw error;
+            }
+          }
+          delete skillHashes[name];
+          skillNames = skillNames.filter((n) => n !== name);
         }
-        delete skillHashes[name];
-        skillNames = skillNames.filter((n) => n !== name);
+      } else {
+        // Keep the local edit — re-fingerprint so the update stops flagging it.
+        const current = skillMdHash(roots, record.scope, name);
+        if (current) skillHashes[name] = current;
       }
-    } else {
-      // Keep the local edit — re-fingerprint so the update stops flagging it.
-      const current = skillMdHash(roots, record.scope, name);
-      if (current) skillHashes[name] = current;
+      settings.upsertImportedSkillRepository({ ...record, skillNames, skillHashes });
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    } catch (error) {
+      return sendResourceMutationFailure(reply, error);
     }
-    settings.upsertImportedSkillRepository({ ...record, skillNames, skillHashes });
-    broadcast({ type: "resources_changed" });
-    return { ok: true };
   });
 
   // Forget a repo: drop the provenance record + the persistent clone. The skills
@@ -797,7 +861,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         if (message === "repository_busy") {
           return reply.status(409).send({ error: "That repository operation is already running." });
         }
-        return reply.status(500).send({ error: message });
+        return sendResourceMutationFailure(reply, error);
       }
       broadcast({ type: "resources_changed" });
       return { ok: true };
@@ -834,7 +898,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     try {
       writePromptFile(rootsFor(projectId), scope, name, edit);
     } catch (error) {
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
@@ -856,7 +920,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     try {
       deletePromptFile(rootsFor(projectId), scope, name);
     } catch (error) {
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     // Drop the name from the flat default list only if it no longer resolves to
     // any prompt anywhere (another scope may still provide it).
@@ -914,7 +978,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (message === "prompt_not_found") {
         return reply.status(404).send({ error: `No ${scope} prompt named "${name}".` });
       }
-      return reply.status(500).send({ error: message });
+      return sendResourceMutationFailure(reply, error);
     }
     // Re-point references by which FILE each reference actually resolved to.
     // Prompts resolve GLOBAL-first (unlike skills, where a project skill shadows
@@ -1109,7 +1173,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           error: `Both legacy and modern global agents are named "${name}"; choose a unique name before editing.`,
         });
       }
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     // settings.json isn't under the resource watcher — notify clients directly.
     broadcast({ type: "resources_changed" });
@@ -1150,7 +1214,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (error instanceof Error && error.message === "agent_ambiguous") {
         return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
       }
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
@@ -1200,7 +1264,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (error instanceof Error && error.message === "agent_ambiguous") {
         return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
       }
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
@@ -1239,7 +1303,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (message === "agent_not_found") {
         return reply.status(404).send({ error: `No ${scope} agent named "${name}".` });
       }
-      return reply.status(500).send({ error: message });
+      return sendResourceMutationFailure(reply, error);
     }
     // Re-point project defaults, but ONLY where this rename actually changes the
     // effective default — bare-name resolution respects scope shadowing (a
@@ -1281,7 +1345,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     try {
       writeSkillFile(roots, scope, name, edit);
     } catch (error) {
-      return reply.status(500).send({ error: String(error) });
+      return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
