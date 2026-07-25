@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -145,6 +145,42 @@ describe("POST /resources/skills/rename", () => {
     expect(await defaultSkills()).toEqual(defaultsBefore);
     expect(await globalSkillNames()).toEqual(globalsBefore);
     expect(await globalSkillNames()).not.toContain("solo2");
+  });
+
+  const unixIt = process.platform === "win32" ? it.skip : it;
+  unixIt("does not persist reference changes when the SKILL.md update is unsafe", async () => {
+    await writeGlobalSkill("unsafe-rename");
+    await api("PATCH", "/settings", {
+      setDefaultSkill: { name: "unsafe-rename", enabled: true },
+    });
+    await api("PATCH", `/projects/${projectId}`, {
+      assignedSkills: ["formatter", "unsafe-rename"],
+    });
+    const skillFile = path.join(
+      resourceHome,
+      ".pi",
+      "agent",
+      "skills",
+      "unsafe-rename",
+      "SKILL.md",
+    );
+    const outside = path.join(resourceHome, "outside-skill.md");
+    writeFileSync(outside, "outside-safe");
+    rmSync(skillFile);
+    symlinkSync(outside, skillFile);
+
+    const response = await api("POST", "/resources/skills/rename", {
+      scope: "global",
+      name: "unsafe-rename",
+      newName: "unsafe-renamed",
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("unsafe") });
+    expect(await assignedOf()).toContain("unsafe-rename");
+    expect(await assignedOf()).not.toContain("unsafe-renamed");
+    expect(await defaultSkills()).toContain("unsafe-rename");
+    expect(await defaultSkills()).not.toContain("unsafe-renamed");
   });
 
   it("409 on a name clash and 404 on a missing source", async () => {

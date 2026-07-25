@@ -156,6 +156,60 @@ test("shows the read-only Agent Deck bridges inventory (memory active)", async (
   await expect(page.getByTestId("bridge-state-mcp")).toHaveText("off");
 });
 
+test("shows readable extension load, toggle, and remove failures", async ({ page }) => {
+  await page.route("**/resources/extensions*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 503,
+      json: { error: "Extension inventory is temporarily unavailable." },
+    });
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-extensions").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Extension inventory is temporarily unavailable.",
+  );
+
+  await page.unroute("**/resources/extensions*");
+  await page.route("**/resources/extensions*", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      await route.fulfill({
+        status: 200,
+        json: {
+          extensions: [
+            {
+              path: "/tmp/failing-extension.ts",
+              name: "failing-extension.ts",
+              exists: true,
+              disabled: false,
+              source: "added",
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (method === "DELETE") {
+      await route.fulfill({ status: 409, json: { error: "Extension removal was refused." } });
+      return;
+    }
+    return route.fallback();
+  });
+  await page.route("**/resources/extensions/disabled", async (route) => {
+    await route.fulfill({ status: 409, json: { error: "Extension toggle was refused." } });
+  });
+  await page.reload();
+  await page.getByTestId("nav-extensions").click();
+
+  await page.getByTestId("extension-toggle-failing-extension.ts").click();
+  await expect(page.getByTestId("error-banner")).toHaveText("Error: Extension toggle was refused.");
+  await page.getByTestId("extension-remove-failing-extension.ts").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Extension removal was refused.",
+  );
+});
+
 test("loading-mode picker + bulk enable/disable (native PiAgentExtensionLoadingMode)", async ({
   page,
 }) => {

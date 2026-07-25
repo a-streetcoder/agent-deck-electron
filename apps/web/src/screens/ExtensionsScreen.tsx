@@ -49,7 +49,7 @@ export function ExtensionsScreen() {
         ? `/resources/extensions?projectId=${encodeURIComponent(currentProjectId)}`
         : "/resources/extensions";
       const response = await fetch(url);
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       const data = (await response.json()) as { extensions: ExtensionEntry[] };
       setExtensions(data.extensions);
     } catch (err) {
@@ -70,37 +70,56 @@ export function ExtensionsScreen() {
   // stray click mutate everything before the real mode arrives.
   const [loadingMode, setLoadingMode] = useState<LoadingMode | null>(null);
   useEffect(() => {
-    void fetch("/settings")
-      .then((response) => response.json())
-      .then((data: { settings: { extensionLoadingMode: LoadingMode } }) =>
-        setLoadingMode(data.settings.extensionLoadingMode),
-      )
-      .catch(() => {});
-  }, []);
+    void (async () => {
+      try {
+        const response = await fetch("/settings");
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const data = (await response.json()) as {
+          settings: { extensionLoadingMode: LoadingMode };
+        };
+        setLoadingMode(data.settings.extensionLoadingMode);
+      } catch (err) {
+        setError(String(err));
+      }
+    })();
+  }, [setError]);
   const setMode = async (mode: LoadingMode): Promise<void> => {
     const prev = loadingMode;
     setLoadingMode(mode); // optimistic
-    const res = await fetch("/settings", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ extensionLoadingMode: mode }),
-    }).catch(() => null);
-    if (!res || !res.ok) setLoadingMode(prev); // revert on failure
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ extensionLoadingMode: mode }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+    } catch (err) {
+      setLoadingMode(prev); // revert on failure
+      setError(String(err));
+    }
   };
   // Bulk enable/disable every listed extension (native All / None).
   const setAllDisabled = async (disabled: boolean): Promise<void> => {
-    await Promise.all(
-      extensions
-        .filter((ext) => ext.disabled !== disabled)
-        .map((ext) =>
-          fetch("/resources/extensions/disabled", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: ext.path, disabled }),
-          }).catch(() => {}),
-        ),
-    );
-    await load();
+    try {
+      await Promise.all(
+        extensions
+          .filter((ext) => ext.disabled !== disabled)
+          .map(async (ext) => {
+            const response = await fetch("/resources/extensions/disabled", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ path: ext.path, disabled }),
+            });
+            if (!response.ok) throw new Error(await responseErrorMessage(response));
+          }),
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      // Some requests may have succeeded before a sibling failed; always
+      // reconcile the list to the server's authoritative partial result.
+      await load();
+    }
   };
 
   useEffect(() => {
@@ -135,21 +154,31 @@ export function ExtensionsScreen() {
   };
 
   const toggle = async (ext: ExtensionEntry): Promise<void> => {
-    await fetch("/resources/extensions/disabled", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: ext.path, disabled: !ext.disabled }),
-    }).catch(() => {});
-    await load();
+    try {
+      const response = await fetch("/resources/extensions/disabled", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: ext.path, disabled: !ext.disabled }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
   };
 
   const remove = async (ext: ExtensionEntry): Promise<void> => {
-    await fetch("/resources/extensions", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: ext.path }),
-    }).catch(() => {});
-    await load();
+    try {
+      const response = await fetch("/resources/extensions", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: ext.path }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
   };
 
   // Names loaded by 2+ enabled extensions — pi would load duplicates (§16.2).

@@ -52,7 +52,7 @@ export function PromptsScreen() {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     try {
       const response = await fetch(`/resources/prompts${query}`);
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       const data = (await response.json()) as { prompts: PromptInfo[] };
       setPrompts(data.prompts);
     } catch (err) {
@@ -67,15 +67,15 @@ export function PromptsScreen() {
     const seq = ++defaultsSeq.current;
     try {
       const response = await fetch("/settings");
-      if (!response.ok) return;
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       const { settings } = (await response.json()) as {
         settings: { defaultPromptTemplates?: string[] };
       };
       if (seq === defaultsSeq.current) setDefaultPrompts(settings.defaultPromptTemplates ?? []);
-    } catch {
-      // Non-fatal: the toggle just won't reflect state until the next refresh.
+    } catch (err) {
+      if (seq === defaultsSeq.current) setError(String(err));
     }
-  }, []);
+  }, [setError]);
 
   useEffect(() => {
     void load();
@@ -98,7 +98,7 @@ export function PromptsScreen() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ setDefaultPromptTemplate: { name, enabled } }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       const { settings } = (await response.json()) as {
         settings: { defaultPromptTemplates?: string[] };
       };

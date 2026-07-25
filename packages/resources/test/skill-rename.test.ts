@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -61,5 +61,21 @@ describe("renameSkillDir", () => {
     writeSkillFile(roots, "global", "linter", { description: "l", body: "keep" });
     renameSkillDir(roots, "global", "linter", "Linter");
     expect(scanSkills(roots).map((s) => s.name)).toEqual(["Linter"]);
+  });
+
+  const unixIt = process.platform === "win32" ? it.skip : it;
+  unixIt("propagates an unsafe SKILL.md frontmatter update after moving the directory", () => {
+    const roots = { home: home() };
+    writeSkillFile(roots, "global", "unsafe-frontmatter", { description: "safe", body: "safe" });
+    const skillFile = path.join(globalSkillDir(roots, "unsafe-frontmatter"), "SKILL.md");
+    const outside = path.join(roots.home, "outside-skill.md");
+    writeFileSync(outside, "outside-safe");
+    rmSync(skillFile);
+    symlinkSync(outside, skillFile);
+
+    expect(() =>
+      renameSkillDir(roots, "global", "unsafe-frontmatter", "renamed-unsafe-frontmatter"),
+    ).toThrow("Native resource filesystem safety boundary refused the operation.");
+    expect(readFileSync(outside, "utf8")).toBe("outside-safe");
   });
 });

@@ -380,8 +380,10 @@ export function SkillsScreen() {
   // Per-repo unresolved conflicts (skills the user edited locally that an update
   // held back rather than overwriting) — native Keep Mine / Take Remote.
   const [conflicts, setConflicts] = useState<Record<string, string[]>>({});
-  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
-  const resolvingConflictRef = useRef<string | null>(null);
+  const [resolvingConflicts, setResolvingConflicts] = useState<Record<string, "mine" | "remote">>(
+    {},
+  );
+  const resolvingConflictsRef = useRef(new Set<string>());
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
@@ -539,9 +541,9 @@ export function SkillsScreen() {
     resolution: "mine" | "remote",
   ): Promise<void> => {
     const key = `${id}\0${name}`;
-    if (resolvingConflictRef.current === key) return;
-    resolvingConflictRef.current = key;
-    setResolvingConflict(key);
+    if (resolvingConflictsRef.current.has(key)) return;
+    resolvingConflictsRef.current.add(key);
+    setResolvingConflicts((current) => ({ ...current, [key]: resolution }));
     try {
       const res = await fetch(`/resources/skill-repos/${id}/resolve`, {
         method: "POST",
@@ -559,8 +561,12 @@ export function SkillsScreen() {
     } catch (err) {
       setGlobalError(String(err));
     } finally {
-      if (resolvingConflictRef.current === key) resolvingConflictRef.current = null;
-      setResolvingConflict((current) => (current === key ? null : current));
+      resolvingConflictsRef.current.delete(key);
+      setResolvingConflicts((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
     }
   };
 
@@ -791,7 +797,8 @@ export function SkillsScreen() {
                       Locally edited — your version was kept. Resolve:
                     </div>
                     {conflicts[repo.id]!.map((name) => {
-                      const conflictBusy = resolvingConflict === `${repo.id}\0${name}`;
+                      const resolution = resolvingConflicts[`${repo.id}\0${name}`];
+                      const conflictBusy = resolution !== undefined;
                       return (
                         <div
                           key={name}
@@ -807,7 +814,7 @@ export function SkillsScreen() {
                             disabled={conflictBusy}
                             onClick={() => void resolveConflict(repo.id, name, "mine")}
                           >
-                            {conflictBusy ? "Resolving…" : "Keep mine"}
+                            {resolution === "mine" ? "Keeping mine…" : "Keep mine"}
                           </ControlButton>
                           <ControlButton
                             data-testid={`skill-conflict-remote-${repo.id}-${name}`}
@@ -815,7 +822,7 @@ export function SkillsScreen() {
                             disabled={conflictBusy}
                             onClick={() => void resolveConflict(repo.id, name, "remote")}
                           >
-                            {conflictBusy ? "Resolving…" : "Take remote"}
+                            {resolution === "remote" ? "Taking remote…" : "Take remote"}
                           </ControlButton>
                         </div>
                       );

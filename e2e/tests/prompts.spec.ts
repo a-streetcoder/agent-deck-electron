@@ -166,6 +166,43 @@ test("the All Projects toggle sets a prompt as a default (native defaultPromptTe
     .not.toContain("changelog-note");
 });
 
+test("shows readable prompt load and default-toggle failures", async ({ page }) => {
+  const promptDir = path.join(harness.piHome, ".pi", "agent", "prompts");
+  mkdirSync(promptDir, { recursive: true });
+  writeFileSync(
+    path.join(promptDir, "failure-toggle.md"),
+    "---\nname: failure-toggle\ndescription: Failure fixture\n---\nBody.\n",
+  );
+  await page.route("**/resources/prompts*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 503,
+      json: { error: "Prompt catalog is temporarily unavailable." },
+    });
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-prompts").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Prompt catalog is temporarily unavailable.",
+  );
+
+  await page.unroute("**/resources/prompts*");
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-prompts").click();
+  const toggle = page.getByTestId("prompt-default-failure-toggle");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await page.route("**/settings", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await route.fulfill({ status: 409, json: { error: "Default prompt update was refused." } });
+  });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Default prompt update was refused.",
+  );
+});
+
 test("the editor's per-project availability assigns a global prompt to a project (native)", async ({
   page,
 }) => {

@@ -519,8 +519,12 @@ export function renameSkillDir(
       skillFile,
       `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${parsed.body.trim()}\n`,
     );
-  } catch {
-    // No SKILL.md to update — the directory move is still the rename.
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_NOT_FOUND") {
+      // A directory without SKILL.md can still be renamed.
+      return to;
+    }
+    throw error;
   }
   return to;
 }

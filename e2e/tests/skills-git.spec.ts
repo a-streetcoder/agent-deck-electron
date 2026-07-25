@@ -103,6 +103,67 @@ test("lists the imported repo, badges an upstream update, and pulls it", async (
     .toBe(true);
 });
 
+test("tracks concurrent conflict resolutions independently with action-specific labels", async ({
+  page,
+}) => {
+  const id = "concurrent-conflicts";
+  const pending = new Map<string, () => void>();
+  const requestCounts = new Map<string, number>();
+
+  await page.route("**/resources/skill-repos", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        repos: [
+          {
+            id,
+            remoteUrl: "https://example.invalid/concurrent.git",
+            skillNames: ["conflict-a", "conflict-b"],
+            lastSyncedCommit: "abc123",
+            importedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    });
+  });
+  await page.route(`**/resources/skill-repos/${id}/check`, async (route) => {
+    await route.fulfill({ status: 200, json: { updateAvailable: true } });
+  });
+  await page.route(`**/resources/skill-repos/${id}/update`, async (route) => {
+    await route.fulfill({ status: 200, json: { conflicts: ["conflict-a", "conflict-b"] } });
+  });
+  await page.route(`**/resources/skill-repos/${id}/resolve`, async (route) => {
+    const { name } = route.request().postDataJSON() as { name: string };
+    requestCounts.set(name, (requestCounts.get(name) ?? 0) + 1);
+    await new Promise<void>((resolve) => pending.set(name, resolve));
+    await route.fulfill({ status: 200, json: { ok: true } });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  await page.getByTestId(`skill-repo-update-${id}`).click();
+
+  const mineA = page.getByTestId(`skill-conflict-mine-${id}-conflict-a`);
+  const remoteB = page.getByTestId(`skill-conflict-remote-${id}-conflict-b`);
+  await mineA.click();
+  await remoteB.click();
+  await expect.poll(() => requestCounts.get("conflict-a")).toBe(1);
+  await expect.poll(() => requestCounts.get("conflict-b")).toBe(1);
+  await expect(mineA).toBeDisabled();
+  await expect(mineA).toHaveAccessibleName("Keeping mine…");
+  await expect(remoteB).toBeDisabled();
+  await expect(remoteB).toHaveAccessibleName("Taking remote…");
+
+  pending.get("conflict-b")!();
+  await expect(remoteB).toHaveCount(0);
+  await expect(mineA).toBeDisabled();
+  await mineA.evaluate((button: { click(): void }) => button.click());
+  expect(requestCounts.get("conflict-a")).toBe(1);
+
+  pending.get("conflict-a")!();
+  await expect(mineA).toHaveCount(0);
+});
+
 test("holds a locally-edited skill as a conflict and resolves it Take Remote", async ({ page }) => {
   const { repos } = (await (await fetch(`${harness.baseUrl}/resources/skill-repos`)).json()) as {
     repos: Array<{ id: string }>;
