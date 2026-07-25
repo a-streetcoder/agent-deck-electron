@@ -34,18 +34,23 @@ test.beforeAll(async () => {
   if (!existsSync(path.join(WEB_DIST, "index.html"))) {
     execSync("pnpm --filter @agent-deck/web build", { cwd: WORKSPACE_ROOT, stdio: "inherit" });
   }
-  // The main process spawns the server via pnpm, which needs the real HOME
-  // (a throwaway HOME sends corepack into a reinstall that aborts with no TTY).
-  // This spec sends no prompt, so it never launches pi nor mutates ~/.pi; the
-  // isolated AGENT_DECK_DATA_DIR keeps the added project out of real state.
+  // Isolate both app persistence and the Pi resource catalog. The desktop package
+  // invokes the workspace's installed pnpm directly, so it does not need the real HOME.
   const dataDir = mkdtempSync(path.join(tmpdir(), "electron-e2e-data-"));
+  const resourceHome = mkdtempSync(path.join(tmpdir(), "electron-e2e-home-"));
   // CI runs as root in a container where Chromium's setuid sandbox can't start,
   // so Electron needs --no-sandbox there (harmless locally, gated on CI).
   const launchArgs = process.env.CI ? [DESKTOP_DIR, "--no-sandbox"] : [DESKTOP_DIR];
   app = await electron.launch({
     executablePath: electronPath,
     args: launchArgs,
-    env: { ...process.env, PI_SKIP_VERSION_CHECK: "1", AGENT_DECK_DATA_DIR: dataDir },
+    env: {
+      ...process.env,
+      HOME: resourceHome,
+      USERPROFILE: resourceHome,
+      PI_SKIP_VERSION_CHECK: "1",
+      AGENT_DECK_DATA_DIR: dataDir,
+    },
   });
   electronPid = app.process().pid ?? undefined;
 
@@ -218,6 +223,25 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   expect(health).toBe(true);
 });
 
+test("Loop artifact reveal accepts only backend-owned opaque run ids", async () => {
+  const window = await app.firstWindow();
+  const result = await window.evaluate(async () => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: { revealLoopArtifacts?(runId: string): Promise<boolean> };
+      }
+    ).agentDeck;
+    if (!bridge?.revealLoopArtifacts) return "bridge unavailable";
+    try {
+      await bridge.revealLoopArtifacts("../../arbitrary-path");
+      return "unexpected success";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+  expect(result).toContain("Loop run is unavailable");
+});
+
 test("adding a project via the native folder picker registers it", async () => {
   const window = await app.firstWindow();
   // Project selection lives in the toolbar picker popover (native), so open it.
@@ -235,6 +259,62 @@ test("adding a project via the native folder picker registers it", async () => {
   // The picked folder shows up as a registered project; reopen the picker to see it.
   await window.getByTestId("project-picker").click();
   await expect(window.getByTestId(`project-${projectName}`)).toBeVisible({ timeout: 15_000 });
+
+  const runId = await window.evaluate(async (selectedPath) => {
+    const projectsResponse = await fetch("/projects");
+    const projects = (await projectsResponse.json()) as {
+      projects: Array<{ id: string; path: string }>;
+    };
+    const project = projects.projects.find((candidate) => candidate.path === selectedPath);
+    if (!project) throw new Error("desktop test project was not registered");
+    const loopResponse = await fetch("/loops", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Desktop Reveal Checkpoint",
+        structure: "humanApproval",
+        checkpointPrompt: "Verify artifact reveal.",
+      }),
+    });
+    if (!loopResponse.ok) throw new Error(await loopResponse.text());
+    const loopsResponse = await fetch("/loops");
+    const { loops } = (await loopsResponse.json()) as {
+      loops: Array<{ id: string; name: string }>;
+    };
+    const loop = loops.find((candidate) => candidate.name === "Desktop Reveal Checkpoint");
+    if (!loop) throw new Error("desktop reveal Loop was not persisted");
+    const runResponse = await fetch(`/loops/${encodeURIComponent(loop.id)}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id }),
+    });
+    if (!runResponse.ok) throw new Error(await runResponse.text());
+    return ((await runResponse.json()) as { run: { id: string } }).run.id;
+  }, projectDir);
+  await app.evaluate(({ shell }) => {
+    shell.showItemInFolder = (revealedPath) => {
+      (globalThis as typeof globalThis & { revealedLoopArtifacts?: string }).revealedLoopArtifacts =
+        revealedPath;
+    };
+  });
+  const revealed = await window.evaluate(async (id) => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: { revealLoopArtifacts?(runId: string): Promise<boolean> };
+      }
+    ).agentDeck;
+    return await bridge?.revealLoopArtifacts?.(id);
+  }, runId);
+  expect(revealed).toBe(true);
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { revealedLoopArtifacts?: string })
+            .revealedLoopArtifacts,
+      ),
+    )
+    .toContain("loop-artifacts");
 });
 
 test("the native File menu exposes New Chat and it creates a session", async () => {

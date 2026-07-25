@@ -441,6 +441,26 @@ ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
   }
 });
 
+ipcMain.handle("loops:revealArtifacts", async (_event, rawRunId) => {
+  const runId = String(rawRunId ?? "");
+  if (!serverPort || !/^[0-9a-f-]{36}$/i.test(runId)) {
+    throw new Error("Loop run is unavailable");
+  }
+  const response = await fetch(
+    `http://127.0.0.1:${serverPort}/loops/runs/${encodeURIComponent(runId)}/artifact-directory`,
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(typeof body.error === "string" ? body.error : "Artifacts are unavailable");
+  }
+  const body = await response.json();
+  if (!body || typeof body.directory !== "string" || !path.isAbsolute(body.directory)) {
+    throw new Error("The backend returned an invalid artifact directory");
+  }
+  shell.showItemInFolder(body.directory);
+  return true;
+});
+
 ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
   const properties = ["openDirectory", "createDirectory"];
   if (options.multiple) properties.push("multiSelections");

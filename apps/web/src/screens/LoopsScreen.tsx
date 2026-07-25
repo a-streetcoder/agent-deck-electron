@@ -47,6 +47,7 @@ import {
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { useAgents } from "../state/useAgents.ts";
+import { revealLoopArtifacts } from "../lib/native.ts";
 import { switchToSession } from "../state/wsBridge.ts";
 
 /**
@@ -242,6 +243,8 @@ export function LoopsScreen() {
   const [approvalPending, setApprovalPending] = useState<"approve" | "reject" | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [acknowledgePending, setAcknowledgePending] = useState(false);
+  const [revealPending, setRevealPending] = useState(false);
+  const [artifactActionMessage, setArtifactActionMessage] = useState<string | null>(null);
   const runIdRef = useRef<string | null>(null);
   const runPendingRef = useRef(false);
   runPendingRef.current = runPending;
@@ -322,6 +325,32 @@ export function LoopsScreen() {
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSaveError(null);
     setDraft(draftFrom(loop));
+  };
+
+  const saveLoopFromRun = (run: LoopRun): void => {
+    if (!isLoopRunTerminal(run.status) || !run.definitionSnapshot) return;
+    const firstGoalLine = run.definitionSnapshot.goal
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    const project = projects.find((candidate) => candidate.id === run.projectId);
+    const definition: LoopDefinition = {
+      id: "",
+      source: "user",
+      filePath: "",
+      availability: project ? "projectPaths" : "allProjects",
+      projectPaths: project ? [project.path] : [],
+      ...run.definitionSnapshot,
+      name: (firstGoalLine || "Saved Loop").slice(0, 64),
+      description: "Saved from completed loop run.",
+    };
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSaveError(null);
+    const next = draftFrom(definition);
+    next.id = undefined;
+    next.original = null;
+    setDraft(next);
   };
 
   const closeEditor = useCallback((): void => {
@@ -636,6 +665,24 @@ export function LoopsScreen() {
     }
   };
 
+  const revealArtifacts = async (run: LoopRun): Promise<void> => {
+    if (revealPending || !run.artifactDirectory) return;
+    setRevealPending(true);
+    setArtifactActionMessage(null);
+    try {
+      const revealed = await revealLoopArtifacts(run.id);
+      setArtifactActionMessage(
+        revealed
+          ? "Artifacts revealed in the file manager."
+          : `Desktop reveal is unavailable. Artifacts: ${run.artifactDirectory}`,
+      );
+    } catch (error) {
+      setArtifactActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRevealPending(false);
+    }
+  };
+
   const openLoopSession = (run: LoopRun): void => {
     const session = sessions.find((candidate) => candidate.id === run.sessionId);
     if (!session) {
@@ -900,6 +947,15 @@ export function LoopsScreen() {
                         Retry
                       </ControlButton>
                     ) : null}
+                    {activeRun.definitionSnapshot ? (
+                      <ControlButton
+                        data-testid="loop-save-definition"
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                        onClick={() => saveLoopFromRun(activeRun)}
+                      >
+                        Save Loop
+                      </ControlButton>
+                    ) : null}
                     <ControlButton
                       ref={dismissButtonRef}
                       data-testid="loop-run-dismiss"
@@ -1057,6 +1113,26 @@ export function LoopsScreen() {
                   <ShieldCheck size={11} aria-hidden />
                   {acknowledgePending ? "Unlocking…" : "I checked — unlock checkout"}
                 </ControlButton>
+              </div>
+            ) : null}
+            {activeRun.artifactDirectory ? (
+              <div className="mt-2 space-y-1 text-detail" data-testid="loop-artifact-actions">
+                <ControlButton
+                  data-testid="loop-reveal-artifacts"
+                  disabled={revealPending}
+                  onClick={() => void revealArtifacts(activeRun)}
+                >
+                  {revealPending ? "Revealing…" : "Reveal Artifacts"}
+                </ControlButton>
+                {artifactActionMessage ? (
+                  <div
+                    role="status"
+                    className="break-all"
+                    data-testid="loop-artifact-action-status"
+                  >
+                    {artifactActionMessage}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {activeRun.sessionId ? (

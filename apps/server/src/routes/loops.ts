@@ -753,6 +753,21 @@ export function registerLoopRoutes(
     return { run };
   });
 
+  // Electron main calls this with an opaque run id; the renderer never supplies a filesystem path.
+  fastify.get("/loops/runs/:id/artifact-directory", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });
+    try {
+      const directory = loopEngine.artifactDirectoryForReveal(id);
+      if (!directory) return reply.status(409).send({ error: "run has no artifact directory" });
+      return { directory };
+    } catch (error) {
+      return reply.status(409).send({
+        error: error instanceof Error ? error.message : "artifact directory is unavailable",
+      });
+    }
+  });
+
   fastify.post("/loops/runs/:id/resolve", async (request, reply) => {
     const id = (request.params as { id: string }).id;
     if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });

@@ -494,6 +494,19 @@ test("authors project availability and uses an accessible responsive launch over
     evaluatorThinkingLevel: "high",
     maxIterations: 0,
   });
+
+  const saveLoop = page.getByTestId("loop-save-definition");
+  await saveLoop.click();
+  await expect(page.getByTestId("loop-editor")).toHaveAccessibleName("New Loop");
+  await expect(page.getByTestId("loop-name")).toHaveValue("Run-only goal override");
+  await expect(page.getByTestId("loop-goal")).toHaveValue("Run-only goal override");
+  await expect(page.getByTestId("loop-launch-context")).toHaveValue("RUN_ONLY_CONTEXT");
+  await expect(page.getByTestId("loop-success-condition")).toHaveValue(
+    "Run-only explicit success condition",
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("loop-editor")).toHaveCount(0);
+  await expect(saveLoop).toBeFocused();
 });
 
 test("runs a single-agent loop to completion", async ({ page }) => {
@@ -511,6 +524,10 @@ test("runs a single-agent loop to completion", async ({ page }) => {
   await expect(validation).toContainText("completed");
   await expect(page.getByTestId("loop-session-evidence")).toContainText("Run manifest:");
   await expect(page.getByTestId("loop-session-evidence")).toContainText("Progress report:");
+  await page.getByTestId("loop-reveal-artifacts").click();
+  await expect(page.getByTestId("loop-artifact-action-status")).toContainText(
+    "Desktop reveal is unavailable",
+  );
   const openSession = page.getByTestId("loop-open-session");
   await expect(openSession).toHaveAccessibleName(/Open session for Green Suite/i);
   await openSession.click();

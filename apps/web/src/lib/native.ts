@@ -20,6 +20,7 @@ export interface AgentDeckBridge {
     buttonLabel?: string;
     multiple?: boolean;
   }): Promise<string[]>;
+  revealLoopArtifacts?(runId: string): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
   openAppMenu?(
     name: "file" | "edit" | "view" | "help",
@@ -51,6 +52,13 @@ export function nativeBridge(): AgentDeckBridge | undefined {
 /** True when running inside the Electron shell (native folder picker available). */
 export function isElectron(): boolean {
   return nativeBridge()?.isElectron === true;
+}
+
+/** Reveal a backend-validated Loop artifact directory through Electron. */
+export async function revealLoopArtifacts(runId: string): Promise<boolean> {
+  const bridge = nativeBridge();
+  if (!bridge?.revealLoopArtifacts) return false;
+  return (await bridge.revealLoopArtifacts(runId)) === true;
 }
 
 /** Open an http(s) URL in the user's default browser through Electron. */

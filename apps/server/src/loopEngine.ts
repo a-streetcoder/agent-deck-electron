@@ -876,6 +876,27 @@ export class LoopEngine {
   get(id: string): LoopRun | undefined {
     return this.runs.get(id);
   }
+
+  /** Revalidate a run-owned artifact directory immediately before a desktop reveal. */
+  artifactDirectoryForReveal(id: string): string | undefined {
+    const run = this.runs.get(id);
+    if (!run?.artifactDirectoryId || !run.artifactDirectory || !this.artifactsRoot)
+      return undefined;
+    const expected = path.join(this.artifactsRoot, run.artifactDirectoryId);
+    const relative = path.relative(this.artifactsRoot, expected);
+    if (
+      relative.startsWith("..") ||
+      path.isAbsolute(relative) ||
+      path.resolve(run.artifactDirectory) !== expected
+    ) {
+      throw new Error("unsafe Loop artifact directory");
+    }
+    if (lstatSync(expected).isSymbolicLink() || realpathSync(expected) !== expected) {
+      throw new Error("unsafe Loop artifact directory");
+    }
+    return expected;
+  }
+
   list(): LoopRun[] {
     return [...this.runs.values()];
   }

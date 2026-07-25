@@ -1383,6 +1383,25 @@ describe("loop engine (single-agent)", () => {
     expect(readdirSync(dataDir).some((name) => name.includes(".corrupt-"))).toBe(false);
   });
 
+  it("revalidates owned artifact directories before desktop reveal", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-reveal-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "loop-artifact-reveal-outside-"));
+    const engine = new LoopEngine({
+      dataDir,
+      executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "report"),
+    });
+    const run = engine.start(makeLoop(), cwd());
+    await engine.settled(run.id);
+
+    expect(engine.artifactDirectoryForReveal(run.id)).toBe(realpathSync(run.artifactDirectory!));
+    rmSync(run.artifactDirectory!, { recursive: true });
+    symlinkSync(outside, run.artifactDirectory!, process.platform === "win32" ? "junction" : "dir");
+    expect(() => engine.artifactDirectoryForReveal(run.id)).toThrow(
+      "unsafe Loop artifact directory",
+    );
+    expect(engine.artifactDirectoryForReveal("missing")).toBeUndefined();
+  });
+
   it("quarantines persisted artifact paths outside the owned run directory", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-tamper-"));
     const engine = new LoopEngine({
