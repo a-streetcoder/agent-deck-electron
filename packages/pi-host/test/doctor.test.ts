@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The doctor probes real subprocesses (bash/git/gh/node); individual checks
@@ -13,6 +14,7 @@ import {
   meetsMinNode,
   parseNodeVersion,
   probeVersion,
+  resolveDoctorAgentDir,
   runDoctor,
   summarizeSettings,
   webAccessChecks,
@@ -42,53 +44,186 @@ describe("runDoctor", () => {
     }
   }, 20_000);
 
-  it("validates pi's settings.json (native Doctor Settings Files)", async () => {
-    // Absent → ok (pi uses defaults).
-    const absent = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
-    const absentCheck = (await runDoctor(absent)).checks.find((c) => c.id === "settings");
-    expect(absentCheck?.status).toBe("ok");
-    expect(absentCheck?.detail).toMatch(/not present/i);
+  it("diagnoses global and project settings independently without leaking content", async () => {
+    const settingsPath = (home: string): string => path.join(home, ".pi", "agent", "settings.json");
+    const projectSettingsPath = (projectPath: string): string =>
+      path.join(projectPath, ".pi", "settings.json");
+    const settingsChecks = async (home: string, projectPath: string) => {
+      const report = await runDoctor(home, projectPath);
+      expect(new Set(report.checks.map((check) => check.id)).size).toBe(report.checks.length);
+      return {
+        global: report.checks.find((check) => check.id === "settings")!,
+        project: report.checks.find((check) => check.id === "settings-project")!,
+      };
+    };
 
-    // Valid but empty → ok, plain "valid JSON" (no summary).
-    const good = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
-    const goodAgent = path.join(good, ".pi", "agent");
-    mkdirSync(goodAgent, { recursive: true });
-    writeFileSync(path.join(goodAgent, "settings.json"), '{"subagents":{"agentOverrides":{}}}');
-    const goodCheck = (await runDoctor(good)).checks.find((c) => c.id === "settings");
-    expect(goodCheck?.status).toBe("ok");
-    expect(goodCheck?.detail).toBe("valid JSON");
+    // Both absent files are healthy defaults, but still show their exact source paths.
+    const missingHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const missingProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    const missing = await settingsChecks(missingHome, missingProject);
+    expect(missing.global).toMatchObject({
+      status: "ok",
+      label: "Global Pi settings (active candidate)",
+    });
+    expect(missing.global.detail).toContain(settingsPath(missingHome));
+    expect(missing.global.detail).toMatch(/not present.*built-in defaults/i);
+    expect(missing.project).toMatchObject({ status: "ok", label: "Project Pi settings" });
+    expect(missing.project.detail).toContain(projectSettingsPath(missingProject));
+    expect(missing.project.detail).toMatch(/not present.*global settings.*built-in defaults/i);
+    expect(missing.project.detail).toMatch(/selected project's settings candidate/i);
+    expect(missing.project.detail).toMatch(
+      /new trusted Pi sessions load a valid candidate.*matching values then override global settings/i,
+    );
 
-    // Valid with notable content → ok, and the detail summarizes it (native
-    // "Settings Files": overrides, disableBuiltins, packages, extra prompts).
-    const rich = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
-    const richAgent = path.join(rich, ".pi", "agent");
-    mkdirSync(richAgent, { recursive: true });
+    // Valid files expose only counts/booleans, not package, prompt, override, or secret names.
+    const validHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const validProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    mkdirSync(path.dirname(settingsPath(validHome)), { recursive: true });
+    mkdirSync(path.dirname(projectSettingsPath(validProject)), { recursive: true });
     writeFileSync(
-      path.join(richAgent, "settings.json"),
+      settingsPath(validHome),
       JSON.stringify({
-        subagents: { agentOverrides: { coder: { description: "x" } }, disableBuiltins: true },
-        packages: ["pkg-a"],
-        prompts: ["a", "b"],
+        subagents: {
+          agentOverrides: { "sentinel-global-override": { token: "sentinel-global-secret" } },
+          disableBuiltins: true,
+        },
+        packages: ["sentinel-global-package"],
+        prompts: ["sentinel-global-prompt-a", "sentinel-global-prompt-b"],
       }),
     );
-    const richCheck = (await runDoctor(rich)).checks.find((c) => c.id === "settings");
-    expect(richCheck?.status).toBe("ok");
-    expect(richCheck?.detail).toContain("1 agent override");
-    expect(richCheck?.detail).toContain("builtin agents disabled");
-    expect(richCheck?.detail).toContain("1 package");
-    expect(richCheck?.detail).toContain("2 extra prompt paths");
+    writeFileSync(
+      projectSettingsPath(validProject),
+      JSON.stringify({
+        subagents: {
+          agentOverrides: {
+            "sentinel-project-override-a": {},
+            "sentinel-project-override-b": {},
+          },
+        },
+        packages: ["sentinel-project-package-a", "sentinel-project-package-b"],
+        prompts: ["sentinel-project-prompt"],
+        apiKey: "sentinel-project-secret",
+      }),
+    );
+    const valid = await settingsChecks(validHome, validProject);
+    expect(valid.global.detail).toContain(`${settingsPath(validHome)} — valid JSON`);
+    expect(valid.global.detail).toContain("1 agent override");
+    expect(valid.global.detail).toContain("builtin agents disabled");
+    expect(valid.global.detail).toContain("1 package");
+    expect(valid.global.detail).toContain("2 extra prompt paths");
+    expect(valid.project.detail).toContain(`${projectSettingsPath(validProject)} — valid JSON`);
+    expect(valid.project.detail).toContain("2 agent overrides");
+    expect(valid.project.detail).toContain("2 packages");
+    expect(valid.project.detail).toContain("1 extra prompt path");
+    expect(valid.project.detail).toMatch(/selected project's settings candidate/i);
+    expect(valid.project.detail).toMatch(/new trusted Pi sessions load a valid candidate/i);
+    const validDetails = `${valid.global.detail}\n${valid.project.detail}`;
+    for (const sentinel of [
+      "sentinel-global-override",
+      "sentinel-global-secret",
+      "sentinel-global-package",
+      "sentinel-global-prompt",
+      "sentinel-project-override",
+      "sentinel-project-package",
+      "sentinel-project-prompt",
+      "sentinel-project-secret",
+    ]) {
+      expect(validDetails).not.toContain(sentinel);
+    }
 
-    // Malformed JSON → warn (pi doesn't crash — it falls back to {} and warns —
-    // but the user's custom settings are silently dropped).
-    const bad = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
-    const badAgent = path.join(bad, ".pi", "agent");
-    mkdirSync(badAgent, { recursive: true });
-    writeFileSync(path.join(badAgent, "settings.json"), "{ not: valid json, ");
-    const badCheck = (await runDoctor(bad)).checks.find((c) => c.id === "settings");
-    expect(badCheck?.status).toBe("warn");
-    expect(badCheck?.detail).toMatch(/malformed/i);
-    expect(badCheck?.detail).toMatch(/custom settings won't apply/i);
-  }, 20_000);
+    // A malformed global file does not hide a valid project result.
+    const badGlobalHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const goodProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    mkdirSync(path.dirname(settingsPath(badGlobalHome)), { recursive: true });
+    mkdirSync(path.dirname(projectSettingsPath(goodProject)), { recursive: true });
+    writeFileSync(settingsPath(badGlobalHome), "{ sentinel-global-malformed-secret");
+    writeFileSync(projectSettingsPath(goodProject), "{}");
+    const badGlobal = await settingsChecks(badGlobalHome, goodProject);
+    expect(badGlobal.global.status).toBe("warn");
+    expect(badGlobal.global.detail).toMatch(/malformed JSON.*custom settings won't apply/i);
+    expect(badGlobal.global.detail).not.toContain("sentinel-global-malformed-secret");
+    expect(badGlobal.project.status).toBe("ok");
+    expect(badGlobal.project.detail).toMatch(/valid JSON/i);
+
+    // A malformed project file likewise leaves the global result intact.
+    const goodGlobalHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const badProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    mkdirSync(path.dirname(settingsPath(goodGlobalHome)), { recursive: true });
+    mkdirSync(path.dirname(projectSettingsPath(badProject)), { recursive: true });
+    writeFileSync(settingsPath(goodGlobalHome), "{}");
+    writeFileSync(projectSettingsPath(badProject), "{ sentinel-project-malformed-secret");
+    const malformedProject = await settingsChecks(goodGlobalHome, badProject);
+    expect(malformedProject.global.status).toBe("ok");
+    expect(malformedProject.project.status).toBe("warn");
+    expect(malformedProject.project.detail).toMatch(/malformed JSON.*custom settings won't apply/i);
+    expect(malformedProject.project.detail).toMatch(/selected project's settings candidate/i);
+    expect(malformedProject.project.detail).not.toContain("sentinel-project-malformed-secret");
+
+    // Pinned SettingsManager treats exactly empty content as {}, but JSON null
+    // and primitives fail its migration and must not be reported as loadable.
+    const emptyHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const invalidProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    mkdirSync(path.dirname(settingsPath(emptyHome)), { recursive: true });
+    mkdirSync(path.dirname(projectSettingsPath(invalidProject)), { recursive: true });
+    writeFileSync(settingsPath(emptyHome), "");
+    writeFileSync(projectSettingsPath(invalidProject), "null");
+    const emptyAndNull = await settingsChecks(emptyHome, invalidProject);
+    expect(emptyAndNull.global).toMatchObject({ status: "ok" });
+    expect(emptyAndNull.global.detail).toMatch(/empty file.*loads empty settings/i);
+    expect(emptyAndNull.project).toMatchObject({ status: "warn" });
+    expect(emptyAndNull.project.detail).toMatch(/valid JSON, but not a settings object/i);
+
+    writeFileSync(settingsPath(emptyHome), '"sentinel-primitive-secret"');
+    writeFileSync(projectSettingsPath(invalidProject), "[]");
+    const primitiveAndArray = await settingsChecks(emptyHome, invalidProject);
+    expect(primitiveAndArray.global).toMatchObject({ status: "warn" });
+    expect(primitiveAndArray.global.detail).toMatch(/valid JSON, but not a settings object/i);
+    expect(primitiveAndArray.global.detail).not.toContain("sentinel-primitive-secret");
+    // Arrays survive Pi's initial migration; Doctor avoids claiming they fail.
+    expect(primitiveAndArray.project).toMatchObject({ status: "ok" });
+    expect(primitiveAndArray.project.detail).toMatch(/valid JSON/i);
+
+    // Pi follows valid file symlinks. Keep the platform-unreliable Windows
+    // symlink privilege case out while exercising the behavior on POSIX.
+    if (process.platform !== "win32") {
+      const symlinkHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+      const symlinkProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+      const target = path.join(symlinkHome, "settings-target.json");
+      mkdirSync(path.dirname(settingsPath(symlinkHome)), { recursive: true });
+      writeFileSync(target, JSON.stringify({ packages: ["sentinel-symlink-package"] }));
+      symlinkSync(target, settingsPath(symlinkHome));
+      const symlinked = await settingsChecks(symlinkHome, symlinkProject);
+      expect(symlinked.global).toMatchObject({ status: "ok" });
+      expect(symlinked.global.detail).toContain("1 package");
+      expect(symlinked.global.detail).not.toContain("sentinel-symlink-package");
+
+      unlinkSync(target);
+      const brokenSymlink = await settingsChecks(symlinkHome, symlinkProject);
+      expect(brokenSymlink.global).toMatchObject({ status: "ok" });
+      expect(brokenSymlink.global.detail).toMatch(/not present.*built-in defaults/i);
+    }
+
+    // Directories at either file path are deterministic, platform-neutral non-regular files.
+    const directoryHome = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const directoryProject = mkdtempSync(path.join(tmpdir(), "doctor-project-"));
+    mkdirSync(settingsPath(directoryHome), { recursive: true });
+    mkdirSync(projectSettingsPath(directoryProject), { recursive: true });
+    const directories = await settingsChecks(directoryHome, directoryProject);
+    expect(directories.global).toMatchObject({ status: "warn" });
+    expect(directories.global.detail).toMatch(/does not resolve to a regular file/i);
+    expect(directories.project).toMatchObject({ status: "warn" });
+    expect(directories.project.detail).toMatch(/does not resolve to a regular file/i);
+  }, 30_000);
+
+  it("uses the effective agent directory and omits project settings without a project", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    const agentDir = path.join(home, "effective-agent-dir");
+    const report = await runDoctor(home, undefined, agentDir);
+    expect(report.checks.find((check) => check.id === "settings")?.detail).toContain(
+      path.join(agentDir, "settings.json"),
+    );
+    expect(report.checks.some((check) => check.id === "settings-project")).toBe(false);
+  });
 
   it("includes a Node.js runtime check (this runner meets pi's minimum)", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
@@ -99,6 +234,38 @@ describe("runDoctor", () => {
     // The test runner necessarily runs on Node ≥ pi's minimum, so this is "ok".
     expect(node!.status).toBe("ok");
     expect(node!.detail).toContain(MIN_NODE_VERSION);
+  });
+});
+
+describe("resolveDoctorAgentDir", () => {
+  const home = path.resolve(path.join(tmpdir(), "doctor-effective-home"));
+  const cwd = path.resolve(path.join(tmpdir(), "doctor-session-cwd"));
+
+  it("uses the effective home by default", () => {
+    expect(resolveDoctorAgentDir(home, cwd)).toBe(path.join(home, ".pi", "agent"));
+    expect(resolveDoctorAgentDir(home, cwd, "")).toBe(path.join(home, ".pi", "agent"));
+  });
+
+  it("expands tilde against the effective home", () => {
+    expect(resolveDoctorAgentDir(home, cwd, "~")).toBe(home);
+    expect(resolveDoctorAgentDir(home, cwd, `~${path.sep}${path.join("custom", "agent")}`)).toBe(
+      path.join(home, "custom", "agent"),
+    );
+  });
+
+  it("resolves relative overrides against the session cwd", () => {
+    const relative = path.join("relative", "agent-dir");
+    expect(resolveDoctorAgentDir(home, cwd, relative)).toBe(path.resolve(cwd, relative));
+  });
+
+  it("preserves absolute override location semantics", () => {
+    const absolute = path.resolve(path.join(tmpdir(), "doctor-absolute-agent-dir"));
+    expect(resolveDoctorAgentDir(home, cwd, absolute)).toBe(absolute);
+  });
+
+  it("converts a file URL override to its cross-platform filesystem path", () => {
+    const absolute = path.resolve(path.join(tmpdir(), "doctor-file-url-agent-dir"));
+    expect(resolveDoctorAgentDir(home, cwd, pathToFileURL(absolute).href)).toBe(absolute);
   });
 });
 

@@ -20,7 +20,15 @@ test.beforeAll(async () => {
     path.join(harness.piHome, ".pi", "agent", ".env"),
     "OPENAI_API_KEY=sk-secret-value-1234\nSHARED_KEY=global-value\n",
   );
+  writeFileSync(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+    JSON.stringify({ packages: ["runtime-global-package"] }),
+  );
   mkdirSync(path.join(project, ".pi"), { recursive: true });
+  writeFileSync(
+    path.join(project, ".pi", "settings.json"),
+    JSON.stringify({ prompts: ["runtime-project-prompt"] }),
+  );
   writeFileSync(
     path.join(project, ".pi", ".env"),
     "SHARED_KEY=project-value\nEXA_API_KEY=exa-project-super-secret-7890\n",
@@ -77,12 +85,14 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   await expect(nodeCheck).toHaveAttribute("data-check-status", "ok");
   await expect(nodeCheck).toContainText("Node.js");
 
-  // pi settings.json validity check (native Doctor Settings Files): the hermetic
-  // home has no settings.json, so it reports ok ("uses defaults").
+  // Global settings provenance is always visible, including its exact source.
   const settingsCheck = page.locator('[data-check-id="settings"]');
   await expect(settingsCheck).toBeVisible();
   await expect(settingsCheck).toHaveAttribute("data-check-status", "ok");
-  await expect(settingsCheck).toContainText("settings.json");
+  await expect(settingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
+  await expect(page.locator('[data-check-id="settings-project"]')).toHaveCount(0);
 
   // The GitHub CLI check is surfaced (its ok/warn verdict depends on the host's
   // gh install/auth, so only its presence is asserted here).
@@ -122,6 +132,17 @@ test("Doctor inspects the selected project's effective environment without leaki
   const request = await doctorRequest;
   expect(new URL(request.url()).searchParams.get("projectId")).toBeTruthy();
 
+  const globalSettingsCheck = page.locator('[data-check-id="settings"]');
+  const projectSettingsCheck = page.locator('[data-check-id="settings-project"]');
+  await expect(globalSettingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
+  await expect(projectSettingsCheck).toContainText(path.join(project, ".pi", "settings.json"));
+  await expect(projectSettingsCheck).toContainText(/selected project's settings candidate/i);
+  await expect(projectSettingsCheck).toContainText(
+    /new trusted Pi sessions load a valid candidate.*matching values then override global settings/i,
+  );
+
   const exaCheck = page.locator('[data-check-id="web-access-exa"]');
   await expect(exaCheck).toContainText("EXA_API_KEY is configured");
   await expect(exaCheck).toContainText(/tools are unavailable/i);
@@ -140,6 +161,10 @@ test("Doctor inspects the selected project's effective environment without leaki
   const nextRequest = await globalRequest;
   expect(new URL(nextRequest.url()).searchParams.has("projectId")).toBe(false);
   await expect(exaCheck).toContainText(/optional.*EXA_API_KEY/i);
+  await expect(projectSettingsCheck).toHaveCount(0);
+  await expect(globalSettingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
 });
 
 test("Doctor preserves results across a retryable refresh failure", async ({ page }) => {

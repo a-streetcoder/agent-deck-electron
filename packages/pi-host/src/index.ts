@@ -23,6 +23,7 @@ export {
 } from "./rpcProtocol.ts";
 export {
   hasEffectiveEnvValue,
+  resolveDoctorAgentDir,
   runDoctor,
   webAccessChecks,
   type CheckStatus,
