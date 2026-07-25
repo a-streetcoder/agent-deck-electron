@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -34,6 +35,7 @@ interface LegacyFixture {
   clonePath: string;
   copiedSkill: string;
   upstream: string;
+  dataDir: string;
   close(): Promise<void>;
 }
 
@@ -103,11 +105,55 @@ async function legacyFixture(options: { localEdit?: boolean } = {}): Promise<Leg
     clonePath,
     copiedSkill,
     upstream,
+    dataDir,
     close: async () => {
       await server.close();
       delete process.env.AGENT_DECK_PI_ENV;
     },
   };
+}
+
+async function establishTwoSkillBaseline(
+  fixture: LegacyFixture,
+): Promise<{ alpha: string; beta: string }> {
+  rmSync(path.join(fixture.upstream, "SKILL.md"));
+  rmSync(path.join(fixture.upstream, "was-file"), { recursive: true });
+  rmSync(path.join(fixture.upstream, "was-dir"));
+  for (const name of ["alpha", "beta"]) {
+    const dir = path.join(fixture.upstream, name);
+    mkdirSync(dir);
+    writeFileSync(path.join(dir, "SKILL.md"), skill(name, `${name} baseline.`));
+  }
+  git(fixture.upstream, ["add", "-A"]);
+  git(fixture.upstream, ["commit", "-m", "establish two skills"]);
+  const response = await fetch(
+    `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+    { method: "POST" },
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ conflicts: [] });
+  const catalog = path.dirname(path.dirname(fixture.copiedSkill));
+  return {
+    alpha: path.join(catalog, "alpha", "SKILL.md"),
+    beta: path.join(catalog, "beta", "SKILL.md"),
+  };
+}
+
+function persistedLegacyRecord(fixture: LegacyFixture): {
+  lastSyncedCommit: string;
+  skillNames: string[];
+  skillHashes: Record<string, string>;
+} {
+  const persisted = JSON.parse(
+    readFileSync(path.join(fixture.dataDir, "app-settings.json"), "utf8"),
+  ) as {
+    importedSkillRepositories: Array<{
+      lastSyncedCommit: string;
+      skillNames: string[];
+      skillHashes: Record<string, string>;
+    }>;
+  };
+  return persisted.importedSkillRepositories[0]!;
 }
 
 describe("legacy copied skill repository compatibility", () => {
@@ -154,6 +200,184 @@ describe("legacy copied skill repository compatibility", () => {
       expect(resolve.status).toBe(200);
       expect(readFileSync(fixture.copiedSkill, "utf8")).toContain("Upstream body.");
     } finally {
+      await fixture.close();
+    }
+  });
+
+  const unixIt = process.platform === "win32" ? it.skip : it;
+
+  unixIt(
+    "persists partial update progress so a retry converges without a false conflict",
+    async () => {
+      const fixture = await legacyFixture();
+      try {
+        const copied = await establishTwoSkillBaseline(fixture);
+        const baselineCommit = persistedLegacyRecord(fixture).lastSyncedCommit;
+        const alphaUpdate = skill("alpha", "alpha upstream update.");
+        writeFileSync(path.join(fixture.upstream, "alpha", "SKILL.md"), alphaUpdate);
+        writeFileSync(
+          path.join(fixture.upstream, "beta", "SKILL.md"),
+          skill("beta", "beta upstream update."),
+        );
+        const outside = path.join(path.dirname(fixture.upstream), "unsafe-source");
+        writeFileSync(outside, "outside");
+        symlinkSync(outside, path.join(fixture.upstream, "beta", "unsafe-link"));
+        git(fixture.upstream, ["add", "-A"]);
+        git(fixture.upstream, ["commit", "-m", "update with unsafe second skill"]);
+
+        const interrupted = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(interrupted.status).toBe(409);
+        expect(await interrupted.json()).toMatchObject({
+          error: expect.stringContaining("interrupted"),
+        });
+        expect(readFileSync(copied.alpha, "utf8")).toBe(alphaUpdate);
+        expect(readFileSync(copied.beta, "utf8")).toContain("beta baseline");
+        const partial = persistedLegacyRecord(fixture);
+        expect(partial.lastSyncedCommit).toBe(baselineCommit);
+        expect(partial.skillHashes.alpha).toBe(sha256(alphaUpdate));
+
+        rmSync(path.join(fixture.upstream, "beta", "unsafe-link"));
+        writeFileSync(path.join(fixture.upstream, "beta", "safe-asset"), "safe");
+        git(fixture.upstream, ["add", "-A"]);
+        git(fixture.upstream, ["commit", "-m", "make second skill safe"]);
+        const retry = await fetch(
+          `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+          { method: "POST" },
+        );
+        expect(retry.status).toBe(200);
+        expect(await retry.json()).toMatchObject({ updated: true, conflicts: [] });
+        expect(readFileSync(copied.alpha, "utf8")).toBe(alphaUpdate);
+        expect(readFileSync(copied.beta, "utf8")).toContain("beta upstream update");
+        expect(persistedLegacyRecord(fixture).lastSyncedCommit).toBe(
+          git(fixture.upstream, ["rev-parse", "HEAD"]),
+        );
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  unixIt("serializes concurrent legacy updates for one repository", async () => {
+    const fixture = await legacyFixture();
+    try {
+      const gitPath = "/usr/bin/git";
+      expect(existsSync(gitPath)).toBe(true);
+      const wrapper = path.join(fixture.dataDir, "delayed-git.mjs");
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nif (process.argv[2] === "fetch") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);\nconst result = spawnSync(${JSON.stringify(gitPath)}, process.argv.slice(2), { stdio: "inherit" });\nprocess.exit(result.status ?? 1);\n`,
+      );
+      chmodSync(wrapper, 0o755);
+      process.env.AGENT_DECK_GIT_BIN = wrapper;
+
+      const responses = await Promise.all([
+        fetch(`http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`, {
+          method: "POST",
+        }),
+        fetch(`http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`, {
+          method: "POST",
+        }),
+      ]);
+      expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+      const persisted = persistedLegacyRecord(fixture);
+      expect(persisted.skillNames).toEqual(["legacy-skill"]);
+      expect(persisted.lastSyncedCommit).toBe(git(fixture.upstream, ["rev-parse", "HEAD"]));
+    } finally {
+      delete process.env.AGENT_DECK_GIT_BIN;
+      await fixture.close();
+    }
+  });
+
+  unixIt("prevents forget from racing an in-flight legacy update", async () => {
+    const fixture = await legacyFixture();
+    try {
+      const gitPath = "/usr/bin/git";
+      expect(existsSync(gitPath)).toBe(true);
+      const marker = path.join(fixture.dataDir, "update-fetch-started");
+      const wrapper = path.join(fixture.dataDir, "delayed-forget-git.mjs");
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nimport { writeFileSync } from "node:fs";\nif (process.argv[2] === "fetch") { writeFileSync(${JSON.stringify(marker)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); }\nconst result = spawnSync(${JSON.stringify(gitPath)}, process.argv.slice(2), { stdio: "inherit" });\nprocess.exit(result.status ?? 1);\n`,
+      );
+      chmodSync(wrapper, 0o755);
+      process.env.AGENT_DECK_GIT_BIN = wrapper;
+
+      const updatePromise = fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      await vi.waitFor(() => expect(existsSync(marker)).toBe(true));
+      const forget = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id`,
+        { method: "DELETE" },
+      );
+      expect(forget.status).toBe(409);
+      expect(await forget.json()).toMatchObject({ error: expect.stringContaining("already") });
+
+      const update = await updatePromise;
+      expect(update.status).toBe(200);
+      expect(await update.json()).toMatchObject({ updated: true });
+      expect(existsSync(fixture.clonePath)).toBe(true);
+      expect(persistedLegacyRecord(fixture).lastSyncedCommit).toBe(
+        git(fixture.upstream, ["rev-parse", "HEAD"]),
+      );
+
+      const retry = await fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id`,
+        { method: "DELETE" },
+      );
+      expect(retry.status).toBe(200);
+      expect(existsSync(fixture.clonePath)).toBe(false);
+      const persisted = JSON.parse(
+        readFileSync(path.join(fixture.dataDir, "app-settings.json"), "utf8"),
+      ) as { importedSkillRepositories: unknown[] };
+      expect(persisted.importedSkillRepositories).toEqual([]);
+    } finally {
+      delete process.env.AGENT_DECK_GIT_BIN;
+      await fixture.close();
+    }
+  });
+
+  unixIt("prevents a conflict resolution from racing an in-flight update", async () => {
+    const fixture = await legacyFixture({ localEdit: true });
+    try {
+      const gitPath = "/usr/bin/git";
+      expect(existsSync(gitPath)).toBe(true);
+      const wrapper = path.join(fixture.dataDir, "delayed-resolve-git.mjs");
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nif (process.argv[2] === "fetch") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);\nconst result = spawnSync(${JSON.stringify(gitPath)}, process.argv.slice(2), { stdio: "inherit" });\nprocess.exit(result.status ?? 1);\n`,
+      );
+      chmodSync(wrapper, 0o755);
+      process.env.AGENT_DECK_GIT_BIN = wrapper;
+
+      const updatePromise = fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/update`,
+        { method: "POST" },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const resolvePromise = fetch(
+        `http://127.0.0.1:${fixture.server.port}/resources/skill-repos/legacy-id/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "legacy-skill", resolution: "mine" }),
+        },
+      );
+      const [update, resolve] = await Promise.all([updatePromise, resolvePromise]);
+      expect(update.status).toBe(200);
+      expect(await update.json()).toMatchObject({ conflicts: ["legacy-skill"] });
+      expect(resolve.status).toBe(409);
+      expect(await resolve.json()).toMatchObject({ error: expect.stringContaining("already") });
+      expect(readFileSync(fixture.copiedSkill, "utf8")).toContain("Local edit");
+      expect(persistedLegacyRecord(fixture).skillHashes["legacy-skill"]).not.toBe(
+        sha256(readFileSync(fixture.copiedSkill, "utf8")),
+      );
+    } finally {
+      delete process.env.AGENT_DECK_GIT_BIN;
       await fixture.close();
     }
   });

@@ -247,18 +247,31 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
 
 function AssignmentCard({ skill }: { skill: SkillInfo }) {
   const projects = useAppStore((state) => state.projects);
+  const setError = useAppStore((state) => state.setError);
   const [defaultSkills, setDefaultSkills] = useState<string[]>([]);
+  const [allProjectsBusy, setAllProjectsBusy] = useState(false);
+  const allProjectsBusyRef = useRef(false);
+  // A slower settings read must not overwrite a newer optimistic toggle or its
+  // authoritative PATCH response.
+  const settingsSeq = useRef(0);
 
-  const refreshSettings = useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch("/settings");
-      if (!response.ok) return;
-      const { settings } = (await response.json()) as { settings: { defaultSkills: string[] } };
-      setDefaultSkills(settings.defaultSkills);
-    } catch {
-      // Transient — next refresh wins.
-    }
-  }, []);
+  const refreshSettings = useCallback(
+    async (force = false): Promise<void> => {
+      // A skill-selection refresh is unnecessary while the global settings PATCH
+      // owns the state. Failure recovery passes force=true after the PATCH settles.
+      if (allProjectsBusyRef.current && !force) return;
+      const seq = ++settingsSeq.current;
+      try {
+        const response = await fetch("/settings");
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const { settings } = (await response.json()) as { settings: { defaultSkills?: string[] } };
+        if (seq === settingsSeq.current) setDefaultSkills(settings.defaultSkills ?? []);
+      } catch (err) {
+        if (seq === settingsSeq.current) setError(String(err));
+      }
+    },
+    [setError],
+  );
 
   // Refetch when the selected skill changes so another tab's edits show up.
   useEffect(() => {
@@ -268,18 +281,43 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
   const allProjects = defaultSkills.includes(skill.name);
 
   const toggleAllProjects = async (enabled: boolean): Promise<void> => {
-    const next = new Set(defaultSkills);
-    if (enabled) next.add(skill.name);
-    else next.delete(skill.name);
-    setDefaultSkills([...next]); // optimistic — checkbox must flip immediately
-    // Atomic membership op: the server computes against CURRENT state, so
-    // concurrent edits to other skills can't be clobbered.
-    await fetch("/settings", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setDefaultSkill: { name: skill.name, enabled } }),
-    }).catch(() => {});
-    await refreshSettings();
+    // The ref closes the same-render gap before disabled reaches the DOM.
+    if (allProjectsBusyRef.current) return;
+    allProjectsBusyRef.current = true;
+    setAllProjectsBusy(true);
+    const seq = ++settingsSeq.current;
+    setDefaultSkills((current) =>
+      enabled
+        ? [...new Set([...current, skill.name])]
+        : current.filter((name) => name !== skill.name),
+    );
+    try {
+      // Atomic membership op: the server computes against CURRENT state, so
+      // concurrent edits to other skills can't be clobbered.
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setDefaultSkill: { name: skill.name, enabled } }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const { settings } = (await response.json()) as { settings: { defaultSkills?: string[] } };
+      if (seq === settingsSeq.current) setDefaultSkills(settings.defaultSkills ?? []);
+    } catch (err) {
+      // Immediately undo the optimistic claim, then reload the server's current
+      // value in case another client changed it while this request failed.
+      if (seq === settingsSeq.current) {
+        setDefaultSkills((current) =>
+          enabled
+            ? current.filter((name) => name !== skill.name)
+            : [...new Set([...current, skill.name])],
+        );
+      }
+      setError(String(err));
+      await refreshSettings(true);
+    } finally {
+      allProjectsBusyRef.current = false;
+      setAllProjectsBusy(false);
+    }
   };
 
   return (
@@ -301,7 +339,8 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
           type="checkbox"
           data-testid={`assign-skill-all-${skill.name}`}
           checked={allProjects}
-          disabled={skill.disabled}
+          disabled={skill.disabled || allProjectsBusy}
+          aria-busy={allProjectsBusy}
           onChange={(event) => void toggleAllProjects(event.target.checked)}
         />
         <Grid3x3 size={14} className="text-text-muted" />
@@ -376,7 +415,8 @@ export function SkillsScreen() {
   // available (a per-repo ls-remote check), and which is busy updating/forgetting.
   const [repos, setRepos] = useState<SkillRepo[]>([]);
   const [updatable, setUpdatable] = useState<Set<string>>(new Set());
-  const [repoBusy, setRepoBusy] = useState<string | null>(null);
+  const [repoBusy, setRepoBusy] = useState<Record<string, "update" | "forget">>({});
+  const repoBusyRef = useRef(new Map<string, "update" | "forget">());
   // Per-repo unresolved conflicts (skills the user edited locally that an update
   // held back rather than overwriting) — native Keep Mine / Take Remote.
   const [conflicts, setConflicts] = useState<Record<string, string[]>>({});
@@ -546,7 +586,9 @@ export function SkillsScreen() {
   }, [resourcesVersion, setGlobalError]);
 
   const updateRepo = async (id: string): Promise<void> => {
-    setRepoBusy(id);
+    if (repoBusyRef.current.has(id)) return;
+    repoBusyRef.current.set(id, "update");
+    setRepoBusy((current) => ({ ...current, [id]: "update" }));
     try {
       const res = await fetch(`/resources/skill-repos/${id}/update`, { method: "POST" });
       if (!res.ok) throw new Error(await responseErrorMessage(res));
@@ -567,7 +609,12 @@ export function SkillsScreen() {
     } catch (err) {
       setGlobalError(String(err));
     } finally {
-      setRepoBusy(null);
+      repoBusyRef.current.delete(id);
+      setRepoBusy((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
     }
   };
 
@@ -607,7 +654,9 @@ export function SkillsScreen() {
   };
 
   const forgetRepo = async (id: string): Promise<void> => {
-    setRepoBusy(id);
+    if (repoBusyRef.current.has(id)) return;
+    repoBusyRef.current.set(id, "forget");
+    setRepoBusy((current) => ({ ...current, [id]: "forget" }));
     try {
       const response = await fetch(`/resources/skill-repos/${id}`, { method: "DELETE" });
       if (!response.ok) {
@@ -618,7 +667,12 @@ export function SkillsScreen() {
     } catch (err) {
       setGlobalError(String(err));
     } finally {
-      setRepoBusy(null);
+      repoBusyRef.current.delete(id);
+      setRepoBusy((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
     }
   };
 
@@ -782,6 +836,7 @@ export function SkillsScreen() {
                 <div
                   data-testid={`skill-repo-${repo.id}`}
                   className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
+                  aria-busy={repoBusy[repo.id] !== undefined}
                 >
                   <GitBranch size={12} className="shrink-0 text-text-secondary" />
                   <span
@@ -805,10 +860,10 @@ export function SkillsScreen() {
                   <ControlButton
                     data-testid={`skill-repo-update-${repo.id}`}
                     className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={repoBusy === repo.id}
+                    disabled={repoBusy[repo.id] !== undefined}
                     onClick={() => void updateRepo(repo.id)}
                   >
-                    {repoBusy === repo.id ? "Updating…" : "Update"}
+                    {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
                   </ControlButton>
                   <ControlButton
                     data-testid={`skill-repo-forget-${repo.id}`}
@@ -818,7 +873,10 @@ export function SkillsScreen() {
                         ? "Forget this repository and remove its managed skill collection"
                         : "Forget this repository (keeps the imported skills)"
                     }
-                    disabled={repoBusy === repo.id}
+                    aria-label={
+                      repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
+                    }
+                    disabled={repoBusy[repo.id] !== undefined}
                     onClick={() => void forgetRepo(repo.id)}
                   >
                     <X size={12} />

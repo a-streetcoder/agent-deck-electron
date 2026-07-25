@@ -129,6 +129,62 @@ test("an All-Projects (default) skill reaches sessions of every project", async 
     .toContain("skill:sign-offs");
 });
 
+test("the Skills All Projects toggle rolls back, reloads, and reports failures", async ({
+  page,
+}) => {
+  const name = "failed-default";
+  const skillDir = path.join(harness.piHome, ".pi", "agent", "skills", name);
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: Exercise failed assignment\n---\n\nFailure fixture.\n`,
+  );
+
+  let patchCount = 0;
+  let releasePatch!: () => void;
+  const patchPending = new Promise<void>((resolve) => {
+    releasePatch = resolve;
+  });
+  await page.route("**/settings", async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patchCount += 1;
+    await patchPending;
+    await route.fulfill({
+      status: 409,
+      json: { error: "Default skill update was refused." },
+    });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  await page.locator(`[data-skill-name="${name}"]`).click();
+  const toggle = page.getByTestId(`assign-skill-all-${name}`);
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeDisabled();
+  await expect.poll(() => patchCount).toBe(1);
+  await toggle.evaluate((input: { dispatchEvent(event: Event): boolean }) => {
+    input.dispatchEvent(new Event("click", { bubbles: true }));
+  });
+  expect(patchCount).toBe(1);
+
+  releasePatch();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Default skill update was refused.",
+  );
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeEnabled();
+  expect(patchCount).toBe(1);
+
+  const { settings } = (await (await fetch(`${harness.baseUrl}/settings`)).json()) as {
+    settings: { defaultSkills: string[] };
+  };
+  expect(settings.defaultSkills).not.toContain(name);
+});
+
 test("an All-Projects (default) prompt template reaches sessions as a /<name> command", async () => {
   // A GLOBAL prompt template in the hermetic pi home (native
   // defaultPromptTemplateNames → --prompt-template launch flags).

@@ -68,6 +68,7 @@ export {
   discoverSkillRoots,
   skillMdHash,
   type DiscoveredSkillRoot,
+  type SkillImportFilter,
   type SkillImportResult,
   type WritableScope,
 } from "./writer.ts";

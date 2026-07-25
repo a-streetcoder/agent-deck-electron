@@ -678,90 +678,159 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         return sendResourceMutationFailure(reply, error);
       }
     }
-    if (!existsSync(record.clonePath)) {
-      return reply.status(400).send({ error: "The clone is missing — re-import the repository." });
-    }
-    // Resolve the catalog roots for the record's scope (a project it was imported
-    // into must still be registered).
-    const roots = rootsForRepoRecord(record);
-    if (!roots) {
-      return reply.status(400).send({ error: "That project is no longer registered." });
-    }
     try {
-      // Conflicts: skills whose catalog copy the user has locally edited since we
-      // wrote it (current hash ≠ the stored fingerprint). Detected BEFORE the
-      // fetch and HELD back from the overwrite so an edit is never silently lost.
-      const stored = { ...(record.skillHashes ?? {}) };
-      // Backfill a baseline for any skill without a stored fingerprint (records
-      // imported before hashing existed): adopt its current catalog hash so this
-      // round isn't a false conflict AND future edits become detectable — closes
-      // the "no baseline → silently overwritten" gap.
-      for (const name of record.skillNames) {
-        if (stored[name] === undefined) {
-          const current = skillMdHash(roots, record.scope, name);
-          if (current) stored[name] = current;
+      const result = await withRepositoryLock(record.id, async () => {
+        // Re-read under the lock: a preceding resolve may have changed the
+        // fingerprints while this request was waiting to run.
+        const currentRecord = settings
+          .get()
+          .importedSkillRepositories.find((candidate) => candidate.id === id);
+        if (!currentRecord) throw new Error("unknown_repository");
+        if (currentRecord.storageMode === "collection-v1") {
+          throw new Error("repository_mode_changed");
         }
-      }
-      const conflicts = record.skillNames.filter((name) => {
-        const current = skillMdHash(roots, record.scope, name);
-        return current !== null && stored[name] !== undefined && current !== stored[name];
-      });
+        if (!existsSync(currentRecord.clonePath)) {
+          throw new Error("repository_clone_missing");
+        }
+        const roots = rootsForRepoRecord(currentRecord);
+        if (!roots) throw new Error("repository_project_missing");
 
-      const newCommit = await gitPullFfInto(record.clonePath, record.ref);
-      if (newCommit === record.lastSyncedCommit) {
-        return { updated: false, commit: newCommit, conflicts: [] as string[] }; // up to date
-      }
-      const scanDir = subdirScanPath(record.clonePath, record.subdir);
-      const result = importSkillsFromClone(
-        roots,
-        record.scope,
-        scanDir,
-        skillRepoName(record.remoteUrl),
-        true, // overwrite the non-conflicting skills
-        { exclude: new Set(conflicts) }, // ...but hold the locally-edited ones
-      );
-      // Skills upstream DELETED (in the record before, now neither imported nor
-      // held) are removed from the catalog too, so the repo stays the source of
-      // truth rather than leaving orphans — but NEVER a locally-edited conflict
-      // (that would silently drop the user's edit; it stays held instead).
-      const conflictSet = new Set(conflicts);
-      for (const name of record.skillNames) {
-        if (
-          !result.imported.includes(name) &&
-          !result.skipped.includes(name) &&
-          !conflictSet.has(name)
-        ) {
-          try {
-            deleteSkillDir(roots, record.scope, name);
-          } catch (error) {
-            if (
-              !(error instanceof ResourceCatalogCapabilityError) ||
-              error.code !== "RESOURCE_NOT_FOUND"
-            ) {
-              throw error;
-            }
+        // Conflicts: skills whose catalog copy the user has locally edited since we
+        // wrote it (current hash ≠ the stored fingerprint). Detected BEFORE the
+        // fetch and HELD back from the overwrite so an edit is never silently lost.
+        const stored = { ...(currentRecord.skillHashes ?? {}) };
+        // Backfill a baseline for any skill without a stored fingerprint (records
+        // imported before hashing existed): adopt its current catalog hash so this
+        // round isn't a false conflict AND future edits become detectable — closes
+        // the "no baseline → silently overwritten" gap.
+        for (const name of currentRecord.skillNames) {
+          if (stored[name] === undefined) {
+            const current = skillMdHash(roots, currentRecord.scope, name);
+            if (current) stored[name] = current;
           }
         }
-      }
-      // The held conflicts keep their OLD fingerprint so they stay flagged until
-      // resolved; the freshly-imported skills take their new one.
-      const heldConflicts = conflicts.filter((n) => skillMdHash(roots, record.scope, n) !== null);
-      const skillHashes: Record<string, string> = { ...result.hashes };
-      for (const n of heldConflicts) if (stored[n]) skillHashes[n] = stored[n];
-      settings.upsertImportedSkillRepository({
-        ...record,
-        skillNames: [...new Set([...result.imported, ...heldConflicts])],
-        skillHashes,
-        lastSyncedCommit: newCommit,
+        const conflicts = currentRecord.skillNames.filter((name) => {
+          const current = skillMdHash(roots, currentRecord.scope, name);
+          return current !== null && stored[name] !== undefined && current !== stored[name];
+        });
+
+        const newCommit = await gitPullFfInto(currentRecord.clonePath, currentRecord.ref);
+        if (newCommit === currentRecord.lastSyncedCommit) {
+          return { updated: false, commit: newCommit, conflicts: [] as string[] };
+        }
+
+        // A legacy update copies several independent catalog trees. Persist each
+        // completed tree before starting the next one so an interrupted update can
+        // distinguish already-applied upstream content from a real local edit.
+        let progressRecord = currentRecord;
+        let progressPersisted = false;
+        const persistProgress = (next: ImportedSkillRepository): void => {
+          settings.upsertImportedSkillRepository(next);
+          progressRecord = next;
+          progressPersisted = true;
+        };
+
+        try {
+          const scanDir = subdirScanPath(currentRecord.clonePath, currentRecord.subdir);
+          const result = importSkillsFromClone(
+            roots,
+            currentRecord.scope,
+            scanDir,
+            skillRepoName(currentRecord.remoteUrl),
+            true,
+            {
+              exclude: new Set(conflicts),
+              onImported: (name, hash) => {
+                const skillHashes = { ...(progressRecord.skillHashes ?? {}) };
+                if (hash) skillHashes[name] = hash;
+                persistProgress({
+                  ...progressRecord,
+                  skillNames: [...new Set([...progressRecord.skillNames, name])],
+                  skillHashes,
+                });
+              },
+            },
+          );
+          // Skills upstream DELETED (in the record before, now neither imported nor
+          // held) are removed from the catalog too, so the repo stays the source of
+          // truth rather than leaving orphans — but NEVER a locally-edited conflict.
+          const conflictSet = new Set(conflicts);
+          for (const name of currentRecord.skillNames) {
+            if (
+              !result.imported.includes(name) &&
+              !result.skipped.includes(name) &&
+              !conflictSet.has(name)
+            ) {
+              try {
+                deleteSkillDir(roots, currentRecord.scope, name);
+              } catch (error) {
+                if (
+                  !(error instanceof ResourceCatalogCapabilityError) ||
+                  error.code !== "RESOURCE_NOT_FOUND"
+                ) {
+                  throw error;
+                }
+              }
+              const skillHashes = { ...(progressRecord.skillHashes ?? {}) };
+              delete skillHashes[name];
+              persistProgress({
+                ...progressRecord,
+                skillNames: progressRecord.skillNames.filter((candidate) => candidate !== name),
+                skillHashes,
+              });
+            }
+          }
+          // The held conflicts keep their OLD fingerprint so they stay flagged until
+          // resolved; the freshly-imported skills take their new one.
+          const heldConflicts = conflicts.filter(
+            (name) => skillMdHash(roots, currentRecord.scope, name) !== null,
+          );
+          const skillHashes: Record<string, string> = { ...result.hashes };
+          for (const name of heldConflicts) if (stored[name]) skillHashes[name] = stored[name];
+          const next = {
+            ...progressRecord,
+            skillNames: [...new Set([...result.imported, ...heldConflicts])],
+            skillHashes,
+            lastSyncedCommit: newCommit,
+          };
+          settings.upsertImportedSkillRepository(next);
+          return {
+            updated: true,
+            commit: newCommit,
+            imported: result.imported,
+            conflicts: heldConflicts,
+          };
+        } catch (error) {
+          if (!progressPersisted) throw error;
+          const incomplete = new ResourceCatalogCapabilityError(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "The repository update stopped after some skills were updated. Retry to finish reconciling it safely.",
+          );
+          incomplete.cause = error;
+          throw incomplete;
+        }
       });
       broadcast({ type: "resources_changed" });
-      return {
-        updated: true,
-        commit: newCommit,
-        imported: result.imported,
-        conflicts: heldConflicts,
-      };
+      return result;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "repository_busy") {
+        return reply.status(409).send({ error: "That repository operation is already running." });
+      }
+      if (message === "unknown_repository") {
+        return reply.status(404).send({ error: "unknown skill repository" });
+      }
+      if (message === "repository_clone_missing") {
+        return reply
+          .status(400)
+          .send({ error: "The clone is missing — re-import the repository." });
+      }
+      if (message === "repository_project_missing") {
+        return reply.status(400).send({ error: "That project is no longer registered." });
+      }
+      if (message === "repository_mode_changed") {
+        return reply.status(409).send({ error: "That repository changed while the update began." });
+      }
       return sendResourceMutationFailure(reply, error);
     }
   });
@@ -785,52 +854,91 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         .status(400)
         .send({ error: "Project-scoped skill repository catalogs are no longer writable." });
     }
-    const roots = rootsForRepoRecord(record);
-    if (!roots) return reply.status(400).send({ error: "That project is no longer registered." });
-    if (!existsSync(record.clonePath)) {
-      return reply.status(400).send({ error: "The clone is missing — re-import the repository." });
-    }
     const { name, resolution } = parsed.data;
     try {
-      const skillHashes = { ...(record.skillHashes ?? {}) };
-      let skillNames = record.skillNames;
-      if (resolution === "remote") {
-        // Take upstream: overwrite the catalog copy with the clone's version.
-        const scanDir = subdirScanPath(record.clonePath, record.subdir);
-        const result = importSkillsFromClone(
-          roots,
-          record.scope,
-          scanDir,
-          skillRepoName(record.remoteUrl),
-          true,
-          { only: new Set([name]) },
-        );
-        if (result.hashes[name]) {
-          skillHashes[name] = result.hashes[name];
-        } else {
-          // Upstream removed this skill — "take remote" means take the deletion.
-          try {
-            deleteSkillDir(roots, record.scope, name);
-          } catch (error) {
-            if (
-              !(error instanceof ResourceCatalogCapabilityError) ||
-              error.code !== "RESOURCE_NOT_FOUND"
-            ) {
-              throw error;
-            }
-          }
-          delete skillHashes[name];
-          skillNames = skillNames.filter((n) => n !== name);
+      const result = await withRepositoryLock(record.id, async () => {
+        // Resolve against the latest manifest under the same lock as update so
+        // two conflict decisions cannot overwrite each other's fingerprints.
+        const currentRecord = settings
+          .get()
+          .importedSkillRepositories.find((candidate) => candidate.id === id);
+        if (!currentRecord) throw new Error("unknown_repository");
+        if (currentRecord.storageMode === "collection-v1") {
+          throw new Error("repository_mode_changed");
         }
-      } else {
-        // Keep the local edit — re-fingerprint so the update stops flagging it.
-        const current = skillMdHash(roots, record.scope, name);
-        if (current) skillHashes[name] = current;
-      }
-      settings.upsertImportedSkillRepository({ ...record, skillNames, skillHashes });
+        if (currentRecord.scope === "project") throw new Error("repository_project_scope");
+        const roots = rootsForRepoRecord(currentRecord);
+        if (!roots) throw new Error("repository_project_missing");
+        if (!existsSync(currentRecord.clonePath)) throw new Error("repository_clone_missing");
+
+        const skillHashes = { ...(currentRecord.skillHashes ?? {}) };
+        let skillNames = currentRecord.skillNames;
+        if (resolution === "remote") {
+          // Take upstream: overwrite the catalog copy with the clone's version.
+          const scanDir = subdirScanPath(currentRecord.clonePath, currentRecord.subdir);
+          const imported = importSkillsFromClone(
+            roots,
+            currentRecord.scope,
+            scanDir,
+            skillRepoName(currentRecord.remoteUrl),
+            true,
+            { only: new Set([name]) },
+          );
+          if (imported.hashes[name]) {
+            skillHashes[name] = imported.hashes[name];
+          } else {
+            // Upstream removed this skill — "take remote" means take the deletion.
+            try {
+              deleteSkillDir(roots, currentRecord.scope, name);
+            } catch (error) {
+              if (
+                !(error instanceof ResourceCatalogCapabilityError) ||
+                error.code !== "RESOURCE_NOT_FOUND"
+              ) {
+                throw error;
+              }
+            }
+            delete skillHashes[name];
+            skillNames = skillNames.filter((candidate) => candidate !== name);
+          }
+        } else {
+          // Keep the local edit — re-fingerprint so the update stops flagging it.
+          const current = skillMdHash(roots, currentRecord.scope, name);
+          if (current) skillHashes[name] = current;
+        }
+        settings.upsertImportedSkillRepository({
+          ...currentRecord,
+          skillNames,
+          skillHashes,
+        });
+        return { ok: true };
+      });
       broadcast({ type: "resources_changed" });
-      return { ok: true };
+      return result;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "repository_busy") {
+        return reply.status(409).send({ error: "That repository operation is already running." });
+      }
+      if (message === "unknown_repository") {
+        return reply.status(404).send({ error: "unknown skill repository" });
+      }
+      if (message === "repository_clone_missing") {
+        return reply
+          .status(400)
+          .send({ error: "The clone is missing — re-import the repository." });
+      }
+      if (message === "repository_project_missing") {
+        return reply.status(400).send({ error: "That project is no longer registered." });
+      }
+      if (message === "repository_project_scope") {
+        return reply
+          .status(400)
+          .send({ error: "Project-scoped skill repository catalogs are no longer writable." });
+      }
+      if (message === "repository_mode_changed") {
+        return reply.status(409).send({ error: "That repository changed while resolve began." });
+      }
       return sendResourceMutationFailure(reply, error);
     }
   });
@@ -867,11 +975,34 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return { ok: true };
     }
     try {
-      rmSync(record.clonePath, { recursive: true, force: true, maxRetries: 5 });
-    } catch {
-      // Legacy semantics: clone removal is best-effort and copied skills stay.
+      await withRepositoryLock(record.id, async () => {
+        const currentRecord = settings
+          .get()
+          .importedSkillRepositories.find((candidate) => candidate.id === id);
+        if (!currentRecord) throw new Error("unknown_repository");
+        if (currentRecord.storageMode === "collection-v1") {
+          throw new Error("repository_mode_changed");
+        }
+        try {
+          rmSync(currentRecord.clonePath, { recursive: true, force: true, maxRetries: 5 });
+        } catch {
+          // Legacy semantics: clone removal is best-effort and copied skills stay.
+        }
+        settings.removeImportedSkillRepository(currentRecord.id);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "repository_busy") {
+        return reply.status(409).send({ error: "That repository operation is already running." });
+      }
+      if (message === "unknown_repository") {
+        return reply.status(404).send({ error: "unknown skill repository" });
+      }
+      if (message === "repository_mode_changed") {
+        return reply.status(409).send({ error: "That repository changed while forget began." });
+      }
+      return sendResourceMutationFailure(reply, error);
     }
-    settings.removeImportedSkillRepository(id);
     return { ok: true };
   });
 

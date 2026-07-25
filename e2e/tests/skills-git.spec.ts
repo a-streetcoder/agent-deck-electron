@@ -133,6 +133,100 @@ test("lists the imported repo, badges an upstream update, and pulls it", async (
     .toBe(true);
 });
 
+test("tracks concurrent repository operations with independent accessible busy labels", async ({
+  page,
+}) => {
+  const updateId = "concurrent-update";
+  const forgetId = "concurrent-forget";
+  let updateRequests = 0;
+  let forgetRequests = 0;
+  let releaseUpdate!: () => void;
+  let releaseForget!: () => void;
+  const updatePending = new Promise<void>((resolve) => {
+    releaseUpdate = resolve;
+  });
+  const forgetPending = new Promise<void>((resolve) => {
+    releaseForget = resolve;
+  });
+
+  await page.route("**/resources/skill-repos", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        repos: [
+          {
+            id: updateId,
+            remoteUrl: "https://example.invalid/update.git",
+            skillNames: ["update-skill"],
+            lastSyncedCommit: "abc123",
+            importedAt: new Date(0).toISOString(),
+          },
+          {
+            id: forgetId,
+            remoteUrl: "https://example.invalid/forget.git",
+            skillNames: ["forget-skill"],
+            lastSyncedCommit: "def456",
+            importedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/resources/skill-repos/*/check", async (route) => {
+    await route.fulfill({ status: 200, json: { updateAvailable: false } });
+  });
+  await page.route(`**/resources/skill-repos/${updateId}/update`, async (route) => {
+    updateRequests += 1;
+    await updatePending;
+    await route.fulfill({ status: 200, json: { conflicts: [] } });
+  });
+  await page.route(`**/resources/skill-repos/${forgetId}`, async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.continue();
+      return;
+    }
+    forgetRequests += 1;
+    await forgetPending;
+    await route.fulfill({ status: 200, json: { ok: true } });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  const update = page.getByTestId(`skill-repo-update-${updateId}`);
+  const forget = page.getByTestId(`skill-repo-forget-${forgetId}`);
+  await update.click();
+  await forget.click();
+
+  await expect.poll(() => updateRequests).toBe(1);
+  await expect.poll(() => forgetRequests).toBe(1);
+  await expect(update).toBeDisabled();
+  await expect(update).toHaveAccessibleName("Updating…");
+  await expect(forget).toBeDisabled();
+  await expect(forget).toHaveAccessibleName("Forgetting…");
+  await expect(page.getByTestId(`skill-repo-${updateId}`)).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId(`skill-repo-${forgetId}`)).toHaveAttribute("aria-busy", "true");
+
+  // Programmatic duplicate clicks exercise the synchronous guards rather than
+  // relying only on the disabled presentation.
+  await update.evaluate((button: { dispatchEvent(event: Event): boolean }) => {
+    button.dispatchEvent(new Event("click", { bubbles: true }));
+  });
+  await forget.evaluate((button: { dispatchEvent(event: Event): boolean }) => {
+    button.dispatchEvent(new Event("click", { bubbles: true }));
+  });
+  expect(updateRequests).toBe(1);
+  expect(forgetRequests).toBe(1);
+
+  releaseUpdate();
+  await expect(update).toBeEnabled();
+  await expect(update).toHaveAccessibleName("Update");
+  await expect(forget).toBeDisabled();
+  await expect(forget).toHaveAccessibleName("Forgetting…");
+
+  releaseForget();
+  await expect(page.getByTestId(`skill-repo-${forgetId}`)).toHaveCount(0);
+});
+
 test("tracks concurrent conflict resolutions independently with action-specific labels", async ({
   page,
 }) => {

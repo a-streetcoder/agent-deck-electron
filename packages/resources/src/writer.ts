@@ -627,6 +627,13 @@ export interface SkillImportResult {
   hashes: Record<string, string>;
 }
 
+export interface SkillImportFilter {
+  only?: Set<string>;
+  exclude?: Set<string>;
+  /** Called after each catalog copy completes, allowing durable update progress. */
+  onImported?: (name: string, hash: string | undefined) => void;
+}
+
 /** sha-256 of a SKILL.md file, or null if it can't be read. */
 function hashSkillMd(skillDir: string): string | null {
   try {
@@ -673,7 +680,7 @@ export function importSkillsFromClone(
   overwrite = false,
   /** Restrict which skills are touched: `only` = just these names; `exclude` =
    *  every name but these (used to HOLD locally-edited conflicts on a re-sync). */
-  filter?: { only?: Set<string>; exclude?: Set<string> },
+  filter?: SkillImportFilter,
 ): SkillImportResult {
   const skillDirs = existsSync(path.join(cloneDir, "SKILL.md"))
     ? [cloneDir] // root SKILL.md → the whole repo is a single skill
@@ -721,6 +728,7 @@ export function importSkillsFromClone(
     imported.push(name);
     const hash = hashSkillMd(srcDir);
     if (hash) hashes[name] = hash;
+    filter?.onImported?.(name, hash ?? undefined);
   }
   return { imported, skipped, hashes };
 }
