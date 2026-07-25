@@ -1,8 +1,11 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
 import {
+  discoverModelCatalog,
   hasEffectiveEnvValue,
+  ModelCatalogError,
   resolveDoctorAgentDir,
+  resolvePiBinary,
   runDoctor,
   webAccessChecks,
 } from "@agent-deck/pi-host";
@@ -29,7 +32,15 @@ import {
  * instructions editor. Moved verbatim from server.ts.
  */
 export function registerSettingsRoutes(ctx: ServerContext): void {
-  const { fastify, settings, providerLogin, broadcast, resourceHome, rootsFor } = ctx;
+  const {
+    fastify,
+    settings,
+    providerLogin,
+    broadcast,
+    resourceHome,
+    rootsFor,
+    enabledExtensionPaths,
+  } = ctx;
 
   // Runtime screens: masked env inspector and the doctor health probe.
   fastify.get("/runtime/env", async (request) => {
@@ -246,6 +257,61 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
     return { settings: settings.update(patch) };
+  });
+
+  // Session-independent model discovery. This runs Pi's exiting --list-models
+  // mode with the same enabled global extensions as an ordinary no-project
+  // session, plus server-configured provider registration extensions. It never
+  // creates an RPC session or accepts client-controlled paths/environment.
+  fastify.post("/runtime/models/discover", async (request, reply) => {
+    if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+      return reply.status(415).send({ error: "JSON request required" });
+    }
+    const parsed = z.object({}).strict().safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid discovery request" });
+
+    const controller = new AbortController();
+    let completed = false;
+    const onDisconnect = (): void => {
+      if (!completed) controller.abort();
+    };
+    reply.raw.once("close", onDisconnect);
+
+    try {
+      const defaults = envDefaults();
+      const home = resourceHome();
+      // Match an ordinary no-project launch: environment defaults first, then
+      // enabled global extensions, then provider-registration fallbacks.
+      const extensions = [
+        ...new Set([
+          ...(defaults.extensions ?? []),
+          ...enabledExtensionPaths(),
+          ...(defaults.providerExtensions ?? []),
+        ]),
+      ];
+      const models = await discoverModelCatalog({
+        binPath: resolvePiBinary().path,
+        cwd: defaults.cwd ?? home,
+        env: { ...defaults.env, HOME: home, USERPROFILE: home },
+        extensions,
+        signal: controller.signal,
+      });
+      const disabled = new Set(settings.get().disabledModels);
+      return { models: models.filter((model) => !disabled.has(`${model.provider}:${model.id}`)) };
+    } catch (error) {
+      if (error instanceof ModelCatalogError) {
+        if (error.code === "aborted") {
+          return reply.status(499).send({ error: "model discovery cancelled" });
+        }
+        if (error.code === "timeout") {
+          return reply.status(504).send({ error: "model discovery timed out" });
+        }
+      }
+      return reply.status(502).send({ error: "model discovery unavailable" });
+    } finally {
+      completed = true;
+      reply.raw.off("close", onDisconnect);
+    }
   });
 
   // Hide/show a model in the picker (app-level curation, the native Enabled/Disabled toggle).
