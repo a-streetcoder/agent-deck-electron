@@ -5,11 +5,15 @@ import {
   loopDefinitionValidationError,
   normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
+  normalizeLoopLaunchContext,
+  normalizeLoopProjectPaths,
   normalizeParallelBranches,
   LOOP_STRUCTURES,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   LOOP_WRITE_TARGETS,
   type LoopDefinition,
+  type LoopDefinitionAvailability,
+  type LoopLaunchContextScope,
   type LoopStructure,
   type LoopWriteTarget,
 } from "@agent-deck/domain";
@@ -52,6 +56,40 @@ function asParallelBranches(value: unknown): string[] | undefined {
   if (typeof value === "string") return normalizeParallelBranches(value.split("|"));
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? normalizeParallelBranches(value)
+    : undefined;
+}
+function decodeJSONStringLine(content: string, key: string): string | undefined {
+  const raw = nativeLineFrontmatterValue(content, key);
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "string" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function decodeJSONStringArrayLine(content: string, key: string): string[] | undefined {
+  const raw = nativeLineFrontmatterValue(content, key);
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function asLaunchContextScope(value: unknown): LoopLaunchContextScope {
+  return value === "everyIteration" ? "everyIteration" : "firstIterationOnly";
+}
+function asAvailability(value: unknown): LoopDefinitionAvailability {
+  return value === "projectPaths" ? "projectPaths" : "allProjects";
+}
+function asProjectPaths(value: unknown): string[] | undefined {
+  if (typeof value === "string") return normalizeLoopProjectPaths(value.split("|"));
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? normalizeLoopProjectPaths(value)
     : undefined;
 }
 function nativeLineDocument(content: string): {
@@ -113,11 +151,22 @@ export function loopSlug(name: string): string {
   return slug || "loop";
 }
 
+export function loopCatalogIdentity(basename: string): string {
+  return Buffer.from(basename, "utf8").toString("base64url");
+}
+
 export function parseLoopFile(filePath: string, content: string): LoopDefinition {
   const { frontmatter, body } = parseLoopDocument(content);
-  const base = path.basename(filePath).replace(/\.loop\.md$/i, "");
+  const basename = path.basename(filePath);
+  const base = basename.replace(/\.loop\.md$/i, "");
+  const launchContext =
+    decodeJSONStringLine(content, "launchContextJSON") ?? asString(frontmatter.launchContext);
+  const projectPaths =
+    decodeJSONStringArrayLine(content, "projectPathsJSON") ??
+    asProjectPaths(frontmatter.projectPaths) ??
+    [];
   return {
-    id: filePath,
+    id: loopCatalogIdentity(basename),
     name: asString(frontmatter.name) ?? base,
     description: asString(frontmatter.description) ?? "",
     goal: body.trim(),
@@ -139,10 +188,16 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
       asStructure(frontmatter.structure) === "humanApproval"
         ? normalizeLoopCheckpointPrompt(nativeLineFrontmatterValue(content, "checkpointPrompt"))
         : asString(frontmatter.checkpointPrompt) || undefined,
-    maxIterations: clampMaxIterations(Number(frontmatter.maxIterations)),
+    launchContext: normalizeLoopLaunchContext(launchContext),
+    launchContextScope: asLaunchContextScope(frontmatter.launchContextScope),
+    maxIterations: clampMaxIterations(
+      frontmatter.maxIterations === undefined ? Number.NaN : Number(frontmatter.maxIterations),
+    ),
     validationCommand: asString(frontmatter.validationCommand) ?? "",
     writeTarget: asWriteTarget(frontmatter.writeTarget),
     source: "user",
+    availability: asAvailability(frontmatter.availability),
+    projectPaths: normalizeLoopProjectPaths(projectPaths),
     filePath,
   };
 }
@@ -176,6 +231,8 @@ export function scanLoops(roots: ResourceRoots): LoopDefinition[] {
 }
 
 export interface LoopEdit {
+  /** Required when editing; omitted only for creation. */
+  id?: string;
   name: string;
   /** Internal duplication seed so native-only metadata survives the copy. */
   preservedFrontmatter?: Record<string, unknown>;
@@ -191,9 +248,13 @@ export interface LoopEdit {
   triageAgent?: string;
   classificationPrompt?: string;
   checkpointPrompt?: string;
+  launchContext?: string;
+  launchContextScope?: LoopLaunchContextScope;
   maxIterations?: number;
   validationCommand?: string;
   writeTarget?: LoopWriteTarget;
+  availability?: LoopDefinitionAvailability;
+  projectPaths?: string[];
 }
 
 // Match LoopDefinitionStore.encode: common fields first, followed by the
@@ -216,6 +277,10 @@ const LOOP_FIELD_ORDER = [
   "triageAgent",
   "classificationPrompt",
   "checkpointPrompt",
+  "launchContextScope",
+  "launchContextJSON",
+  "availability",
+  "projectPathsJSON",
 ] as const;
 const LOOP_FIELD_KEYS = new Set<string>(LOOP_FIELD_ORDER);
 
@@ -237,7 +302,9 @@ function serializeFrontmatter(record: Record<string, unknown>): string {
         ? `classificationPrompt: ${normalizeLoopClassificationPrompt(asString(value))}`
         : key === "checkpointPrompt"
           ? `checkpointPrompt: ${normalizeLoopCheckpointPrompt(asString(value))}`
-          : YAML.stringify({ [key]: value }).trimEnd(),
+          : key === "launchContextJSON" || key === "projectPathsJSON"
+            ? `${key}: ${JSON.stringify(value)}`
+            : YAML.stringify({ [key]: value }).trimEnd(),
     )
     .join("\n");
 }
@@ -259,7 +326,8 @@ function compatibilityFilePath(roots: ResourceRoots, basename: string): string {
  */
 export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   const records = scanLoopRecords(roots);
-  const existing = records.find((record) => record.loop.name === edit.name);
+  const existing = edit.id ? records.find((record) => record.loop.id === edit.id) : undefined;
+  if (edit.id && !existing) throw new Error("loop_not_found");
   const basename = existing?.basename ?? loopBasename(edit.name);
   const filePath = compatibilityFilePath(roots, basename);
   let frontmatter: Record<string, unknown> = { ...(edit.preservedFrontmatter ?? {}) };
@@ -353,6 +421,19 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     if (edit.checkpointPrompt) frontmatter.checkpointPrompt = edit.checkpointPrompt;
     else delete frontmatter.checkpointPrompt;
   }
+  if (edit.launchContext !== undefined) {
+    const launchContext = normalizeLoopLaunchContext(edit.launchContext);
+    delete frontmatter.launchContext;
+    if (launchContext) {
+      frontmatter.launchContextScope = edit.launchContextScope ?? "firstIterationOnly";
+      frontmatter.launchContextJSON = launchContext;
+    } else {
+      delete frontmatter.launchContextScope;
+      delete frontmatter.launchContextJSON;
+    }
+  } else if (edit.launchContextScope !== undefined && frontmatter.launchContextJSON !== undefined) {
+    frontmatter.launchContextScope = edit.launchContextScope;
+  }
   if (edit.maxIterations !== undefined) {
     frontmatter.maxIterations = clampMaxIterations(edit.maxIterations);
   }
@@ -361,6 +442,16 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
     else delete frontmatter.validationCommand;
   }
   if (edit.writeTarget !== undefined) frontmatter.writeTarget = edit.writeTarget;
+  if (edit.availability !== undefined) frontmatter.availability = edit.availability;
+  if (edit.projectPaths !== undefined || edit.availability !== undefined) {
+    delete frontmatter.projectPaths;
+    const projectPaths =
+      (edit.availability ?? asAvailability(frontmatter.availability)) === "projectPaths"
+        ? normalizeLoopProjectPaths(edit.projectPaths ?? [])
+        : [];
+    if (projectPaths.length) frontmatter.projectPathsJSON = projectPaths;
+    else delete frontmatter.projectPathsJSON;
+  }
   if (edit.goal !== undefined) body = edit.goal.trim();
 
   const content = `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`;
@@ -379,9 +470,9 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
   return filePath;
 }
 
-/** Delete by catalog identity. Display file paths are never used as authority. */
-export function deleteLoopFile(roots: ResourceRoots, name: string): void {
-  const existing = scanLoopRecords(roots).find((record) => record.loop.name === name);
+/** Delete by opaque catalog identity. Display file paths are never used as authority. */
+export function deleteLoopFile(roots: ResourceRoots, id: string): void {
+  const existing = scanLoopRecords(roots).find((record) => record.loop.id === id);
   if (!existing) return;
   deleteLoopCatalogFile(roots.home, existing.basename);
 }
@@ -410,9 +501,9 @@ export class LoopStructureNotRunnableError extends Error {
  * Throws "loop_not_found" if the source doesn't exist, or
  * LoopStructureNotRunnableError when no engine exists for its structure.
  */
-export function duplicateLoop(roots: ResourceRoots, name: string): string {
+export function duplicateLoop(roots: ResourceRoots, id: string): string {
   const records = scanLoopRecords(roots);
-  const sourceRecord = records.find((record) => record.loop.name === name);
+  const sourceRecord = records.find((record) => record.loop.id === id);
   if (!sourceRecord) throw new Error("loop_not_found");
   const source = sourceRecord.loop;
   const loops = records.map((record) => record.loop);
@@ -425,9 +516,9 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
   // De-dup by SLUG (the filename key), not name — otherwise a name-unique copy
   // could still collide on disk with a differently-named loop and throw.
   const existingSlugs = new Set(loops.map((loop) => loopSlug(loop.name)));
-  let copyName = `Copy of ${name}`;
+  let copyName = `Copy of ${source.name}`;
   for (let n = 2; existingSlugs.has(loopSlug(copyName)); n += 1)
-    copyName = `Copy of ${name} (${n})`;
+    copyName = `Copy of ${source.name} (${n})`;
   const sourceDocument = parseLoopDocument(sourceRecord.content);
   writeLoopFile(roots, {
     name: copyName,
@@ -444,9 +535,13 @@ export function duplicateLoop(roots: ResourceRoots, name: string): string {
     triageAgent: source.triageAgent,
     classificationPrompt: source.classificationPrompt,
     checkpointPrompt: source.checkpointPrompt,
+    launchContext: source.launchContext,
+    launchContextScope: source.launchContextScope,
     maxIterations: source.maxIterations,
     validationCommand: source.validationCommand,
     writeTarget: source.writeTarget,
+    availability: source.availability,
+    projectPaths: source.projectPaths,
   });
   return copyName;
 }

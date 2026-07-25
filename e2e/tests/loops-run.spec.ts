@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import type { LoopRun } from "@agent-deck/domain";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 let harness: E2eHarness;
@@ -188,6 +189,34 @@ async function openLoops(page: Page): Promise<void> {
   await page.getByTestId("nav-loops").click();
 }
 
+async function loopId(name: string): Promise<string> {
+  const response = await fetch(`${harness.baseUrl}/loops`);
+  const data = (await response.json()) as { loops: Array<{ id: string; name: string }> };
+  const loop = data.loops.find((candidate) => candidate.name === name);
+  if (!loop) throw new Error(`unknown Loop fixture: ${name}`);
+  return loop.id;
+}
+
+async function launchLoop(
+  page: Page,
+  name: string,
+  overrides: {
+    goal?: string;
+    context?: string;
+    scope?: "firstIterationOnly" | "everyIteration";
+  } = {},
+): Promise<void> {
+  await page.getByTestId(`loop-run-${name}`).click();
+  const dialog = page.getByTestId("loop-launch-dialog");
+  await expect(dialog).toBeVisible();
+  if (overrides.goal !== undefined) await page.getByTestId("loop-launch-goal").fill(overrides.goal);
+  if (overrides.context !== undefined)
+    await page.getByTestId("loop-launch-context-override").fill(overrides.context);
+  if (overrides.scope !== undefined)
+    await page.getByTestId("loop-launch-scope-override").selectOption(overrides.scope);
+  await page.getByTestId("loop-launch-confirm").click();
+}
+
 test("authors, duplicates, reloads, and approves an accessible Human Approval checkpoint", async ({
   page,
 }) => {
@@ -198,6 +227,8 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   const prompt = page.getByTestId("loop-checkpoint-prompt");
   await expect(prompt).toBeFocused();
   await prompt.fill("Review release severity and owner.");
+  await page.getByTestId("loop-launch-context").fill("saved approval context");
+  await page.getByTestId("loop-launch-context-scope").selectOption("everyIteration");
   await page.getByTestId("loop-save").click();
   await page.getByTestId("loop-duplicate-Release Approval").click();
   await page.getByTestId("loop-open-Copy of Release Approval").click();
@@ -206,7 +237,10 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   );
   await page.getByTestId("loop-cancel").click();
 
-  await page.getByTestId("loop-run-Release Approval").click();
+  await launchLoop(page, "Release Approval", {
+    context: "run-only approval context",
+    scope: "firstIterationOnly",
+  });
   await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
   await expect(page.getByTestId("loop-checkpoint-question")).toHaveText(
     "Review release severity and owner.",
@@ -231,9 +265,42 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   const approvedResolution = page.getByTestId("loop-approval-resolution");
   await expect(approvedResolution).toContainText("Approval recorded");
   await expect(approvedResolution).toContainText("Retry creates a fresh linked checkpoint");
+  const beforeRetryResponse = await page.request.get(`${harness.baseUrl}/loops/runs`);
+  const beforeRetryRuns = (await beforeRetryResponse.json()) as { runs: LoopRun[] };
+  const original = beforeRetryRuns.runs
+    .filter((candidate) => candidate.loopName === "Release Approval")
+    .at(-1)!;
+  const releaseId = await loopId("Release Approval");
+  expect(
+    (
+      await page.request.put(`${harness.baseUrl}/loops`, {
+        data: {
+          id: releaseId,
+          name: "Release Approval",
+          goal: "edited catalog goal",
+          launchContext: "edited catalog context",
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await page.request.delete(`${harness.baseUrl}/loops`, {
+        data: { id: releaseId },
+      })
+    ).ok(),
+  ).toBe(true);
   await expect(page.getByTestId("loop-run-retry")).toBeFocused();
   await page.getByTestId("loop-run-retry").click();
   await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
+  const afterRetryResponse = await page.request.get(`${harness.baseUrl}/loops/runs`);
+  const afterRetryRuns = (await afterRetryResponse.json()) as { runs: LoopRun[] };
+  expect(afterRetryRuns.runs.find((candidate) => candidate.retryOf === original.id)).toMatchObject({
+    definitionSnapshot: {
+      launchContext: "run-only approval context",
+      launchContextScope: "firstIterationOnly",
+    },
+  });
   await expect(page.getByTestId("loop-run-history")).toContainText("Approval recorded");
 });
 
@@ -241,7 +308,7 @@ test("rejects Human Approval by keyboard and preserves focus on a resolution con
   page,
 }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Reject Approval").click();
+  await launchLoop(page, "Reject Approval");
   const reject = page.getByTestId("loop-approval-reject");
   await reject.focus();
   await page.route("**/loops/runs/*/resolve", async (route) => {
@@ -279,9 +346,90 @@ test("rejects Human Approval by keyboard and preserves focus on a resolution con
   expect(await retryRejected.json()).toMatchObject({ code: "loop_retry_unavailable" });
 });
 
+test("authors project availability and uses an accessible responsive launch override dialog", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await page.getByTestId("loop-open-Green Suite").click();
+  await page.getByRole("radio", { name: "Selected registered projects" }).check();
+  await page.getByTestId("loop-launch-context").fill("saved context");
+  await page.getByTestId("loop-launch-context-scope").selectOption("firstIterationOnly");
+  const maxIterations = page.getByTestId("loop-max-iterations");
+  await expect(maxIterations).toHaveAttribute("step", "1");
+  await maxIterations.fill("4.8");
+  await expect(maxIterations).toHaveValue("4");
+  await maxIterations.fill("1e999");
+  await expect(maxIterations).toHaveValue("0");
+  await maxIterations.fill("0");
+  await page.getByTestId("loop-save").click();
+  const row = page.locator('[data-loop-name="Green Suite"]');
+  await expect(row).toContainText("Unlimited");
+  await expect(row).toContainText("Assigned to 1 project");
+
+  const secondProject = mkdtempSync(path.join(tmpdir(), "proj-looprun-other-"));
+  const created = await page.request.post(`${harness.baseUrl}/projects`, {
+    data: { path: secondProject },
+  });
+  expect(created.ok()).toBe(true);
+  await page.reload();
+  await selectProject(page, path.basename(secondProject));
+  await page.getByTestId("nav-loops").click();
+  await expect(page.getByTestId("loop-unavailable-Green Suite")).toContainText(
+    "Assign this Loop to the project",
+  );
+  await expect(page.getByTestId("loop-run-Green Suite")).toBeDisabled();
+
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-loops").click();
+  const runButton = page.getByTestId("loop-run-Green Suite");
+  await runButton.focus();
+  await runButton.click();
+  const dialog = page.getByTestId("loop-launch-dialog");
+  await expect(dialog).toHaveAccessibleName("Run Green Suite");
+  await expect(page.getByTestId("loop-launch-goal")).toBeFocused();
+  await expect(dialog).toContainText("No iteration limit");
+  await page.setViewportSize({ width: 420, height: 560 });
+  await expect
+    .poll(() => dialog.evaluate((element) => element.scrollWidth <= element.clientWidth))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(runButton).toBeFocused();
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const greenSuiteId = await loopId("Green Suite");
+  await page.route(new RegExp(`/loops/${greenSuiteId}/run$`), async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await route.continue();
+  });
+  await runButton.click();
+  await page.getByTestId("loop-launch-goal").fill("Run-only goal override");
+  await page.getByTestId("loop-launch-context-override").fill("RUN_ONLY_CONTEXT");
+  await page.getByTestId("loop-launch-scope-override").selectOption("everyIteration");
+  const confirm = page.getByTestId("loop-launch-confirm");
+  const start = confirm.click();
+  await expect(confirm).toHaveText("Starting…");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("loop-launch-dialog")).toBeVisible();
+  await start;
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  const response = await page.request.get(`${harness.baseUrl}/loops/runs`);
+  const runs = (await response.json()) as { runs: LoopRun[] };
+  const run = runs.runs.filter((candidate) => candidate.loopName === "Green Suite").at(-1)!;
+  expect(run.definitionSnapshot).toMatchObject({
+    goal: "Run-only goal override",
+    launchContext: "RUN_ONLY_CONTEXT",
+    launchContextScope: "everyIteration",
+    maxIterations: 0,
+  });
+});
+
 test("runs a single-agent loop to completion", async ({ page }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Green Suite").click();
+  await launchLoop(page, "Green Suite");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
@@ -290,7 +438,7 @@ test("runs a single-agent loop to completion", async ({ page }) => {
 
 test("retains and restores registered worktree evidence in the run panel", async ({ page }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Retained Worktree").click();
+  await launchLoop(page, "Retained Worktree");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
@@ -336,7 +484,7 @@ test("authors, reorders, duplicates, runs, and restores an accessible Pipeline",
   await page.getByTestId("loop-duplicate-Authored Pipeline").click();
   await expect(page.locator('[data-loop-name="Copy of Authored Pipeline"]')).toBeVisible();
 
-  await page.getByTestId("loop-run-Authored Pipeline").click();
+  await launchLoop(page, "Authored Pipeline");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
@@ -387,7 +535,7 @@ test("authors, normalizes, duplicates, runs, and restores accessible Parallel re
   await page.getByTestId("loop-duplicate-Authored Parallel").click();
   await expect(page.locator('[data-loop-name="Copy of Authored Parallel"]')).toBeVisible();
 
-  await page.getByTestId("loop-run-Authored Parallel").click();
+  await launchLoop(page, "Authored Parallel");
   const statuses = page.getByTestId("loop-parallel-branch-statuses");
   await expect(statuses).toContainText("Branch 1: Agent B");
   await expect(statuses).toContainText("Branch 2: Agent A");
@@ -464,7 +612,7 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   await page.getByTestId("loop-duplicate-Authored Triage").click();
   await expect(page.locator('[data-loop-name="Copy of Authored Triage"]')).toBeVisible();
 
-  await page.getByTestId("loop-run-Authored Triage").click();
+  await launchLoop(page, "Authored Triage");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
@@ -490,13 +638,16 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-run-iterations")).toContainText("High impact finding");
 
-  await page.getByTestId("loop-run-Unavailable Triage").click();
+  await launchLoop(page, "Unavailable Triage");
   await expect(page.getByRole("alert")).toContainText(
     'The configured triage agent "Unavailable Explorer" is unavailable',
   );
   await expect(page.getByTestId("loop-run-panel")).toContainText("Authored Triage");
+  await page.getByTestId("loop-launch-cancel").click();
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveCount(0);
 
-  await page.route(/\/loops\/Failing%20Triage\/run$/, async (route) => {
+  const failingTriageId = await loopId("Failing Triage");
+  await page.route(new RegExp(`/loops/${failingTriageId}/run$`), async (route) => {
     const now = new Date().toISOString();
     await route.fulfill({
       status: 201,
@@ -548,7 +699,7 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
       }),
     });
   });
-  await page.getByTestId("loop-run-Failing Triage").click();
+  await launchLoop(page, "Failing Triage");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "failed", {
     timeout: 30_000,
   });
@@ -558,7 +709,7 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   ).toContainText(/triage provider failed|request failed|error/i);
   await expect(page.getByTestId("loop-run-iterations")).toContainText("Discovery / triage error");
 
-  await page.getByTestId("loop-run-Slow Triage Stop").click();
+  await launchLoop(page, "Slow Triage Stop");
   const stop = page.getByTestId("loop-run-stop");
   await expect(stop).toBeVisible();
   await stop.focus();
@@ -574,7 +725,7 @@ test("shows queued Parallel branches, announces transitions, and withholds Retry
   page,
 }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Slow Parallel Stop").click();
+  await launchLoop(page, "Slow Parallel Stop");
   const statuses = page.getByTestId("loop-parallel-branch-statuses").first();
   await expect(statuses.locator('[data-branch-index="0"]')).toContainText("Running");
   await expect(statuses.locator('[data-branch-index="1"]')).toContainText("Running");
@@ -598,7 +749,7 @@ test("shows queued Parallel branches, announces transitions, and withholds Retry
 
 test("shows a failed Parallel branch textually and as an alert", async ({ page }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Failing Parallel").click();
+  await launchLoop(page, "Failing Parallel");
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "failed", {
     timeout: 30_000,
   });
@@ -614,7 +765,7 @@ test("shows ordered Maker+Checker evidence, disables launches, and restores hist
   page,
 }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Reviewed Report").click();
+  await launchLoop(page, "Reviewed Report");
   await expect(page.getByTestId("loop-run-Reviewed Report")).toBeDisabled();
   await expect(page.getByTestId("loop-run-Slow Stop")).toBeDisabled();
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
@@ -655,7 +806,7 @@ test("shows ordered Maker+Checker evidence, disables launches, and restores hist
 
 test("Stop cancels a running loop and native retry eligibility is enforced", async ({ page }) => {
   await openLoops(page);
-  await page.getByTestId("loop-run-Slow Stop").click();
+  await launchLoop(page, "Slow Stop");
   const stop = page.getByTestId("loop-run-stop");
   await expect(stop).toBeVisible();
   await page.route(/\/loops\/runs\/[^/]+\/stop$/, async (route) => {
@@ -762,7 +913,8 @@ test("shows native-truthful human-input and recovery actions without broad live 
 
 test("surfaces a typed checkout conflict in the Loop UI", async ({ page }) => {
   await openLoops(page);
-  await page.route(/\/loops\/Slow%20Stop\/run$/, async (route) => {
+  const slowStopId = await loopId("Slow Stop");
+  await page.route(new RegExp(`/loops/${slowStopId}/run$`), async (route) => {
     await route.fulfill({
       status: 409,
       contentType: "application/json",
@@ -772,15 +924,16 @@ test("surfaces a typed checkout conflict in the Loop UI", async ({ page }) => {
       }),
     });
   });
-  await page.getByTestId("loop-run-Slow Stop").click();
-  await expect(page.getByTestId("error-banner")).toContainText(
+  await launchLoop(page, "Slow Stop");
+  await expect(page.getByTestId("loop-launch-dialog").getByRole("alert")).toContainText(
     "Another Loop is already running in this project checkout.",
   );
 });
 
 test("non-destructive artifact runs may coexist", async () => {
+  const reviewedReportId = await loopId("Reviewed Report");
   const start = async (): Promise<Response> =>
-    await fetch(`${harness.baseUrl}/loops/${encodeURIComponent("Reviewed Report")}/run`, {
+    await fetch(`${harness.baseUrl}/loops/${encodeURIComponent(reviewedReportId)}/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectId }),
@@ -794,8 +947,9 @@ test("non-destructive artifact runs may coexist", async () => {
 });
 
 test("returns a typed conflict for concurrent destructive checkout runs", async () => {
+  const slowStopId = await loopId("Slow Stop");
   const start = async (): Promise<Response> =>
-    await fetch(`${harness.baseUrl}/loops/${encodeURIComponent("Slow Stop")}/run`, {
+    await fetch(`${harness.baseUrl}/loops/${encodeURIComponent(slowStopId)}/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectId }),

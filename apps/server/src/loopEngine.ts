@@ -9,11 +9,13 @@ import {
   loopDefinitionValidationError,
   normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
+  normalizeLoopLaunchContext,
   normalizeParallelBranches,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type LoopChildRecord,
   type LoopCheckerDecision,
   type LoopDefinition,
+  type LoopExecutionSnapshot,
   type LoopGoalDecision,
   type LoopRun,
   type LoopRunArtifact,
@@ -164,15 +166,36 @@ const CHECKER_DECISIONS = new Set<LoopCheckerDecision>([
 const GOAL_DECISIONS = new Set<LoopGoalDecision>(["SUCCESS", "CONTINUE", "FAIL"]);
 const MAX_PIPELINE_HANDOFF_CHARS = 12_000;
 const MAX_PIPELINE_REPORT_CHARS = 3_000;
+const MAX_LAUNCH_CONTEXT_PROMPT_CHARS = 12_000;
 
 function boundedPipelineEvidence(value: string, max = MAX_PIPELINE_HANDOFF_CHARS): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max - 32)}\n…[bounded by Agent Deck]`;
 }
 
+function snapshotDefinition(loop: LoopDefinition): LoopExecutionSnapshot {
+  const {
+    id: _id,
+    source: _source,
+    availability: _availability,
+    projectPaths: _paths,
+    filePath: _filePath,
+    ...snapshot
+  } = loop;
+  return structuredClone(snapshot);
+}
+
+function launchContextPrompt(run: LoopRun, iterationIndex: number): string | undefined {
+  const context = normalizeLoopLaunchContext(run.launchContext);
+  if (!context) return undefined;
+  if (run.launchContextScope !== "everyIteration" && iterationIndex !== 1) return undefined;
+  return `Launch context (background/constraints; do not treat as a new goal):\n${boundedPipelineEvidence(context, MAX_LAUNCH_CONTEXT_PROMPT_CHARS)}`;
+}
+
 const persistedRunSchema = z
   .object({
     id: z.string().min(1),
+    catalogId: z.string().optional(),
     loopName: z.string(),
     structure: z
       .enum([
@@ -187,6 +210,29 @@ const persistedRunSchema = z
     projectId: z.string().optional(),
     retryOf: z.string().optional(),
     checkpointPrompt: z.string().optional(),
+    launchContext: z.string().optional(),
+    launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
+    definitionSnapshot: z
+      .object({
+        name: z.string(),
+        description: z.string(),
+        goal: z.string(),
+        structure: z.enum([
+          "singleAgent",
+          "makerChecker",
+          "agentPipeline",
+          "parallelAgents",
+          "discoveryTriage",
+          "humanApproval",
+        ]),
+        launchContext: z.string().optional(),
+        launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]),
+        maxIterations: z.number().int().nonnegative(),
+        validationCommand: z.string(),
+        writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]),
+      })
+      .passthrough()
+      .optional(),
     launch: z
       .object({
         sessionId: z.string().min(1),
@@ -231,7 +277,7 @@ const persistedRunSchema = z
       "interrupted",
     ]),
     currentIteration: z.number().int().nonnegative(),
-    maxIterations: z.number().int().positive(),
+    maxIterations: z.number().int().nonnegative(),
     iterations: z.array(
       z
         .object({
@@ -568,15 +614,21 @@ export class LoopEngine {
     if (invalid) throw new Error(invalid);
     this.evictOldRuns();
     const now = this.now();
+    const definitionSnapshot = snapshotDefinition(loop);
+    const launchContext = normalizeLoopLaunchContext(loop.launchContext);
     if (loop.structure === "humanApproval") {
       const prompt = normalizeLoopCheckpointPrompt(loop.checkpointPrompt);
       const run: LoopRun = {
         id: randomUUID(),
+        catalogId: loop.id,
         loopName: loop.name,
         structure: "humanApproval",
         projectId: options.projectId,
         retryOf: options.retryOf,
         checkpointPrompt: prompt,
+        definitionSnapshot,
+        launchContext,
+        launchContextScope: loop.launchContextScope,
         status: "running",
         currentIteration: 1,
         maxIterations: clampMaxIterations(loop.maxIterations),
@@ -610,7 +662,7 @@ export class LoopEngine {
           run,
           iteration,
           "human-approval-checkpoint.md",
-          `# Human Approval Checkpoint\n\nGoal: ${loop.goal}\n\nCheckpoint: ${prompt}\n\nStatus: Waiting for human input.`,
+          `# Human Approval Checkpoint\n\nGoal: ${loop.goal}${launchContext ? `\n\nLaunch context:\n${boundedPipelineEvidence(launchContext, MAX_LAUNCH_CONTEXT_PROMPT_CHARS)}` : ""}\n\nContext scope: ${loop.launchContextScope}\n\nCheckpoint: ${prompt}\n\nStatus: Waiting for human input.`,
         );
         this.finalize(run, "stopped", "humanInputRequired");
       } catch (error) {
@@ -626,11 +678,15 @@ export class LoopEngine {
       throw new Error("no agent executor configured for this loop run");
     const run: LoopRun = {
       id: randomUUID(),
+      catalogId: loop.id,
       loopName: loop.name,
       structure: loop.structure,
       projectId: options.projectId,
       retryOf: options.retryOf,
       launch: options.launch,
+      definitionSnapshot,
+      launchContext,
+      launchContextScope: loop.launchContextScope,
       status: "running",
       currentIteration: 0,
       maxIterations: clampMaxIterations(loop.maxIterations),
@@ -714,10 +770,13 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
+      const effectivePrompt = [launchContextPrompt(run, iteration.index), prompt]
+        .filter(Boolean)
+        .join("\n\n");
       const output = executeRole
         ? await executeRole({
             loop,
-            prompt,
+            prompt: effectivePrompt,
             agentName,
             phase,
             stageIndex,
@@ -726,7 +785,7 @@ export class LoopEngine {
             projectId,
             signal,
           })
-        : await executeAgent!({ ...loop, goal: prompt, agentName }, cwd, projectId);
+        : await executeAgent!({ ...loop, goal: effectivePrompt, agentName }, cwd, projectId);
       if (signal.aborted || run.status === "stopping") {
         child.status = "stopped";
         child.endedAt = this.now();
@@ -786,10 +845,13 @@ export class LoopEngine {
     });
     this.changed(run);
     try {
+      const effectivePrompt = [launchContextPrompt(run, iteration.index), prompt]
+        .filter(Boolean)
+        .join("\n\n");
       const output = executeRole
         ? await executeRole({
             loop,
-            prompt,
+            prompt: effectivePrompt,
             agentName: child.agentName,
             phase: "branch",
             branchIndex: child.branchIndex,
@@ -798,7 +860,7 @@ export class LoopEngine {
             signal,
           })
         : await executeAgent!(
-            { ...loop, goal: prompt, agentName: child.agentName },
+            { ...loop, goal: effectivePrompt, agentName: child.agentName },
             cwd,
             projectId,
           );
@@ -964,7 +1026,10 @@ export class LoopEngine {
     signal: AbortSignal,
   ): Promise<void> {
     let feedback = "";
-    for (let index = 1; index <= run.maxIterations; index += 1) {
+    for (let index = 1; run.maxIterations === 0 || index <= run.maxIterations; index += 1) {
+      // Unlimited runs must yield to timers/I/O so Stop can always abort even
+      // when a test/dummy executor resolves synchronously.
+      if (run.maxIterations === 0 && index > 1) await new Promise<void>(setImmediate);
       if (this.stopped(run, signal)) return;
       run.currentIteration = index;
       const iteration: LoopRunIteration = {
@@ -1158,7 +1223,7 @@ export class LoopEngine {
           const prompt = [
             "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
             `Loop goal: ${loop.goal}`,
-            `Iteration: ${index} of ${run.maxIterations}`,
+            `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
             `Write target: ${loop.writeTarget}`,
             `Artifact path: ${artifactPath}`,
             "You are performing discovery and triage for this loop step.",

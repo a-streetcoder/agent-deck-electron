@@ -3,11 +3,14 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import nodePath from "node:path";
 import {
   canRetryLoopRun,
+  isLoopAvailableInProject,
   isRunnableLoopStructure,
+  normalizeLoopLaunchContext,
   loopDefinitionValidationError,
   LOOP_PARALLEL_WRITE_TARGET_CODE,
   LOOP_STRUCTURE_LABEL,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type LoopDefinition,
   type LoopStructure,
 } from "@agent-deck/domain";
 import {
@@ -138,6 +141,7 @@ export function registerLoopRoutes(
   // Loop definitions (native LoopDefinitionStore, Bank CRUD half — no run engine
   // yet). Global: loops live under ~/.pi/agent/loops.
   const loopEditBody = z.object({
+    id: z.string().min(1).max(500).optional(),
     name: z.string().trim().min(1).max(200),
     description: z.string().max(2000).optional(),
     goal: z.string().max(50_000).optional(),
@@ -160,9 +164,13 @@ export function registerLoopRoutes(
     triageAgent: z.string().max(200).optional(),
     classificationPrompt: z.string().max(20_000).optional(),
     checkpointPrompt: z.string().max(20_000).optional(),
+    launchContext: z.string().max(50_000).optional(),
+    launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
     maxIterations: z.number().int().optional(),
     validationCommand: z.string().max(10_000).optional(),
     writeTarget: z.enum(["artifactMarkdown", "newWorktree", "currentCheckout"]).optional(),
+    availability: z.enum(["allProjects", "projectPaths"]).optional(),
+    projectPaths: z.array(z.string().max(10_000)).max(1_000).optional(),
   });
 
   fastify.get("/loops", async (_request, reply) => {
@@ -182,12 +190,21 @@ export function registerLoopRoutes(
     const roots = rootsFor();
     let existing;
     try {
-      existing = scanLoops(roots).find((loop) => loop.name === parsed.data.name);
+      existing = parsed.data.id
+        ? scanLoops(roots).find((loop) => loop.id === parsed.data.id)
+        : undefined;
     } catch (error) {
       return (
         catalogCapabilityRefusal(error, reply) ??
         reply.status(500).send({ error: "Loop catalog scan failed." })
       );
+    }
+    if (parsed.data.id && !existing) return reply.status(404).send({ error: "unknown loop" });
+    if (parsed.data.availability === "projectPaths" && !parsed.data.projectPaths?.length) {
+      return reply.status(422).send({
+        code: "loop_definition_invalid",
+        error: "Select at least one project for project-specific availability.",
+      });
     }
     const resultingStructure = parsed.data.structure ?? existing?.structure ?? "singleAgent";
     if (!isRunnableLoopStructure(resultingStructure)) {
@@ -199,6 +216,9 @@ export function registerLoopRoutes(
       const refused = catalogCapabilityRefusal(error, reply);
       if (refused) return refused;
       const message = error instanceof Error ? error.message : String(error);
+      if (message === "loop_not_found") {
+        return reply.status(404).send({ error: "unknown loop" });
+      }
       if (message === "loop_slug_conflict") {
         return reply
           .status(409)
@@ -219,10 +239,10 @@ export function registerLoopRoutes(
   });
 
   fastify.delete("/loops", async (request, reply) => {
-    const parsed = z.object({ name: z.string().min(1) }).safeParse(request.body);
+    const parsed = z.object({ id: z.string().min(1).max(500) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     try {
-      deleteLoopFile(rootsFor(), parsed.data.name);
+      deleteLoopFile(rootsFor(), parsed.data.id);
     } catch (error) {
       return (
         catalogCapabilityRefusal(error, reply) ??
@@ -233,24 +253,24 @@ export function registerLoopRoutes(
     return { ok: true };
   });
 
-  fastify.post("/loops/:name/duplicate", async (request, reply) => {
-    const name = (request.params as { name: string }).name;
+  fastify.post("/loops/:id/duplicate", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
     const roots = rootsFor();
     let source;
     try {
-      source = scanLoops(roots).find((loop) => loop.name === name);
+      source = scanLoops(roots).find((loop) => loop.id === id);
     } catch (error) {
       return (
         catalogCapabilityRefusal(error, reply) ??
         reply.status(500).send({ error: "Loop catalog scan failed." })
       );
     }
-    if (!source) return reply.status(404).send({ error: `unknown loop: ${name}` });
+    if (!source) return reply.status(404).send({ error: "unknown loop" });
     if (!isRunnableLoopStructure(source.structure)) {
       return reply.status(422).send(unsupportedStructureError(source.structure));
     }
     try {
-      const copyName = duplicateLoop(roots, name);
+      const copyName = duplicateLoop(roots, id);
       broadcast({ type: "resources_changed" });
       return { name: copyName };
     } catch (error) {
@@ -258,7 +278,7 @@ export function registerLoopRoutes(
       if (refused) return refused;
       const message = error instanceof Error ? error.message : String(error);
       if (message === "loop_not_found") {
-        return reply.status(404).send({ error: `unknown loop: ${name}` });
+        return reply.status(404).send({ error: "unknown loop" });
       }
       // The resource layer repeats the invariant to close direct-call and
       // check/use races. Preserve the same user-facing typed 422 contract if
@@ -275,37 +295,15 @@ export function registerLoopRoutes(
 
   // Run a supported Loop through a transient parent session. Maker+Checker
   // roles receive phase-specific capabilities; durable truth lives in run state.
-  fastify.post("/loops/:name/run", async (request, reply) => {
-    const name = (request.params as { name: string }).name;
-    let loop;
-    try {
-      loop = scanLoops(rootsFor()).find((candidate) => candidate.name === name);
-    } catch (error) {
-      return (
-        catalogCapabilityRefusal(error, reply) ??
-        reply.status(500).send({ error: "Loop catalog scan failed." })
-      );
-    }
-    if (!loop) return reply.status(404).send({ error: `unknown loop: ${name}` });
-    // This must precede request parsing, project lookup, worktree creation,
-    // session/Pi allocation, and LoopEngine.start: unsupported persisted/native
-    // definitions are readable but never silently run as single-agent loops.
-    if (!isRunnableLoopStructure(loop.structure)) {
-      return reply.status(422).send(unsupportedStructureError(loop.structure));
-    }
-    // Persisted native Parallel definitions are readable, but an unsafe target
-    // is rejected before request parsing, project lookup, lock/worktree setup,
-    // session creation, or Pi allocation.
-    if (loop.structure === "parallelAgents" && loop.writeTarget !== "artifactMarkdown") {
-      return reply.status(422).send({
-        code: LOOP_PARALLEL_WRITE_TARGET_CODE,
-        error: "Parallel agents are report-only and require the Artifact (markdown) write target.",
-      });
-    }
+  fastify.post("/loops/:id/run", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
     const parsed = z
       .object({
         projectId: z.string().optional(),
         retryOf: z.string().uuid().optional(),
+        goal: z.string().max(50_000).optional(),
+        launchContext: z.string().max(50_000).optional(),
+        launchContextScope: z.enum(["firstIterationOnly", "everyIteration"]).optional(),
         provider: z.string().optional(),
         model: z.string().optional(),
         extensions: z.array(z.string()).optional(),
@@ -314,6 +312,76 @@ export function registerLoopRoutes(
       .safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const body = parsed.data;
+    if (!body.projectId) {
+      return reply.status(400).send({ error: "projectId is required to run a loop" });
+    }
+    const project = projects.find((candidate) => candidate.id === body.projectId);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+
+    let loop: LoopDefinition;
+    if (body.retryOf) {
+      const previous = loopEngine.get(body.retryOf);
+      if (
+        !previous ||
+        !canRetryLoopRun(previous) ||
+        previous.projectId !== body.projectId ||
+        previous.catalogId !== id ||
+        !previous.definitionSnapshot
+      ) {
+        return reply.status(409).send({
+          code: "loop_retry_unavailable",
+          error: "The original effective Loop definition is unavailable for retry.",
+        });
+      }
+      loop = {
+        id,
+        source: "user",
+        availability: "allProjects",
+        projectPaths: [],
+        filePath: "",
+        ...structuredClone(previous.definitionSnapshot),
+      };
+    } else {
+      try {
+        const found = scanLoops(rootsFor()).find((candidate) => candidate.id === id);
+        if (!found) return reply.status(404).send({ error: "unknown loop" });
+        loop = found;
+      } catch (error) {
+        return (
+          catalogCapabilityRefusal(error, reply) ??
+          reply.status(500).send({ error: "Loop catalog scan failed." })
+        );
+      }
+      // Availability is exact registered-project metadata only. It is checked
+      // before lock, worktree, session, child, or Pi allocation.
+      if (!isLoopAvailableInProject(loop, project.path)) {
+        return reply.status(403).send({
+          code: "loop_unavailable_for_project",
+          error: "This Loop is not assigned to the selected project.",
+        });
+      }
+    }
+
+    if (!body.retryOf) {
+      loop = {
+        ...loop,
+        goal: body.goal ?? loop.goal,
+        launchContext:
+          body.launchContext === undefined
+            ? loop.launchContext
+            : normalizeLoopLaunchContext(body.launchContext),
+        launchContextScope: body.launchContextScope ?? loop.launchContextScope,
+      };
+    }
+    if (!isRunnableLoopStructure(loop.structure)) {
+      return reply.status(422).send(unsupportedStructureError(loop.structure));
+    }
+    if (loop.structure === "parallelAgents" && loop.writeTarget !== "artifactMarkdown") {
+      return reply.status(422).send({
+        code: LOOP_PARALLEL_WRITE_TARGET_CODE,
+        error: "Parallel agents are report-only and require the Artifact (markdown) write target.",
+      });
+    }
     const definitionError = loopDefinitionValidationError(loop);
     if (definitionError) {
       return reply.status(422).send({ code: "loop_definition_invalid", error: definitionError });
@@ -330,13 +398,6 @@ export function registerLoopRoutes(
       }
     }
     const defaults = envDefaults();
-    // A loop runs its agent + shell validation command in a project's working
-    // tree — require an explicit project so it never executes in the server's cwd.
-    if (!body.projectId) {
-      return reply.status(400).send({ error: "projectId is required to run a loop" });
-    }
-    const project = projects.find((p) => p.id === body.projectId);
-    if (!project) return reply.status(404).send({ error: "unknown project" });
     // A native Human Approval run is a durable app-data checkpoint only. It
     // never allocates a Pi session, child, validation process, checkout lock,
     // or worktree, regardless of the saved write target.
@@ -601,12 +662,12 @@ export function registerLoopRoutes(
             : "This Loop outcome is not eligible for retry.",
       });
     }
-    if (!previous.projectId) {
+    if (!previous.projectId || !previous.catalogId) {
       return reply.status(409).send({ error: "The original project is unavailable." });
     }
     const response = await fastify.inject({
       method: "POST",
-      url: `/loops/${encodeURIComponent(previous.loopName)}/run`,
+      url: `/loops/${encodeURIComponent(previous.catalogId)}/run`,
       payload: {
         projectId: previous.projectId,
         retryOf: previous.id,

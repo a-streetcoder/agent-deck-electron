@@ -147,11 +147,38 @@ export const LOOP_WRITE_TARGET_LABEL: Record<LoopWriteTarget, string> = {
 /** `user` loops are editable; `builtin` loops are read-only (duplicate to edit). */
 export type LoopSource = "user" | "builtin";
 
-export const LOOP_MAX_ITERATIONS_LIMIT = 20;
+export type LoopLaunchContextScope = "firstIterationOnly" | "everyIteration";
+export type LoopDefinitionAvailability = "allProjects" | "projectPaths";
+
+export const LOOP_MAX_ITERATIONS_LIMIT = 100;
 export const LOOP_DEFAULT_MAX_ITERATIONS = 3;
 
+export function normalizeLoopLaunchContext(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+/** Paths are opaque equality metadata. They are never resolved or used for filesystem access. */
+export function normalizeLoopProjectPaths(paths: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  return (paths ?? [])
+    .map((projectPath) => projectPath.trim())
+    .filter((projectPath) => {
+      if (!projectPath || seen.has(projectPath)) return false;
+      seen.add(projectPath);
+      return true;
+    });
+}
+
+export function isLoopAvailableInProject(
+  loop: Pick<LoopDefinition, "availability" | "projectPaths">,
+  projectPath: string,
+): boolean {
+  return loop.availability === "allProjects" || loop.projectPaths.includes(projectPath);
+}
+
 export interface LoopDefinition {
-  /** Stable id — the file path for on-disk loops. */
+  /** Opaque stable catalog identity derived from the securely scanned basename. */
   id: string;
   name: string;
   description: string;
@@ -173,20 +200,33 @@ export interface LoopDefinition {
   classificationPrompt?: string;
   /** Native flat Human Approval frontmatter. */
   checkpointPrompt?: string;
-  /** 1..LOOP_MAX_ITERATIONS_LIMIT; the fixed iteration cap. */
+  launchContext?: string;
+  launchContextScope: LoopLaunchContextScope;
+  /** 0 means unlimited; positive values are clamped to 1..LOOP_MAX_ITERATIONS_LIMIT. */
   maxIterations: number;
   /** Shell command whose exit 0 stops the loop early (the success condition). */
   validationCommand: string;
   writeTarget: LoopWriteTarget;
   source: LoopSource;
+  availability: LoopDefinitionAvailability;
+  /** Opaque exact-match metadata only; never filesystem authority. */
+  projectPaths: string[];
+  /** Compatibility/display metadata only. Catalog operations use `id`. */
   filePath: string;
 }
 
-/** Clamp a requested iteration count into the native 1..limit range. */
+/** Native semantics: exactly 0 is unlimited; positive values clamp to 1..100. */
 export function clampMaxIterations(value: number): number {
   if (!Number.isFinite(value)) return LOOP_DEFAULT_MAX_ITERATIONS;
-  return Math.min(LOOP_MAX_ITERATIONS_LIMIT, Math.max(1, Math.floor(value)));
+  const integer = Math.floor(value);
+  if (integer === 0) return 0;
+  return Math.min(LOOP_MAX_ITERATIONS_LIMIT, Math.max(1, integer));
 }
+
+export type LoopExecutionSnapshot = Omit<
+  LoopDefinition,
+  "id" | "source" | "availability" | "projectPaths" | "filePath"
+>;
 
 /** A durable live/finished loop run. */
 export type LoopRunStatus =
@@ -324,9 +364,15 @@ export interface LoopRunLaunchOwnership {
 
 export interface LoopRun {
   id: string;
+  /** Opaque catalog identity captured at launch; retained even if the file is deleted. */
+  catalogId?: string;
   loopName: string;
   /** Snapshotted orchestration shape; absent only on legacy persisted runs. */
   structure?: LoopStructure;
+  /** Effective launch definition, including run-only overrides, for deterministic retry. */
+  definitionSnapshot?: LoopExecutionSnapshot;
+  launchContext?: string;
+  launchContextScope?: LoopLaunchContextScope;
   projectId?: string;
   retryOf?: string;
   launch?: LoopRunLaunchOwnership;

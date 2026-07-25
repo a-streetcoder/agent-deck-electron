@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { cwd } from "node:process";
 import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LoopEngine } from "../src/loopEngine.ts";
 
 /**
@@ -24,12 +24,91 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
     validationCommand: "exit 0",
     writeTarget: "artifactMarkdown",
     source: "user",
+    availability: "allProjects",
+    projectPaths: [],
     filePath: "x",
     ...overrides,
+    launchContextScope: overrides.launchContextScope ?? "firstIterationOnly",
   };
 }
 
 describe("loop engine (single-agent)", () => {
+  it("injects bounded launch context according to first/every iteration scope", async () => {
+    for (const scope of ["firstIterationOnly", "everyIteration"] as const) {
+      const prompts: string[] = [];
+      let validations = 0;
+      const engine = new LoopEngine({
+        executeRole: async ({ prompt }) => {
+          prompts.push(prompt);
+          return "report";
+        },
+        runValidation: async () => ++validations >= 2,
+      });
+      const run = engine.start(
+        makeLoop({
+          launchContext: `CONTEXT-${scope}-${"x".repeat(20_000)}`,
+          launchContextScope: scope,
+          maxIterations: 2,
+        }),
+        cwd(),
+      );
+      await engine.settled(run.id);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain(`CONTEXT-${scope}`);
+      expect(prompts[0]!.length).toBeLessThan(13_000);
+      expect(prompts[1]!.includes(`CONTEXT-${scope}`)).toBe(scope === "everyIteration");
+    }
+  });
+
+  it("runs maxIterations 0 without a cap and remains asynchronously stoppable", async () => {
+    let calls = 0;
+    const engine = new LoopEngine({
+      executeAgent: async () => {
+        calls += 1;
+        return "work";
+      },
+      runValidation: async () => false,
+    });
+    const run = engine.start(makeLoop({ maxIterations: 0 }), cwd());
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(3));
+    await engine.stop(run.id);
+    expect(engine.get(run.id)).toMatchObject({
+      maxIterations: 0,
+      status: "stopped",
+      stopReason: "userStopped",
+    });
+  });
+
+  it("snapshots Human Approval goal and launch context without invoking Pi", () => {
+    let calls = 0;
+    const engine = new LoopEngine({
+      executeAgent: async () => {
+        calls += 1;
+        return "no";
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "humanApproval",
+        goal: "approve this goal",
+        checkpointPrompt: "Review now",
+        launchContext: "release context",
+        launchContextScope: "everyIteration",
+      }),
+      cwd(),
+    );
+    expect(calls).toBe(0);
+    expect(run).toMatchObject({
+      launchContext: "release context",
+      launchContextScope: "everyIteration",
+      definitionSnapshot: {
+        goal: "approve this goal",
+        launchContext: "release context",
+        launchContextScope: "everyIteration",
+      },
+    });
+  });
+
   it("durably checkpoints and resolves Human Approval without any executable work", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-human-approval-"));
     let executorCalls = 0;

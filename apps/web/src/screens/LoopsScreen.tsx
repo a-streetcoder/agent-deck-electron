@@ -22,8 +22,11 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  isLoopAvailableInProject,
   normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
+  normalizeLoopLaunchContext,
+  normalizeLoopProjectPaths,
   normalizeParallelBranches,
   LOOP_DEFAULT_CHECKPOINT_PROMPT,
   LOOP_DEFAULT_CLASSIFICATION_PROMPT,
@@ -105,6 +108,7 @@ const inputClass =
   "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
 
 interface LoopDraft {
+  id?: string;
   original: string | null; // the name at open time (null = new); edit keeps the name fixed
   name: string;
   description: string;
@@ -119,9 +123,20 @@ interface LoopDraft {
   triageAgent: string;
   classificationPrompt: string;
   checkpointPrompt: string;
+  launchContext: string;
+  launchContextScope: LoopDefinition["launchContextScope"];
   maxIterations: number;
   validationCommand: string;
   writeTarget: LoopDefinition["writeTarget"];
+  availability: LoopDefinition["availability"];
+  projectPaths: string[];
+}
+
+interface LoopLaunchDraft {
+  loop: LoopDefinition;
+  goal: string;
+  launchContext: string;
+  launchContextScope: LoopDefinition["launchContextScope"];
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -131,6 +146,7 @@ async function responseError(response: Response): Promise<string> {
 
 function draftFrom(loop: LoopDefinition | null): LoopDraft {
   return {
+    id: loop?.id,
     original: loop?.name ?? null,
     name: loop?.name ?? "",
     description: loop?.description ?? "",
@@ -145,12 +161,16 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
     triageAgent: loop?.triageAgent ?? "",
     classificationPrompt: loop?.classificationPrompt ?? LOOP_DEFAULT_CLASSIFICATION_PROMPT,
     checkpointPrompt: loop?.checkpointPrompt ?? LOOP_DEFAULT_CHECKPOINT_PROMPT,
+    launchContext: loop?.launchContext ?? "",
+    launchContextScope: loop?.launchContextScope ?? "firstIterationOnly",
     maxIterations: loop?.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS,
     validationCommand: loop?.validationCommand ?? "",
     writeTarget:
       loop?.structure === "parallelAgents"
         ? "artifactMarkdown"
         : (loop?.writeTarget ?? "artifactMarkdown"),
+    availability: loop?.availability ?? "allProjects",
+    projectPaths: loop?.projectPaths ? [...loop.projectPaths] : [],
   };
 }
 
@@ -158,11 +178,15 @@ export function LoopsScreen() {
   const setError = useAppStore((state) => state.setError);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const projects = useAppStore((state) => state.projects);
+  const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
   const agents = useAgents().filter((agent) => !agent.shadowed && !agent.disabled);
   const [loops, setLoops] = useState<LoopDefinition[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState<LoopDraft | null>(null);
+  const [launchDraft, setLaunchDraft] = useState<LoopLaunchDraft | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [runs, setRuns] = useState<LoopRun[]>([]);
@@ -173,7 +197,11 @@ export function LoopsScreen() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [acknowledgePending, setAcknowledgePending] = useState(false);
   const runIdRef = useRef<string | null>(null);
+  const runPendingRef = useRef(false);
+  runPendingRef.current = runPending;
   const dialogRef = useRef<HTMLDivElement>(null);
+  const launchDialogRef = useRef<HTMLDivElement>(null);
+  const launchReturnFocusRef = useRef<HTMLElement | null>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
   const approveButtonRef = useRef<HTMLButtonElement>(null);
@@ -272,6 +300,60 @@ export function LoopsScreen() {
     };
   }, [closeEditor, editorOpen]);
 
+  const closeLaunch = useCallback((): void => {
+    setLaunchDraft(null);
+    setLaunchError(null);
+    requestAnimationFrame(() => launchReturnFocusRef.current?.focus());
+  }, []);
+
+  const openLaunch = (loop: LoopDefinition): void => {
+    launchReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setLaunchError(null);
+    setLaunchDraft({
+      loop,
+      goal: loop.goal,
+      launchContext: loop.launchContext ?? "",
+      launchContextScope: loop.launchContextScope,
+    });
+  };
+
+  const launchOpen = launchDraft !== null;
+  useEffect(() => {
+    if (!launchOpen) return;
+    const dialog = launchDialogRef.current;
+    if (!dialog) return;
+    const focusables = (): HTMLElement[] =>
+      [...dialog.querySelectorAll<HTMLElement>("button, input, select, textarea")].filter(
+        (element) => !element.hasAttribute("disabled"),
+      );
+    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!runPendingRef.current) closeLaunch();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      const first = items[0];
+      const last = items.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      dialog.removeEventListener("keydown", onKeyDown);
+    };
+  }, [closeLaunch, launchOpen]);
+
   const save = async (): Promise<void> => {
     if (!draft || !draft.name.trim()) return;
     const focusBeforeSave =
@@ -284,6 +366,7 @@ export function LoopsScreen() {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          id: draft.id,
           name: draft.name.trim(),
           description: draft.description,
           goal: draft.goal,
@@ -310,9 +393,16 @@ export function LoopsScreen() {
             draft.structure === "humanApproval"
               ? normalizeLoopCheckpointPrompt(draft.checkpointPrompt)
               : undefined,
+          launchContext: normalizeLoopLaunchContext(draft.launchContext) ?? "",
+          launchContextScope: draft.launchContextScope,
           maxIterations: draft.maxIterations,
           validationCommand: draft.validationCommand,
           writeTarget: draft.writeTarget,
+          availability: draft.availability,
+          projectPaths:
+            draft.availability === "projectPaths"
+              ? normalizeLoopProjectPaths(draft.projectPaths)
+              : [],
         }),
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -332,7 +422,7 @@ export function LoopsScreen() {
       const response = await fetch("/loops", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: loop.name }),
+        body: JSON.stringify({ id: loop.id }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       await load();
@@ -343,7 +433,7 @@ export function LoopsScreen() {
 
   const duplicate = async (loop: LoopDefinition): Promise<void> => {
     try {
-      const response = await fetch(`/loops/${encodeURIComponent(loop.name)}/duplicate`, {
+      const response = await fetch(`/loops/${encodeURIComponent(loop.id)}/duplicate`, {
         method: "POST",
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -353,23 +443,31 @@ export function LoopsScreen() {
     }
   };
 
-  const startRun = async (loop: LoopDefinition): Promise<void> => {
-    if (!currentProjectId || runPending) return;
+  const startRun = async (): Promise<void> => {
+    if (!currentProjectId || !launchDraft || runPending) return;
+    const { loop, goal, launchContext, launchContextScope } = launchDraft;
     setError(null);
+    setLaunchError(null);
     setRunPending(true);
     try {
-      const response = await fetch(`/loops/${encodeURIComponent(loop.name)}/run`, {
+      const response = await fetch(`/loops/${encodeURIComponent(loop.id)}/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId: currentProjectId }),
+        body: JSON.stringify({
+          projectId: currentProjectId,
+          goal,
+          launchContext,
+          launchContextScope,
+        }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       const { run } = (await response.json()) as { run: LoopRun };
       runIdRef.current = run.id;
       setActiveRun(run);
       setRuns((previous) => [...previous, run]);
+      closeLaunch();
     } catch (err) {
-      setError(String(err));
+      setLaunchError(err instanceof Error ? err.message : String(err));
     } finally {
       setRunPending(false);
     }
@@ -502,7 +600,11 @@ export function LoopsScreen() {
     );
   }, [activeRun]);
 
-  const draftError = draft ? loopDefinitionValidationError(draft) : undefined;
+  const draftError = draft
+    ? draft.availability === "projectPaths" && !normalizeLoopProjectPaths(draft.projectPaths).length
+      ? "Select at least one registered project."
+      : loopDefinitionValidationError(draft)
+    : undefined;
   const anyRunActive =
     runs.some((run) => run.status === "running" || run.status === "stopping") ||
     activeRun?.status === "running" ||
@@ -624,8 +726,8 @@ export function LoopsScreen() {
               aria-live="polite"
               aria-atomic="true"
             >
-              {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration} /{" "}
-              {activeRun.maxIterations}
+              {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration}
+              {activeRun.maxIterations === 0 ? " · No limit" : ` / ${activeRun.maxIterations}`}
             </div>
             {parallelAnnouncement ? (
               <div
@@ -909,7 +1011,10 @@ export function LoopsScreen() {
           {!loaded ? <SkeletonRows count={3} /> : null}
           {loops.map((loop, index) => {
             const runnable = !loopDefinitionValidationError(loop);
-            const unavailableId = `loop-structure-unavailable-${index}`;
+            const available = currentProject
+              ? isLoopAvailableInProject(loop, currentProject.path)
+              : false;
+            const unavailableId = `loop-unavailable-${index}`;
             return (
               <div
                 key={loop.id}
@@ -928,18 +1033,26 @@ export function LoopsScreen() {
                     {loop.name}
                   </div>
                   <div className="truncate text-detail text-text-muted">
-                    {LOOP_STRUCTURE_LABEL[loop.structure]} · {loop.maxIterations}× ·{" "}
+                    {LOOP_STRUCTURE_LABEL[loop.structure]} ·{" "}
+                    {loop.maxIterations === 0 ? "Unlimited" : `${loop.maxIterations}×`} ·{" "}
                     {loop.description || "No description"}
                   </div>
-                  {!runnable ? (
+                  <div className="truncate text-detail text-text-muted">
+                    {loop.availability === "allProjects"
+                      ? "Available in all projects"
+                      : `Assigned to ${loop.projectPaths.length} project${loop.projectPaths.length === 1 ? "" : "s"}`}
+                  </div>
+                  {!runnable || (currentProject && !available) ? (
                     <div
                       id={unavailableId}
                       data-testid={`loop-unavailable-${loop.name}`}
                       className="mt-1 text-detail text-text-secondary"
                     >
-                      {loop.structure === "parallelAgents"
-                        ? "Parallel agents are report-only. Edit this definition to use Artifact (markdown) before saving or running."
-                        : "This structure is unavailable. Convert it to Single agent before saving or running."}
+                      {!runnable
+                        ? loop.structure === "parallelAgents"
+                          ? "Parallel agents are report-only. Edit this definition to use Artifact (markdown) before saving or running."
+                          : "This structure is unavailable. Convert it before saving or running."
+                        : `Unavailable in ${currentProject?.name ?? "this project"}. Assign this Loop to the project to run it.`}
                     </div>
                   ) : null}
                 </ControlButton>
@@ -948,14 +1061,24 @@ export function LoopsScreen() {
                   className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                   title={
                     !runnable
-                      ? "Unavailable until converted to Single agent"
-                      : currentProjectId
-                        ? "Run loop"
-                        : "Open a project to run"
+                      ? "Unavailable until its definition is valid"
+                      : currentProject && !available
+                        ? "Loop is not assigned to this project"
+                        : currentProjectId
+                          ? "Configure and run loop"
+                          : "Open a project to run"
                   }
-                  aria-describedby={!runnable ? unavailableId : undefined}
-                  disabled={!runnable || !currentProjectId || runPending || Boolean(anyRunActive)}
-                  onClick={() => void startRun(loop)}
+                  aria-describedby={
+                    !runnable || (currentProject && !available) ? unavailableId : undefined
+                  }
+                  disabled={
+                    !runnable ||
+                    !available ||
+                    !currentProjectId ||
+                    runPending ||
+                    Boolean(anyRunActive)
+                  }
+                  onClick={() => openLaunch(loop)}
                 >
                   <Play size={12} /> Run
                 </ControlButton>
@@ -1039,6 +1162,98 @@ export function LoopsScreen() {
                 onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
               />
             </label>
+            <label className="block text-xs text-text-muted">
+              Launch context / arguments
+              <ControlTextArea
+                data-testid="loop-launch-context"
+                className={`${inputClass} min-h-[76px]`}
+                value={draft.launchContext}
+                onChange={(event) => setDraft({ ...draft, launchContext: event.target.value })}
+              />
+              <span className="mt-1 block text-detail">
+                Optional background or constraints kept separate from the Loop goal.
+              </span>
+            </label>
+            {draft.launchContext.trim() ? (
+              <label className="block text-xs text-text-muted">
+                Context scope
+                <ControlSelect
+                  data-testid="loop-launch-context-scope"
+                  className={inputClass}
+                  value={draft.launchContextScope}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      launchContextScope: event.target.value as LoopDraft["launchContextScope"],
+                    })
+                  }
+                >
+                  <option value="firstIterationOnly">First iteration only</option>
+                  <option value="everyIteration">Every iteration</option>
+                </ControlSelect>
+              </label>
+            ) : null}
+            <fieldset className="space-y-2 rounded-lg border border-border-subtle p-2">
+              <legend className="px-1 text-xs font-medium text-text-secondary">
+                Project availability
+              </legend>
+              <label className="flex items-center gap-2 text-xs text-text-primary">
+                <ControlInput
+                  type="radio"
+                  name="loop-availability"
+                  value="allProjects"
+                  checked={draft.availability === "allProjects"}
+                  onChange={() => setDraft({ ...draft, availability: "allProjects" })}
+                />
+                All projects
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-primary">
+                <ControlInput
+                  type="radio"
+                  name="loop-availability"
+                  value="projectPaths"
+                  checked={draft.availability === "projectPaths"}
+                  onChange={() =>
+                    setDraft({
+                      ...draft,
+                      availability: "projectPaths",
+                      projectPaths:
+                        draft.projectPaths.length || !currentProject
+                          ? draft.projectPaths
+                          : [currentProject.path],
+                    })
+                  }
+                />
+                Selected registered projects
+              </label>
+              {draft.availability === "projectPaths" ? (
+                <div className="space-y-1 pl-5" data-testid="loop-project-assignments">
+                  {projects.map((project) => (
+                    <label key={project.id} className="flex items-center gap-2 text-xs">
+                      <ControlInput
+                        type="checkbox"
+                        checked={draft.projectPaths.includes(project.path)}
+                        onChange={(event) =>
+                          setDraft({
+                            ...draft,
+                            projectPaths: event.target.checked
+                              ? normalizeLoopProjectPaths([...draft.projectPaths, project.path])
+                              : draft.projectPaths.filter((path) => path !== project.path),
+                          })
+                        }
+                      />
+                      <span>{project.name}</span>
+                      {project.id === currentProjectId ? (
+                        <span className="text-text-muted">Current project</span>
+                      ) : null}
+                    </label>
+                  ))}
+                  {!projects.length ? (
+                    <p className="text-detail text-text-muted">No registered projects.</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </fieldset>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-text-muted">
                 Structure
@@ -1439,14 +1654,26 @@ export function LoopsScreen() {
                 <ControlInput
                   data-testid="loop-max-iterations"
                   type="number"
-                  min={1}
+                  min={0}
                   max={LOOP_MAX_ITERATIONS_LIMIT}
+                  step={1}
                   className={inputClass}
                   value={draft.maxIterations}
                   onChange={(e) =>
-                    setDraft({ ...draft, maxIterations: Number(e.target.value) || 1 })
+                    setDraft({
+                      ...draft,
+                      maxIterations: Number.isFinite(Number(e.target.value))
+                        ? Math.min(
+                            LOOP_MAX_ITERATIONS_LIMIT,
+                            Math.max(0, Math.trunc(Number(e.target.value))),
+                          )
+                        : LOOP_DEFAULT_MAX_ITERATIONS,
+                    })
                   }
                 />
+                <span className="mt-1 block text-detail">
+                  0 means no iteration limit; Stop remains available. Maximum 100.
+                </span>
               </label>
               <label className="text-xs text-text-muted">
                 Write target
@@ -1533,6 +1760,104 @@ export function LoopsScreen() {
                 onClick={() => void save()}
               >
                 {saving ? "Saving…" : "Save"}
+              </ControlButton>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {launchDraft ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-3 sm:p-8"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !runPending) closeLaunch();
+          }}
+        >
+          <div
+            ref={launchDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="loop-launch-title"
+            data-testid="loop-launch-dialog"
+            className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
+          >
+            <h3 id="loop-launch-title" className="text-sm font-semibold text-text-primary">
+              Run {launchDraft.loop.name}
+            </h3>
+            <p className="text-xs text-text-muted">
+              {LOOP_STRUCTURE_LABEL[launchDraft.loop.structure]} ·{" "}
+              {launchDraft.loop.maxIterations === 0
+                ? "No iteration limit"
+                : `Up to ${launchDraft.loop.maxIterations} iterations`}
+            </p>
+            <label className="block text-xs text-text-muted">
+              Run goal
+              <ControlTextArea
+                data-testid="loop-launch-goal"
+                className={`${inputClass} min-h-[100px]`}
+                value={launchDraft.goal}
+                disabled={runPending}
+                onChange={(event) => setLaunchDraft({ ...launchDraft, goal: event.target.value })}
+              />
+            </label>
+            <label className="block text-xs text-text-muted">
+              Launch context / arguments
+              <ControlTextArea
+                data-testid="loop-launch-context-override"
+                className={`${inputClass} min-h-[90px]`}
+                value={launchDraft.launchContext}
+                disabled={runPending}
+                onChange={(event) =>
+                  setLaunchDraft({ ...launchDraft, launchContext: event.target.value })
+                }
+              />
+            </label>
+            <label className="block text-xs text-text-muted">
+              Context scope
+              <ControlSelect
+                data-testid="loop-launch-scope-override"
+                className={inputClass}
+                value={launchDraft.launchContextScope}
+                disabled={runPending}
+                onChange={(event) =>
+                  setLaunchDraft({
+                    ...launchDraft,
+                    launchContextScope: event.target.value as LoopLaunchDraft["launchContextScope"],
+                  })
+                }
+              >
+                <option value="firstIterationOnly">First iteration only</option>
+                <option value="everyIteration">Every iteration</option>
+              </ControlSelect>
+            </label>
+            {launchError ? (
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="rounded-lg bg-danger-subtle p-2 text-xs"
+              >
+                {launchError}
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <ControlButton
+                data-testid="loop-launch-cancel"
+                className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm"
+                disabled={runPending}
+                onClick={closeLaunch}
+              >
+                Cancel
+              </ControlButton>
+              <ControlButton
+                data-testid="loop-launch-confirm"
+                className="rounded-capsule bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40"
+                disabled={
+                  runPending ||
+                  (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim())
+                }
+                onClick={() => void startRun()}
+              >
+                {runPending ? "Starting…" : "Start run"}
               </ControlButton>
             </div>
           </div>

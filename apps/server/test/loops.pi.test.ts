@@ -120,8 +120,16 @@ async function putLoop(
   expect(res.ok).toBe(true);
 }
 
-async function startRun(name: string): Promise<string> {
-  const res = await fetch(`${base}/loops/${encodeURIComponent(name)}/run`, {
+async function startRun(
+  name: string,
+  overrides: { goal?: string; launchContext?: string; launchContextScope?: string } = {},
+): Promise<string> {
+  const catalog = (await (await fetch(`${base}/loops`)).json()) as {
+    loops: Array<{ id: string; name: string }>;
+  };
+  const loop = catalog.loops.find((candidate) => candidate.name === name);
+  if (!loop) throw new Error(`missing real-Pi Loop fixture: ${name}`);
+  const res = await fetch(`${base}/loops/${encodeURIComponent(loop.id)}/run`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -130,6 +138,7 @@ async function startRun(name: string): Promise<string> {
       model: MOCK_MODEL_ID,
       extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
       env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
+      ...overrides,
     }),
   });
   expect(res.status).toBe(201);
@@ -186,6 +195,44 @@ describe("loop run engine (real pi)", () => {
     expect(rejected.stopReason).toBe("humanRejected");
     expect(rejected.iterations.flatMap((iteration) => iteration.artifacts)).toHaveLength(1);
     expect(mock.requests).toHaveLength(requestStart);
+  });
+
+  it("injects first/every launch context through real Pi while preserving ordered deltas", async () => {
+    for (const scope of ["firstIterationOnly", "everyIteration"] as const) {
+      const marker = `context-${scope}.marker`;
+      const command = `node -e "const fs=require('fs');if(fs.existsSync('${marker}'))process.exit(0);fs.writeFileSync('${marker}','1');process.exit(1)"`;
+      await putLoop(`context-${scope}`, command, 3);
+      const requestStart = mock.requests.length;
+      const run = await waitTerminal(
+        await startRun(`context-${scope}`, {
+          goal: `Override goal ${scope}`,
+          launchContext: `UNIQUE_CONTEXT_${scope}`,
+          launchContextScope: scope,
+        }),
+      );
+      expect(run.iterations).toHaveLength(2);
+      expect(run.definitionSnapshot).toMatchObject({
+        goal: `Override goal ${scope}`,
+        launchContext: `UNIQUE_CONTEXT_${scope}`,
+        launchContextScope: scope,
+      });
+      const requests = mock.requests.slice(requestStart);
+      const contextRequests = requests.filter((request) =>
+        JSON.stringify(request.messages).includes(`UNIQUE_CONTEXT_${scope}`),
+      );
+      expect(contextRequests).toHaveLength(scope === "everyIteration" ? 2 : 1);
+      for (
+        let requestIndex = requestStart;
+        requestIndex < mock.requests.length;
+        requestIndex += 1
+      ) {
+        expect(
+          mock.events.filter(
+            (event) => event.requestIndex === requestIndex && event.kind === "delta",
+          ).length,
+        ).toBeGreaterThan(2);
+      }
+    }
   });
 
   it("completes after one iteration when validation passes (exit 0)", async () => {
@@ -608,7 +655,11 @@ describe("loop run engine (real pi)", () => {
       }),
     });
 
-    const runRes = await fetch(`${base}/loops/wt-loop/run`, {
+    const wtCatalog = (await (await fetch(`${base}/loops`)).json()) as {
+      loops: Array<{ id: string; name: string }>;
+    };
+    const wtLoop = wtCatalog.loops.find((candidate) => candidate.name === "wt-loop")!;
+    const runRes = await fetch(`${base}/loops/${encodeURIComponent(wtLoop.id)}/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

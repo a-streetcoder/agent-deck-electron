@@ -240,7 +240,10 @@ try {
   let listed = await jsonRequest("GET", "/loops");
   if (listed.loops[0]?.goal !== "safe") throw new Error("create/read failed");
 
+  const originalId = listed.loops[0]?.id;
+  if (typeof originalId !== "string") throw new Error("created Loop did not expose an opaque id");
   await jsonRequest("PUT", "/loops", {
+    id: originalId,
     name: "Packaged Native Smoke",
     description: "updated",
     goal: "safer",
@@ -251,16 +254,18 @@ try {
     throw new Error("update/read failed");
   }
 
-  const duplicate = await jsonRequest(
-    "POST",
-    `/loops/${encodeURIComponent("Packaged Native Smoke")}/duplicate`,
-  );
+  const duplicate = await jsonRequest("POST", `/loops/${encodeURIComponent(originalId)}/duplicate`);
   if (duplicate.name !== "Copy of Packaged Native Smoke") throw new Error("duplicate failed");
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops.length !== 2) throw new Error("duplicate read failed");
 
-  await jsonRequest("DELETE", "/loops", { name: "Packaged Native Smoke" });
-  await jsonRequest("DELETE", "/loops", { name: "Copy of Packaged Native Smoke" });
+  const original = listed.loops.find((loop) => loop.name === "Packaged Native Smoke");
+  const copy = listed.loops.find((loop) => loop.name === "Copy of Packaged Native Smoke");
+  if (typeof original?.id !== "string" || typeof copy?.id !== "string") {
+    throw new Error("duplicate listing did not expose opaque ids");
+  }
+  await jsonRequest("DELETE", "/loops", { id: original.id });
+  await jsonRequest("DELETE", "/loops", { id: copy.id });
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops.length !== 0) throw new Error("delete failed");
 

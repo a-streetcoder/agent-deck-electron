@@ -17,7 +17,7 @@ The cross-plat port is **substantially at parity on the load-bearing core of eve
 
 The t3code-adopted set (terminal, diffs, review comments, open-in-editor, file nav, command palette, composer, checkpoints, preview, desktop notifications) is the **most complete and internally coherent** part of the port — fully wired end-to-end with dedicated e2e specs — and its remaining gaps are almost all documented deferrals rather than broken wiring.
 
-**Bottom line:** the happy paths work end-to-end and are tested, but the port is not yet feature-complete against the native spec. Remaining Loop work is workflow depth such as launch context and review/apply/discard, not missing structure engines.
+**Bottom line:** the happy paths work end-to-end and are tested, but the port is not yet feature-complete against the native spec. Remaining Loop work is workflow depth such as review/apply/discard and transcript integration, not missing structure engines.
 
 ---
 
@@ -35,7 +35,7 @@ The t3code-adopted set (terminal, diffs, review comments, open-in-editor, file n
 
 **Worktrees + merge + Git incl. release** — Strong parity: worktree create, review-then-merge (idle-gated), status/commit/push, AI commit-message, and the generalized Release action (preflight → AI notes → atomic tag-and-push with rollback) all track the native services. Gaps are secondary: session-delete keeps the branch (native force-deletes), no keepWorktreeAfterMerge toggle, no explicit pre-merge parent-clean guard, merge conflict collapses to a generic 409, release preflight drops the remote-sync (ahead/behind) gate.
 
-**Loops** — Loop Bank CRUD and dedicated Maker+Checker, Agent Pipeline, report-only Parallel Agents, Discovery/Triage, and Human Approval orchestration are present with structure-specific configuration and durable evidence. Remaining gaps include launch context, complete worktree review/apply/discard, visible session/transcript integration, project availability/assignment, and builtin loops.
+**Loops** — Loop Bank CRUD and dedicated Maker+Checker, Agent Pipeline, report-only Parallel Agents, Discovery/Triage, and Human Approval orchestration are present with structure-specific configuration and durable evidence. Remaining gaps include complete worktree review/apply/discard, visible session/transcript integration, and builtin loops.
 
 **Memory** — Strong core: project-scoped store, all types/statuses with injection eligibility, secret scanning, launch + per-turn injection, the three bridge tools, and a lexical+fuzzy recall that correctly abstains. Gaps: the **semantic embedder path lacks native's abstain/qualification gates** (injects top-N for any query); there is **no "Memory Recalled" transcript card** and no click-through from memory cards; the data model drops useCount/lastUsedAt; UI drops tags editing, detail view, bulk stale cleanup, and the pause toggle.
 
@@ -55,11 +55,9 @@ The t3code-adopted set (terminal, diffs, review comments, open-in-editor, file n
 
 | Feature                                                                            | Status    | Severity | Area           |
 | ---------------------------------------------------------------------------------- | --------- | -------- | -------------- |
-| Loop launch context + context scope                                                | missing   | major    | Loops          |
 | Loop session + transcript integration (runs in hidden throwaway session)           | divergent | major    | Loops          |
 | Loop per-iteration markdown artifacts + artifact dir + reveal                      | missing   | major    | Loops          |
 | Loop worktree apply/discard                                                        | partial   | major    | Loops          |
-| Loop project availability & assignment (Default/Project/Catalog/Builtin)           | missing   | major    | Loops          |
 | Loop run control bar (Retry/Save/Reveal/Apply/Discard/Approve/Reject)              | partial   | major    | Loops          |
 | Agent avatar generation / import-from-file / per-agent display                     | divergent | major    | Agents         |
 | Per-project agent-assignment matrix (custom agents)                                | missing   | major    | Agents         |
@@ -181,7 +179,7 @@ _(S22a desktop notifications + badges IS landed and is audited above, not parked
 
 ## Recommended fix-slices (non-parked, ordered by severity)
 
-**Slice A — Loops workflow depth.** Preserve the five dedicated structure engines while adding launch context, richer per-iteration artifacts, worktree review/apply/discard, visible session/transcript integration, missing control-bar actions, and project availability/assignment.
+**Slice A — Loops workflow depth.** Preserve the five dedicated structure engines while adding richer per-iteration artifacts, worktree review/apply/discard, visible session/transcript integration, and missing control-bar actions.
 
 **Slice B — Provider + model reach.** Add API-key sign-in (write `ApiKeyCredential` to auth.json) and surface the full connectable provider catalog (Subscriptions + API-key groups). Introduce a session-independent model catalog endpoint so the Models screen and onboarding default-model picker work before a session exists.
 
