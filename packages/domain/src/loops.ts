@@ -76,6 +76,9 @@ export function loopDefinitionValidationError(
 ): string | undefined {
   if (!isRunnableLoopStructure(loop.structure)) return "This Loop structure is unavailable.";
   if (!loop.name.trim()) return "A name is required.";
+  if (loop.structure === "singleAgent") {
+    if (!loop.agentName?.trim()) return "An agent is required.";
+  }
   if (loop.structure === "makerChecker") {
     if (!loop.goal.trim()) return "A goal is required.";
     if (!(loop.makerName ?? loop.agentName ?? "").trim()) return "A maker agent is required.";
@@ -119,6 +122,79 @@ export function normalizeParallelBranches(branches: readonly string[] | undefine
 
 export const LOOP_STRUCTURE_UNSUPPORTED_CODE = "loop_structure_unsupported";
 export const LOOP_PARALLEL_WRITE_TARGET_CODE = "loop_parallel_write_target_unsafe";
+export const LOOP_AGENT_PREFLIGHT_CODE = "loop_agent_preflight_failed";
+export const LOOP_CURRENT_CHECKOUT_CONFIRMATION_CODE =
+  "loop_current_checkout_confirmation_required";
+
+export type LoopAgentRole = "agent" | "maker" | "checker" | "stage" | "branch" | "triage";
+
+export interface LoopRequiredAgentRole {
+  role: LoopAgentRole;
+  /** One-based position for ordered stages and normalized branches. */
+  position?: number;
+  agentName: string;
+}
+
+export interface LoopAgentPreflightIssue extends LoopRequiredAgentRole {
+  reason: "missing" | "disabled";
+}
+
+/** Required named-agent roles in deterministic execution order. */
+export function loopRequiredAgentRoles(
+  loop: Pick<
+    LoopDefinition,
+    | "structure"
+    | "agentName"
+    | "makerName"
+    | "checkerName"
+    | "pipelineStages"
+    | "parallelBranches"
+    | "triageAgent"
+  >,
+): LoopRequiredAgentRole[] {
+  switch (loop.structure) {
+    case "singleAgent":
+      return [{ role: "agent", agentName: loop.agentName?.trim() ?? "" }];
+    case "makerChecker":
+      return [
+        { role: "maker", agentName: (loop.makerName ?? loop.agentName ?? "").trim() },
+        { role: "checker", agentName: loop.checkerName?.trim() ?? "" },
+      ];
+    case "agentPipeline":
+      return (loop.pipelineStages ?? []).map((agentName, index) => ({
+        role: "stage",
+        position: index + 1,
+        agentName: agentName.trim(),
+      }));
+    case "parallelAgents":
+      return normalizeParallelBranches(loop.parallelBranches).map((agentName, index) => ({
+        role: "branch",
+        position: index + 1,
+        agentName,
+      }));
+    case "discoveryTriage":
+      return [{ role: "triage", agentName: loop.triageAgent?.trim() ?? "" }];
+    case "humanApproval":
+      return [];
+  }
+}
+
+export function loopAgentRoleLabel(role: LoopRequiredAgentRole): string {
+  switch (role.role) {
+    case "agent":
+      return "Single agent";
+    case "maker":
+      return "Maker";
+    case "checker":
+      return "Checker";
+    case "stage":
+      return `Pipeline stage ${role.position}`;
+    case "branch":
+      return `Parallel branch ${role.position}`;
+    case "triage":
+      return "Triage";
+  }
+}
 
 export const LOOP_STRUCTURE_LABEL: Record<LoopStructure, string> = {
   singleAgent: "Single agent",

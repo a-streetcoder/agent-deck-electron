@@ -115,7 +115,13 @@ async function putLoop(
   const res = await fetch(`${base}/loops`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, goal: "Do the work.", validationCommand, maxIterations }),
+    body: JSON.stringify({
+      name,
+      goal: "Do the work.",
+      agentName: "Agent A",
+      validationCommand,
+      maxIterations,
+    }),
   });
   expect(res.ok).toBe(true);
 }
@@ -138,6 +144,7 @@ async function startRun(
       model: MOCK_MODEL_ID,
       extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
       env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
+      currentCheckoutConfirmed: true,
       ...overrides,
     }),
   });

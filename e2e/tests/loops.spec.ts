@@ -17,6 +17,11 @@ function loopFile(): string {
 
 test.beforeAll(async () => {
   harness = await startHarness({ chunkDelayMs: 20 });
+  const agentsDir = path.join(harness.piHome, ".pi", "agent", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(path.join(agentsDir, "Agent A.md"), "---\nname: Agent A\n---\nRun.\n");
+  writeFileSync(path.join(agentsDir, "Maker.md"), "---\nname: Maker\n---\nMake.\n");
+  writeFileSync(path.join(agentsDir, "Checker.md"), "---\nname: Checker\n---\nCheck.\n");
 });
 
 test.afterAll(async () => {
@@ -62,6 +67,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
     "Discovery + triage",
     "Human approval",
   ]);
+  await page.getByTestId("loop-agent").selectOption("Agent A");
   await page.getByTestId("loop-max-iterations").fill("6");
   await page.getByTestId("loop-validation").fill("pnpm test");
   await page.getByTestId("loop-save").click();

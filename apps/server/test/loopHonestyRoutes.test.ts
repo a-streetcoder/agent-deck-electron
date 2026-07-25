@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LOOP_PARALLEL_WRITE_TARGET_CODE, type LoopStructure } from "@agent-deck/domain";
-import { deleteLoopFile, loopsDir, scanLoops, writeLoopFile } from "@agent-deck/resources";
+import {
+  deleteLoopFile,
+  loopsDir,
+  scanLoops,
+  writeLoopFile as persistLoopFile,
+} from "@agent-deck/resources";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
@@ -19,6 +24,18 @@ import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loop
 import { SessionCreationError } from "../src/SessionManager.ts";
 
 const servers: ReturnType<typeof Fastify>[] = [];
+
+function writeLoopFile(
+  roots: Parameters<typeof persistLoopFile>[0],
+  edit: Parameters<typeof persistLoopFile>[1],
+): ReturnType<typeof persistLoopFile> {
+  return persistLoopFile(roots, {
+    ...(edit.structure === undefined || edit.structure === "singleAgent"
+      ? { agentName: edit.agentName ?? "Agent A" }
+      : {}),
+    ...edit,
+  });
+}
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -47,6 +64,14 @@ function makeRoutes(
   const resolveHumanApproval = vi.fn();
   const getEngine = vi.fn();
   const broadcast = vi.fn();
+  const resolveNamedAgent = vi.fn<ServerContext["resolveNamedAgent"]>((name: string) =>
+    name.startsWith("Missing")
+      ? { status: "not_found" as const }
+      : {
+          status: "ok" as const,
+          agent: { body: "", systemPromptMode: "replace", skillDirs: [], extensions: [] },
+        },
+  );
   const findProject = vi.fn((_predicate?: (project: { id: string; path: string }) => boolean) => ({
     id: "project",
     path: home,
@@ -97,6 +122,7 @@ function makeRoutes(
       bridgeTokens,
       broadcast,
       rootsFor,
+      resolveNamedAgent,
       enabledExtensionPaths: () => [],
       worktreesRoot: path.join(home, "managed-worktrees"),
     } as unknown as ServerContext,
@@ -123,6 +149,7 @@ function makeRoutes(
     getEngine,
     findProject,
     broadcast,
+    resolveNamedAgent,
     indexRows,
     bridgeTokens,
     canonicalCheckoutEffect,
@@ -217,7 +244,7 @@ describe("loop route honesty gate", () => {
     const run = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Release Approval", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(run.statusCode).toBe(201);
     const checkpoint = run.json().run;
@@ -315,7 +342,7 @@ describe("loop route honesty gate", () => {
     const response = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Rollback Loop", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
 
     expect(response.statusCode).toBe(500);
@@ -404,7 +431,7 @@ describe("loop route honesty gate", () => {
     const responsePromise = fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Announce Rollback Loop", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     await vi.waitFor(() => expect(order).toEqual(["stop"]));
     expect(destroySession).not.toHaveBeenCalled();
@@ -458,7 +485,7 @@ describe("loop route honesty gate", () => {
     const response = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Retained Review Loop", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(response.statusCode).toBe(201);
     expect(response.json().run.launch.worktree).toMatchObject({
@@ -482,10 +509,10 @@ describe("loop route honesty gate", () => {
     const run = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Invalid Triage", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(run.statusCode).toBe(422);
-    expect(run.json()).toMatchObject({ code: "loop_definition_invalid" });
+    expect(run.json()).toMatchObject({ code: "loop_agent_preflight_failed" });
     expect(createSession).not.toHaveBeenCalled();
     expect(startEngine).not.toHaveBeenCalled();
     expect(createLoopWorktree).not.toHaveBeenCalled();
@@ -508,11 +535,11 @@ describe("loop route honesty gate", () => {
     const unavailable = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Invalid Triage", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(unavailable.statusCode).toBe(422);
     expect(unavailable.json()).toMatchObject({
-      code: "loop_definition_invalid",
+      code: "loop_agent_preflight_failed",
       error: expect.stringContaining("Missing Explorer"),
     });
     expect(createSession).not.toHaveBeenCalled();
@@ -578,11 +605,18 @@ describe("loop route honesty gate", () => {
     }));
     runSubagent.mockResolvedValue("classification");
 
-    for (const name of ["Artifact Triage", "Checkout Triage", "Worktree Triage"]) {
+    for (const [name, writeTarget] of [
+      ["Artifact Triage", "artifactMarkdown"],
+      ["Checkout Triage", "currentCheckout"],
+      ["Worktree Triage", "newWorktree"],
+    ] as const) {
       const response = await fastify.inject({
         method: "POST",
         url: catalogActionUrl(home, name, "run"),
-        payload: { projectId: "project" },
+        payload: {
+          projectId: "project",
+          ...(writeTarget === "currentCheckout" ? { currentCheckoutConfirmed: true } : {}),
+        },
       });
       expect(response.statusCode).toBe(201);
       const call = startEngine.mock.calls.at(-1)!;
@@ -632,7 +666,7 @@ describe("loop route honesty gate", () => {
     const run = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Invalid Pipeline", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(run.statusCode).toBe(422);
     expect(run.json()).toMatchObject({ code: "loop_definition_invalid" });
@@ -664,7 +698,7 @@ describe("loop route honesty gate", () => {
     const response = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Unsafe Parallel", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(response.statusCode).toBe(422);
     expect(response.json()).toMatchObject({ code: LOOP_PARALLEL_WRITE_TARGET_CODE });
@@ -715,7 +749,7 @@ describe("loop route honesty gate", () => {
     const response = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Safe Parallel", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(response.statusCode).toBe(201);
     const options = startEngine.mock.calls[0]![2];
@@ -788,7 +822,7 @@ describe("loop route honesty gate", () => {
     const artifact = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Artifact Pipeline", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(artifact.statusCode).toBe(201);
     const artifactOptions = startEngine.mock.calls[0]![2];
@@ -806,7 +840,7 @@ describe("loop route honesty gate", () => {
     const checkout = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Checkout Pipeline", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(checkout.statusCode).toBe(201);
     const checkoutOptions = startEngine.mock.calls[1]![2];
@@ -877,13 +911,13 @@ describe("loop route honesty gate", () => {
     const first = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Checkout Loop", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(first.statusCode).toBe(201);
     const second = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Checkout Loop", "run"),
-      payload: { projectId: "project-alias" },
+      payload: { projectId: "project-alias", currentCheckoutConfirmed: true },
     });
     expect(second.statusCode).toBe(409);
     expect(second.json()).toMatchObject({ code: "loop_checkout_busy" });
@@ -902,7 +936,7 @@ describe("loop route honesty gate", () => {
     const afterCleanup = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Checkout Loop", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(afterCleanup.statusCode).toBe(201);
     expect(createSession).toHaveBeenCalledTimes(2);
@@ -926,7 +960,7 @@ describe("loop route honesty gate", () => {
     const response = await fastify.inject({
       method: "POST",
       url: catalogActionUrl(home, "Missing Checkout", "run"),
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
 
     expect(response.statusCode).toBe(409);
@@ -1105,7 +1139,7 @@ describe("loop route honesty gate", () => {
     const run = await fastify.inject({
       method: "POST",
       url: `/loops/${encodeURIComponent(alpha.id)}/run`,
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(run.statusCode).toBe(201);
     expect(startEngine.mock.calls[0]![0]).toMatchObject({ id: alpha.id, name: "Alpha" });
@@ -1148,7 +1182,7 @@ describe("loop route honesty gate", () => {
     const rejected = await fastify.inject({
       method: "POST",
       url: `/loops/${encodeURIComponent(assigned.id)}/run`,
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(rejected.statusCode).toBe(403);
     expect(rejected.json()).toMatchObject({ code: "loop_unavailable_for_project" });
@@ -1170,7 +1204,7 @@ describe("loop route honesty gate", () => {
     const selected = await fastify.inject({
       method: "POST",
       url: `/loops/${encodeURIComponent(assigned.id)}/run`,
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(selected.statusCode).toBe(201);
     expect(startEngine).toHaveBeenCalledTimes(1);
@@ -1187,7 +1221,7 @@ describe("loop route honesty gate", () => {
     const allProjects = await fastify.inject({
       method: "POST",
       url: `/loops/${encodeURIComponent(assigned.id)}/run`,
-      payload: { projectId: "project" },
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
     });
     expect(allProjects.statusCode).toBe(201);
     expect(startEngine).toHaveBeenCalledTimes(2);
@@ -1250,13 +1284,234 @@ describe("loop route honesty gate", () => {
     });
   });
 
+  it("preflights both valid Maker+Checker roles and preserves their selected names", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-maker-preflight-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Maker Preflight",
+        structure: "makerChecker",
+        goal: "Build and review.",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "Require evidence.",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, resolveNamedAgent, createSession, startEngine, settledEngine } =
+      makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: {
+        id: "maker-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    startEngine.mockReturnValue({
+      id: "maker-run",
+      loopName: "Maker Preflight",
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Maker Preflight", "run"),
+      payload: { projectId: "project" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(resolveNamedAgent.mock.calls.map(([name]) => name)).toEqual(["Maker", "Checker"]);
+    expect(startEngine.mock.calls[0]![0]).toMatchObject({
+      makerName: "Maker",
+      checkerName: "Checker",
+    });
+  });
+
+  it("reports every unavailable ordered role before checkout or executable allocation", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-agent-preflight-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Preflight Pipeline",
+        structure: "agentPipeline",
+        goal: "Run every role.",
+        pipelineStages: [
+          "Good",
+          "Missing Agent",
+          "Missing Agent",
+          "Disabled Agent",
+          "Shadowed Agent",
+        ],
+        writeTarget: "currentCheckout",
+      },
+    );
+    const {
+      fastify,
+      resolveNamedAgent,
+      canonicalCheckoutEffect,
+      createWorktreeEffect,
+      createSession,
+      startEngine,
+    } = makeRoutes(home);
+    resolveNamedAgent.mockImplementation((name: string) =>
+      name === "Disabled Agent"
+        ? ({ status: "disabled" } as const)
+        : name === "Good"
+          ? ({
+              status: "ok",
+              agent: { body: "", systemPromptMode: "replace", skillDirs: [], extensions: [] },
+            } as const)
+          : ({ status: "not_found" } as const),
+    );
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Preflight Pipeline", "run"),
+      payload: { projectId: "project", currentCheckoutConfirmed: true },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      code: "loop_agent_preflight_failed",
+      issues: [
+        { role: "stage", position: 2, agentName: "Missing Agent", reason: "missing" },
+        { role: "stage", position: 3, agentName: "Missing Agent", reason: "missing" },
+        { role: "stage", position: 4, agentName: "Disabled Agent", reason: "disabled" },
+        { role: "stage", position: 5, agentName: "Shadowed Agent", reason: "missing" },
+      ],
+    });
+    expect(resolveNamedAgent.mock.calls.map(([name]) => name)).toEqual([
+      "Good",
+      "Missing Agent",
+      "Missing Agent",
+      "Disabled Agent",
+      "Shadowed Agent",
+    ]);
+    expect(canonicalCheckoutEffect).not.toHaveBeenCalled();
+    expect(createWorktreeEffect).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+  });
+
+  it("requires typed current-checkout confirmation before canonicalization, including retry", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-checkout-confirmation-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Confirmed Checkout",
+        goal: "Run safely.",
+        agentName: "Agent A",
+        writeTarget: "currentCheckout",
+      },
+    );
+    const definition = scanLoops({ home }).find((loop) => loop.name === "Confirmed Checkout")!;
+    const {
+      fastify,
+      getEngine,
+      canonicalCheckoutEffect,
+      createSession,
+      startEngine,
+      settledEngine,
+    } = makeRoutes(home);
+
+    const launch = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Confirmed Checkout", "run"),
+      payload: { projectId: "project" },
+    });
+    expect(launch.statusCode).toBe(422);
+    expect(launch.json()).toMatchObject({
+      code: "loop_current_checkout_confirmation_required",
+    });
+    expect(canonicalCheckoutEffect).not.toHaveBeenCalled();
+
+    getEngine.mockReturnValue({
+      id: "00000000-0000-4000-8000-000000000001",
+      catalogId: definition.id,
+      loopName: definition.name,
+      structure: definition.structure,
+      definitionSnapshot: {
+        name: definition.name,
+        description: definition.description,
+        goal: definition.goal,
+        structure: definition.structure,
+        agentName: definition.agentName,
+        launchContextScope: definition.launchContextScope,
+        maxIterations: definition.maxIterations,
+        validationCommand: definition.validationCommand,
+        writeTarget: definition.writeTarget,
+      },
+      projectId: "project",
+      status: "failed",
+      stopReason: "agentFailed",
+      currentIteration: 1,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+    });
+    const retry = await fastify.inject({
+      method: "POST",
+      url: "/loops/runs/00000000-0000-4000-8000-000000000001/retry",
+      payload: {},
+    });
+    expect(retry.statusCode).toBe(422);
+    expect(retry.json()).toMatchObject({
+      code: "loop_current_checkout_confirmation_required",
+    });
+    expect(canonicalCheckoutEffect).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(startEngine).not.toHaveBeenCalled();
+
+    createSession.mockReturnValue({
+      meta: {
+        id: "retry-parent",
+        cwd: home,
+        createdAt: new Date().toISOString(),
+        projectId: "project",
+      },
+    });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    startEngine.mockReturnValue({
+      id: "retry-run",
+      loopName: definition.name,
+      status: "running",
+      currentIteration: 0,
+      maxIterations: 1,
+      iterations: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const confirmedRetry = await fastify.inject({
+      method: "POST",
+      url: "/loops/runs/00000000-0000-4000-8000-000000000001/retry",
+      payload: { currentCheckoutConfirmed: true },
+    });
+    expect(confirmedRetry.statusCode).toBe(201);
+    expect(canonicalCheckoutEffect).toHaveBeenCalledOnce();
+    expect(createSession).toHaveBeenCalledOnce();
+    expect(startEngine).toHaveBeenCalledOnce();
+  });
+
   it("keeps supported single-agent creation and duplication working", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-honesty-supported-"));
     const { fastify } = makeRoutes(home);
     const create = await fastify.inject({
       method: "PUT",
       url: "/loops",
-      payload: { name: "Supported", structure: "singleAgent", goal: "Run safely." },
+      payload: {
+        name: "Supported",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        agentName: "Agent A",
+      },
     });
     expect(create.statusCode).toBe(200);
 

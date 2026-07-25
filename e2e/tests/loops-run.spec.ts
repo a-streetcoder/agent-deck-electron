@@ -93,12 +93,14 @@ test.beforeAll(async () => {
   await putLoop({
     name: "Green Suite",
     goal: "Make it pass.",
+    agentName: "Agent A",
     validationCommand: "exit 0",
     maxIterations: 3,
   });
   await putLoop({
     name: "Retained Worktree",
     goal: "Produce retained review evidence.",
+    agentName: "Agent A",
     validationCommand: "exit 0",
     writeTarget: "newWorktree",
     maxIterations: 1,
@@ -214,7 +216,15 @@ async function launchLoop(
     await page.getByTestId("loop-launch-context-override").fill(overrides.context);
   if (overrides.scope !== undefined)
     await page.getByTestId("loop-launch-scope-override").selectOption(overrides.scope);
-  await page.getByTestId("loop-launch-confirm").click();
+  const confirm = page.getByTestId("loop-launch-confirm");
+  const checkoutConfirmation = page.getByTestId("loop-current-checkout-confirmation");
+  if (await checkoutConfirmation.count()) {
+    await expect(confirm).toBeDisabled();
+    await checkoutConfirmation.focus();
+    await page.keyboard.press("Space");
+    await expect(checkoutConfirmation).toBeChecked();
+  }
+  await confirm.click();
 }
 
 test("authors, duplicates, reloads, and approves an accessible Human Approval checkpoint", async ({
@@ -292,6 +302,10 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   ).toBe(true);
   await expect(page.getByTestId("loop-run-retry")).toBeFocused();
   await page.getByTestId("loop-run-retry").click();
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveAccessibleName(
+    "Retry Release Approval",
+  );
+  await page.getByTestId("loop-launch-confirm").click();
   await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
   const afterRetryResponse = await page.request.get(`${harness.baseUrl}/loops/runs`);
   const afterRetryRuns = (await afterRetryResponse.json()) as { runs: LoopRun[] };
@@ -349,8 +363,30 @@ test("rejects Human Approval by keyboard and preserves focus on a resolution con
 test("authors project availability and uses an accessible responsive launch override dialog", async ({
   page,
 }) => {
+  await page.route("**/resources/agents?projectId=*", async (route) => {
+    const response = await route.fetch();
+    const data = (await response.json()) as { agents: Array<Record<string, unknown>> };
+    if (new URL(route.request().url()).searchParams.get("projectId") === projectId) {
+      data.agents.push({
+        name: "Project Only",
+        scope: "project",
+        filePath: "/fixture/project-only.md",
+        body: "Project scoped.",
+        systemPromptMode: "replace",
+        shadowed: false,
+        replacesBuiltin: false,
+      });
+    }
+    await route.fulfill({ response, json: data });
+  });
   await openLoops(page);
   await page.getByTestId("loop-open-Green Suite").click();
+  const agentSelector = page.getByTestId("loop-agent");
+  await expect(agentSelector.locator('option[value="Project Only"]')).toHaveCount(1);
+  await agentSelector.press("p");
+  await agentSelector.press("p");
+  await expect(agentSelector).toHaveValue("Project Only");
+  await agentSelector.selectOption("Agent A");
   await page.getByRole("radio", { name: "Selected registered projects" }).check();
   await page.getByTestId("loop-launch-context").fill("saved context");
   await page.getByTestId("loop-launch-context-scope").selectOption("firstIterationOnly");
@@ -378,6 +414,11 @@ test("authors project availability and uses an accessible responsive launch over
     "Assign this Loop to the project",
   );
   await expect(page.getByTestId("loop-run-Green Suite")).toBeDisabled();
+  await page.getByTestId("loop-open-Green Suite").click();
+  await expect(page.getByTestId("loop-agent").locator('option[value="Project Only"]')).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "Cancel" }).click();
 
   await selectProject(page, path.basename(project));
   await page.getByTestId("nav-loops").click();
@@ -404,7 +445,9 @@ test("authors project availability and uses an accessible responsive launch over
   });
   await runButton.click();
   await page.getByTestId("loop-launch-goal").fill("Run-only goal override");
+  await expect(page.getByTestId("loop-launch-goal")).toHaveValue("Run-only goal override");
   await page.getByTestId("loop-launch-context-override").fill("RUN_ONLY_CONTEXT");
+  await expect(page.getByTestId("loop-launch-context-override")).toHaveValue("RUN_ONLY_CONTEXT");
   await page.getByTestId("loop-launch-scope-override").selectOption("everyIteration");
   const confirm = page.getByTestId("loop-launch-confirm");
   const start = confirm.click();
@@ -469,9 +512,9 @@ test("authors, reorders, duplicates, runs, and restores an accessible Pipeline",
   await page.getByTestId("loop-pipeline-add-stage").click();
   await page.getByTestId("loop-pipeline-add-stage").click();
   await page.getByTestId("loop-pipeline-add-stage").click();
-  await page.getByTestId("loop-pipeline-stage-agent-0").fill("Agent A");
-  await page.getByTestId("loop-pipeline-stage-agent-1").fill("Agent B");
-  await page.getByTestId("loop-pipeline-stage-agent-2").fill("Agent A");
+  await page.getByTestId("loop-pipeline-stage-agent-0").selectOption("Agent A");
+  await page.getByTestId("loop-pipeline-stage-agent-1").selectOption("Agent B");
+  await page.getByTestId("loop-pipeline-stage-agent-2").selectOption("Agent A");
   await page.getByRole("button", { name: "Move pipeline stage 3 up" }).click();
   await expect(page.getByTestId("loop-pipeline-stage-agent-0")).toHaveValue("Agent A");
   await expect(page.getByTestId("loop-pipeline-stage-agent-1")).toHaveValue("Agent A");
@@ -518,9 +561,9 @@ test("authors, normalizes, duplicates, runs, and restores accessible Parallel re
   await page.getByTestId("loop-parallel-add-branch").click();
   await page.getByTestId("loop-parallel-add-branch").click();
   await page.getByTestId("loop-parallel-add-branch").click();
-  await page.getByTestId("loop-parallel-branch-agent-0").fill("Agent A");
-  await page.getByTestId("loop-parallel-branch-agent-1").fill("Agent B");
-  await page.getByTestId("loop-parallel-branch-agent-2").fill("Agent A");
+  await page.getByTestId("loop-parallel-branch-agent-0").selectOption("Agent A");
+  await page.getByTestId("loop-parallel-branch-agent-1").selectOption("Agent B");
+  await page.getByTestId("loop-parallel-branch-agent-2").selectOption("Agent A");
   await page.getByRole("button", { name: "Move parallel branch 2 up" }).click();
   await expect(page.getByTestId("loop-parallel-branch-agent-0")).toHaveValue("Agent B");
   await expect(page.getByTestId("loop-parallel-branch-agent-1")).toHaveValue("Agent A");
@@ -588,7 +631,7 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   await expect(triageAgent).toBeFocused();
   await expect(page.getByRole("alert")).toContainText("A triage agent is required");
   await expect(page.getByTestId("loop-save")).toBeDisabled();
-  await triageAgent.fill("Triage Agent");
+  await triageAgent.selectOption("Triage Agent");
   const prompt = page.getByTestId("loop-classification-prompt");
   const nativeDefault = "Classify findings by severity and summarize recommended next action.";
   await expect(prompt).toHaveValue(nativeDefault);
@@ -638,10 +681,11 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   await page.getByTestId("nav-loops").click();
   await expect(page.getByTestId("loop-run-iterations")).toContainText("High impact finding");
 
-  await launchLoop(page, "Unavailable Triage");
-  await expect(page.getByRole("alert")).toContainText(
-    'The configured triage agent "Unavailable Explorer" is unavailable',
+  await page.getByTestId("loop-run-Unavailable Triage").click();
+  await expect(page.getByTestId("loop-launch-agent-errors")).toContainText(
+    "Triage: “Unavailable Explorer” is unavailable",
   );
+  await expect(page.getByTestId("loop-launch-confirm")).toBeDisabled();
   await expect(page.getByTestId("loop-run-panel")).toContainText("Authored Triage");
   await page.getByTestId("loop-launch-cancel").click();
   await expect(page.getByTestId("loop-launch-dialog")).toHaveCount(0);
@@ -747,18 +791,36 @@ test("shows queued Parallel branches, announces transitions, and withholds Retry
   await expect(page.getByTestId("loop-run-dismiss")).toBeFocused();
 });
 
-test("shows a failed Parallel branch textually and as an alert", async ({ page }) => {
+test("repairs an existing unavailable Parallel agent without silent substitution", async ({
+  page,
+}) => {
   await openLoops(page);
+  await page.getByTestId("loop-open-Failing Parallel").click();
+  const missing = page.getByTestId("loop-parallel-branch-agent-0");
+  await expect(missing).toHaveValue("Missing Agent");
+  await expect(missing.locator('option[value="Missing Agent"]')).toContainText("unavailable");
+  await expect(page.getByTestId("loop-agent-role-errors")).toContainText(
+    "Parallel branch 1: “Missing Agent” is unavailable",
+  );
+  await expect(page.getByTestId("loop-save")).toBeDisabled();
+  await page.getByTestId("loop-cancel").click();
+  await page.getByTestId("loop-run-Failing Parallel").click();
+  await expect(page.getByTestId("loop-launch-agent-errors")).toContainText(
+    "Parallel branch 1: “Missing Agent” is unavailable",
+  );
+  await expect(page.getByTestId("loop-launch-confirm")).toBeDisabled();
+  await page.getByTestId("loop-launch-cancel").click();
+  await page.getByTestId("loop-open-Failing Parallel").click();
+  await page.getByTestId("loop-parallel-branch-agent-0").selectOption("Agent B");
+  await page.getByTestId("loop-save").click();
+
   await launchLoop(page, "Failing Parallel");
-  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "failed", {
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
   const statuses = page.getByTestId("loop-parallel-branch-statuses");
-  await expect(statuses.locator('[data-branch-index="0"]')).toContainText("Missing Agent — Failed");
+  await expect(statuses.locator('[data-branch-index="0"]')).toContainText("Agent B — Completed");
   await expect(statuses.locator('[data-branch-index="1"]')).toContainText("Agent A — Completed");
-  await expect(
-    page.getByRole("alert").filter({ hasText: "Parallel branch Missing Agent failed" }),
-  ).toContainText("unknown agent: Missing Agent");
 });
 
 test("shows ordered Maker+Checker evidence, disables launches, and restores history", async ({
@@ -832,8 +894,28 @@ test("shows native-truthful human-input and recovery actions without broad live 
   const now = new Date().toISOString();
   const humanRun = {
     id: "22222222-2222-4222-8222-222222222222",
+    catalogId: "reviewed-report-id",
     loopName: "Reviewed Report",
+    structure: "makerChecker",
     projectId,
+    launch: {
+      sessionId: "human-loop-parent",
+      writeTarget: "currentCheckout",
+      checkoutLockKey: "/canonical/project",
+    },
+    definitionSnapshot: {
+      name: "Reviewed Report",
+      description: "",
+      goal: "Review evidence.",
+      structure: "makerChecker",
+      makerName: "Maker",
+      checkerName: "Checker",
+      checkerRubric: "Require evidence.",
+      launchContextScope: "firstIterationOnly",
+      maxIterations: 2,
+      validationCommand: "exit 0",
+      writeTarget: "currentCheckout",
+    },
     status: "stopped",
     currentIteration: 1,
     maxIterations: 2,
@@ -871,6 +953,16 @@ test("shows native-truthful human-input and recovery actions without broad live 
   await expect(page.getByTestId("loop-evaluator-decision")).toContainText("CONTINUE");
   await expect(page.getByTestId("loop-run-panel")).not.toHaveAttribute("aria-live");
   await expect(page.getByTestId("loop-run-live-status")).toHaveText(/Stopped · Iteration 1 \/ 2/);
+  await page.getByTestId("loop-run-retry").click();
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveAccessibleName(
+    "Retry Reviewed Report",
+  );
+  const retryConfirmation = page.getByTestId("loop-current-checkout-confirmation");
+  await expect(page.getByTestId("loop-launch-confirm")).toBeDisabled();
+  await retryConfirmation.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("loop-launch-confirm")).toBeEnabled();
+  await page.getByTestId("loop-launch-cancel").click();
 
   await page.unroute(/\/loops\/runs$/);
   const recoveryRun = {
@@ -936,7 +1028,7 @@ test("non-destructive artifact runs may coexist", async () => {
     await fetch(`${harness.baseUrl}/loops/${encodeURIComponent(reviewedReportId)}/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ projectId, currentCheckoutConfirmed: true }),
     });
   const [first, second] = await Promise.all([start(), start()]);
   expect(first.status).toBe(201);
@@ -952,7 +1044,7 @@ test("returns a typed conflict for concurrent destructive checkout runs", async 
     await fetch(`${harness.baseUrl}/loops/${encodeURIComponent(slowStopId)}/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ projectId, currentCheckoutConfirmed: true }),
     });
   const first = await start();
   expect(first.status).toBe(201);

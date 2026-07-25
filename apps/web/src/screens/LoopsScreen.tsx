@@ -21,6 +21,8 @@ import {
   canRetryLoopRun,
   isLoopRunTerminal,
   isRunnableLoopStructure,
+  loopAgentRoleLabel,
+  loopRequiredAgentRoles,
   loopDefinitionValidationError,
   isLoopAvailableInProject,
   normalizeLoopCheckpointPrompt,
@@ -36,7 +38,9 @@ import {
   RUNNABLE_LOOP_STRUCTURES,
   LOOP_WRITE_TARGET_LABEL,
   LOOP_WRITE_TARGETS,
+  type AgentInfo,
   type LoopDefinition,
+  type LoopRequiredAgentRole,
   type LoopRun,
 } from "@agent-deck/domain";
 import { SkeletonRows } from "../components/Skeleton.tsx";
@@ -134,9 +138,24 @@ interface LoopDraft {
 
 interface LoopLaunchDraft {
   loop: LoopDefinition;
+  retryOf?: string;
   goal: string;
   launchContext: string;
   launchContextScope: LoopDefinition["launchContextScope"];
+  currentCheckoutConfirmed: boolean;
+}
+
+function unavailableAgentRoles(
+  loop: Parameters<typeof loopRequiredAgentRoles>[0],
+  availableNames: ReadonlySet<string>,
+): LoopRequiredAgentRole[] {
+  return loopRequiredAgentRoles(loop).filter(
+    (role) => !role.agentName || !availableNames.has(role.agentName),
+  );
+}
+
+function agentUnavailableText(role: LoopRequiredAgentRole): string {
+  return `${loopAgentRoleLabel(role)}: ${role.agentName ? `“${role.agentName}” is unavailable` : "select an agent"}.`;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -181,7 +200,9 @@ export function LoopsScreen() {
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
-  const agents = useAgents().filter((agent) => !agent.shadowed && !agent.disabled);
+  const allAgents = useAgents();
+  const agents = allAgents.filter((agent) => !agent.shadowed && !agent.disabled);
+  const availableAgentNames = new Set(agents.map((agent) => agent.name));
   const [loops, setLoops] = useState<LoopDefinition[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState<LoopDraft | null>(null);
@@ -208,7 +229,7 @@ export function LoopsScreen() {
   const rejectButtonRef = useRef<HTMLButtonElement>(null);
   const dismissButtonRef = useRef<HTMLButtonElement>(null);
   const checkpointPromptRef = useRef<HTMLTextAreaElement>(null);
-  const triageAgentRef = useRef<HTMLInputElement>(null);
+  const triageAgentRef = useRef<HTMLSelectElement>(null);
   const focusRetryAfterStopRef = useRef(false);
   const approvalErrorFocusRef = useRef<"approve" | "reject" | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -315,6 +336,7 @@ export function LoopsScreen() {
       goal: loop.goal,
       launchContext: loop.launchContext ?? "",
       launchContextScope: loop.launchContextScope,
+      currentCheckoutConfirmed: false,
     });
   };
 
@@ -445,21 +467,32 @@ export function LoopsScreen() {
 
   const startRun = async (): Promise<void> => {
     if (!currentProjectId || !launchDraft || runPending) return;
-    const { loop, goal, launchContext, launchContextScope } = launchDraft;
+    const { loop, retryOf, goal, launchContext, launchContextScope, currentCheckoutConfirmed } =
+      launchDraft;
     setError(null);
     setLaunchError(null);
     setRunPending(true);
     try {
-      const response = await fetch(`/loops/${encodeURIComponent(loop.id)}/run`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          projectId: currentProjectId,
-          goal,
-          launchContext,
-          launchContextScope,
-        }),
-      });
+      const response = await fetch(
+        retryOf
+          ? `/loops/runs/${encodeURIComponent(retryOf)}/retry`
+          : `/loops/${encodeURIComponent(loop.id)}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            retryOf
+              ? { currentCheckoutConfirmed }
+              : {
+                  projectId: currentProjectId,
+                  goal,
+                  launchContext,
+                  launchContextScope,
+                  currentCheckoutConfirmed,
+                },
+          ),
+        },
+      );
       if (!response.ok) throw new Error(await responseError(response));
       const { run } = (await response.json()) as { run: LoopRun };
       runIdRef.current = run.id;
@@ -531,21 +564,27 @@ export function LoopsScreen() {
     }
   };
 
-  const retryRun = async (): Promise<void> => {
-    if (!activeRun || runPending) return;
-    setRunPending(true);
-    try {
-      const response = await fetch(`/loops/runs/${activeRun.id}/retry`, { method: "POST" });
-      if (!response.ok) throw new Error(await responseError(response));
-      const { run } = (await response.json()) as { run: LoopRun };
-      runIdRef.current = run.id;
-      setActiveRun(run);
-      setRuns((previous) => [...previous, run]);
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setRunPending(false);
-    }
+  const openRetry = (): void => {
+    if (!activeRun?.definitionSnapshot || !activeRun.catalogId || runPending) return;
+    launchReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const loop: LoopDefinition = {
+      id: activeRun.catalogId,
+      source: "user",
+      availability: "allProjects",
+      projectPaths: [],
+      filePath: "",
+      ...activeRun.definitionSnapshot,
+    };
+    setLaunchError(null);
+    setLaunchDraft({
+      loop,
+      retryOf: activeRun.id,
+      goal: loop.goal,
+      launchContext: loop.launchContext ?? "",
+      launchContextScope: loop.launchContextScope,
+      currentCheckoutConfirmed: false,
+    });
   };
 
   // Poll the active run until it reaches a terminal state.
@@ -600,11 +639,32 @@ export function LoopsScreen() {
     );
   }, [activeRun]);
 
+  const draftAgentIssues = draft ? unavailableAgentRoles(draft, availableAgentNames) : [];
   const draftError = draft
     ? draft.availability === "projectPaths" && !normalizeLoopProjectPaths(draft.projectPaths).length
       ? "Select at least one registered project."
-      : loopDefinitionValidationError(draft)
+      : (loopDefinitionValidationError(draft) ??
+        (draftAgentIssues.length
+          ? `Repair unavailable agent roles: ${draftAgentIssues.map(agentUnavailableText).join(" ")}`
+          : undefined))
     : undefined;
+  const launchAgentIssues = launchDraft
+    ? unavailableAgentRoles(launchDraft.loop, availableAgentNames)
+    : [];
+  const launchNeedsCheckoutConfirmation = launchDraft?.loop.writeTarget === "currentCheckout";
+  const renderAgentOptions = (selected: string) => (
+    <>
+      <option value="">Select an agent</option>
+      {selected && !availableAgentNames.has(selected) ? (
+        <option value={selected}>{selected} (unavailable)</option>
+      ) : null}
+      {agents.map((agent: AgentInfo) => (
+        <option key={`${agent.scope}-${agent.name}`} value={agent.name}>
+          {agent.name}
+        </option>
+      ))}
+    </>
+  );
   const anyRunActive =
     runs.some((run) => run.status === "running" || run.status === "stopping") ||
     activeRun?.status === "running" ||
@@ -686,7 +746,7 @@ export function LoopsScreen() {
                             ? "loop-checkout-recovery-notice"
                             : undefined
                         }
-                        onClick={() => void retryRun()}
+                        onClick={openRetry}
                       >
                         Retry
                       </ControlButton>
@@ -1254,7 +1314,7 @@ export function LoopsScreen() {
                 </div>
               ) : null}
             </fieldset>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-xs text-text-muted">
                 Structure
                 <ControlSelect
@@ -1318,39 +1378,44 @@ export function LoopsScreen() {
               {draft.structure === "singleAgent" ? (
                 <label className="text-xs text-text-muted">
                   Agent
-                  <ControlInput
+                  <ControlSelect
                     data-testid="loop-agent"
                     className={inputClass}
-                    list="loop-agent-choices"
-                    placeholder="agent name"
                     value={draft.agentName}
+                    aria-invalid={!availableAgentNames.has(draft.agentName)}
                     onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
-                  />
+                  >
+                    {renderAgentOptions(draft.agentName)}
+                  </ControlSelect>
                 </label>
               ) : null}
             </div>
             {draft.structure === "makerChecker" ? (
               <div className="space-y-3" data-testid="loop-maker-checker-config">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="text-xs text-text-muted">
                     Maker agent
-                    <ControlInput
+                    <ControlSelect
                       data-testid="loop-maker"
                       className={inputClass}
-                      list="loop-agent-choices"
                       value={draft.makerName}
+                      aria-invalid={!availableAgentNames.has(draft.makerName)}
                       onChange={(e) => setDraft({ ...draft, makerName: e.target.value })}
-                    />
+                    >
+                      {renderAgentOptions(draft.makerName)}
+                    </ControlSelect>
                   </label>
                   <label className="text-xs text-text-muted">
                     Checker agent
-                    <ControlInput
+                    <ControlSelect
                       data-testid="loop-checker"
                       className={inputClass}
-                      list="loop-agent-choices"
                       value={draft.checkerName}
+                      aria-invalid={!availableAgentNames.has(draft.checkerName)}
                       onChange={(e) => setDraft({ ...draft, checkerName: e.target.value })}
-                    />
+                    >
+                      {renderAgentOptions(draft.checkerName)}
+                    </ControlSelect>
                   </label>
                 </div>
                 <label className="block text-xs text-text-muted">
@@ -1384,11 +1449,11 @@ export function LoopsScreen() {
                     data-testid={`loop-pipeline-stage-${index}`}
                   >
                     <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
-                    <ControlInput
+                    <ControlSelect
                       className={inputClass}
                       data-testid={`loop-pipeline-stage-agent-${index}`}
                       aria-label={`Pipeline stage ${index + 1} agent`}
-                      list="loop-agent-choices"
+                      aria-invalid={!availableAgentNames.has(stage)}
                       disabled={saving}
                       value={stage}
                       onChange={(event) => {
@@ -1396,7 +1461,9 @@ export function LoopsScreen() {
                         pipelineStages[index] = event.target.value;
                         setDraft({ ...draft, pipelineStages });
                       }}
-                    />
+                    >
+                      {renderAgentOptions(stage)}
+                    </ControlSelect>
                     <ControlButton
                       type="button"
                       title="Move stage up"
@@ -1484,11 +1551,11 @@ export function LoopsScreen() {
                     data-testid={`loop-parallel-branch-${index}`}
                   >
                     <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
-                    <ControlInput
+                    <ControlSelect
                       className={inputClass}
                       data-testid={`loop-parallel-branch-agent-${index}`}
                       aria-label={`Parallel branch ${index + 1} agent`}
-                      list="loop-agent-choices"
+                      aria-invalid={!availableAgentNames.has(branch)}
                       disabled={saving}
                       value={branch}
                       onChange={(event) => {
@@ -1496,7 +1563,9 @@ export function LoopsScreen() {
                         parallelBranches[index] = event.target.value;
                         setDraft({ ...draft, parallelBranches });
                       }}
-                    />
+                    >
+                      {renderAgentOptions(branch)}
+                    </ControlSelect>
                     <ControlButton
                       type="button"
                       title="Move branch up"
@@ -1579,15 +1648,16 @@ export function LoopsScreen() {
                 </p>
                 <label className="block text-xs text-text-muted">
                   Triage agent
-                  <ControlInput
+                  <ControlSelect
                     ref={triageAgentRef}
                     data-testid="loop-triage-agent"
                     className={inputClass}
-                    list="loop-agent-choices"
-                    placeholder="agent name"
                     value={draft.triageAgent}
+                    aria-invalid={!availableAgentNames.has(draft.triageAgent)}
                     onChange={(event) => setDraft({ ...draft, triageAgent: event.target.value })}
-                  />
+                  >
+                    {renderAgentOptions(draft.triageAgent)}
+                  </ControlSelect>
                 </label>
                 <label className="block text-xs text-text-muted">
                   Classification prompt
@@ -1643,12 +1713,24 @@ export function LoopsScreen() {
                 </label>
               </fieldset>
             ) : null}
-            <datalist id="loop-agent-choices">
-              {agents.map((agent) => (
-                <option key={`${agent.scope}-${agent.name}`} value={agent.name} />
-              ))}
-            </datalist>
-            <div className="grid grid-cols-2 gap-3">
+            {draftAgentIssues.length ? (
+              <div
+                className="rounded-lg border border-danger px-2 py-1 text-xs text-danger"
+                role="status"
+                aria-live="polite"
+                data-testid="loop-agent-role-errors"
+              >
+                <strong>Unavailable agent roles.</strong>
+                <ul className="list-disc pl-4">
+                  {draftAgentIssues.map((issue) => (
+                    <li key={`${issue.role}-${issue.position ?? 0}`}>
+                      {agentUnavailableText(issue)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-xs text-text-muted">
                 Max iterations
                 <ControlInput
@@ -1782,7 +1864,7 @@ export function LoopsScreen() {
             className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
           >
             <h3 id="loop-launch-title" className="text-sm font-semibold text-text-primary">
-              Run {launchDraft.loop.name}
+              {launchDraft.retryOf ? "Retry" : "Run"} {launchDraft.loop.name}
             </h3>
             <p className="text-xs text-text-muted">
               {LOOP_STRUCTURE_LABEL[launchDraft.loop.structure]} ·{" "}
@@ -1796,8 +1878,11 @@ export function LoopsScreen() {
                 data-testid="loop-launch-goal"
                 className={`${inputClass} min-h-[100px]`}
                 value={launchDraft.goal}
-                disabled={runPending}
-                onChange={(event) => setLaunchDraft({ ...launchDraft, goal: event.target.value })}
+                disabled={runPending || Boolean(launchDraft.retryOf)}
+                onChange={(event) => {
+                  const goal = event.target.value;
+                  setLaunchDraft((current) => (current ? { ...current, goal } : current));
+                }}
               />
             </label>
             <label className="block text-xs text-text-muted">
@@ -1806,10 +1891,11 @@ export function LoopsScreen() {
                 data-testid="loop-launch-context-override"
                 className={`${inputClass} min-h-[90px]`}
                 value={launchDraft.launchContext}
-                disabled={runPending}
-                onChange={(event) =>
-                  setLaunchDraft({ ...launchDraft, launchContext: event.target.value })
-                }
+                disabled={runPending || Boolean(launchDraft.retryOf)}
+                onChange={(event) => {
+                  const launchContext = event.target.value;
+                  setLaunchDraft((current) => (current ? { ...current, launchContext } : current));
+                }}
               />
             </label>
             <label className="block text-xs text-text-muted">
@@ -1818,18 +1904,59 @@ export function LoopsScreen() {
                 data-testid="loop-launch-scope-override"
                 className={inputClass}
                 value={launchDraft.launchContextScope}
-                disabled={runPending}
-                onChange={(event) =>
-                  setLaunchDraft({
-                    ...launchDraft,
-                    launchContextScope: event.target.value as LoopLaunchDraft["launchContextScope"],
-                  })
-                }
+                disabled={runPending || Boolean(launchDraft.retryOf)}
+                onChange={(event) => {
+                  const launchContextScope = event.target
+                    .value as LoopLaunchDraft["launchContextScope"];
+                  setLaunchDraft((current) =>
+                    current ? { ...current, launchContextScope } : current,
+                  );
+                }}
               >
                 <option value="firstIterationOnly">First iteration only</option>
                 <option value="everyIteration">Every iteration</option>
               </ControlSelect>
             </label>
+            {launchAgentIssues.length ? (
+              <div
+                id="loop-launch-agent-errors"
+                role="status"
+                aria-live="polite"
+                className="rounded-lg border border-danger p-2 text-xs text-danger"
+                data-testid="loop-launch-agent-errors"
+              >
+                <strong>Required agents are unavailable in this project.</strong>
+                <ul className="list-disc pl-4">
+                  {launchAgentIssues.map((issue) => (
+                    <li key={`${issue.role}-${issue.position ?? 0}`}>
+                      {agentUnavailableText(issue)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {launchNeedsCheckoutConfirmation ? (
+              <label
+                id="loop-current-checkout-confirmation-label"
+                className="flex items-start gap-2 rounded-lg border border-warning p-2 text-xs text-text-secondary"
+              >
+                <ControlInput
+                  type="checkbox"
+                  data-testid="loop-current-checkout-confirmation"
+                  checked={launchDraft.currentCheckoutConfirmed}
+                  disabled={runPending}
+                  onChange={(event) => {
+                    const currentCheckoutConfirmed = event.target.checked;
+                    setLaunchDraft((current) =>
+                      current ? { ...current, currentCheckoutConfirmed } : current,
+                    );
+                  }}
+                />
+                <span>
+                  I confirm this Loop may run agents directly in the current project checkout.
+                </span>
+              </label>
+            ) : null}
             {launchError ? (
               <div
                 role="alert"
@@ -1853,11 +1980,20 @@ export function LoopsScreen() {
                 className="rounded-capsule bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40"
                 disabled={
                   runPending ||
-                  (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim())
+                  launchAgentIssues.length > 0 ||
+                  (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim()) ||
+                  (launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed)
+                }
+                aria-describedby={
+                  launchAgentIssues.length
+                    ? "loop-launch-agent-errors"
+                    : launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed
+                      ? "loop-current-checkout-confirmation-label"
+                      : undefined
                 }
                 onClick={() => void startRun()}
               >
-                {runPending ? "Starting…" : "Start run"}
+                {runPending ? "Starting…" : launchDraft.retryOf ? "Start retry" : "Start run"}
               </ControlButton>
             </div>
           </div>

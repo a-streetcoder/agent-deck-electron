@@ -9,6 +9,8 @@ export function useAgents(): AgentInfo[] {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
+    // Never retain the prior project's choices while the scoped catalog reloads.
+    setAgents([]);
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     let cancelled = false;
     void fetch(`/resources/agents${query}`)

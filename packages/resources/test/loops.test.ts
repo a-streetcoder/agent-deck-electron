@@ -31,7 +31,15 @@ function saveLoopFile(
   edit: Parameters<typeof persistLoopFile>[1],
 ): string {
   const existing = scanLoops(roots).find((loop) => loop.name === edit.name);
-  return persistLoopFile(roots, existing ? { ...edit, id: existing.id } : edit);
+  const resultingStructure = edit.structure ?? existing?.structure ?? "singleAgent";
+  const withRequiredAgent =
+    resultingStructure === "singleAgent"
+      ? { agentName: edit.agentName ?? existing?.agentName ?? "Agent A", ...edit }
+      : edit;
+  return persistLoopFile(
+    roots,
+    existing ? { ...withRequiredAgent, id: existing.id } : withRequiredAgent,
+  );
 }
 
 function duplicateNamedLoop(roots: { home: string }, name: string): string {
@@ -264,9 +272,13 @@ describe("loop definition store", () => {
 
   it("uses opaque identity only when a display name collides with another record id", () => {
     const roots = { home: makeHome() };
-    persistLoopFile(roots, { name: "Alpha", goal: "alpha goal" });
+    persistLoopFile(roots, { name: "Alpha", goal: "alpha goal", agentName: "Agent A" });
     const alpha = scanLoops(roots).find((loop) => loop.name === "Alpha")!;
-    persistLoopFile(roots, { name: alpha.id, goal: "collision goal" });
+    persistLoopFile(roots, {
+      name: alpha.id,
+      goal: "collision goal",
+      agentName: "Agent A",
+    });
     const collision = scanLoops(roots).find((loop) => loop.name === alpha.id)!;
 
     persistLoopFile(roots, { id: alpha.id, name: "Alpha", description: "selected alpha" });

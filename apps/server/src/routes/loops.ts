@@ -5,8 +5,12 @@ import {
   canRetryLoopRun,
   isLoopAvailableInProject,
   isRunnableLoopStructure,
+  loopAgentRoleLabel,
+  loopRequiredAgentRoles,
   normalizeLoopLaunchContext,
   loopDefinitionValidationError,
+  LOOP_AGENT_PREFLIGHT_CODE,
+  LOOP_CURRENT_CHECKOUT_CONFIRMATION_CODE,
   LOOP_PARALLEL_WRITE_TARGET_CODE,
   LOOP_STRUCTURE_LABEL,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
@@ -19,7 +23,6 @@ import {
   LoopCatalogCapabilityError,
   LoopDefinitionInvalidError,
   LoopStructureNotRunnableError,
-  scanAgents,
   scanLoops,
   writeLoopFile,
 } from "@agent-deck/resources";
@@ -109,6 +112,7 @@ export function registerLoopRoutes(
     bridgeTokens,
     broadcast,
     rootsFor,
+    resolveNamedAgent,
     enabledExtensionPaths,
     worktreesRoot,
   } = ctx;
@@ -308,6 +312,7 @@ export function registerLoopRoutes(
         model: z.string().optional(),
         extensions: z.array(z.string()).optional(),
         env: z.record(z.string()).optional(),
+        currentCheckoutConfirmed: z.boolean().optional(),
       })
       .safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
@@ -382,20 +387,41 @@ export function registerLoopRoutes(
         error: "Parallel agents are report-only and require the Artifact (markdown) write target.",
       });
     }
+    const requiredRoles = loopRequiredAgentRoles(loop);
+    const agentIssues = requiredRoles.flatMap((role) => {
+      if (!role.agentName) return [{ ...role, reason: "missing" as const }];
+      const resolved = resolveNamedAgent(role.agentName, body.projectId);
+      return resolved.status === "ok"
+        ? []
+        : [
+            {
+              ...role,
+              reason: resolved.status === "disabled" ? ("disabled" as const) : ("missing" as const),
+            },
+          ];
+    });
+    if (agentIssues.length) {
+      const summary = agentIssues
+        .map(
+          (issue) =>
+            `${loopAgentRoleLabel(issue)}: ${issue.agentName ? `"${issue.agentName}"` : "no agent selected"} (${issue.reason})`,
+        )
+        .join("; ");
+      return reply.status(422).send({
+        code: LOOP_AGENT_PREFLIGHT_CODE,
+        error: `Required Loop agents are unavailable. ${summary}`,
+        issues: agentIssues,
+      });
+    }
     const definitionError = loopDefinitionValidationError(loop);
     if (definitionError) {
       return reply.status(422).send({ code: "loop_definition_invalid", error: definitionError });
     }
-    if (loop.structure === "discoveryTriage") {
-      const configuredAgent = scanAgents(rootsFor()).find(
-        (agent) => agent.name === loop.triageAgent && !agent.shadowed && !agent.disabled,
-      );
-      if (!configuredAgent) {
-        return reply.status(422).send({
-          code: "loop_definition_invalid",
-          error: `The configured triage agent "${loop.triageAgent}" is unavailable.`,
-        });
-      }
+    if (loop.writeTarget === "currentCheckout" && body.currentCheckoutConfirmed !== true) {
+      return reply.status(422).send({
+        code: LOOP_CURRENT_CHECKOUT_CONFIRMATION_CODE,
+        error: "Confirm that this Loop may run in the current project checkout.",
+      });
     }
     const defaults = envDefaults();
     // A native Human Approval run is a durable app-data checkpoint only. It
@@ -651,6 +677,10 @@ export function registerLoopRoutes(
   });
 
   fastify.post("/loops/runs/:id/retry", async (request, reply) => {
+    const parsed = z
+      .object({ currentCheckoutConfirmed: z.boolean().optional() })
+      .safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const previous = loopEngine.get((request.params as { id: string }).id);
     if (!previous) return reply.status(404).send({ error: "unknown loop run" });
     if (!canRetryLoopRun(previous)) {
@@ -671,6 +701,7 @@ export function registerLoopRoutes(
       payload: {
         projectId: previous.projectId,
         retryOf: previous.id,
+        currentCheckoutConfirmed: parsed.data.currentCheckoutConfirmed,
       },
     });
     return reply.status(response.statusCode).send(response.json());

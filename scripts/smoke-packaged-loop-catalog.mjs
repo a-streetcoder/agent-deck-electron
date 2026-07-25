@@ -236,6 +236,7 @@ try {
     name: "Packaged Native Smoke",
     goal: "safe",
     structure: "singleAgent",
+    agentName: "Packaged Smoke Agent",
   });
   let listed = await jsonRequest("GET", "/loops");
   if (listed.loops[0]?.goal !== "safe") throw new Error("create/read failed");
@@ -248,6 +249,7 @@ try {
     description: "updated",
     goal: "safer",
     structure: "singleAgent",
+    agentName: "Packaged Smoke Agent",
   });
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops[0]?.description !== "updated" || listed.loops[0]?.goal !== "safer") {

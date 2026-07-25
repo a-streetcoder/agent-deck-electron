@@ -19,7 +19,7 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
     description: "",
     goal: "do the thing",
     structure: "singleAgent",
-    agentName: undefined,
+    agentName: "Agent",
     maxIterations: 3,
     validationCommand: "exit 0",
     writeTarget: "artifactMarkdown",
@@ -33,6 +33,14 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
 }
 
 describe("loop engine (single-agent)", () => {
+  it("fails closed for a blank required Single Agent name before creating a run", () => {
+    const engine = new LoopEngine({ executeAgent: async () => "must not run" });
+    expect(() => engine.start(makeLoop({ agentName: "   " }), cwd())).toThrow(
+      "An agent is required.",
+    );
+    expect(engine.list()).toEqual([]);
+  });
+
   it("injects bounded launch context according to first/every iteration scope", async () => {
     for (const scope of ["firstIterationOnly", "everyIteration"] as const) {
       const prompts: string[] = [];
