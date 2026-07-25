@@ -58,6 +58,36 @@ test("imports a skill from a git repository and it lands in the catalog", async 
   expect(readFileSync(path.join(dest, "SKILL.md"), "utf8")).toContain("Scrape web pages");
 });
 
+test("shows readable skill inventory load failures", async ({ page }) => {
+  await page.route(/\/resources\/skills(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 503,
+      json: { error: "Skill inventory is temporarily unavailable." },
+    });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Skill inventory is temporarily unavailable.",
+  );
+});
+
+test("shows readable skill repository load failures", async ({ page }) => {
+  await page.route("**/resources/skill-repos", async (route) => {
+    await route.fulfill({
+      status: 503,
+      json: { error: "Skill repositories are temporarily unavailable." },
+    });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  await expect(page.getByTestId("error-banner")).toHaveText(
+    "Error: Skill repositories are temporarily unavailable.",
+  );
+});
+
 test("a bad repo URL reports a clone error", async () => {
   const res = await fetch(`${harness.baseUrl}/resources/skills/import-git`, {
     method: "POST",

@@ -64,7 +64,7 @@ describe("renameSkillDir", () => {
   });
 
   const unixIt = process.platform === "win32" ? it.skip : it;
-  unixIt("propagates an unsafe SKILL.md frontmatter update after moving the directory", () => {
+  unixIt("rolls the directory back when the SKILL.md frontmatter update fails", () => {
     const roots = { home: home() };
     writeSkillFile(roots, "global", "unsafe-frontmatter", { description: "safe", body: "safe" });
     const skillFile = path.join(globalSkillDir(roots, "unsafe-frontmatter"), "SKILL.md");
@@ -77,5 +77,7 @@ describe("renameSkillDir", () => {
       renameSkillDir(roots, "global", "unsafe-frontmatter", "renamed-unsafe-frontmatter"),
     ).toThrow("Native resource filesystem safety boundary refused the operation.");
     expect(readFileSync(outside, "utf8")).toBe("outside-safe");
+    expect(existsSync(globalSkillDir(roots, "unsafe-frontmatter"))).toBe(true);
+    expect(existsSync(globalSkillDir(roots, "renamed-unsafe-frontmatter"))).toBe(false);
   });
 });

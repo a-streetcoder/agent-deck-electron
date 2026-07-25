@@ -388,15 +388,27 @@ export function SkillsScreen() {
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     let cancelled = false;
-    void fetch(`/resources/skills${query}`)
-      .then((response) => response.json())
-      .then((data: { skills: SkillInfo[] }) => {
+    void (async () => {
+      try {
+        const response = await fetch(`/resources/skills${query}`);
+        if (!response.ok) {
+          throw new Error(
+            await responseErrorMessage(
+              response,
+              `Couldn't load skills (${response.status}). Reload to try again.`,
+            ),
+          );
+        }
+        const data = (await response.json()) as { skills: SkillInfo[] };
         if (!cancelled) setSkills(data.skills);
-      });
+      } catch (error) {
+        if (!cancelled) setGlobalError(String(error));
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [currentProjectId, resourcesVersion]);
+  }, [currentProjectId, resourcesVersion, setGlobalError]);
 
   const assignedNames = useMemo(() => {
     const names = new Set<string>();
@@ -484,30 +496,54 @@ export function SkillsScreen() {
     }
   };
 
-  // Load the imported repos and check each for an available update (best-effort).
+  // Load imported repositories and check each for an available update.
   useEffect(() => {
     let cancelled = false;
-    void fetch("/resources/skill-repos")
-      .then((response) => response.json())
-      .then((data: { repos: SkillRepo[] }) => {
+    void (async () => {
+      try {
+        const response = await fetch("/resources/skill-repos");
+        if (!response.ok) {
+          throw new Error(
+            await responseErrorMessage(
+              response,
+              `Couldn't load skill repositories (${response.status}). Reload to try again.`,
+            ),
+          );
+        }
+        const data = (await response.json()) as { repos: SkillRepo[] };
         if (cancelled) return;
         setRepos(data.repos);
         for (const repo of data.repos) {
-          void fetch(`/resources/skill-repos/${repo.id}/check`, { method: "POST" })
-            .then((response) => response.json())
-            .then((check: { updateAvailable: boolean }) => {
+          void (async () => {
+            try {
+              const checkResponse = await fetch(`/resources/skill-repos/${repo.id}/check`, {
+                method: "POST",
+              });
+              if (!checkResponse.ok) {
+                throw new Error(
+                  await responseErrorMessage(
+                    checkResponse,
+                    `Couldn't check ${repo.remoteUrl} for updates (${checkResponse.status}). Retry by reloading.`,
+                  ),
+                );
+              }
+              const check = (await checkResponse.json()) as { updateAvailable: boolean };
               if (!cancelled && check.updateAvailable) {
                 setUpdatable((prev) => new Set(prev).add(repo.id));
               }
-            })
-            .catch(() => {});
+            } catch (error) {
+              if (!cancelled) setGlobalError(String(error));
+            }
+          })();
         }
-      })
-      .catch(() => {});
+      } catch (error) {
+        if (!cancelled) setGlobalError(String(error));
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [resourcesVersion]);
+  }, [resourcesVersion, setGlobalError]);
 
   const updateRepo = async (id: string): Promise<void> => {
     setRepoBusy(id);

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -177,6 +177,12 @@ describe("POST /resources/skills/rename", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: expect.stringContaining("unsafe") });
+    expect(existsSync(path.join(resourceHome, ".pi", "agent", "skills", "unsafe-rename"))).toBe(
+      true,
+    );
+    expect(existsSync(path.join(resourceHome, ".pi", "agent", "skills", "unsafe-renamed"))).toBe(
+      false,
+    );
     expect(await assignedOf()).toContain("unsafe-rename");
     expect(await assignedOf()).not.toContain("unsafe-renamed");
     expect(await defaultSkills()).toContain("unsafe-rename");

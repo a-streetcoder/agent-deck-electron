@@ -524,6 +524,24 @@ export function renameSkillDir(
       // A directory without SKILL.md can still be renamed.
       return to;
     }
+
+    // The manifest update happens after the directory move. Restore the source
+    // location before exposing the failure so a retry starts from the original,
+    // internally consistent state. Both moves remain inside the typed native
+    // catalog boundary.
+    try {
+      secureRename(roots, to, from);
+    } catch (rollbackError) {
+      const incomplete = new ResourceCatalogCapabilityError(
+        "RESOURCE_RECONCILE_INCOMPLETE",
+        "The skill directory was renamed, its SKILL.md update failed, and the directory rollback also failed. Retry the rename to reconcile it safely.",
+      );
+      incomplete.cause = new AggregateError(
+        [error, rollbackError],
+        "Skill rename reconciliation failed",
+      );
+      throw incomplete;
+    }
     throw error;
   }
   return to;
