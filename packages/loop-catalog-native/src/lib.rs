@@ -504,45 +504,20 @@ fn exchange_entries(
 fn windows_open_mutation(
     dir: &Dir,
     name: &str,
-    write: bool,
+    delete_access: bool,
     maybe_dir: bool,
 ) -> std::io::Result<cap_std::fs::File> {
     use windows_sys::Win32::Storage::FileSystem::{
-        DELETE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     let mut options = OpenOptions::new();
     options
-        .read(true)
         .follow(FollowSymlinks::No)
         .maybe_dir(maybe_dir)
-        .access_mode(DELETE | FILE_GENERIC_READ | if write { FILE_GENERIC_WRITE } else { 0 })
-        // Intentionally omit FILE_SHARE_DELETE. Entries outside our private
-        // staging namespace stay pinned against rename/delete after validation.
+        .access_mode(FILE_READ_ATTRIBUTES | if delete_access { DELETE } else { 0 })
+        // Omitting delete sharing pins the opened identity against a concurrent
+        // rename or deletion. Do not mix this policy with delete-sharing views.
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-    dir.open_with(name, &options)
-}
-
-#[cfg(windows)]
-fn windows_open_private_stage(
-    dir: &Dir,
-    name: &str,
-    write: bool,
-    maybe_dir: bool,
-) -> std::io::Result<cap_std::fs::File> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        DELETE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE,
-    };
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .follow(FollowSymlinks::No)
-        .maybe_dir(maybe_dir)
-        .access_mode(DELETE | FILE_GENERIC_READ | if write { FILE_GENERIC_WRITE } else { 0 })
-        // Private stage entries are unobservable implementation artifacts. They
-        // must share delete so POSIX disposition can remove them while the
-        // capability handle that proves their identity remains open.
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     dir.open_with(name, &options)
 }
 
@@ -636,37 +611,19 @@ fn windows_rename_handle(
 }
 
 #[cfg(windows)]
-fn windows_set_disposition(file: &cap_std::fs::File, private_owned: bool) -> std::io::Result<()> {
+fn windows_delete_handle(file: &cap_std::fs::File) -> std::io::Result<()> {
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO,
-        FILE_DISPOSITION_INFO_EX, FileDispositionInfo, FileDispositionInfoEx,
-        SetFileInformationByHandle,
+        FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
     };
-    let result = if private_owned {
-        let disposition = FILE_DISPOSITION_INFO_EX {
-            Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
-        };
-        unsafe {
-            SetFileInformationByHandle(
-                file.as_raw_handle(),
-                FileDispositionInfoEx,
-                std::ptr::addr_of!(disposition).cast(),
-                u32::try_from(std::mem::size_of_val(&disposition)).unwrap(),
-            )
-        }
-    } else {
-        // Legacy delete-on-close works with the no-FILE_SHARE_DELETE handle
-        // used to pin an existing destination against containment races.
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
-        unsafe {
-            SetFileInformationByHandle(
-                file.as_raw_handle(),
-                FileDispositionInfo,
-                std::ptr::addr_of!(disposition).cast(),
-                u32::try_from(std::mem::size_of_val(&disposition)).unwrap(),
-            )
-        }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    let result = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::addr_of!(disposition).cast(),
+            u32::try_from(std::mem::size_of_val(&disposition)).unwrap(),
+        )
     };
     if result == 0 {
         Err(std::io::Error::last_os_error())
@@ -676,18 +633,8 @@ fn windows_set_disposition(file: &cap_std::fs::File, private_owned: bool) -> std
 }
 
 #[cfg(windows)]
-fn windows_delete_handle(file: &cap_std::fs::File) -> std::io::Result<()> {
-    windows_set_disposition(file, false)
-}
-
-#[cfg(windows)]
-fn windows_delete_private_handle(file: &cap_std::fs::File) -> std::io::Result<()> {
-    windows_set_disposition(file, true)
-}
-
-#[cfg(windows)]
 fn rename_noreplace(from_dir: &Dir, from: &str, to_dir: &Dir, to: &str) -> std::io::Result<()> {
-    let source = windows_open_mutation(from_dir, from, false, true)?;
+    let source = windows_open_mutation(from_dir, from, true, true)?;
     windows_rename_handle(&source, to_dir, to, false)
 }
 
@@ -730,9 +677,9 @@ fn unique_resource_temp(
     dir: &Dir,
     prefix: &str,
     content: &str,
-) -> std::io::Result<(String, cap_std::fs::File)> {
+) -> Result<(String, cap_std::fs::File)> {
     for _ in 0..128 {
-        let name = format!("{prefix}{}", private_nonce()?);
+        let name = format!("{prefix}{}", private_nonce().map_err(map_resource_io)?);
         let mut options = OpenOptions::new();
         options
             .write(true)
@@ -745,13 +692,12 @@ fn unique_resource_temp(
         options
             .access_mode(
                 windows_sys::Win32::Storage::FileSystem::DELETE
-                    | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES
                     | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE,
             )
             .share_mode(
                 windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
-                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE
-                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
             );
         match dir.open_with(&name, &options) {
             Ok(mut file) => {
@@ -760,17 +706,26 @@ fn unique_resource_temp(
                     .and_then(|()| file.sync_all())
                 {
                     drop(file);
-                    let _ = dir.remove_file(&name);
-                    return Err(error);
+                    #[cfg(windows)]
+                    let cleanup = cleanup_owned_entry(dir, &name);
+                    #[cfg(not(windows))]
+                    let cleanup = dir.remove_file(&name).map_err(map_resource_io);
+                    if cleanup.is_err() {
+                        return Err(resource_error(
+                            "RESOURCE_RECONCILE_INCOMPLETE",
+                            "private-temporary write cleanup was interrupted; retry",
+                        ));
+                    }
+                    return Err(map_resource_io(error));
                 }
                 return Ok((name, file));
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
+            Err(error) => return Err(map_resource_io(error)),
         }
     }
-    Err(std::io::Error::new(
-        ErrorKind::AlreadyExists,
+    Err(resource_error(
+        "RESOURCE_ALREADY_EXISTS",
         "could not allocate private resource temporary file",
     ))
 }
@@ -820,8 +775,7 @@ pub fn write_resource_catalog_file(
     } else {
         false
     };
-    let (temp, file) =
-        unique_resource_temp(&parent, RESOURCE_TEMP_PREFIX, &content).map_err(map_resource_io)?;
+    let (temp, file) = unique_resource_temp(&parent, RESOURCE_TEMP_PREFIX, &content)?;
     #[cfg(windows)]
     let _ = &temp;
     #[cfg(windows)]
@@ -832,23 +786,19 @@ pub fn write_resource_catalog_file(
     } else {
         parent.hard_link(&temp, &parent, &leaf)
     };
-    #[cfg(windows)]
-    let cleanup = if result.is_err() {
-        windows_delete_private_handle(&file)
-    } else {
-        Ok(())
-    };
     drop(file);
     #[cfg(not(windows))]
     let _ = parent.remove_file(&temp);
-    #[cfg(windows)]
-    if cleanup.is_err() {
-        return Err(resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource write failed and private-temporary cleanup was interrupted; retry",
-        ));
+    if let Err(error) = result {
+        #[cfg(windows)]
+        if cleanup_owned_entry(&parent, &temp).is_err() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "resource write failed and private-temporary cleanup was interrupted; retry",
+            ));
+        }
+        return Err(map_resource_io(error));
     }
-    result.map_err(map_resource_io)?;
     sync_dir(&parent).map_err(map_resource_io)
 }
 
@@ -899,7 +849,16 @@ fn remove_tree_entry(parent: &Dir, name: &str) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn remove_opened_tree(opened: &cap_std::fs::File) -> Result<()> {
+fn windows_cleanup_debug(operation: &str, error: &std::io::Error) {
+    eprintln!(
+        "Windows resource cleanup failed: operation={operation} kind={:?} os_code={:?}",
+        error.kind(),
+        error.raw_os_error()
+    );
+}
+
+#[cfg(windows)]
+fn remove_opened_tree(parent: &Dir, name: &str, opened: cap_std::fs::File) -> Result<()> {
     let opened_metadata = opened.metadata().map_err(map_resource_io)?;
     if opened_metadata.file_type().is_symlink()
         || (!opened_metadata.is_file() && !opened_metadata.is_dir())
@@ -910,7 +869,10 @@ fn remove_opened_tree(opened: &cap_std::fs::File) -> Result<()> {
         ));
     }
     if opened_metadata.is_dir() {
-        let child = Dir::reopen_dir(opened).map_err(map_resource_io)?;
+        // The reopened view is used only to enumerate and recursively acquire
+        // owned child handles. It must be gone before this directory is marked
+        // delete-on-close.
+        let child = Dir::reopen_dir(&opened).map_err(map_resource_io)?;
         let mut names = Vec::new();
         for entry in child.entries().map_err(map_resource_io)? {
             names.push(
@@ -924,96 +886,54 @@ fn remove_opened_tree(opened: &cap_std::fs::File) -> Result<()> {
                     })?,
             );
         }
+        names.sort();
         for entry_name in names {
-            let nested = child
-                .symlink_metadata(&entry_name)
-                .map_err(map_resource_io)?;
-            if nested.file_type().is_symlink() {
-                return Err(resource_error(
-                    "RESOURCE_UNSAFE_COMPONENT",
-                    "nested links are not resource mutation targets",
-                ));
-            }
             remove_tree_entry(&child, &entry_name)?;
         }
         drop(child);
     }
-    windows_delete_handle(opened).map_err(map_resource_io)
-}
-
-#[cfg(windows)]
-fn remove_opened_private_tree(opened: &cap_std::fs::File) -> Result<()> {
-    let opened_metadata = opened.metadata().map_err(map_resource_io)?;
-    if opened_metadata.file_type().is_symlink()
-        || (!opened_metadata.is_file() && !opened_metadata.is_dir())
-    {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "opened private-stage entry is unsafe",
-        ));
+    if let Err(error) = windows_delete_handle(&opened) {
+        windows_cleanup_debug("FileDispositionInfo", &error);
+        return Err(map_resource_io(error));
     }
-    if opened_metadata.is_dir() {
-        let child = Dir::reopen_dir(opened).map_err(map_resource_io)?;
-        let mut names = Vec::new();
-        for entry in child.entries().map_err(map_resource_io)? {
-            names.push(
-                entry
-                    .map_err(map_resource_io)?
-                    .file_name()
-                    .to_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 resource name")
-                    })?,
+    // Legacy disposition removes the directory entry only when every handle is
+    // closed. Explicitly consume our mutation handle before name verification.
+    drop(opened);
+    match parent.symlink_metadata(name) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Ok(_) => {
+            // The name may now designate a recreation. Never issue a second
+            // deletion by name after the consumed identity became delete-pending.
+            eprintln!(
+                "Windows resource cleanup verification failed: operation=verify_absent result=name_present"
             );
+            Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "resource cleanup could not be verified; retry",
+            ))
         }
-        for entry_name in names {
-            let metadata = child
-                .symlink_metadata(&entry_name)
-                .map_err(map_resource_io)?;
-            if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
-                return Err(resource_error(
-                    "RESOURCE_UNSAFE_COMPONENT",
-                    "private-stage entry changed type",
-                ));
-            }
-            let nested = windows_open_private_stage(&child, &entry_name, metadata.is_file(), true)
-                .map_err(map_resource_io)?;
-            remove_opened_private_tree(&nested)?;
+        Err(error) => {
+            windows_cleanup_debug("verify_absent", &error);
+            Err(map_resource_io(error))
         }
-        drop(child);
     }
-    windows_delete_private_handle(opened).map_err(map_resource_io)
 }
 
 #[cfg(windows)]
 fn remove_tree_entry(parent: &Dir, name: &str) -> Result<()> {
-    let metadata = parent.symlink_metadata(name).map_err(map_resource_io)?;
-    if metadata.file_type().is_symlink() {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "links are not resource mutation targets",
-        ));
+    let opened = windows_open_mutation(parent, name, true, true).map_err(map_resource_io)?;
+    remove_opened_tree(parent, name, opened)
+}
+
+#[cfg(windows)]
+fn cleanup_owned_entry(parent: &Dir, name: &str) -> Result<()> {
+    // Absence before acquisition already satisfies private cleanup. Once
+    // acquired, remove_opened_tree consumes and verifies that opened identity.
+    match windows_open_mutation(parent, name, true, true) {
+        Ok(opened) => remove_opened_tree(parent, name, opened),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(map_resource_io(error)),
     }
-    if !metadata.is_file() && !metadata.is_dir() {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "unsupported file type",
-        ));
-    }
-    let opened =
-        windows_open_mutation(parent, name, metadata.is_file(), true).map_err(map_resource_io)?;
-    let opened_metadata = opened.metadata().map_err(map_resource_io)?;
-    if opened_metadata.file_type().is_symlink()
-        || opened_metadata.is_file() != metadata.is_file()
-        || opened_metadata.is_dir() != metadata.is_dir()
-    {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "resource entry changed type",
-        ));
-    }
-    remove_opened_tree(&opened)
 }
 
 #[napi]
@@ -1035,34 +955,31 @@ fn rename_resource_entry_windows(
     from_leaf: &str,
     to_parent: &Dir,
     to_leaf: &str,
-    source_is_file: bool,
+    _source_is_file: bool,
     _case_only: bool,
     replacement_content: Option<&str>,
 ) -> Result<()> {
-    let source = windows_open_mutation(from_parent, from_leaf, source_is_file, true)
-        .map_err(map_resource_io)?;
+    let source =
+        windows_open_mutation(from_parent, from_leaf, true, true).map_err(map_resource_io)?;
     if let Some(content) = replacement_content {
-        let (_temporary, replacement) =
-            unique_resource_temp(to_parent, RESOURCE_TEMP_PREFIX, content)
-                .map_err(map_resource_io)?;
+        let (temporary, replacement) =
+            unique_resource_temp(to_parent, RESOURCE_TEMP_PREFIX, content)?;
         let publication = windows_rename_handle(&replacement, to_parent, to_leaf, false);
-        let cleanup = if publication.is_err() {
-            windows_delete_private_handle(&replacement)
-        } else {
-            Ok(())
-        };
         drop(replacement);
-        if cleanup.is_err() {
+        if let Err(error) = publication {
+            if cleanup_owned_entry(to_parent, &temporary).is_err() {
+                return Err(resource_error(
+                    "RESOURCE_RECONCILE_INCOMPLETE",
+                    "resource rename failed and private-temporary cleanup was interrupted; retry",
+                ));
+            }
+            return Err(map_resource_io(error));
+        }
+        if remove_opened_tree(from_parent, from_leaf, source).is_err() {
             return Err(resource_error(
                 "RESOURCE_RECONCILE_INCOMPLETE",
-                "resource rename failed and private-temporary cleanup was interrupted; retry",
+                "resource rename completed but source cleanup was interrupted; retry",
             ));
-        }
-        if let Err(error) = publication {
-            return Err(map_resource_io(error));
-        }
-        if let Err(error) = windows_delete_handle(&source) {
-            return Err(map_resource_io(error));
         }
     } else {
         windows_rename_handle(&source, to_parent, to_leaf, false).map_err(map_resource_io)?;
@@ -1118,8 +1035,7 @@ pub fn rename_resource_catalog_entry(
     }
     #[cfg(not(windows))]
     let replacement = if let Some(content) = replacement_content.as_deref() {
-        let (name, file) = unique_resource_temp(&to_parent, RESOURCE_TEMP_PREFIX, content)
-            .map_err(map_resource_io)?;
+        let (name, file) = unique_resource_temp(&to_parent, RESOURCE_TEMP_PREFIX, content)?;
         drop(file);
         Some(name)
     } else {
@@ -1435,13 +1351,12 @@ fn staged_file_temp(
         options
             .access_mode(
                 windows_sys::Win32::Storage::FileSystem::DELETE
-                    | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ
+                    | windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES
                     | windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE,
             )
             .share_mode(
                 windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
-                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE
-                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+                    | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
             );
         match destination.open_with(&temporary, &options) {
             Ok(mut output) => {
@@ -1449,7 +1364,16 @@ fn staged_file_temp(
                     std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all())
                 {
                     drop(output);
-                    let _ = destination.remove_file(&temporary);
+                    #[cfg(windows)]
+                    let cleanup = cleanup_owned_entry(destination, &temporary);
+                    #[cfg(not(windows))]
+                    let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
+                    if cleanup.is_err() {
+                        return Err(resource_error(
+                            "RESOURCE_RECONCILE_INCOMPLETE",
+                            "reconcile-temporary write cleanup was interrupted; retry",
+                        ));
+                    }
                     return Err(map_resource_io(error));
                 }
                 return Ok((temporary, output));
@@ -1530,16 +1454,12 @@ fn reconcile_staged_entry(
         let result = windows_rename_handle(&file, destination, name, true);
         #[cfg(not(windows))]
         let result = destination.rename(&temporary, destination, name);
-        #[cfg(windows)]
-        let cleanup = if result.is_err() {
-            windows_delete_private_handle(&file)
-        } else {
-            Ok(())
-        };
         drop(file);
         if let Err(error) = result {
+            #[cfg(windows)]
+            let cleanup = cleanup_owned_entry(destination, &temporary);
             #[cfg(not(windows))]
-            let cleanup = destination.remove_file(&temporary);
+            let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
             if cleanup.is_err() {
                 return Err(resource_error(
                     "RESOURCE_RECONCILE_INCOMPLETE",
@@ -1586,16 +1506,12 @@ fn reconcile_staged_entry(
         let result = windows_rename_handle(&file, destination, name, false);
         #[cfg(not(windows))]
         let result = rename_noreplace(destination, &temporary, destination, name);
-        #[cfg(windows)]
-        let cleanup = if result.is_err() {
-            windows_delete_private_handle(&file)
-        } else {
-            Ok(())
-        };
         drop(file);
         if let Err(error) = result {
+            #[cfg(windows)]
+            let cleanup = cleanup_owned_entry(destination, &temporary);
             #[cfg(not(windows))]
-            let cleanup = destination.remove_file(&temporary);
+            let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
             if cleanup.is_err() {
                 return Err(resource_error(
                     "RESOURCE_RECONCILE_INCOMPLETE",
@@ -1740,27 +1656,15 @@ fn validate_exact_tree(staged: &Dir, destination: &Dir) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_owned_stage(
-    parent: &Dir,
-    stage: &str,
-    stage_handle: Option<&cap_std::fs::File>,
-) -> Result<()> {
+fn cleanup_owned_stage(parent: &Dir, stage: &str) -> Result<()> {
     #[cfg(windows)]
-    if let Some(stage_handle) = stage_handle {
-        return remove_opened_private_tree(stage_handle);
-    }
+    return cleanup_owned_entry(parent, stage);
     #[cfg(not(windows))]
-    let _ = stage_handle;
     remove_tree_entry(parent, stage)
 }
 
-fn cleanup_owned_stage_error(
-    parent: &Dir,
-    stage: &str,
-    stage_handle: Option<&cap_std::fs::File>,
-    original: Error,
-) -> Error {
-    if cleanup_owned_stage(parent, stage, stage_handle).is_err() {
+fn cleanup_owned_stage_error(parent: &Dir, stage: &str, original: Error) -> Error {
+    if cleanup_owned_stage(parent, stage).is_err() {
         resource_error(
             "RESOURCE_RECONCILE_INCOMPLETE",
             "resource operation failed and private-stage cleanup was interrupted; retry",
@@ -1770,42 +1674,28 @@ fn cleanup_owned_stage_error(
     }
 }
 
-fn publish_staged_tree_with_handle(
-    parent: &Dir,
-    stage: &str,
-    leaf: &str,
-    replace: bool,
-    stage_handle: Option<&cap_std::fs::File>,
-) -> Result<()> {
+fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> Result<()> {
     if !replace {
         #[cfg(windows)]
-        let publication = if let Some(stage_handle) = stage_handle {
-            windows_rename_handle(stage_handle, parent, leaf, false)
-        } else {
-            rename_noreplace(parent, stage, parent, leaf)
-        };
+        let publication = rename_noreplace(parent, stage, parent, leaf);
         #[cfg(not(windows))]
         let publication = rename_noreplace(parent, stage, parent, leaf);
         if let Err(error) = publication {
             return Err(cleanup_owned_stage_error(
                 parent,
                 stage,
-                stage_handle,
                 map_resource_io(error),
             ));
         }
         return sync_dir(parent).map_err(map_resource_io);
     }
 
-    #[cfg(not(windows))]
-    let _ = stage_handle;
     let target = match parent.symlink_metadata(leaf) {
         Ok(metadata) => {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
                 return Err(cleanup_owned_stage_error(
                     parent,
                     stage,
-                    stage_handle,
                     resource_error(
                         "RESOURCE_UNSAFE_COMPONENT",
                         "target changed to an unsafe entry",
@@ -1819,25 +1709,19 @@ fn publish_staged_tree_with_handle(
             return Err(cleanup_owned_stage_error(
                 parent,
                 stage,
-                stage_handle,
                 map_resource_io(error),
             ));
         }
     };
     let Some(target) = target else {
         #[cfg(windows)]
-        let publication = if let Some(stage_handle) = stage_handle {
-            windows_rename_handle(stage_handle, parent, leaf, false)
-        } else {
-            rename_noreplace(parent, stage, parent, leaf)
-        };
+        let publication = rename_noreplace(parent, stage, parent, leaf);
         #[cfg(not(windows))]
         let publication = rename_noreplace(parent, stage, parent, leaf);
         if let Err(error) = publication {
             return Err(cleanup_owned_stage_error(
                 parent,
                 stage,
-                stage_handle,
                 map_resource_io(error),
             ));
         }
@@ -1933,14 +1817,8 @@ fn publish_staged_tree_with_handle(
         let _ = target;
         let mut mutated = false;
         let result = (|| {
-            let _stage_pin = if stage_handle.is_none() {
-                Some(
-                    windows_open_private_stage(parent, stage, false, true)
-                        .map_err(|error| reconcile_io(error, false))?,
-                )
-            } else {
-                None
-            };
+            let _stage_pin = windows_open_mutation(parent, stage, false, true)
+                .map_err(|error| reconcile_io(error, false))?;
             let _destination_pin = windows_open_mutation(parent, leaf, false, true)
                 .map_err(|error| reconcile_io(error, false))?;
             let staged = open_child_dir(parent, stage, false)
@@ -1954,7 +1832,7 @@ fn publish_staged_tree_with_handle(
             reconcile_staged_dir(&staged, &destination, &mut mutated)?;
             validate_exact_tree(&staged, &destination)
         })();
-        let cleanup = cleanup_owned_stage(parent, stage, stage_handle);
+        let cleanup = cleanup_owned_stage(parent, stage);
         if let Err(error) = result {
             return Err(if cleanup.is_err() {
                 resource_error(
@@ -1978,11 +1856,6 @@ fn publish_staged_tree_with_handle(
         }
         sync_dir(parent).map_err(map_resource_io)
     }
-}
-
-#[cfg(test)]
-fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> Result<()> {
-    publish_staged_tree_with_handle(parent, stage, leaf, replace, None)
 }
 
 #[napi]
@@ -2015,7 +1888,7 @@ pub fn copy_resource_tree(
     );
     parent.create_dir(&stage).map_err(map_resource_io)?;
     #[cfg(windows)]
-    let stage_open = windows_open_private_stage(&parent, &stage, false, true);
+    let stage_open = windows_open_mutation(&parent, &stage, false, true);
     #[cfg(not(windows))]
     let stage_open = nofollow_open(&parent, &stage, false, true);
     let stage_file = match stage_open {
@@ -2024,7 +1897,6 @@ pub fn copy_resource_tree(
             return Err(cleanup_owned_stage_error(
                 &parent,
                 &stage,
-                None,
                 map_resource_io(error),
             ));
         }
@@ -2032,50 +1904,43 @@ pub fn copy_resource_tree(
     let stage_metadata = match stage_file.metadata() {
         Ok(metadata) => metadata,
         Err(error) => {
-            let result = cleanup_owned_stage_error(
+            drop(stage_file);
+            return Err(cleanup_owned_stage_error(
                 &parent,
                 &stage,
-                Some(&stage_file),
                 map_resource_io(error),
-            );
-            drop(stage_file);
-            return Err(result);
+            ));
         }
     };
     if !stage_metadata.is_dir() || stage_metadata.file_type().is_symlink() {
-        let result = cleanup_owned_stage_error(
+        drop(stage_file);
+        return Err(cleanup_owned_stage_error(
             &parent,
             &stage,
-            Some(&stage_file),
             resource_error("RESOURCE_UNSAFE_COMPONENT", "staging changed type"),
-        );
-        drop(stage_file);
-        return Err(result);
+        ));
     }
     let stage_dir = match Dir::reopen_dir(&stage_file) {
         Ok(dir) => dir,
         Err(error) => {
-            let result = cleanup_owned_stage_error(
+            drop(stage_file);
+            return Err(cleanup_owned_stage_error(
                 &parent,
                 &stage,
-                Some(&stage_file),
                 map_resource_io(error),
-            );
-            drop(stage_file);
-            return Err(result);
+            ));
         }
     };
     if let Err(error) = copy_tree(&source, &stage_dir) {
         drop(stage_dir);
-        let result = cleanup_owned_stage_error(&parent, &stage, Some(&stage_file), error);
         drop(stage_file);
-        return Err(result);
+        return Err(cleanup_owned_stage_error(&parent, &stage, error));
     }
+    // Publication and named cleanup take ownership through fresh mutation
+    // handles. Close every validation/copy view first.
     drop(stage_dir);
-    let result =
-        publish_staged_tree_with_handle(&parent, &stage, &leaf, replace, Some(&stage_file));
     drop(stage_file);
-    result
+    publish_staged_tree(&parent, &stage, &leaf, replace)
 }
 
 #[cfg(test)]
@@ -2906,16 +2771,29 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_private_stage_handle_can_remove_its_owned_tree_while_open() {
+    fn windows_owned_tree_cleanup_closes_borrowed_views_before_consuming_handles() {
         let root = home();
         let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
         parent.create_dir("private-stage").unwrap();
         fs::create_dir(root.path().join("private-stage/nested")).unwrap();
         fs::write(root.path().join("private-stage/nested/file"), "owned").unwrap();
-        let stage = windows_open_private_stage(&parent, "private-stage", false, true).unwrap();
 
-        remove_opened_private_tree(&stage).unwrap();
+        {
+            let stage_pin = windows_open_mutation(&parent, "private-stage", false, true).unwrap();
+            let stage_view = Dir::reopen_dir(&stage_pin).unwrap();
+            assert_eq!(stage_view.entries().unwrap().count(), 1);
+            drop(stage_view);
+            drop(stage_pin);
+        }
+
+        remove_tree_entry(&parent, "private-stage").unwrap();
         assert!(!root.path().join("private-stage").exists());
+        parent.create_dir("private-stage").unwrap();
+        fs::write(root.path().join("private-stage/reused"), "safe reuse").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("private-stage/reused")).unwrap(),
+            "safe reuse"
+        );
     }
 
     #[cfg(windows)]
