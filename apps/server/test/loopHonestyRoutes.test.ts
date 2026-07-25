@@ -1,11 +1,4 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LOOP_PARALLEL_WRITE_TARGET_CODE, type LoopStructure } from "@agent-deck/domain";
@@ -331,8 +324,8 @@ describe("loop route honesty gate", () => {
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     const generatedTarget = vi.mocked(createLoopWorktree).mock.calls[0]![1];
     expect(response.json().error).toContain(generatedTarget);
-    expect(path.dirname(generatedTarget)).toBe(
-      path.join(realpathSync(path.join(home, "managed-worktrees")), "loop"),
+    expect(canonicalCheckoutLockKey(path.dirname(generatedTarget))).toBe(
+      canonicalCheckoutLockKey(path.join(home, "managed-worktrees", "loop")),
     );
     expect(path.basename(generatedTarget)).toMatch(
       /^loop-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
