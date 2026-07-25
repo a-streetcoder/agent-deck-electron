@@ -15,6 +15,28 @@ function tree(): string {
   roots.push(root);
   return root;
 }
+
+function runWindowsCmd(args: string[], operation: string): void {
+  try {
+    execFileSync("cmd.exe", ["/d", "/c", ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const stderr = (error as { stderr?: string | Buffer }).stderr;
+    const detail = stderr ? `: ${stderr.toString().trim()}` : "";
+    throw new Error(`${operation} failed${detail}`, { cause: error });
+  }
+}
+
+function createWindowsJunction(junction: string, target: string): void {
+  runWindowsCmd(["mklink", "/J", junction, target], "creating Windows junction");
+}
+
+function removeWindowsJunction(junction: string): void {
+  runWindowsCmd(["rmdir", junction], "removing Windows junction");
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     try {
@@ -95,11 +117,12 @@ describe("skillTreeFingerprint", () => {
     const outside = tree();
     writeFileSync(path.join(outside, "sentinel"), "outside bytes");
     const junction = path.join(root, "junction");
-    execFileSync("cmd.exe", ["/d", "/s", "/c", `mklink /J "${junction}" "${outside}"`], {
-      stdio: "ignore",
-    });
-
-    expect(() => skillTreeFingerprint(root)).toThrow(/symbolic link or junction/);
+    createWindowsJunction(junction, outside);
+    try {
+      expect(() => skillTreeFingerprint(root)).toThrow(/symbolic link or junction/);
+    } finally {
+      removeWindowsJunction(junction);
+    }
   });
 
   windowsIt("marks a reserved .git junction without traversing its target", () => {
@@ -107,13 +130,14 @@ describe("skillTreeFingerprint", () => {
     const outside = tree();
     writeFileSync(path.join(outside, "sentinel"), "first outside bytes");
     const junction = path.join(root, ".git");
-    execFileSync("cmd.exe", ["/d", "/s", "/c", `mklink /J "${junction}" "${outside}"`], {
-      stdio: "ignore",
-    });
-
-    const first = skillTreeFingerprint(root, { reservedGit: "presence" });
-    writeFileSync(path.join(outside, "sentinel"), "changed outside bytes");
-    expect(skillTreeFingerprint(root, { reservedGit: "presence" })).toBe(first);
+    createWindowsJunction(junction, outside);
+    try {
+      const first = skillTreeFingerprint(root, { reservedGit: "presence" });
+      writeFileSync(path.join(outside, "sentinel"), "changed outside bytes");
+      expect(skillTreeFingerprint(root, { reservedGit: "presence" })).toBe(first);
+    } finally {
+      removeWindowsJunction(junction);
+    }
   });
 
   const unixIt = process.platform === "win32" ? it.skip : it;
