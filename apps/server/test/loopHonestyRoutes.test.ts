@@ -755,7 +755,8 @@ describe("loop route honesty gate", () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-review-proof-"));
     const { fastify, getEngine } = makeRoutes(home);
     const ownershipId = "12345678-1234-4123-8123-123456789abc";
-    const worktreeRoot = path.join(home, "managed-worktrees", "loop");
+    const projectRoot = canonicalCheckoutLockKey(home);
+    const worktreeRoot = path.join(projectRoot, "managed-worktrees", "loop");
     const worktreePath = path.join(worktreeRoot, `loop-${ownershipId}`);
     mkdirSync(worktreePath);
     const sentinel = path.join(worktreePath, "review.txt");
@@ -772,7 +773,7 @@ describe("loop route honesty gate", () => {
         worktree: {
           ownershipVersion: 1,
           ownershipId,
-          projectRoot: canonicalCheckoutLockKey(home),
+          projectRoot,
           path: worktreePath,
           branch,
           sourceBranch: "main",

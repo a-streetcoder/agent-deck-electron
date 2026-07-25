@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import {
 
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WEB_DIST = path.join(WORKSPACE_ROOT, "apps", "web", "dist");
+let webBuiltForWorker = false;
 
 export interface E2eHarness {
   server: AgentDeckServer;
@@ -36,8 +37,11 @@ export async function startHarness(options?: {
   /** Drive a real pi tool call (e.g. read/bash) — see MockProviderOptions.toolCall. */
   toolCall?: NonNullable<Parameters<typeof startMockProvider>[0]>["toolCall"];
 }): Promise<E2eHarness> {
-  if (!existsSync(path.join(WEB_DIST, "index.html"))) {
+  // dist is ignored and may exist from an older checkout. Build once per
+  // Playwright worker so browser E2E always serves the renderer under test.
+  if (!webBuiltForWorker) {
     execSync("pnpm --filter @agent-deck/web build", { cwd: WORKSPACE_ROOT, stdio: "inherit" });
+    webBuiltForWorker = true;
   }
 
   const mock = await startMockProvider({

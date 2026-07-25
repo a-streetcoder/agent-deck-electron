@@ -1456,7 +1456,6 @@ describe("loop engine (single-agent)", () => {
   it("fails validation before writing through a nested symlink evidence parent", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-artifact-live-symlink-"));
     const outside = mkdtempSync(path.join(tmpdir(), "loop-artifact-live-outside-"));
-    let run!: ReturnType<LoopEngine["start"]>;
     const engine = new LoopEngine({
       dataDir,
       executeRole: async ({ phase }) => {
@@ -1471,7 +1470,7 @@ describe("loop engine (single-agent)", () => {
         return phase === "evaluator" ? "SUCCESS" : "report";
       },
     });
-    run = engine.start(makeLoop({ validationCommand: "printf unsafe" }), cwd());
+    const run = engine.start(makeLoop({ validationCommand: "printf unsafe" }), cwd());
     await engine.settled(run.id);
 
     expect(run.status).toBe("failed");
