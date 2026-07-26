@@ -28,7 +28,10 @@ const SENTINEL = "preview-fixture-page";
 // A scratch project whose only script is a static dev server. server.js listens
 // on an EPHEMERAL loopback port (so parallel runs never collide), prints its URL
 // (the server-side port detector reads it from stdout), and serves a fixed page.
-const PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-"));
+const PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-package-"));
+const CARGO_PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-cargo-"));
+const DJANGO_PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-django-"));
+const STATIC_PROJECT = mkdtempSync(path.join(tmpdir(), "proj-preview-static-"));
 
 let harness: E2eHarness;
 
@@ -55,13 +58,22 @@ test.beforeAll(async () => {
     ].join("\n"),
   );
 
+  writeFileSync(
+    path.join(CARGO_PROJECT, "Cargo.toml"),
+    "[package]\nname = 'preview'\nversion = '0.0.0'\n",
+  );
+  writeFileSync(path.join(DJANGO_PROJECT, "manage.py"), "# proposal marker only\n");
+  writeFileSync(path.join(STATIC_PROJECT, "index.html"), "<!doctype html><title>static</title>");
+
   harness = await startHarness({ reply: () => "ok", chunkDelayMs: 0 });
-  const response = await fetch(`${harness.baseUrl}/projects`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: PROJECT }),
-  });
-  if (!response.ok) throw new Error(await response.text());
+  for (const project of [PROJECT, CARGO_PROJECT, DJANGO_PROJECT, STATIC_PROJECT]) {
+    const response = await fetch(`${harness.baseUrl}/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: project }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+  }
 });
 
 test.afterAll(async () => {
@@ -95,7 +107,12 @@ test("scripts control runs a dev server, the discovered port embeds, stop reaps 
   const select = page.getByTestId("preview-script-select");
   // The `dev` script is listed and preselected (preferredScript picks it).
   await expect(select.locator("option", { hasText: "dev" })).toHaveCount(1);
-  await expect(select).toHaveValue("dev");
+  await expect(select).toHaveValue("package:ZGV2");
+  await expect(page.getByTestId("preview-command-details")).toContainText("package.json script");
+  await expect(page.getByTestId("preview-command-details")).toContainText("node server.js");
+  // Detection and selection are proposal-only: opening Preview must not spawn.
+  await expect(page.getByTestId("preview-log")).toHaveCount(0);
+  await expect(page.getByTestId("preview-iframe")).toHaveCount(0);
 
   // Run it: the printed loopback port is detected + confirmed, so the panel
   // auto-embeds it (no user action) — the run's output streams into the log
@@ -125,6 +142,36 @@ test("scripts control runs a dev server, the discovered port embeds, stop reaps 
   await expect.poll(() => isUnreachable(url), { timeout: 15_000 }).toBe(true);
   // The Run control is back (a fresh run can start).
   await expect(page.getByTestId("preview-run")).toBeVisible();
+});
+
+test("Cargo, Django, and static roots are proposed without starting them", async ({ page }) => {
+  const cases = [
+    { project: CARGO_PROJECT, label: "Cargo server", evidence: "Cargo.toml", command: "cargo run" },
+    {
+      project: DJANGO_PROJECT,
+      label: "Django server",
+      evidence: "manage.py",
+      command: "python manage.py runserver 127.0.0.1:8000",
+    },
+    {
+      project: STATIC_PROJECT,
+      label: "Static site",
+      evidence: "root index.html",
+      command: "python -m http.server 8000 --bind 127.0.0.1",
+    },
+  ];
+  for (const item of cases) {
+    await page.goto(harness.baseUrl);
+    await selectProject(page, path.basename(item.project));
+    await page.getByTestId("preview-toggle").click();
+    const select = page.getByTestId("preview-script-select");
+    await expect(select.locator("option", { hasText: item.label })).toHaveCount(1);
+    const details = page.getByTestId("preview-command-details");
+    await expect(details).toContainText(item.evidence);
+    await expect(details).toContainText(item.command);
+    await expect(page.getByTestId("preview-log")).toHaveCount(0);
+    await expect(page.getByTestId("preview-iframe")).toHaveCount(0);
+  }
 });
 
 test("the preview panel lists nothing to run for a scriptless session", async ({ page }) => {

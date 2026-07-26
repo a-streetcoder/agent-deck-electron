@@ -14,7 +14,7 @@ import {
   RotateCw,
   Square,
 } from "lucide-react";
-import type { DiscoveredServer, ProjectScript } from "@agent-deck/contracts";
+import type { DiscoveredServer, ProjectServerCommand } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../../state/store.ts";
 import { parseLoopbackHttpUrl } from "../../lib/loopback.ts";
@@ -73,11 +73,35 @@ const MAX_LOG_CHARS = 200_000;
 const IFRAME_LOAD_HINT_MS = 8_000;
 
 /** Prefer a `dev`/`start` script as the default selection, else the first. */
-function preferredScript(scripts: readonly ProjectScript[]): string | null {
-  if (scripts.length === 0) return null;
+function preferredScript(commands: readonly ProjectServerCommand[]): string | null {
+  if (commands.length === 0) return null;
   const preferred =
-    scripts.find((s) => s.name === "dev") ?? scripts.find((s) => s.name === "start");
-  return (preferred ?? scripts[0]!).name;
+    commands.find((item) => item.source === "package" && item.label === "dev") ??
+    commands.find((item) => item.source === "package" && item.label === "start");
+  return (preferred ?? commands[0]!).id;
+}
+
+/** Keep a selection across refresh only while that opaque id is still offered. */
+export function refreshedCommandSelection(
+  current: string | null,
+  commands: readonly ProjectServerCommand[],
+): string | null {
+  return current !== null && commands.some((item) => item.id === current)
+    ? current
+    : preferredScript(commands);
+}
+
+function commandEvidence(command: ProjectServerCommand): string {
+  switch (command.source) {
+    case "package":
+      return "package.json script";
+    case "cargo":
+      return "Cargo.toml";
+    case "django":
+      return "manage.py";
+    case "static":
+      return "root index.html";
+  }
 }
 
 function appendLog(previous: string, chunk: string): string {
@@ -129,8 +153,10 @@ export function PreviewPanel() {
     [sessionId, addElementContext],
   );
 
-  const [scripts, setScripts] = useState<readonly ProjectScript[]>([]);
-  const [scriptsLoading, setScriptsLoading] = useState(false);
+  const [scripts, setScripts] = useState<readonly ProjectServerCommand[]>([]);
+  const [scriptsState, setScriptsState] = useState<"idle" | "loading" | "success" | "error">(
+    "idle",
+  );
   const [selected, setSelected] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -146,15 +172,16 @@ export function PreviewPanel() {
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const loadScripts = useCallback(async () => {
-    setScriptsLoading(true);
+    setScriptsState("loading");
     try {
       const list = await listSessionScripts();
       setScripts(list);
-      setSelected((current) => current ?? preferredScript(list));
+      setSelected((current) => refreshedCommandSelection(current, list));
+      setScriptsState("success");
     } catch {
-      // Offline / torn-down session: leave the (reset) list — reopening refetches.
-    } finally {
-      setScriptsLoading(false);
+      // Keep existing candidates on refresh failure, but report the failure
+      // instead of presenting it as a successful empty detection result.
+      setScriptsState("error");
     }
   }, []);
 
@@ -169,6 +196,7 @@ export function PreviewPanel() {
     let cancelled = false;
 
     setScripts([]);
+    setScriptsState("idle");
     setSelected(null);
     setRunId(null);
     setRunning(false);
@@ -267,7 +295,7 @@ export function PreviewPanel() {
       ) : (
         <ScriptsRunner
           scripts={scripts}
-          scriptsLoading={scriptsLoading}
+          scriptsState={scriptsState}
           selected={selected}
           onSelect={setSelected}
           running={running}
@@ -290,9 +318,9 @@ export function PreviewPanel() {
 // discovered-server card (the donor's ProjectScriptsControl + PreviewEmptyState).
 // ---------------------------------------------------------------------------
 
-function ScriptsRunner(props: {
-  scripts: readonly ProjectScript[];
-  scriptsLoading: boolean;
+export function ScriptsRunner(props: {
+  scripts: readonly ProjectServerCommand[];
+  scriptsState: "idle" | "loading" | "success" | "error";
   selected: string | null;
   onSelect: (name: string) => void;
   running: boolean;
@@ -307,7 +335,7 @@ function ScriptsRunner(props: {
 }) {
   const {
     scripts,
-    scriptsLoading,
+    scriptsState,
     selected,
     onSelect,
     running,
@@ -321,6 +349,8 @@ function ScriptsRunner(props: {
     onOpenServer,
   } = props;
   const hasScripts = scripts.length > 0;
+  const scriptsLoading = scriptsState === "loading";
+  const scriptsFailed = scriptsState === "error";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -352,17 +382,18 @@ function ScriptsRunner(props: {
           className="min-w-0 flex-1 truncate rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-xs text-text-primary disabled:opacity-50"
           data-testid="preview-script-select"
           value={selected ?? ""}
+          aria-label="Detected server command"
           disabled={!hasScripts || running}
           onChange={(event) => onSelect(event.target.value)}
         >
           {hasScripts ? (
             scripts.map((script) => (
-              <option key={script.name} value={script.name}>
-                {script.name}
+              <option key={script.id} value={script.id}>
+                {script.label}
               </option>
             ))
           ) : (
-            <option value="">No scripts</option>
+            <option value="">{scriptsLoading ? "Detecting commands…" : "No commands"}</option>
           )}
         </ControlSelect>
         {running ? (
@@ -389,10 +420,60 @@ function ScriptsRunner(props: {
         )}
       </div>
 
+      {selected
+        ? (() => {
+            const proposal = scripts.find((item) => item.id === selected);
+            return proposal ? (
+              <div
+                className="border-b border-border-subtle px-3 py-2"
+                data-testid="preview-command-details"
+              >
+                <div className="text-detail text-text-muted">
+                  Detected from {commandEvidence(proposal)}
+                </div>
+                <code className="mt-1 block break-all text-xs text-text-secondary">
+                  {proposal.command}
+                </code>
+              </div>
+            ) : null;
+          })()
+        : null}
+
+      {scriptsLoading ? (
+        <div
+          className="border-b border-border-subtle px-3 py-2 text-xs text-text-muted"
+          role="status"
+          aria-live="polite"
+          data-testid="preview-list-loading"
+        >
+          Detecting server commands…
+        </div>
+      ) : null}
+
+      {scriptsFailed ? (
+        <div
+          className="flex items-center justify-between gap-3 border-b border-border-subtle px-3 py-2 text-xs"
+          style={{ color: "var(--color-role-error)" }}
+          role="alert"
+          data-testid="preview-list-error"
+        >
+          <span>Couldn’t load detected server commands. Check the connection and try again.</span>
+          <ControlButton
+            type="button"
+            className="shrink-0 rounded-md border border-border-subtle px-2 py-1 font-semibold"
+            onClick={onRefresh}
+          >
+            Retry
+          </ControlButton>
+        </div>
+      ) : null}
+
       {startError ? (
         <div
           className="border-b border-border-subtle px-3 py-2 text-xs"
           style={{ color: "var(--color-role-error)" }}
+          role="alert"
+          aria-live="assertive"
           data-testid="preview-error"
         >
           {startError}
@@ -433,12 +514,26 @@ function ScriptsRunner(props: {
           data-testid="preview-empty"
         >
           <p className="text-sm text-text-secondary">
-            {hasScripts ? "No preview yet" : "No scripts to run"}
+            {scriptsLoading
+              ? "Detecting server commands…"
+              : scriptsFailed
+                ? "Server commands are temporarily unavailable"
+                : hasScripts
+                  ? "Ready to run a detected server"
+                  : scriptsState === "success"
+                    ? "No server command detected"
+                    : "Waiting to detect server commands"}
           </p>
           <p className="text-xs text-text-muted">
-            {hasScripts
-              ? "Run a dev script — a listening localhost port opens here automatically."
-              : "This project has no package.json scripts to run."}
+            {scriptsLoading
+              ? "Nothing will start while detection is in progress."
+              : scriptsFailed
+                ? "Use Retry above when the connection is available."
+                : hasScripts
+                  ? "Review the exact command above, then choose Run. Nothing starts automatically."
+                  : scriptsState === "success"
+                    ? "Add a package.json script, Cargo.toml, manage.py, or a root index.html, then refresh."
+                    : "Connect to the session to detect available commands."}
           </p>
         </div>
       )}
@@ -460,7 +555,6 @@ function PreviewBrowser(props: {
 }) {
   const { url, onNavigate, onBack, onCaptureElement } = props;
   const [draft, setDraft] = useState(url);
-  const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showHint, setShowHint] = useState(false);
   // Bumped to force the iframe to remount (a hard reload of the same URL).
@@ -538,11 +632,7 @@ function PreviewBrowser(props: {
           value={draft}
           spellCheck={false}
           onChange={(event) => setDraft(event.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false);
-            setDraft(url);
-          }}
+          onBlur={() => setDraft(url)}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -625,7 +715,8 @@ function PreviewBrowser(props: {
           <div
             className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-surface"
             data-testid="preview-loading"
-            aria-hidden={!focused}
+            role="status"
+            aria-live="polite"
           >
             <RotateCw className="h-5 w-5 animate-spin text-text-muted" />
             <span className="text-xs text-text-muted">

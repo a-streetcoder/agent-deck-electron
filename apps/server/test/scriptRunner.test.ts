@@ -1,5 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { Effect, Either, Exit, Scope } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { makeServerRuntime } from "../src/runtime.ts";
 import {
   extractLoopbackPorts,
   listProjectScripts,
-  resolveScriptCommand,
+  resolveProjectServerLaunch,
   ScriptRunner,
   spawnScript,
   type PortProber,
@@ -85,7 +86,12 @@ function fakeAdapter(): {
 
 /** Base spawn options: a command override (bypasses package.json) + always-true probe. */
 const okProbe: PortProber = async () => true;
-const baseOpts = { scriptName: "dev", cwd: process.cwd(), command: "noop", probePort: okProbe };
+const baseOpts = {
+  commandId: "test",
+  cwd: process.cwd(),
+  launch: { executable: "noop", argv: [], command: "noop" },
+  probePort: okProbe,
+};
 
 // Let the microtask that the confirm probe schedules run.
 const flush = async (): Promise<void> => {
@@ -134,35 +140,69 @@ describe("extractLoopbackPorts", () => {
   });
 });
 
-describe("listProjectScripts / resolveScriptCommand", () => {
+describe("project server command detection", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "agent-deck-scripts-"));
   });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("lists declared package.json scripts and resolves a command by name", () => {
+  it("lists package scripts first, then Cargo and Django in stable order", () => {
     writeFileSync(
       join(dir, "package.json"),
       JSON.stringify({ scripts: { dev: "vite", build: "vite build", bad: 42 } }),
     );
+    writeFileSync(join(dir, "Cargo.toml"), "[package]\nname='x'\n");
+    writeFileSync(join(dir, "manage.py"), "");
+    writeFileSync(join(dir, "index.html"), "static must not be proposed");
     expect(listProjectScripts(dir)).toEqual([
-      { name: "dev", command: "vite" },
-      { name: "build", command: "vite build" },
+      { id: "package:ZGV2", label: "dev", command: "vite", source: "package", defaultPort: null },
+      {
+        id: "package:YnVpbGQ",
+        label: "build",
+        command: "vite build",
+        source: "package",
+        defaultPort: null,
+      },
+      {
+        id: "cargo:run",
+        label: "Cargo server",
+        command: "cargo run",
+        source: "cargo",
+        defaultPort: null,
+      },
+      {
+        id: "django:runserver",
+        label: "Django server",
+        command: "python manage.py runserver 127.0.0.1:8000",
+        source: "django",
+        defaultPort: 8000,
+      },
     ]);
-    expect(resolveScriptCommand(dir, "dev")).toBe("vite");
-    // A non-string script value is dropped; an undeclared name resolves to null.
-    expect(resolveScriptCommand(dir, "bad")).toBeNull();
-    expect(resolveScriptCommand(dir, "nope")).toBeNull();
   });
 
-  it("returns an empty list for a missing / invalid / scriptless package.json", () => {
-    expect(listProjectScripts(dir)).toEqual([]); // no package.json
-    writeFileSync(join(dir, "package.json"), "{ not json");
+  it("uses static index.html only as a root regular-file fallback", () => {
+    writeFileSync(join(dir, "index.html"), "ok");
+    expect(listProjectScripts(dir)).toEqual([
+      {
+        id: "static:http-server",
+        label: "Static site",
+        command: "python -m http.server 8000 --bind 127.0.0.1",
+        source: "static",
+        defaultPort: 8000,
+      },
+    ]);
+    rmSync(join(dir, "index.html"));
+    mkdirSync(join(dir, "index.html"));
     expect(listProjectScripts(dir)).toEqual([]);
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+  });
+
+  it("does not treat marker directories as files or static-fallback through a package marker", () => {
+    mkdirSync(join(dir, "Cargo.toml"));
+    mkdirSync(join(dir, "manage.py"));
+    writeFileSync(join(dir, "index.html"), "ok");
+    expect(listProjectScripts(dir).map((item) => item.source)).toEqual(["static"]);
+    writeFileSync(join(dir, "package.json"), "{ invalid");
     expect(listProjectScripts(dir)).toEqual([]);
   });
 });
@@ -177,7 +217,7 @@ describe("spawnScript scoped child service (fake adapter)", () => {
         Effect.gen(function* () {
           const handle = yield* spawnScript(adapter, baseOpts);
           expect(handle.pid).toBe(4321);
-          expect(handle.scriptName).toBe("dev");
+          expect(handle.commandId).toBe("test");
           expect(spawns[0]).toMatchObject({ command: "noop", cwd: process.cwd() });
 
           const events: ScriptEvent[] = [];
@@ -229,6 +269,44 @@ describe("spawnScript scoped child service (fake adapter)", () => {
         }),
       ),
     );
+  });
+
+  it("never probes advisory defaultPort without matching child URL output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-deck-default-port-"));
+    const unrelated = createServer();
+    try {
+      writeFileSync(join(dir, "index.html"), "");
+      await new Promise<void>((resolve, reject) => {
+        unrelated.once("error", reject);
+        unrelated.listen(8000, "127.0.0.1", resolve);
+      });
+      const { adapter, procs } = fakeAdapter();
+      const probed: number[] = [];
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* spawnScript(adapter, {
+              commandId: "static:http-server",
+              cwd: dir,
+              resolveExecutable: () => "/tools/python3",
+              probePort: async (port) => {
+                probed.push(port);
+                return true;
+              },
+            });
+            const events: ScriptEvent[] = [];
+            yield* handle.attach((event) => events.push(event));
+            procs[0]!.emitData("Serving HTTP on 127.0.0.1 port 8000\n");
+            yield* Effect.promise(flush);
+            expect(probed).toEqual([]);
+            expect(events.filter((event) => event._tag === "Server")).toEqual([]);
+          }),
+        ),
+      );
+    } finally {
+      await new Promise<void>((resolve) => unrelated.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("detects a URL split across two reads (carryover tail)", async () => {
@@ -312,17 +390,121 @@ describe("spawnScript scoped child service (fake adapter)", () => {
     );
   });
 
-  it("fails typed with ScriptNotDeclared when the name has no command", async () => {
+  it("spawns detected Cargo and Python commands with exact argv and shell:false", async () => {
+    const cases = [
+      { marker: "Cargo.toml", commandId: "cargo:run", executable: "/tools/cargo", argv: ["run"] },
+      {
+        marker: "manage.py",
+        commandId: "django:runserver",
+        executable: "/tools/python3",
+        argv: ["manage.py", "runserver", "127.0.0.1:8000"],
+      },
+      {
+        marker: "index.html",
+        commandId: "static:http-server",
+        executable: "/tools/python3",
+        argv: ["-m", "http.server", "8000", "--bind", "127.0.0.1"],
+      },
+    ] as const;
+    for (const item of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "agent-deck-launch-"));
+      try {
+        writeFileSync(join(dir, item.marker), "");
+        const { adapter, spawns } = fakeAdapter();
+        await Effect.runPromise(
+          Effect.scoped(
+            spawnScript(adapter, {
+              commandId: item.commandId,
+              cwd: dir,
+              resolveExecutable: (names) =>
+                names[0] === "cargo" ? "/tools/cargo" : "/tools/python3",
+            }),
+          ),
+        );
+        expect(spawns[0]).toMatchObject({
+          executable: item.executable,
+          argv: item.argv,
+          cwd: dir,
+          shell: false,
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps Python resolution order and py -3 behavior behind a cross-platform seam", () => {
+    const django = {
+      id: "django:runserver",
+      label: "Django server",
+      command: "python manage.py runserver 127.0.0.1:8000",
+      source: "django" as const,
+      defaultPort: 8000,
+    };
+    const calls: Array<{ names: readonly string[]; platform: NodeJS.Platform }> = [];
+    const windows = resolveProjectServerLaunch(
+      django,
+      { ComSpec: "C:\\Windows\\cmd.exe" },
+      "win32",
+      (names, _env, platform) => {
+        calls.push({ names, platform });
+        return "C:\\Windows\\py.exe";
+      },
+    );
+    expect(calls).toEqual([{ names: ["python", "py"], platform: "win32" }]);
+    expect(windows?.argv).toEqual(["-3", "manage.py", "runserver", "127.0.0.1:8000"]);
+
+    calls.length = 0;
+    resolveProjectServerLaunch(django, {}, "darwin", (names, _env, platform) => {
+      calls.push({ names, platform });
+      return "/usr/bin/python3";
+    });
+    expect(calls).toEqual([{ names: ["python3", "python"], platform: "darwin" }]);
+  });
+
+  it("fails clearly before spawn when a detected runtime executable is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-deck-missing-exe-"));
+    try {
+      writeFileSync(join(dir, "manage.py"), "");
+      const { adapter, spawns } = fakeAdapter();
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.either(
+            spawnScript(adapter, {
+              commandId: "django:runserver",
+              cwd: dir,
+              resolveExecutable: () => null,
+            }),
+          ),
+        ),
+      );
+      expect(Either.isLeft(result) && result.left.message).toContain("python");
+      expect(spawns).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails typed with ScriptNotDeclared for forged or stale command ids", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-deck-scripts-"));
     try {
       writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { dev: "vite" } }));
       const { adapter, spawns } = fakeAdapter();
-      const result = await Effect.runPromise(
-        Effect.scoped(Effect.either(spawnScript(adapter, { scriptName: "missing", cwd: dir }))),
+      const forged = await Effect.runPromise(
+        Effect.scoped(Effect.either(spawnScript(adapter, { commandId: "missing", cwd: dir }))),
       );
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) expect(result.left._tag).toBe("ScriptNotDeclared");
-      expect(spawns).toEqual([]); // never spawned an undeclared script
+      expect(Either.isLeft(forged)).toBe(true);
+      if (Either.isLeft(forged)) {
+        expect(forged.left._tag).toBe("ScriptNotDeclared");
+        expect(forged.left.message).toContain("refresh");
+      }
+      const detectedId = listProjectScripts(dir)[0]!.id;
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { start: "vite" } }));
+      const stale = await Effect.runPromise(
+        Effect.scoped(Effect.either(spawnScript(adapter, { commandId: detectedId, cwd: dir }))),
+      );
+      expect(Either.isLeft(stale) && stale.left._tag).toBe("ScriptNotDeclared");
+      expect(spawns).toEqual([]); // never spawned a forged or stale command
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -425,7 +607,10 @@ describe("ScriptRunner real child-process smoke test", () => {
         Effect.gen(function* () {
           const runner = yield* ScriptRunner;
           const listed = yield* runner.listScripts(dir);
-          const handle = yield* Scope.extend(runner.spawn({ scriptName: "dev", cwd: dir }), scope);
+          const handle = yield* Scope.extend(
+            runner.spawn({ commandId: "package:ZGV2", cwd: dir }),
+            scope,
+          );
           expect(handle.pid).toBeGreaterThan(0);
 
           let server: ScriptEvent | null = null;
@@ -444,7 +629,15 @@ describe("ScriptRunner real child-process smoke test", () => {
           return { pid: handle.pid, sawServer: server, listed, output };
         }),
       );
-      expect(listed).toEqual([{ name: "dev", command: "node server.cjs" }]);
+      expect(listed).toEqual([
+        {
+          id: "package:ZGV2",
+          label: "dev",
+          command: "node server.cjs",
+          source: "package",
+          defaultPort: null,
+        },
+      ]);
       expect(sawServer).not.toBeNull();
       const server = sawServer as unknown as { server: { host: string; url: string } };
       expect(server.server.host).toBe("localhost");

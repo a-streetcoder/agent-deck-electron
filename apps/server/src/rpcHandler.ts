@@ -569,8 +569,8 @@ export function createRpcConnection(deps: {
         return;
       }
       try {
-        const list = await scripts.listScripts(session.meta.cwd);
-        send({ kind: "scripts_list_ok", id, scripts: list });
+        const candidates = await scripts.listScripts(session.meta.cwd);
+        send({ kind: "scripts_list_ok", id, candidates });
       } catch (error) {
         replyError(error instanceof Error ? error.message : String(error));
       }
@@ -591,7 +591,7 @@ export function createRpcConnection(deps: {
       try {
         const opened = await scripts.start({
           sessionId: session.meta.id,
-          scriptName: request.scriptName,
+          commandId: request.commandId,
           cwd: session.meta.cwd,
         });
         // The socket may have dropped DURING the spawn — close() already swept

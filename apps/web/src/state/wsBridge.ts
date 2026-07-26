@@ -2,7 +2,7 @@ import type {
   ClientMessage,
   EditorId,
   ProjectMeta,
-  ProjectScript,
+  ProjectServerCommand,
   ScriptPush,
   ServerMessage,
   SessionMeta,
@@ -184,11 +184,11 @@ export function subscribeScriptPush(listener: (message: ScriptPush) => void): ()
 }
 
 /** List the CURRENT session's declared package.json scripts ([] if none/offline). */
-export async function listSessionScripts(): Promise<readonly ProjectScript[]> {
+export async function listSessionScripts(): Promise<readonly ProjectServerCommand[]> {
   const sessionId = currentSessionId;
   if (!sessionId) return [];
   const result = await transport.scriptsList(sessionId);
-  return result.scripts;
+  return result.candidates;
 }
 
 /** The run this connection currently has active for the CURRENT session, if any
@@ -201,10 +201,10 @@ export function getSessionRunId(): string | null {
 
 /** Start a declared dev/build script for the CURRENT session as a managed run.
  * Throws on a server failure reply (undeclared script, a run already active). */
-export async function startSessionScript(scriptName: string): Promise<ScriptRunResult> {
+export async function startSessionScript(commandId: string): Promise<ScriptRunResult> {
   const sessionId = currentSessionId;
   if (!sessionId) throw new Error("no active session");
-  const result = await transport.startScript(sessionId, scriptName);
+  const result = await transport.startScript(sessionId, commandId);
   sessionRuns.set(sessionId, result.runId);
   return result;
 }

@@ -72,7 +72,7 @@ describe("createScriptRunnerGateway", () => {
     const { runtime, children } = fakeRuntime();
     const gateway = createScriptRunnerGateway(runtime);
     await expect(
-      gateway.start({ sessionId: "s1", scriptName: "missing", cwd: dir }),
+      gateway.start({ sessionId: "s1", commandId: "missing", cwd: dir }),
     ).rejects.toMatchObject({ _tag: "ScriptNotDeclared" });
     expect(children).toEqual([]);
   });
@@ -81,25 +81,25 @@ describe("createScriptRunnerGateway", () => {
     const { runtime, children } = fakeRuntime();
     const gateway = createScriptRunnerGateway(runtime);
 
-    const run1 = await gateway.start({ sessionId: "s1", scriptName: "dev", cwd: dir });
+    const run1 = await gateway.start({ sessionId: "s1", commandId: "package:ZGV2", cwd: dir });
     expect(run1.runId).toBe("run-1");
     // A second start for the same session is rejected while the first runs.
     await expect(
-      gateway.start({ sessionId: "s1", scriptName: "dev", cwd: dir }),
+      gateway.start({ sessionId: "s1", commandId: "package:ZGV2", cwd: dir }),
     ).rejects.toBeInstanceOf(ScriptAlreadyRunning);
 
     // The child exits on its own → the per-session guard is released, so a fresh
     // run can start for the same session.
     children[0]!.emitExit({ exitCode: 0, signal: null });
-    const run2 = await gateway.start({ sessionId: "s1", scriptName: "dev", cwd: dir });
+    const run2 = await gateway.start({ sessionId: "s1", commandId: "package:ZGV2", cwd: dir });
     expect(run2.runId).toBe("run-2");
   });
 
   it("closeAll() tree-kills every still-open run and is idempotent", async () => {
     const { runtime, children } = fakeRuntime();
     const gateway = createScriptRunnerGateway(runtime);
-    await gateway.start({ sessionId: "s1", scriptName: "dev", cwd: dir });
-    await gateway.start({ sessionId: "s2", scriptName: "dev", cwd: dir });
+    await gateway.start({ sessionId: "s1", commandId: "package:ZGV2", cwd: dir });
+    await gateway.start({ sessionId: "s2", commandId: "package:ZGV2", cwd: dir });
 
     await gateway.closeAll();
     expect(children.map((c) => c.kills)).toEqual([["SIGTERM"], ["SIGTERM"]]);
@@ -110,8 +110,8 @@ describe("createScriptRunnerGateway", () => {
   it("closeAll() after a per-run close() never double-kills (memoized close)", async () => {
     const { runtime, children } = fakeRuntime();
     const gateway = createScriptRunnerGateway(runtime);
-    const first = await gateway.start({ sessionId: "s1", scriptName: "dev", cwd: dir });
-    await gateway.start({ sessionId: "s2", scriptName: "dev", cwd: dir });
+    const first = await gateway.start({ sessionId: "s1", commandId: "package:ZGV2", cwd: dir });
+    await gateway.start({ sessionId: "s2", commandId: "package:ZGV2", cwd: dir });
 
     await first.close();
     expect(children[0]!.kills).toEqual(["SIGTERM"]);

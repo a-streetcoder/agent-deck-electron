@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { Schema } from "effect";
 import { RpcServerFrame } from "@agent-deck/contracts";
-import type { DiscoveredServer, RpcServerFrame as Frame } from "@agent-deck/contracts";
+import type {
+  DiscoveredServer,
+  ProjectServerCommand,
+  RpcServerFrame as Frame,
+} from "@agent-deck/contracts";
 import type { DiffGateway } from "../src/diffGateway.ts";
 import type { EditorLauncher, EditorOpenInput } from "../src/editorLauncher.ts";
 import type { CheckpointRollbackGateway } from "../src/checkpointRollback.ts";
@@ -39,6 +43,7 @@ function makeSession(
     snapshot?: { seq: number; state: unknown };
     /** Session already ended: meta carries endedAt (manager keeps it listed). */
     endedAt?: string;
+    cwd?: string;
     /** Session exit already happened: onExit fires its listener immediately. */
     exitImmediately?: boolean;
   },
@@ -69,7 +74,7 @@ function makeSession(
   const session = {
     meta: {
       id,
-      cwd: "/tmp",
+      cwd: opts?.cwd ?? "/tmp",
       createdAt: "2026-01-01T00:00:00.000Z",
       ...(opts?.endedAt !== undefined ? { endedAt: opts.endedAt } : {}),
     },
@@ -180,7 +185,7 @@ interface FakeScript {
   close: ReturnType<typeof vi.fn>;
 }
 
-function makeFakeScript(runId: string, sessionId: string, scriptName: string): FakeScript {
+function makeFakeScript(runId: string, sessionId: string, commandId: string): FakeScript {
   const listeners = new Set<(event: ScriptEvent) => void>();
   let scrollback = "";
   let running = true;
@@ -197,7 +202,7 @@ function makeFakeScript(runId: string, sessionId: string, scriptName: string): F
   const opened: OpenedScript = {
     runId,
     sessionId,
-    scriptName,
+    commandId,
     pid: 5252,
     attach: (listener) => {
       listeners.add(listener);
@@ -213,8 +218,8 @@ function makeFakeScript(runId: string, sessionId: string, scriptName: string): F
   return { opened, emit, listenerCount: () => listeners.size, close };
 }
 
-function makeScriptGateway(scripts: Record<string, { name: string; command: string }[]> = {}) {
-  const startCalls: Array<{ sessionId: string; scriptName: string; cwd: string }> = [];
+function makeScriptGateway(scripts: Record<string, ProjectServerCommand[]> = {}) {
+  const startCalls: Array<{ sessionId: string; commandId: string; cwd: string }> = [];
   const runs: FakeScript[] = [];
   let nextId = 1;
   let startError: Error | null = null;
@@ -223,7 +228,7 @@ function makeScriptGateway(scripts: Record<string, { name: string; command: stri
     start: async (options) => {
       startCalls.push({ ...options });
       if (startError) throw startError;
-      const run = makeFakeScript(`run-${nextId++}`, options.sessionId, options.scriptName);
+      const run = makeFakeScript(`run-${nextId++}`, options.sessionId, options.commandId);
       runs.push(run);
       return run.opened;
     },
@@ -1246,11 +1251,39 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
 
   it("scripts_list answers with the session project's declared scripts (cwd from meta)", async () => {
     const { session } = makeSession("s1"); // meta.cwd === "/tmp"
-    const scripts = makeScriptGateway({ "/tmp": [{ name: "dev", command: "vite" }] });
+    const scripts = makeScriptGateway({
+      "/tmp": [
+        { id: "package:ZGV2", label: "dev", command: "vite", source: "package", defaultPort: null },
+      ],
+    });
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(frame(1, { type: "scripts_list", sessionId: "s1" }));
     expect(frames).toEqual([
-      { kind: "scripts_list_ok", id: 1, scripts: [{ name: "dev", command: "vite" }] },
+      {
+        kind: "scripts_list_ok",
+        id: 1,
+        candidates: [
+          {
+            id: "package:ZGV2",
+            label: "dev",
+            command: "vite",
+            source: "package",
+            defaultPort: null,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("script_start redetects and spawns in the authoritative worktree cwd", async () => {
+    const { session } = makeSession("s1", { cwd: "/tmp/project-worktree" });
+    const scripts = makeScriptGateway();
+    const { conn } = withScripts({ s1: session }, scripts.gateway);
+    await conn.handleMessage(
+      frame(2, { type: "script_start", sessionId: "s1", commandId: "cargo:run" }),
+    );
+    expect(scripts.startCalls).toEqual([
+      { sessionId: "s1", commandId: "cargo:run", cwd: "/tmp/project-worktree" },
     ]);
   });
 
@@ -1259,10 +1292,12 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(2, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(2, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     // The gateway resolves the cwd server-side (session meta), never the wire.
-    expect(scripts.startCalls).toEqual([{ sessionId: "s1", scriptName: "dev", cwd: "/tmp" }]);
+    expect(scripts.startCalls).toEqual([
+      { sessionId: "s1", commandId: "package:ZGV2", cwd: "/tmp" },
+    ]);
     expect(frames).toEqual([
       { kind: "script_run_ok", id: 2, runId: "run-1", scrollback: "", running: true, server: null },
     ]);
@@ -1289,7 +1324,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     const run = scripts.runs[0]!;
     run.emit({ _tag: "Output", data: "listening\n" });
@@ -1314,7 +1349,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     const run = scripts.runs[0]!;
     await conn.handleMessage(frame(2, { type: "script_stop", runId: "run-1" }));
@@ -1327,7 +1362,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const { conn, frames } = withScripts({}, scripts.gateway);
     await conn.handleMessage(frame(1, { type: "scripts_list", sessionId: "nope" }));
     await conn.handleMessage(
-      frame(2, { type: "script_start", sessionId: "nope", scriptName: "dev" }),
+      frame(2, { type: "script_start", sessionId: "nope", commandId: "package:ZGV2" }),
     );
     await conn.handleMessage(frame(3, { type: "script_attach", runId: "run-99" }));
     await conn.handleMessage(frame(4, { type: "script_stop", runId: "run-99" }));
@@ -1345,7 +1380,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     expect(frames).toEqual([{ kind: "reply", id: 1, ok: false, error: "session has ended" }]);
     expect(scripts.startCalls).toEqual([]);
@@ -1357,7 +1392,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     scripts.setStartError(new Error("a script is already running for this session"));
     const { conn, frames } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     expect(frames).toEqual([
       { kind: "reply", id: 1, ok: false, error: "a script is already running for this session" },
@@ -1369,7 +1404,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     const run = scripts.runs[0]!;
     triggerExit();
@@ -1381,7 +1416,7 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     const scripts = makeScriptGateway();
     const { conn } = withScripts({ s1: session }, scripts.gateway);
     await conn.handleMessage(
-      frame(1, { type: "script_start", sessionId: "s1", scriptName: "dev" }),
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
     );
     const run = scripts.runs[0]!;
     conn.close();

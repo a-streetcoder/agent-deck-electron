@@ -13,7 +13,7 @@ import {
   type FileContentKind,
   type FileListEntry,
   type DiscoveredServer,
-  type ProjectScript,
+  type ProjectServerCommand,
   type ScriptClientRequest,
   type ScriptPush,
   type ServerMessage,
@@ -161,7 +161,7 @@ export interface FileWriteResult {
 /** The reply to a `scripts_list` request (Slice 15b): the session project's
  * declared `package.json` scripts (empty when there is no package.json). */
 export interface ScriptsListResult {
-  readonly scripts: readonly ProjectScript[];
+  readonly candidates: readonly ProjectServerCommand[];
 }
 
 /** The reply to a `script_start` / `script_attach` request (Slice 15b): the
@@ -424,7 +424,7 @@ export class RpcTransport {
         const entry = this.pending.get(frame.id);
         if (!entry) return;
         this.pending.delete(frame.id);
-        entry.resolve({ kind: "scripts_list", result: { scripts: frame.scripts } });
+        entry.resolve({ kind: "scripts_list", result: { candidates: frame.candidates } });
         return;
       }
       case "script_run_ok": {
@@ -674,8 +674,8 @@ export class RpcTransport {
    * with the server-allocated run id; rejects on a server failure reply (unknown
    * session, undeclared script, a run already active, spawn failure).
    */
-  async startScript(sessionId: string, scriptName: string): Promise<ScriptRunResult> {
-    const settled = await this.sendRequest({ type: "script_start", sessionId, scriptName });
+  async startScript(sessionId: string, commandId: string): Promise<ScriptRunResult> {
+    const settled = await this.sendRequest({ type: "script_start", sessionId, commandId });
     if (settled.kind !== "script_run") {
       throw new Error("script_start settled without a script_run_ok reply");
     }

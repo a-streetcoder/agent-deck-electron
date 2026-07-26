@@ -106,7 +106,7 @@ export interface ClientTransport {
   /** List the session project's declared package.json scripts (Slice 15b). */
   scriptsList(sessionId: string): Promise<ScriptsListResult>;
   /** Start a declared dev/build script as a managed run (Slice 15b). */
-  startScript(sessionId: string, scriptName: string): Promise<ScriptRunResult>;
+  startScript(sessionId: string, commandId: string): Promise<ScriptRunResult>;
   /** Reattach to a run this connection started, replaying scrollback (Slice 15b). */
   attachScript(runId: string): Promise<ScriptRunResult>;
   /** Stop a run: tree-kill the child process (Slice 15b); rejects offline. */
@@ -334,12 +334,12 @@ export class RpcClientTransport implements ClientTransport {
     return transport.scriptsList(sessionId);
   }
 
-  startScript(sessionId: string, scriptName: string): Promise<ScriptRunResult> {
+  startScript(sessionId: string, commandId: string): Promise<ScriptRunResult> {
     const transport = this.transport;
     if (!transport || transport.getState() !== "connected") {
       return Promise.reject(new Error("transport not connected"));
     }
-    return transport.startScript(sessionId, scriptName);
+    return transport.startScript(sessionId, commandId);
   }
 
   attachScript(runId: string): Promise<ScriptRunResult> {

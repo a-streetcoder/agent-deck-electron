@@ -20,7 +20,7 @@ import {
 import { ClientMessage, ServerMessage, SessionMeta } from "./protocol.ts";
 import {
   DiscoveredServer,
-  ProjectScript,
+  ProjectServerCommand,
   SCRIPT_MAX_SCRIPTS,
   SCRIPT_MAX_SCROLLBACK_CHARS,
   ScriptClientRequest,
@@ -283,16 +283,13 @@ export const RpcFileWriteOkFrame = Schema.Struct({
 export type RpcFileWriteOkFrame = typeof RpcFileWriteOkFrame.Type;
 
 /**
- * server → client: the reply to a `scripts_list` request (Slice 15a) — the
- * session project's declared `package.json` scripts. An empty array is the
- * clean "no package.json / no scripts" answer; it is never an error.
+ * server → client: the reply to a `scripts_list` request — the server-detected
+ * command proposals for the authoritative session cwd.
  */
 export const RpcScriptsListOkFrame = Schema.Struct({
   kind: Schema.Literal("scripts_list_ok"),
   id: RequestId,
-  // Decode-side cap (defense-in-depth, parity with DiffPush's maxItems): the
-  // producer already slices to SCRIPT_MAX_SCRIPTS.
-  scripts: Schema.Array(ProjectScript).pipe(Schema.maxItems(SCRIPT_MAX_SCRIPTS)),
+  candidates: Schema.Array(ProjectServerCommand).pipe(Schema.maxItems(SCRIPT_MAX_SCRIPTS)),
 });
 export type RpcScriptsListOkFrame = typeof RpcScriptsListOkFrame.Type;
 

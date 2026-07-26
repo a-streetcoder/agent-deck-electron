@@ -1,4 +1,4 @@
-import type { ProjectScript } from "@agent-deck/contracts";
+import type { ProjectServerCommand } from "@agent-deck/contracts";
 import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { ServerRuntime } from "./runtime.ts";
@@ -27,7 +27,7 @@ export interface OpenedScript {
   readonly runId: string;
   /** The session this run belongs to (teardown + one-per-session bookkeeping). */
   readonly sessionId: string;
-  readonly scriptName: string;
+  readonly commandId: string;
   readonly pid: number;
   /** Atomic scrollback + current-server snapshot + subscription (sync). */
   readonly attach: (listener: (event: ScriptEvent) => void) => ScriptAttachment;
@@ -37,11 +37,11 @@ export interface OpenedScript {
 
 export interface ScriptRunnerGateway {
   /** List a session project's declared scripts (cwd = the session's cwd). */
-  readonly listScripts: (cwd: string) => Promise<ProjectScript[]>;
+  readonly listScripts: (cwd: string) => Promise<ProjectServerCommand[]>;
   /** Start a declared script as a scope-owned run (one per session). */
   readonly start: (options: {
     sessionId: string;
-    scriptName: string;
+    commandId: string;
     cwd: string;
   }) => Promise<OpenedScript>;
   /**
@@ -72,7 +72,7 @@ export function createScriptRunnerGateway(runtime: ServerRuntime): ScriptRunnerG
         runtime,
         Effect.flatMap(ScriptRunner, (runner) => runner.listScripts(cwd)),
       ),
-    start: async ({ sessionId, scriptName, cwd }) => {
+    start: async ({ sessionId, commandId, cwd }) => {
       if (bySession.has(sessionId)) throw new ScriptAlreadyRunning(sessionId);
       const scope = runtime.runSync(Scope.make());
       let handle;
@@ -80,7 +80,7 @@ export function createScriptRunnerGateway(runtime: ServerRuntime): ScriptRunnerG
         handle = await runPromiseUnwrapped(
           runtime,
           Effect.flatMap(ScriptRunner, (runner) =>
-            Scope.extend(runner.spawn({ scriptName, cwd }), scope),
+            Scope.extend(runner.spawn({ commandId, cwd }), scope),
           ),
         );
       } catch (error) {
@@ -95,7 +95,7 @@ export function createScriptRunnerGateway(runtime: ServerRuntime): ScriptRunnerG
       const opened: OpenedScript = {
         runId,
         sessionId,
-        scriptName: handle.scriptName,
+        commandId: handle.commandId,
         pid: handle.pid,
         attach: (listener) => runSyncUnwrapped(handle.attach(listener)),
         close: () => {

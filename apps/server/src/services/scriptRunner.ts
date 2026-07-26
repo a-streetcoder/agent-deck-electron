@@ -1,13 +1,15 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { connect as netConnect } from "node:net";
 import nodePath from "node:path";
 import {
+  SCRIPT_COMMAND_MAX,
   SCRIPT_MAX_OUTPUT_CHUNK,
   SCRIPT_MAX_SCRIPTS,
+  SCRIPT_NAME_MAX,
   SCRIPT_MAX_SCROLLBACK_CHARS,
   type DiscoveredServer,
-  type ProjectScript,
+  type ProjectServerCommand,
 } from "@agent-deck/contracts";
 import { Context, Data, Deferred, Duration, Effect, Layer, Option, type Scope } from "effect";
 import { TERMINAL_ENV_BLOCKLIST } from "./terminal.ts";
@@ -31,15 +33,14 @@ import { TERMINAL_ENV_BLOCKLIST } from "./terminal.ts";
  *
  * ## Script source + the security boundary (donor's allowed set)
  *
- * A run's command is NEVER supplied by the client — only a `scriptName`. The
- * server resolves it against the project's `package.json` `scripts` map
- * ({@link resolveScriptCommand}); an unknown name fails typed. The resolved
- * command runs through the platform shell (like the donor writing `script.command`
- * into a terminal), with the project's `node_modules/.bin` prepended to PATH so a
- * declared `"dev": "vite"` behaves exactly as `npm run dev` would. Shell
- * metacharacters in the command are the REPO's code — the same trust boundary pi
- * already runs under — so `shell: true` is safe here; the closed door is the
- * client, which can only pick a declared name.
+ * A run's command is NEVER supplied by the client — only an opaque command id.
+ * The server re-detects that id from the authoritative session cwd immediately
+ * before launch; an unknown or stale id fails typed. Package command text keeps
+ * compatibility with existing shell syntax and gets the project-local bin path,
+ * but this is not `npm run`: npm lifecycle hooks and npm-injected environment
+ * variables are deliberately not synthesized. The Node spawn option remains
+ * `shell:false`; package text is passed as argv to a server-selected platform
+ * shell executable.
  *
  * ## Port detection + loopback validation (donor: PortScanner, re-attributed)
  *
@@ -98,10 +99,14 @@ export interface ScriptProcessLike {
 }
 
 export interface ScriptSpawnInput {
-  /** The declared command string (resolved server-side; never client-supplied). */
+  readonly executable: string;
+  readonly argv: readonly string[];
+  /** Informational command text used in diagnostics and shown by detection. */
   readonly command: string;
   readonly cwd: string;
   readonly env: Record<string, string>;
+  /** Always false: launch structure is selected server-side, never parsed from the wire. */
+  readonly shell: false;
 }
 
 /** The spawn seam: `spawn` may THROW (adapter contract); callers wrap it. */
@@ -126,10 +131,18 @@ export class ScriptSpawnFailed extends Data.TaggedError("ScriptSpawnFailed")<{
 
 /** The requested script name is not declared in the project's package.json. */
 export class ScriptNotDeclared extends Data.TaggedError("ScriptNotDeclared")<{
-  readonly scriptName: string;
+  readonly commandId: string;
 }> {
   override get message(): string {
-    return `no declared script named '${this.scriptName}' in the project`;
+    return "server command is no longer available; refresh the detected commands";
+  }
+}
+
+export class ScriptExecutableMissing extends Data.TaggedError("ScriptExecutableMissing")<{
+  readonly executable: string;
+}> {
+  override get message(): string {
+    return `required executable '${this.executable}' was not found`;
   }
 }
 
@@ -152,8 +165,8 @@ export interface ScriptAttachment {
 /** One live script run as a scoped resource. */
 export interface ScriptHandle {
   readonly pid: number;
-  /** The script name that was started (diagnostics/labeling). */
-  readonly scriptName: string;
+  /** The detected command id that was started (diagnostics/labeling). */
+  readonly commandId: string;
   /**
    * Snapshot scrollback + current server and subscribe to subsequent events,
    * atomically (single sync op — nothing can slip between snapshot and
@@ -171,70 +184,209 @@ export interface ScriptHandle {
 export type PortProber = (port: number) => Promise<boolean>;
 
 export interface ScriptSpawnOptions {
-  /** The declared script name (resolved to a command against `cwd`). */
-  readonly scriptName: string;
+  readonly commandId: string;
   /** Working directory — the owning session's cwd (worktree-aware `meta.cwd`). */
   readonly cwd: string;
-  /** Base environment (defaults to `process.env`); the blocklist is applied on top. */
   readonly env?: Record<string, string | undefined>;
-  /** Override the command resolution (tests); defaults to the package.json lookup. */
-  readonly command?: string;
-  /** Override the confirm prober (tests); defaults to the loopback TCP connect. */
+  /** Cross-platform PATH lookup seam. */
+  readonly resolveExecutable?: ExecutableResolver;
+  /** Full server-owned launch override for process-behavior tests. */
+  readonly launch?: ScriptLaunch;
   readonly probePort?: PortProber;
-  /** Scrollback cap in characters (tests); defaults to the wire-contract cap. */
   readonly maxScrollbackChars?: number;
 }
+
+export interface ScriptLaunch {
+  readonly executable: string;
+  readonly argv: readonly string[];
+  readonly command: string;
+}
+
+export type ExecutableResolver = (
+  names: readonly string[],
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+) => string | null;
 
 // ---------------------------------------------------------------------------
 // 2. Declared-script source (donor: the project's allowed script set)
 // ---------------------------------------------------------------------------
 
-/**
- * Read the project's `package.json` `scripts` map at `cwd` and return its
- * entries as declared scripts (bounded). A missing/unreadable/invalid
- * package.json, or one with no `scripts`, yields an empty list — never an error
- * (a non-Node project simply has nothing to run). This is the ONLY source of
- * runnable commands: the client picks a name, the server owns the command.
- */
-export function listProjectScripts(cwd: string): ProjectScript[] {
-  let raw: string;
+function regularFile(path: string): boolean {
   try {
-    raw = readFileSync(nodePath.join(cwd, "package.json"), "utf8");
+    return statSync(path).isFile();
   } catch {
-    return [];
+    return false;
   }
-  let parsed: unknown;
+}
+
+function rootRegularFile(path: string): boolean {
   try {
-    parsed = JSON.parse(raw);
+    return lstatSync(path).isFile();
   } catch {
-    return [];
+    return false;
   }
-  const scripts =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as { scripts?: unknown }).scripts
-      : undefined;
-  if (typeof scripts !== "object" || scripts === null) return [];
-  const out: ProjectScript[] = [];
-  for (const [name, command] of Object.entries(scripts as Record<string, unknown>)) {
-    if (typeof command !== "string") continue;
-    if (name.length === 0) continue;
-    out.push({ name, command });
-    if (out.length >= SCRIPT_MAX_SCRIPTS) break;
+}
+
+function packageCommandId(name: string): string {
+  return `package:${Buffer.from(name, "utf8").toString("base64url")}`;
+}
+
+/** Detect runnable server commands from regular files in the project root. */
+export function listProjectServerCommands(cwd: string): ProjectServerCommand[] {
+  const packagePath = nodePath.join(cwd, "package.json");
+  const cargoPath = nodePath.join(cwd, "Cargo.toml");
+  const djangoPath = nodePath.join(cwd, "manage.py");
+  const indexPath = nodePath.join(cwd, "index.html");
+  const hasPackage = rootRegularFile(packagePath);
+  const hasCargo = rootRegularFile(cargoPath);
+  const hasDjango = rootRegularFile(djangoPath);
+  const out: ProjectServerCommand[] = [];
+
+  if (hasPackage) {
+    try {
+      const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as { scripts?: unknown };
+      if (typeof parsed.scripts === "object" && parsed.scripts !== null) {
+        for (const [name, command] of Object.entries(parsed.scripts as Record<string, unknown>)) {
+          if (
+            typeof command !== "string" ||
+            name.length === 0 ||
+            name.length > SCRIPT_NAME_MAX ||
+            command.length === 0 ||
+            command.length > SCRIPT_COMMAND_MAX
+          )
+            continue;
+          out.push({
+            id: packageCommandId(name),
+            label: name,
+            command,
+            source: "package",
+            defaultPort: null,
+          });
+          if (out.length >= SCRIPT_MAX_SCRIPTS) return out;
+        }
+      }
+    } catch {
+      // A malformed package file contributes no proposals, but remains a marker
+      // and therefore does not silently turn the project into a static site.
+    }
+  }
+  if (hasCargo && out.length < SCRIPT_MAX_SCRIPTS) {
+    out.push({
+      id: "cargo:run",
+      label: "Cargo server",
+      command: "cargo run",
+      source: "cargo",
+      defaultPort: null,
+    });
+  }
+  if (hasDjango && out.length < SCRIPT_MAX_SCRIPTS) {
+    out.push({
+      id: "django:runserver",
+      label: "Django server",
+      command: "python manage.py runserver 127.0.0.1:8000",
+      source: "django",
+      defaultPort: 8000,
+    });
+  }
+  if (!hasPackage && !hasCargo && !hasDjango && rootRegularFile(indexPath)) {
+    out.push({
+      id: "static:http-server",
+      label: "Static site",
+      command: "python -m http.server 8000 --bind 127.0.0.1",
+      source: "static",
+      defaultPort: 8000,
+    });
   }
   return out;
 }
 
-/**
- * Resolve a declared script name to its command string, or `null` when the name
- * is not a declared `package.json` script. The security gate: only a name that
- * appears here may run.
- */
-export function resolveScriptCommand(cwd: string, scriptName: string): string | null {
-  return listProjectScripts(cwd).find((script) => script.name === scriptName)?.command ?? null;
+/** Compatibility alias for callers that still use the Slice-15 naming. */
+export const listProjectScripts = listProjectServerCommands;
+
+function executableOnPath(
+  name: string,
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+): string | null {
+  if (nodePath.isAbsolute(name)) return regularFile(name) ? name : null;
+  const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
+  const extensions =
+    platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  const delimiter = platform === "win32" ? ";" : ":";
+  const pathApi = platform === "win32" ? nodePath.win32 : nodePath.posix;
+  for (const directory of pathValue.split(delimiter)) {
+    if (!directory) continue;
+    for (const extension of extensions) {
+      const candidate = pathApi.join(
+        directory,
+        platform === "win32" ? `${name}${extension.toLowerCase()}` : name,
+      );
+      if (regularFile(candidate)) return candidate;
+      if (platform === "win32") {
+        const upper = pathApi.join(directory, `${name}${extension.toUpperCase()}`);
+        if (regularFile(upper)) return upper;
+      }
+    }
+  }
+  return null;
 }
 
-/** Inheritable spawn env: base minus blocklist minus undefined, with `node_modules/.bin`
- * prepended to PATH (so a declared `"dev": "vite"` resolves like `npm run` would). */
+export const defaultExecutableResolver: ExecutableResolver = (names, env, platform) => {
+  for (const name of names) {
+    const resolved = executableOnPath(name, env, platform);
+    if (resolved) return resolved;
+  }
+  return null;
+};
+
+export function resolveProjectServerLaunch(
+  candidate: ProjectServerCommand,
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  resolveExecutable: ExecutableResolver = defaultExecutableResolver,
+): ScriptLaunch | null {
+  if (candidate.source === "package") {
+    const executable =
+      platform === "win32"
+        ? (env.ComSpec ?? env.COMSPEC ?? "C:\\Windows\\System32\\cmd.exe")
+        : "/bin/sh";
+    const pathApi = platform === "win32" ? nodePath.win32 : nodePath.posix;
+    if (
+      !pathApi.isAbsolute(executable) ||
+      (platform === process.platform && !regularFile(executable))
+    )
+      return null;
+    return platform === "win32"
+      ? { executable, argv: ["/d", "/s", "/c", candidate.command], command: candidate.command }
+      : { executable, argv: ["-c", candidate.command], command: candidate.command };
+  }
+  if (candidate.source === "cargo") {
+    const executable = resolveExecutable(["cargo"], env, platform);
+    return executable ? { executable, argv: ["run"], command: candidate.command } : null;
+  }
+  const pythonNames = platform === "win32" ? ["python", "py"] : ["python3", "python"];
+  const executable = resolveExecutable(pythonNames, env, platform);
+  if (!executable) return null;
+  const basename = (platform === "win32" ? nodePath.win32 : nodePath.posix)
+    .basename(executable)
+    .toLowerCase();
+  const pyPrefix = platform === "win32" && /^py(?:\.exe)?$/.test(basename) ? ["-3"] : [];
+  return candidate.source === "django"
+    ? {
+        executable,
+        argv: [...pyPrefix, "manage.py", "runserver", "127.0.0.1:8000"],
+        command: candidate.command,
+      }
+    : {
+        executable,
+        argv: [...pyPrefix, "-m", "http.server", "8000", "--bind", "127.0.0.1"],
+        command: candidate.command,
+      };
+}
+
+/** Inheritable spawn env: base minus blocklist minus undefined, with the
+ * project-local executable directory prepended for package command compatibility. */
 function buildScriptEnv(
   base: Record<string, string | undefined>,
   cwd: string,
@@ -337,10 +489,10 @@ function capScrollback(buffer: string, maxChars: number): string {
 export const nodeScriptAdapter: ScriptAdapter = {
   spawn(input) {
     const isWindows = process.platform === "win32";
-    const child = nodeSpawn(input.command, {
+    const child = nodeSpawn(input.executable, [...input.argv], {
       cwd: input.cwd,
       env: input.env,
-      shell: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       // POSIX: lead a fresh process group so kill can signal the whole tree via
       // the negative pid (Windows tree-kill goes through taskkill /T instead).
@@ -410,21 +562,48 @@ export const nodeScriptAdapter: ScriptAdapter = {
 export const spawnScript = (
   adapter: ScriptAdapter,
   options: ScriptSpawnOptions,
-): Effect.Effect<ScriptHandle, ScriptSpawnFailed | ScriptNotDeclared, Scope.Scope> =>
+): Effect.Effect<
+  ScriptHandle,
+  ScriptSpawnFailed | ScriptNotDeclared | ScriptExecutableMissing,
+  Scope.Scope
+> =>
   Effect.map(
     Effect.acquireRelease(
       Effect.gen(function* () {
         const maxScrollbackChars = options.maxScrollbackChars ?? SCRIPT_MAX_SCROLLBACK_CHARS;
-        const command = options.command ?? resolveScriptCommand(options.cwd, options.scriptName);
-        if (command === null) {
-          return yield* Effect.fail(new ScriptNotDeclared({ scriptName: options.scriptName }));
+        const candidate = listProjectServerCommands(options.cwd).find(
+          (item) => item.id === options.commandId,
+        );
+        if (!candidate && !options.launch) {
+          return yield* Effect.fail(new ScriptNotDeclared({ commandId: options.commandId }));
         }
-        const env = buildScriptEnv(options.env ?? process.env, options.cwd);
+        const baseEnv = options.env ?? process.env;
+        const launch =
+          options.launch ??
+          resolveProjectServerLaunch(
+            candidate!,
+            baseEnv,
+            process.platform,
+            options.resolveExecutable ?? defaultExecutableResolver,
+          );
+        if (launch === null) {
+          const executable = candidate?.source === "cargo" ? "cargo" : "python";
+          return yield* Effect.fail(new ScriptExecutableMissing({ executable }));
+        }
+        const env = buildScriptEnv(baseEnv, options.cwd);
         const probePort = options.probePort ?? defaultProbePort;
 
         const proc = yield* Effect.try({
-          try: () => adapter.spawn({ command, cwd: options.cwd, env }),
-          catch: (cause) => new ScriptSpawnFailed({ command, cause }),
+          try: () =>
+            adapter.spawn({
+              executable: launch.executable,
+              argv: launch.argv,
+              command: launch.command,
+              cwd: options.cwd,
+              env,
+              shell: false,
+            }),
+          catch: (cause) => new ScriptSpawnFailed({ command: launch.command, cause }),
         });
 
         const exitDeferred = yield* Deferred.make<ScriptExit>();
@@ -448,9 +627,8 @@ export const spawnScript = (
           if (seenPorts.has(port)) return;
           seenPorts.add(port);
           void probePort(port).then((listening) => {
-            // The scope may have closed (abandoned) or a probe may have already
-            // won the race — dispatch a server exactly once, and never after
-            // the child exited (the port is gone with it).
+            // A port is eligible only because this child printed its loopback
+            // URL. defaultPort metadata is advisory and never triggers a probe.
             if (!listening || abandoned || server !== null || Option.isSome(exitState)) return;
             server = loopbackServer(port);
             dispatch({ _tag: "Server", server });
@@ -485,7 +663,7 @@ export const spawnScript = (
 
         const handle: ScriptHandle = {
           pid: proc.pid,
-          scriptName: options.scriptName,
+          commandId: options.commandId,
           attach: (listener) =>
             Effect.sync(() => {
               listeners.add(listener);
@@ -559,11 +737,15 @@ export const spawnScript = (
 
 export interface ScriptRunnerShape {
   /** List a project's declared runnable scripts (from `package.json`). */
-  readonly listScripts: (cwd: string) => Effect.Effect<ProjectScript[]>;
+  readonly listScripts: (cwd: string) => Effect.Effect<ProjectServerCommand[]>;
   /** Spawn a declared script as a resource of the caller's Scope. */
   readonly spawn: (
     options: ScriptSpawnOptions,
-  ) => Effect.Effect<ScriptHandle, ScriptSpawnFailed | ScriptNotDeclared, Scope.Scope>;
+  ) => Effect.Effect<
+    ScriptHandle,
+    ScriptSpawnFailed | ScriptNotDeclared | ScriptExecutableMissing,
+    Scope.Scope
+  >;
 }
 
 /**
@@ -577,7 +759,7 @@ export class ScriptRunner extends Context.Tag("agent-deck/server/services/Script
 >() {}
 
 export const makeScriptRunner = (adapter: ScriptAdapter): ScriptRunnerShape => ({
-  listScripts: (cwd) => Effect.sync(() => listProjectScripts(cwd)),
+  listScripts: (cwd) => Effect.sync(() => listProjectServerCommands(cwd)),
   spawn: (options) => spawnScript(adapter, options),
 });
 

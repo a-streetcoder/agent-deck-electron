@@ -602,10 +602,28 @@ describe("RpcTransport script/preview surface (Slice 15b)", () => {
       JSON.stringify({
         kind: "scripts_list_ok",
         id: sentFrame.id,
-        scripts: [{ name: "dev", command: "vite" }],
+        candidates: [
+          {
+            id: "package:ZGV2",
+            label: "dev",
+            command: "vite",
+            source: "package",
+            defaultPort: null,
+          },
+        ],
       }),
     );
-    await expect(promise).resolves.toEqual({ scripts: [{ name: "dev", command: "vite" }] });
+    await expect(promise).resolves.toEqual({
+      candidates: [
+        {
+          id: "package:ZGV2",
+          label: "dev",
+          command: "vite",
+          source: "package",
+          defaultPort: null,
+        },
+      ],
+    });
   });
 
   it("startScript resolves with the script_run_ok payload (server present)", async () => {
@@ -613,9 +631,13 @@ describe("RpcTransport script/preview surface (Slice 15b)", () => {
     h.transport.connect();
     h.sockets[0]!.open();
 
-    const promise = h.transport.startScript("s1", "dev");
+    const promise = h.transport.startScript("s1", "package:ZGV2");
     const sentFrame = JSON.parse(h.sockets[0]!.sent[0]!) as { id: number; request: unknown };
-    expect(sentFrame.request).toEqual({ type: "script_start", sessionId: "s1", scriptName: "dev" });
+    expect(sentFrame.request).toEqual({
+      type: "script_start",
+      sessionId: "s1",
+      commandId: "package:ZGV2",
+    });
 
     const server = { host: "localhost", port: 5173, url: "http://localhost:5173" };
     h.sockets[0]!.message(
@@ -641,7 +663,7 @@ describe("RpcTransport script/preview surface (Slice 15b)", () => {
     h.transport.connect();
     h.sockets[0]!.open();
 
-    const promise = h.transport.startScript("s1", "dev");
+    const promise = h.transport.startScript("s1", "package:ZGV2");
     const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
     h.sockets[0]!.message(
       JSON.stringify({ kind: "reply", id, ok: false, error: "a script is already running" }),
