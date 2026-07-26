@@ -109,7 +109,13 @@ function persistPreferredEditor(editor: EditorId): void {
  * detected — the donor's `usePreferredEditor` resolution), and an `open` that
  * launches AND remembers.
  */
-export function useOpenInEditor() {
+export interface OpenInEditorController {
+  available: readonly EditorId[];
+  preferred: EditorId | null;
+  open: (path: string, line: number | undefined, editor?: EditorId) => void;
+}
+
+export function useOpenInEditor(): OpenInEditorController {
   const [available, setAvailable] = useState<readonly EditorId[]>([]);
   const [stored, setStored] = useState<EditorId | null>(null);
   // The list op needs a live socket: keyed on the connection status so a

@@ -12,7 +12,12 @@ import {
 import { balance } from "@/design-system/markdown/balancer";
 import { MessageBubble } from "@/components/transcript/MessageBubble";
 import { ToolGroupCard, type ToolGroupStatus } from "@/components/transcript/ToolGroupCard";
-import { toolFilePath, toolPresentation } from "@/components/transcript/toolPresentation";
+import {
+  toolFilePath,
+  toolFileReference,
+  toolPresentation,
+} from "@/components/transcript/toolPresentation";
+import { OpenInPicker, type OpenInEditorController } from "@/components/diff/OpenInPicker";
 import { AskUserDecisionCard } from "./AskUserDecisionCard.tsx";
 import { RunMeta } from "./RunMeta.tsx";
 import { QuestionAnswerControls } from "./QuestionAnswerControls.tsx";
@@ -35,7 +40,14 @@ const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
 // carry a `path`-like arg (e.g. bash) doesn't get a spurious one.
 const FILE_TOOLS = new Set(["read", "edit", "write"]);
 
-function ToolCellView({ cell }: { cell: ToolCell }) {
+function ToolCellView({
+  cell,
+  editorController,
+}: {
+  cell: ToolCell;
+  editorController?: OpenInEditorController;
+}) {
+  const session = useAppStore((state) => state.session);
   const argsText =
     cell.args === undefined ? null : (
       <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs text-text-muted">
@@ -58,6 +70,7 @@ function ToolCellView({ cell }: { cell: ToolCell }) {
   const filePath = FILE_TOOLS.has(cell.toolName.toLowerCase())
     ? toolFilePath(cell.args)
     : undefined;
+  const fileReference = filePath && session ? toolFileReference(cell.args, session.cwd) : undefined;
   return (
     <div
       data-testid="tool-cell"
@@ -73,11 +86,22 @@ function ToolCellView({ cell }: { cell: ToolCell }) {
         body={
           <div className="space-y-2">
             {filePath ? (
-              <div
-                className="font-mono text-detail text-text-secondary"
-                data-testid="tool-file-path"
-              >
-                {filePath}
+              <div className="flex items-center gap-1" data-testid="tool-file-path-row">
+                <div
+                  className="min-w-0 flex-1 break-all font-mono text-detail text-text-secondary"
+                  data-testid="tool-file-path"
+                >
+                  {filePath}
+                </div>
+                {fileReference && editorController ? (
+                  <OpenInPicker
+                    available={editorController.available}
+                    preferred={editorController.preferred}
+                    onOpen={(editor) =>
+                      editorController.open(fileReference.rpcPath, undefined, editor)
+                    }
+                  />
+                ) : null}
               </div>
             ) : null}
             {argsText}
@@ -327,7 +351,13 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
   );
 }
 
-export function CellView({ cell }: { cell: TranscriptCell }) {
+export function CellView({
+  cell,
+  editorController,
+}: {
+  cell: TranscriptCell;
+  editorController?: OpenInEditorController;
+}) {
   switch (cell.kind) {
     case "user":
       return <UserCellView cell={cell} />;
@@ -358,7 +388,7 @@ export function CellView({ cell }: { cell: TranscriptCell }) {
         </div>
       );
     case "tool":
-      return <ToolCellView cell={cell} />;
+      return <ToolCellView cell={cell} editorController={editorController} />;
     case "subagent":
       return <SubagentCellView cell={cell} />;
     case "supervisor_question":

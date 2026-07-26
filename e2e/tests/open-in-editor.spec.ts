@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, selectProject, test } from "../helpers/fixtures.ts";
@@ -22,6 +29,7 @@ const isWindows = process.platform === "win32";
 const stub = path.join(stubDir, isWindows ? "open-stub.cmd" : "open-stub");
 
 const CHANGED_FILE = path.join(repo, "src", "feature.txt");
+const OUTSIDE_FILE = path.join(path.dirname(repo), `${path.basename(repo)}-outside.txt`);
 
 function readArgv(): string {
   try {
@@ -45,6 +53,7 @@ test.beforeAll(async () => {
   // diff_files fetch alone populates the badge/tree (no pi turn needed).
   mkdirSync(path.join(repo, "src"));
   writeFileSync(CHANGED_FILE, "alpha line\nbeta line\n");
+  writeFileSync(OUTSIDE_FILE, "outside\n");
 
   // The stub editor: append the received argv to a file the test polls.
   if (isWindows) {
@@ -55,7 +64,17 @@ test.beforeAll(async () => {
   }
   process.env.AGENT_DECK_OPEN_BIN = stub;
 
-  harness = await startHarness({ chunkDelayMs: 20 });
+  harness = await startHarness({
+    chunkDelayMs: 20,
+    reply: () => "Read complete.",
+    toolCall: (lastUser, body) => {
+      if (body.messages.at(-1)?.role === "tool") return null;
+      return {
+        name: "read",
+        arguments: { file_path: lastUser.includes("outside") ? OUTSIDE_FILE : CHANGED_FILE },
+      };
+    },
+  });
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -126,4 +145,30 @@ test("tree hover action and header picker launch the stub with the exact target"
       { timeout: 15_000 },
     )
     .toBe("vscode");
+
+  // A real Pi `read` call records an absolute structured path. The transcript
+  // keeps that original value for display but sends only the normalized
+  // session-relative path through editor_open; the server resolves it back to
+  // the canonical contained file before launching the recorder.
+  writeFileSync(argvFile, "");
+  await page.getByTestId("composer-input").fill("read the changed file");
+  await page.getByTestId("send-button").click();
+  const readCard = page.locator('[data-tool="read"]').last();
+  await expect(readCard.getByTestId("tool-file-path")).toHaveText(CHANGED_FILE, {
+    timeout: 30_000,
+  });
+  await readCard.getByTestId("open-in-editor").click();
+  await expect.poll(readArgv, { timeout: 15_000 }).toContain(realpathSync(CHANGED_FILE));
+  expect(readArgv()).not.toContain("--goto");
+
+  // A structured absolute path outside this session remains visible but inert;
+  // no renderer editor RPC action is rendered for it.
+  await page.getByTestId("composer-input").fill("read the outside file");
+  await page.getByTestId("send-button").click();
+  const outsideCard = page.locator('[data-tool="read"]').last();
+  await expect(outsideCard.getByTestId("tool-file-path")).toHaveText(OUTSIDE_FILE, {
+    timeout: 30_000,
+  });
+  await expect(outsideCard.getByTestId("open-in-editor")).toHaveCount(0);
+  expect(readArgv()).not.toContain(realpathSync(OUTSIDE_FILE));
 });

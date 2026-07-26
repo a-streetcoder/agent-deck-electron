@@ -3,10 +3,14 @@ import { useAppStore } from "../state/store.ts";
 import { CellView } from "./cells.tsx";
 import { SessionPlanPanel } from "./SessionPlanPanel.tsx";
 import { SessionStartupCard } from "./SessionStartupCard.tsx";
+import { useOpenInEditor } from "./diff/OpenInPicker.tsx";
 
 export function Transcript() {
   const cells = useAppStore((state) => state.transcript.cells);
   const session = useAppStore((state) => state.session);
+  // One editor/settings discovery owner for the whole transcript. Individual
+  // file rows retain only their local picker-menu state.
+  const editorController = useOpenInEditor();
   // Only a genuinely new session shows the startup card. An existing session
   // already has a piSessionFile (set on switch, before its history streams in),
   // so it never flashes the card during the brief empty-transcript load gap.
@@ -38,7 +42,9 @@ export function Transcript() {
           <SessionStartupCard />
         ) : null
       ) : (
-        cells.map((cell) => <CellView key={cell.id} cell={cell} />)
+        cells.map((cell) => (
+          <CellView key={cell.id} cell={cell} editorController={editorController} />
+        ))
       )}
       <div ref={bottomRef} />
     </div>
