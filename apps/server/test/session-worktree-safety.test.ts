@@ -109,14 +109,13 @@ describe("persisted session worktree deletion boundary", () => {
     execFileSync("git", ["add", "README.md"], { cwd: project });
     execFileSync("git", ["commit", "-m", "initial"], { cwd: project, stdio: "ignore" });
     execFileSync("git", ["branch", "other-owner", "main"], { cwd: project });
-    const root = path.join(dataDir, "session-worktrees");
-    mkdirSync(root, { recursive: true });
-    const target = path.join(realpathSync(root), "deadbeef");
+    const worktreeStore = new SessionWorktreeStore(dataDir);
+    const target = path.join(worktreeStore.rootPath, "deadbeef");
     execFileSync("git", ["worktree", "add", target, "other-owner"], {
       cwd: project,
       stdio: "ignore",
     });
-    const worktreeIdentity = new SessionWorktreeStore(dataDir).captureWorktreeIdentity(target);
+    const worktreeIdentity = worktreeStore.captureWorktreeIdentity(target);
     rmSync(target, { recursive: true });
     writeFileSync(
       path.join(dataDir, "projects.json"),

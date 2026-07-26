@@ -356,7 +356,7 @@ describe("session worktree branch ownership", () => {
     expect(await gitWorktreeRegistrationMatches(repo, target, "agent-deck/session-collision")).toBe(
       false,
     );
-    expect(readFileSync(sentinel, "utf8")).toBe("test\n");
+    expect(readFileSync(sentinel, "utf8").replaceAll("\r\n", "\n")).toBe("test\n");
     expect(existsSync(target)).toBe(true);
   });
 
