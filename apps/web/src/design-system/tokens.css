@@ -46,6 +46,8 @@
   --color-selection-fill: rgba(100, 210, 255, 0.22);
   --color-selection-stroke: rgba(100, 210, 255, 0.32);
   --color-focus-ring: var(--color-brand-accent);
+  /* High-contrast semantic accent for programmatically focused transcript targets. */
+  --color-navigation-focus: var(--color-brand-accent-bright);
   --color-accent-surface: color-mix(
     in srgb,
     var(--color-brand-accent) 7%,
@@ -227,6 +229,7 @@
   --color-quote-bar-fill: #b4b4b8;
   --color-scrollbar: rgba(106, 106, 112, 0.48);
   --color-scrollbar-hover: rgba(58, 58, 64, 0.68);
+  --color-navigation-focus: var(--color-brand-accent-shadow);
   --color-terminal-background: #f7f7f8;
   --color-terminal-foreground: #242429;
   --color-terminal-black: #242429;

@@ -71,6 +71,19 @@ export function cycleSession(direction: 1 | -1): void {
   }
 }
 
+function requestQuestionNavigation(direction: "previous" | "next"): void {
+  const store = useAppStore.getState();
+  const sessionId = store.session?.id;
+  if (!sessionId) {
+    store.pushToast({ kind: "info", message: "Open a session to navigate questions." });
+    return;
+  }
+  // Snapshot identity before changing surfaces so a delayed Transcript can never
+  // apply the request to whichever session happens to be active later.
+  store.setView("chat");
+  store.requestQuestionNavigation(direction, sessionId);
+}
+
 function requestGitAction(action: GitAction): void {
   const store = useAppStore.getState();
   store.requestGitAction({
@@ -182,6 +195,20 @@ const ACTION_COMMANDS: readonly CommandDefinition[] = [
     run: () => {
       cycleSession(-1);
     },
+  },
+  {
+    command: "question.previous",
+    label: "Previous Question",
+    group: "navigation",
+    keywords: ["pending", "approval", "ask user", "recent"],
+    run: () => requestQuestionNavigation("previous"),
+  },
+  {
+    command: "question.next",
+    label: "Next Question",
+    group: "navigation",
+    keywords: ["pending", "approval", "ask user", "recent"],
+    run: () => requestQuestionNavigation("next"),
   },
   {
     command: "panel.sessions.toggle",

@@ -349,6 +349,32 @@ function sendMenu(action) {
 /** Native application menu — File actions bridge to the renderer via IPC. */
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
+  const questionNavigationItems = [
+    { label: "Previous Question", click: () => sendMenu("question.previous") },
+    { label: "Next Question", click: () => sendMenu("question.next") },
+    { type: "separator" },
+  ];
+  const viewSubmenu = app.isPackaged
+    ? [
+        ...questionNavigationItems,
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ]
+    : [
+        ...questionNavigationItems,
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ];
   const template = [
     ...(isMac
       ? [
@@ -390,21 +416,9 @@ function buildAppMenu() {
       ],
     },
     { id: "menu-edit", role: "editMenu" },
-    // Dev keeps the full View menu (reload/devtools handy); a shipped build gets
-    // only the user-facing zoom/fullscreen controls.
-    app.isPackaged
-      ? {
-          id: "menu-view",
-          label: "View",
-          submenu: [
-            { role: "resetZoom" },
-            { role: "zoomIn" },
-            { role: "zoomOut" },
-            { type: "separator" },
-            { role: "togglefullscreen" },
-          ],
-        }
-      : { id: "menu-view", role: "viewMenu" },
+    // Keep Electron's normal development and shipped View controls while adding
+    // semantic question navigation (no fixed accelerators; bindings stay user-owned).
+    { id: "menu-view", label: "View", submenu: viewSubmenu },
     {
       id: "menu-git",
       label: "Git",

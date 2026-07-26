@@ -158,6 +158,74 @@ export type TranscriptCell =
   | SupervisorQuestionCell
   | AskUserCell;
 
+export type QuestionNavigationDirection = "previous" | "next";
+export type QuestionNavigationCell = QuestionCell | AskUserCell | SupervisorQuestionCell;
+
+export interface QuestionNavigationTarget {
+  cell: QuestionNavigationCell;
+  /** Zero-based position among all question cards in transcript order. */
+  index: number;
+  total: number;
+  pending: boolean;
+}
+
+export function isQuestionNavigationCell(cell: TranscriptCell): cell is QuestionNavigationCell {
+  return (
+    cell.kind === "question" || cell.kind === "ask_user" || cell.kind === "supervisor_question"
+  );
+}
+
+export function isPendingQuestionNavigationCell(cell: QuestionNavigationCell): boolean {
+  switch (cell.kind) {
+    case "question":
+      return !cell.answered;
+    case "ask_user":
+      return cell.status === "pending";
+    case "supervisor_question":
+      return !cell.answered && !cell.closed;
+  }
+}
+
+/**
+ * Pick the next question card without wrapping. A valid anchor advances through
+ * every question card (resolved cards stay navigable). With no valid anchor,
+ * pending input is preferred at the requested edge before falling back to any
+ * question at that edge.
+ */
+export function questionNavigationTarget(
+  cells: readonly TranscriptCell[],
+  direction: QuestionNavigationDirection,
+  anchorId: string | null,
+): QuestionNavigationTarget | null {
+  const candidates = cells.filter(isQuestionNavigationCell);
+  if (candidates.length === 0) return null;
+
+  const anchorIndex = anchorId === null ? -1 : candidates.findIndex((cell) => cell.id === anchorId);
+  let index: number;
+  if (anchorIndex >= 0) {
+    index = anchorIndex + (direction === "previous" ? -1 : 1);
+    if (index < 0 || index >= candidates.length) return null;
+  } else {
+    const pendingIndexes = candidates.flatMap((cell, candidateIndex) =>
+      isPendingQuestionNavigationCell(cell) ? [candidateIndex] : [],
+    );
+    if (direction === "previous") {
+      index = pendingIndexes.at(-1) ?? candidates.length - 1;
+    } else {
+      index = pendingIndexes[0] ?? 0;
+    }
+  }
+
+  const cell = candidates[index];
+  if (!cell) return null;
+  return {
+    cell,
+    index,
+    total: candidates.length,
+    pending: isPendingQuestionNavigationCell(cell),
+  };
+}
+
 /**
  * A friendly transcript-card label for an Agent Deck memory bridge tool call
  * (native "Memory Stored / Searched / …" cards), or null for any other tool.

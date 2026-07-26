@@ -107,8 +107,15 @@ describe("matchesChord", () => {
 });
 
 describe("resolveKeybindings + commandForChordEvent", () => {
-  it("catalogs Git workflows without assigning fixed defaults", () => {
-    for (const command of ["git.commit", "git.push", "git.mergeWorktree", "git.release"] as const) {
+  it("catalogs palette-only workflows without assigning fixed defaults", () => {
+    for (const command of [
+      "git.commit",
+      "git.push",
+      "git.mergeWorktree",
+      "git.release",
+      "question.previous",
+      "question.next",
+    ] as const) {
       expect(isKeybindingCommand(command)).toBe(true);
       expect(resolveKeybindings([]).has(command)).toBe(false);
     }

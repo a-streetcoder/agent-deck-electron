@@ -30,6 +30,15 @@ export interface GitActionRequest {
   token: number;
 }
 
+export type QuestionNavigationDirection = "previous" | "next";
+
+/** One-shot request owned by the session that was active when the command ran. */
+export interface QuestionNavigationRequest {
+  direction: QuestionNavigationDirection;
+  sessionId: string;
+  token: number;
+}
+
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
 export type AppView =
@@ -258,6 +267,10 @@ export interface AppState {
   keybindingsEditorOpen: boolean;
   /** One-shot, identity-bound Git workflow request consumed only by GitScreen. */
   gitActionRequest: GitActionRequest | null;
+  /** One-shot, session-bound request consumed only by the matching Transcript. */
+  questionNavigationRequest: QuestionNavigationRequest | null;
+  /** Last question card reached programmatically in the current session. */
+  questionNavigationAnchorId: string | null;
   transcript: TranscriptState;
   /** Last seq applied — sent on resubscribe so the server replays the gap. */
   lastSeq: number;
@@ -281,6 +294,9 @@ export interface AppState {
   requestGitAction(request: Omit<GitActionRequest, "token">): void;
   /** Token-scoped so an older consumer cannot clear a newer request. */
   clearGitActionRequest(token: number): void;
+  requestQuestionNavigation(direction: QuestionNavigationDirection, sessionId: string): void;
+  /** Consume only this request; a newer request cannot be cleared by an older effect. */
+  completeQuestionNavigation(token: number, targetId?: string): void;
   setTerminalOpen(open: boolean): void;
   /** Open `kind` as a tab for `sessionId` (add if absent) and make it active. */
   openWorkspaceTab(sessionId: string, kind: WorkspaceTabKind): void;
@@ -349,6 +365,7 @@ function initialPanelExpanded(): boolean {
 }
 
 let nextGitActionToken = 0;
+let nextQuestionNavigationToken = 0;
 
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
@@ -378,6 +395,8 @@ export const useAppStore = create<AppState>((set) => ({
   commandPaletteOpen: false,
   keybindingsEditorOpen: false,
   gitActionRequest: null,
+  questionNavigationRequest: null,
+  questionNavigationAnchorId: null,
   transcript: emptyTranscript(),
   lastSeq: 0,
   error: null,
@@ -404,7 +423,16 @@ export const useAppStore = create<AppState>((set) => ({
   setProjects: (projects) => set({ projects, projectsLoaded: true }),
   setCurrentProject: (currentProjectId) => set({ currentProjectId }),
   setCurrentAgent: (currentAgentName) => set({ currentAgentName }),
-  setSession: (session) => set({ session }),
+  setSession: (session) =>
+    set((state) =>
+      state.session?.id === session?.id
+        ? { session }
+        : {
+            session,
+            questionNavigationRequest: null,
+            questionNavigationAnchorId: null,
+          },
+    ),
   setSessions: (sessions) => set({ sessions }),
   setPendingComposerText: (pendingComposerText) => set({ pendingComposerText }),
   setKeybindings: (keybindings) => set({ keybindings }),
@@ -419,6 +447,23 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   clearGitActionRequest: (token) =>
     set((state) => (state.gitActionRequest?.token === token ? { gitActionRequest: null } : {})),
+  requestQuestionNavigation: (direction, sessionId) =>
+    set({
+      questionNavigationRequest: {
+        direction,
+        sessionId,
+        token: ++nextQuestionNavigationToken,
+      },
+    }),
+  completeQuestionNavigation: (token, targetId) =>
+    set((state) =>
+      state.questionNavigationRequest?.token === token
+        ? {
+            questionNavigationRequest: null,
+            ...(targetId !== undefined ? { questionNavigationAnchorId: targetId } : {}),
+          }
+        : {},
+    ),
   setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
   openWorkspaceTab: (sessionId, kind) =>
     set((state) => ({

@@ -16,6 +16,8 @@ export type NativeMenuAction =
   | "new-chat"
   | "add-project"
   | "open-keybindings"
+  | "question.previous"
+  | "question.next"
   | "git.commit"
   | "git.push"
   | "git.mergeWorktree"

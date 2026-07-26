@@ -445,6 +445,47 @@ test("the native File menu exposes New Chat and it creates a session", async () 
   await expect.poll(sessionCount, { timeout: 10_000 }).toBe(before + 1);
 });
 
+test("the View menu exposes question navigation without replacing built-in controls", async () => {
+  const window = await app.firstWindow();
+  const viewItems = await app.evaluate(({ Menu }) => {
+    const viewMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "View");
+    return (
+      viewMenu?.submenu?.items
+        .filter((item) => item.type !== "separator")
+        .map((item) => ({ label: item.label, accelerator: item.accelerator ?? null })) ?? []
+    );
+  });
+
+  expect(viewItems).toEqual(
+    expect.arrayContaining([
+      { label: "Previous Question", accelerator: null },
+      { label: "Next Question", accelerator: null },
+      { label: "Reload", accelerator: "CmdOrCtrl+R" },
+      { label: "Force Reload", accelerator: "Shift+CmdOrCtrl+R" },
+      { label: "Toggle Developer Tools", accelerator: expect.any(String) },
+      { label: "Actual Size", accelerator: expect.any(String) },
+      { label: "Zoom In", accelerator: expect.any(String) },
+      { label: "Zoom Out", accelerator: expect.any(String) },
+      { label: "Toggle Full Screen", accelerator: expect.any(String) },
+    ]),
+  );
+
+  // Give the identity-bound command a current session, then exercise main →
+  // preload allowlist → typed renderer listener → shared command.
+  await app.evaluate(({ Menu }) => {
+    const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
+    fileMenu?.submenu?.items.find((item) => item.label === "New Chat")?.click();
+  });
+  await expect(window.getByTestId("browser-toggle")).toBeVisible({ timeout: 15_000 });
+  await app.evaluate(({ Menu }) => {
+    const viewMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "View");
+    viewMenu?.submenu?.items.find((item) => item.label === "Previous Question")?.click();
+  });
+  await expect(window.getByTestId("transcript").getByRole("status")).toHaveText(
+    "No previous question.",
+  );
+});
+
 test("the native Git menu routes commands without bypassing disabled actions", async () => {
   const window = await app.firstWindow();
 

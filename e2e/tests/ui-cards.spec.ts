@@ -60,6 +60,64 @@ test("the editor card is multiline and prefilled, and sends the edit back", asyn
   await expect(card).toHaveAttribute("data-answered", "true");
 });
 
+test("question commands navigate answered and pending cards in order without wrapping", async ({
+  page,
+}) => {
+  await runCommand(page, "/ask-input");
+  const cards = page.getByTestId("question-cell");
+  await expect(cards).toHaveCount(1, { timeout: 30_000 });
+  await page.getByTestId("question-input").fill("first answer");
+  await page.getByTestId("question-submit").click();
+  await expect(cards.first()).toHaveAttribute("data-answered", "true");
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.getByTestId("composer-input").fill("/ask-select");
+  await page.getByTestId("send-button").click();
+  await expect(cards).toHaveCount(2, { timeout: 30_000 });
+
+  const firstTarget = page.locator("[data-question-navigation-cell]").nth(0);
+  const secondTarget = page.locator("[data-question-navigation-cell]").nth(1);
+  const status = page.getByTestId("transcript").getByRole("status");
+  await expect(firstTarget).toHaveAttribute("role", "group");
+  await expect(firstTarget).toHaveAttribute("aria-label", "Resolved question, 1 of 2");
+  await expect(secondTarget).toHaveAttribute("aria-label", "Pending question, 2 of 2");
+
+  const runPaletteCommand = async (label: string): Promise<void> => {
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByTestId("command-palette-input").fill(label);
+    await page.getByTestId("command-palette-item").filter({ hasText: label }).click();
+  };
+
+  await runPaletteCommand("Previous Question");
+  await expect(secondTarget).toBeFocused();
+  await expect(status).toHaveText("Pending question 2 of 2.");
+
+  await runPaletteCommand("Previous Question");
+  await expect(firstTarget).toBeFocused();
+  await expect(status).toHaveText("Question 1 of 2.");
+
+  // Previous at the first card is a boundary no-op: no wrap and no new target.
+  await runPaletteCommand("Previous Question");
+  await expect(status).toHaveText("No previous question.");
+  await expect(secondTarget).not.toBeFocused();
+  const firstBoundaryToken = await status
+    .locator("[data-announcement-token]")
+    .getAttribute("data-announcement-token");
+
+  // The same boundary message is replaced with a fresh keyed announcement so
+  // assistive technology receives repeated invocations too.
+  await runPaletteCommand("Previous Question");
+  await expect(status).toHaveText("No previous question.");
+  await expect(status.locator("[data-announcement-token]")).not.toHaveAttribute(
+    "data-announcement-token",
+    firstBoundaryToken ?? "",
+  );
+
+  await runPaletteCommand("Next Question");
+  await expect(secondTarget).toBeFocused();
+  await expect(status).toHaveText("Pending question 2 of 2.");
+});
+
 test("an open request is answerable from the composer-anchored pending panel", async ({ page }) => {
   await runCommand(page, "/ask-input");
   // The same open extension_ui_request surfaces both as the transcript card AND

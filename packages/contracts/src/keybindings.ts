@@ -27,6 +27,9 @@ export const KEYBINDING_COMMANDS = [
   "session.stop",
   "session.next",
   "session.previous",
+  // Question navigation is palette-only until the user assigns a chord.
+  "question.previous",
+  "question.next",
   "panel.sessions.toggle",
   "keybindings.open",
   // Git workflows — palette-only until the user assigns a chord.

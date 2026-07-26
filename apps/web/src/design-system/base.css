@@ -8,6 +8,18 @@ body,
   height: 100%;
 }
 
+.question-navigation-target {
+  scroll-margin-top: var(--space-4);
+  border-radius: var(--radius-xl);
+  outline: 2px solid transparent;
+  outline-offset: var(--space-1);
+}
+
+.question-navigation-target:focus {
+  outline-color: var(--color-navigation-focus);
+  background: var(--color-accent-surface);
+}
+
 /* Full-viewport app shell: every region scrolls internally, so the page
    itself never scrolls. Also keeps transient layout overflow (e.g. a wide
    panel mid-mount) from flashing a window scrollbar that shifts the whole
