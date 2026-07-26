@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpath, rm } from "node:fs/promises";
+import { access, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -764,24 +764,87 @@ export async function gitCommitOid(cwd: string, revision: string): Promise<strin
 /** Commits on `branch` not yet reachable from `base` (native commitsAhead). */
 export async function gitCommitsAhead(cwd: string, branch: string, base: string): Promise<number> {
   const out = (await runGit(cwd, ["rev-list", "--count", `${base}..${branch}`])).trim();
-  const n = Number.parseInt(out, 10);
-  return Number.isFinite(n) ? n : 0;
+  if (!/^\d+$/.test(out)) throw new Error("invalid commits-ahead result");
+  const n = Number(out);
+  if (!Number.isSafeInteger(n)) throw new Error("invalid commits-ahead result");
+  return n;
 }
 
-/**
- * Merge a session's worktree `branch` back into `sourceBranch` (native Merge
- * toolbar action): check out sourceBranch in the project root, then a `--no-ff`
- * merge with an explicit message (no editor). Throws the git stderr on a dirty
- * tree / checkout failure / merge conflict so the caller can surface it. The
- * worktree + branch are left in place (native default keepWorktreeAfterMerge).
- */
+/** Canonical identity shared by every worktree belonging to one repository. */
+export async function gitRepositoryIdentity(cwd: string): Promise<string> {
+  const commonDir = (
+    await runGit(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+  ).trim();
+  return canonicalWorktreePath(commonDir);
+}
+
+/** Validate a local branch name and prove its fully-qualified ref exists. */
+export async function gitLocalBranchRef(cwd: string, branch: string): Promise<string> {
+  return gitFullyQualifiedBranchRef(cwd, branch);
+}
+
+export async function gitWorkingTreeClean(cwd: string): Promise<boolean> {
+  return (await runGit(cwd, ["status", "--porcelain=v1", "-z"])).length === 0;
+}
+
+/** Detect sequencer and merge state without asking Git to repair or abort it. */
+export async function gitOperationInProgress(cwd: string): Promise<boolean> {
+  const markers = [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+    "rebase-apply",
+    "rebase-merge",
+    "sequencer",
+  ];
+  for (const marker of markers) {
+    const reportedPath = (await runGit(cwd, ["rev-parse", "--git-path", marker])).trim();
+    const markerPath = path.isAbsolute(reportedPath)
+      ? reportedPath
+      : path.resolve(cwd, reportedPath);
+    try {
+      await access(markerPath);
+      return true;
+    } catch {
+      // Missing marker is the normal idle state.
+    }
+  }
+  return false;
+}
+
+export async function gitCheckoutBranch(cwd: string, branch: string): Promise<void> {
+  await runGit(cwd, ["checkout", branch]);
+}
+
+export async function gitHasUnmergedEntries(cwd: string): Promise<boolean> {
+  return (await runGit(cwd, ["ls-files", "-u", "-z"])).length > 0;
+}
+
+export async function gitMergeInProgress(cwd: string): Promise<boolean> {
+  const reportedPath = (await runGit(cwd, ["rev-parse", "--git-path", "MERGE_HEAD"])).trim();
+  const mergeHead = path.isAbsolute(reportedPath) ? reportedPath : path.resolve(cwd, reportedPath);
+  try {
+    await access(mergeHead);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Merge only; checkout and all safety preflights belong to the caller. */
+export async function gitMergeNoCheckout(cwd: string, branch: string): Promise<void> {
+  await runGit(cwd, ["merge", "--no-ff", branch, "-m", `Merge ${branch}`]);
+}
+
+/** Backwards-compatible convenience for non-session callers. */
 export async function gitMerge(
   projectDir: string,
   branch: string,
   sourceBranch: string,
 ): Promise<void> {
-  await runGit(projectDir, ["checkout", sourceBranch]);
-  await runGit(projectDir, ["merge", "--no-ff", branch, "-m", `Merge ${branch}`]);
+  await gitCheckoutBranch(projectDir, sourceBranch);
+  await gitMergeNoCheckout(projectDir, branch);
 }
 
 /** Propose the next patch/minor/major version off the latest `vX.Y.Z` tag

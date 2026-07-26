@@ -290,10 +290,127 @@ export async function rollbackToCheckpoint(turnIndex: number): Promise<{ filesRe
 
 /** The parsed success reply of POST /sessions/:id/merge. */
 export interface MergeResult {
-  ok: boolean;
+  ok: true;
+  code: "merge_succeeded";
+  outcome: "merged";
   branch: string;
   sourceBranch: string;
   commits: number;
+  worktreeCommitted: boolean;
+}
+
+export type MergeFailureOutcome =
+  | "dirty"
+  | "busy"
+  | "stale_ownership"
+  | "conflict"
+  | "nothing_to_merge"
+  | "read_only"
+  | "failed";
+
+const mergeFailureDiscriminants: Readonly<Record<string, MergeFailureOutcome>> = {
+  merge_session_missing: "failed",
+  loop_review_read_only: "read_only",
+  merge_stale_ownership: "stale_ownership",
+  merge_path_validation_failed: "stale_ownership",
+  merge_busy: "busy",
+  merge_source_missing: "stale_ownership",
+  merge_parent_busy: "busy",
+  merge_parent_dirty: "dirty",
+  merge_source_occupied: "stale_ownership",
+  merge_worktree_busy: "busy",
+  merge_preflight_failed: "failed",
+  merge_source_checkout_failed: "failed",
+  merge_parent_changed: "stale_ownership",
+  merge_worktree_commit_failed: "failed",
+  merge_ahead_failed: "failed",
+  merge_nothing_to_merge: "nothing_to_merge",
+  merge_conflict: "conflict",
+  merge_active_failure: "failed",
+  merge_failed: "failed",
+};
+
+interface MergeFailureBody {
+  code: string;
+  outcome: MergeFailureOutcome;
+  error: string;
+  worktreeCommitted: boolean;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function parseMergeFailure(value: unknown): MergeFailureBody | null {
+  const body = record(value);
+  if (
+    !body ||
+    typeof body.code !== "string" ||
+    body.code.length === 0 ||
+    typeof body.outcome !== "string" ||
+    mergeFailureDiscriminants[body.code] !== body.outcome ||
+    typeof body.error !== "string" ||
+    typeof body.worktreeCommitted !== "boolean"
+  ) {
+    return null;
+  }
+  return body as unknown as MergeFailureBody;
+}
+
+function parseMergeSuccess(value: unknown): MergeResult | null {
+  const body = record(value);
+  if (
+    !body ||
+    body.ok !== true ||
+    body.code !== "merge_succeeded" ||
+    body.outcome !== "merged" ||
+    typeof body.branch !== "string" ||
+    body.branch.length === 0 ||
+    typeof body.sourceBranch !== "string" ||
+    body.sourceBranch.length === 0 ||
+    typeof body.commits !== "number" ||
+    !Number.isSafeInteger(body.commits) ||
+    body.commits < 1 ||
+    typeof body.worktreeCommitted !== "boolean"
+  ) {
+    return null;
+  }
+  return body as unknown as MergeResult;
+}
+
+function clearMergedSessionDiff(sessionId: string): void {
+  if (sessionId === currentSessionId) {
+    useAppStore.getState().setDiffState({ repo: true, files: [], truncated: false });
+  }
+}
+
+export class MergeWorktreeError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly outcome: MergeFailureOutcome,
+    public readonly worktreeCommitted: boolean,
+    serverMessage: string,
+  ) {
+    const prefix = worktreeCommitted
+      ? "Your session changes were committed in its worktree, but the merge did not finish. "
+      : "";
+    const guidance =
+      code === "merge_active_failure"
+        ? serverMessage
+        : outcome === "dirty"
+          ? "Commit, stash, or discard the project checkout changes, then try again."
+          : outcome === "busy"
+            ? "Finish or abort the Git operation, then try again."
+            : outcome === "stale_ownership"
+              ? "The session checkout or branch ownership changed. Review the worktrees and start a new isolated session if ownership cannot be restored."
+              : outcome === "conflict"
+                ? "Resolve the conflicts and commit the merge, or abort it in the project checkout."
+                : outcome === "failed"
+                  ? `${serverMessage} Review the project and session Git state, then try again.`
+                  : serverMessage;
+    super(`${prefix}${guidance}`);
+    this.name = "MergeWorktreeError";
+  }
 }
 
 /**
@@ -318,13 +435,28 @@ export async function mergeWorktreeSession(sessionId: string): Promise<MergeResu
     method: "POST",
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? `Merge failed (${response.status}).`);
+    const body = parseMergeFailure(await response.json().catch(() => null));
+    if (!body) {
+      throw new MergeWorktreeError(
+        "merge_failed",
+        "failed",
+        false,
+        `Merge failed (${response.status}).`,
+      );
+    }
+    if (body.worktreeCommitted) clearMergedSessionDiff(sessionId);
+    throw new MergeWorktreeError(body.code, body.outcome, body.worktreeCommitted, body.error);
   }
-  const result = (await response.json()) as MergeResult;
-  if (sessionId === currentSessionId) {
-    useAppStore.getState().setDiffState({ repo: true, files: [], truncated: false });
+  const result = parseMergeSuccess(await response.json().catch(() => null));
+  if (!result) {
+    throw new MergeWorktreeError(
+      "merge_failed",
+      "failed",
+      false,
+      "The merge server returned an invalid success response.",
+    );
   }
+  clearMergedSessionDiff(sessionId);
   return result;
 }
 

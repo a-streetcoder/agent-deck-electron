@@ -6,13 +6,18 @@ import { describe, expect, it } from "vitest";
 import {
   createSessionWorktree,
   gitBlobAtCommit,
+  gitCommitsAhead,
   gitCreateAndPushReleaseTag,
+  gitLocalBranchRef,
   gitLocalTagExists,
+  gitOperationInProgress,
+  gitRepositoryIdentity,
   gitReleaseSynchronization,
   gitRemoteTagExists,
   gitRepoRelativePosixPath,
   gitWorktreePrune,
   gitWorktreeRegistrationMatches,
+  gitWorkingTreeClean,
   gitWorktreeRegistrations,
   parseStatus,
 } from "../src/git.ts";
@@ -398,5 +403,31 @@ describe("session worktree branch ownership", () => {
 
     expect(branches(repo)).toEqual([branch, "main"]);
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+describe("merge preflight plumbing", () => {
+  it("distinguishes exact zero ahead and detects every porcelain dirty class", async () => {
+    const repo = makeRepo();
+    expect(await gitCommitsAhead(repo, "main", "main")).toBe(0);
+    expect(await gitWorkingTreeClean(repo)).toBe(true);
+
+    writeFileSync(path.join(repo, "README.md"), "unstaged\n");
+    expect(await gitWorkingTreeClean(repo)).toBe(false);
+    git(repo, ["add", "README.md"]);
+    expect(await gitWorkingTreeClean(repo)).toBe(false);
+    git(repo, ["reset", "--hard", "HEAD"]);
+    writeFileSync(path.join(repo, "untracked.txt"), "new\n");
+    expect(await gitWorkingTreeClean(repo)).toBe(false);
+  });
+
+  it("validates local refs, repository identity, and operation markers", async () => {
+    const repo = makeRepo();
+    expect(await gitLocalBranchRef(repo, "main")).toBe("refs/heads/main");
+    await expect(gitLocalBranchRef(repo, "-invalid")).rejects.toThrow();
+    expect(await gitRepositoryIdentity(repo)).toBeTruthy();
+    expect(await gitOperationInProgress(repo)).toBe(false);
+    writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), "deadbeef\n");
+    expect(await gitOperationInProgress(repo)).toBe(true);
   });
 });
