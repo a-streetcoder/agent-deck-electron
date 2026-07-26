@@ -1703,36 +1703,31 @@ fn materialize_managed_snapshot(
     let nonce = private_nonce().map_err(map_resource_io)?;
     let stage_leaf = format!("{MANAGED_SNAPSHOT_STAGE_PREFIX}{nonce}");
     let stage = create_private_dir(snapshots, &stage_leaf)?;
-    let skills = create_private_dir(&stage, "skills")?;
-    let mut bounds = SnapshotBounds::default();
-    for (index, components) in selected_roots.iter().enumerate() {
-        let source = match open_selected_skill_root(&clone, components) {
-            Ok(source) => source,
-            Err(error) => {
-                return Err(cleanup_owned_managed_stage_error(
-                    snapshots,
-                    &stage_leaf,
-                    error,
-                ));
-            }
-        };
-        let destination = match create_private_dir(&skills, &index.to_string()) {
-            Ok(destination) => destination,
-            Err(error) => {
-                return Err(cleanup_owned_managed_stage_error(
-                    snapshots,
-                    &stage_leaf,
-                    error,
-                ));
-            }
-        };
-        if let Err(error) = copy_snapshot_tree(&source, &destination, 0, &mut bounds) {
-            return Err(cleanup_owned_managed_stage_error(
-                snapshots,
-                &stage_leaf,
-                error,
-            ));
+    let build_result = (|| -> Result<()> {
+        // Keep every child capability inside this construction scope. Windows
+        // opens these without delete sharing, so none may survive publication.
+        let skills = create_private_dir(&stage, "skills")?;
+        let mut bounds = SnapshotBounds::default();
+        for (index, components) in selected_roots.iter().enumerate() {
+            let source = open_selected_skill_root(&clone, components)?;
+            let destination = create_private_dir(&skills, &index.to_string())?;
+            copy_snapshot_tree(&source, &destination, 0, &mut bounds)?;
+            // `source` and `destination` are dropped at the end of each loop
+            // iteration, before the `skills` capability is dropped here.
         }
+        Ok(())
+    })();
+    // The clone and every selected source capability are no longer needed once
+    // staging is complete; close them before any Windows rename or cleanup.
+    drop(clone);
+    if let Err(error) = build_result {
+        // The stage itself must also close before recursive cleanup on Windows.
+        drop(stage);
+        return Err(cleanup_owned_managed_stage_error(
+            snapshots,
+            &stage_leaf,
+            error,
+        ));
     }
 
     let leaf = snapshot_leaf(repository_id);
@@ -1748,6 +1743,8 @@ fn materialize_managed_snapshot(
         .cloned()
     {
         if cap_file_identity(&leaf_metadata)? != expected.leaf.0 {
+            drop(repository);
+            drop(stage);
             return Err(cleanup_owned_managed_stage_error(
                 snapshots,
                 &stage_leaf,
@@ -1759,6 +1756,8 @@ fn materialize_managed_snapshot(
     match repository.symlink_metadata("skills") {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                drop(repository);
+                drop(stage);
                 return Err(cleanup_owned_managed_stage_error(
                     snapshots,
                     &stage_leaf,
@@ -1781,6 +1780,8 @@ fn materialize_managed_snapshot(
                     .map_err(map_resource_io)?;
                 if let Err(error) = rename_noreplace(&stage, "skills", &repository, "skills") {
                     let _ = rename_noreplace(&repository, &old, &repository, "skills");
+                    drop(repository);
+                    drop(stage);
                     return Err(cleanup_owned_managed_stage_error(
                         snapshots,
                         &stage_leaf,
@@ -1791,10 +1792,29 @@ fn materialize_managed_snapshot(
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            rename_noreplace(&stage, "skills", &repository, "skills").map_err(map_resource_io)?;
+            if let Err(error) = rename_noreplace(&stage, "skills", &repository, "skills") {
+                drop(repository);
+                drop(stage);
+                return Err(cleanup_owned_managed_stage_error(
+                    snapshots,
+                    &stage_leaf,
+                    map_resource_io(error),
+                ));
+            }
         }
-        Err(error) => return Err(map_resource_io(error)),
+        Err(error) => {
+            drop(repository);
+            drop(stage);
+            return Err(cleanup_owned_managed_stage_error(
+                snapshots,
+                &stage_leaf,
+                map_resource_io(error),
+            ));
+        }
     }
+    // Publication moved `skills` out; close the now-empty stage handle before
+    // deleting its directory on Windows.
+    drop(stage);
     remove_owned_managed_stage(snapshots, &stage_leaf)?;
     sync_dir(&repository).map_err(map_resource_io)?;
     sync_dir(snapshots).map_err(map_resource_io)?;
@@ -3614,6 +3634,28 @@ mod tests {
             assert!(!valid_catalog_basename(invalid), "accepted {invalid}");
         }
         assert!(valid_catalog_basename("native name.loop.md"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_child_handle_must_close_before_publication() {
+        let home = home();
+        let snapshots = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let stage = create_private_dir(&snapshots, "stage").unwrap();
+        let skills = create_private_dir(&stage, "skills").unwrap();
+        let repository = create_private_dir(&snapshots, "repository").unwrap();
+
+        let blocked = rename_noreplace(&stage, "skills", &repository, "skills").unwrap_err();
+        assert!(
+            matches!(blocked.raw_os_error(), Some(5 | 32 | 33)),
+            "unexpected rename error: {blocked:?}"
+        );
+        drop(skills);
+        rename_noreplace(&stage, "skills", &repository, "skills").unwrap();
+
+        drop(repository);
+        drop(stage);
+        drop(snapshots);
     }
 
     #[cfg(windows)]
