@@ -1535,6 +1535,59 @@ fn parse_session_worktree_identity_token(token: &str) -> Result<StableFileIdenti
     Ok(StableFileIdentity { volume, file })
 }
 
+fn rollback_empty_session_worktree_reservation(
+    root: &Dir,
+    leaf: &str,
+    expected_identity: &StableFileIdentity,
+) {
+    let rollback = || -> std::io::Result<()> {
+        let expected = root.symlink_metadata(leaf)?;
+        if !expected.is_dir()
+            || session_entry_is_link(&expected)
+            || cap_file_identity(&expected).ok().as_ref() != Some(expected_identity)
+        {
+            return Ok(());
+        }
+        let opened = nofollow_open(root, leaf, false, true)?;
+        let opened_metadata = opened.metadata()?;
+        if !opened_metadata.is_dir()
+            || session_entry_is_link(&opened_metadata)
+            || cap_file_identity(&opened_metadata).ok().as_ref() != Some(expected_identity)
+        {
+            return Ok(());
+        }
+        let opened = Dir::from_std_file(opened.into_std());
+        let mut entries = opened.entries()?;
+        if entries.next().transpose()?.is_some() {
+            return Ok(());
+        }
+        drop(entries);
+        drop(opened);
+        // Non-recursive removal is the final race check: content appearing after
+        // the empty scan makes this fail rather than deleting it.
+        root.remove_dir(leaf)
+    };
+    let _ = rollback();
+}
+
+#[cfg(test)]
+thread_local! {
+    static RESERVATION_FAILURE_HOOK: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn take_reservation_failure_hook(stage: u8) -> u8 {
+    RESERVATION_FAILURE_HOOK.with(|hook| {
+        let value = hook.get();
+        if value == stage || value == stage + 1 {
+            hook.set(0);
+            value
+        } else {
+            0
+        }
+    })
+}
+
 fn reserve_session_worktree(
     root: &Dir,
     root_path: &str,
@@ -1546,8 +1599,62 @@ fn reserve_session_worktree(
     // create_dir is capability-relative and atomic. Existing files, directories,
     // links, and reparse points all fail without being inspected or removed.
     root.create_dir(&leaf).map_err(map_session_worktree_io)?;
-    let token = capture_session_worktree_identity(root, root_path, root_identity, target_path)?;
-    sync_dir(root).map_err(map_session_worktree_io)?;
+    let created = match root.symlink_metadata(&leaf) {
+        Ok(metadata) => metadata,
+        Err(error) => return Err(map_session_worktree_io(error)),
+    };
+    let created_identity = match cap_file_identity(&created) {
+        Ok(identity) if created.is_dir() && !session_entry_is_link(&created) => identity,
+        Ok(_) => {
+            return Err(session_worktree_error(
+                "SESSION_WORKTREE_UNSAFE",
+                "new reservation changed before identity capture",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+
+    #[cfg(test)]
+    {
+        let hook = take_reservation_failure_hook(1);
+        if hook == 2 {
+            let captured = format!(".test-captured-{leaf}");
+            root.rename(&leaf, root, &captured).unwrap();
+            root.create_dir(&leaf).unwrap();
+            root.write(format!("{leaf}/replacement"), b"untouched")
+                .unwrap();
+        }
+        if hook != 0 {
+            let primary = session_worktree_error(
+                "SESSION_WORKTREE_IO",
+                "injected reservation identity-capture failure",
+            );
+            rollback_empty_session_worktree_reservation(root, &leaf, &created_identity);
+            return Err(primary);
+        }
+    }
+
+    let token = match capture_session_worktree_identity(root, root_path, root_identity, target_path)
+    {
+        Ok(token) => token,
+        Err(primary) => {
+            rollback_empty_session_worktree_reservation(root, &leaf, &created_identity);
+            return Err(primary);
+        }
+    };
+    #[cfg(test)]
+    let sync_result = if take_reservation_failure_hook(3) == 3 {
+        Err(std::io::Error::other("injected reservation sync failure"))
+    } else {
+        sync_dir(root)
+    };
+    #[cfg(not(test))]
+    let sync_result = sync_dir(root);
+    if let Err(error) = sync_result {
+        let primary = map_session_worktree_io(error);
+        let _ = delete_session_worktree(root, root_path, root_identity, target_path, &token);
+        return Err(primary);
+    }
     Ok(token)
 }
 
@@ -5607,6 +5714,68 @@ mod tests {
             fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
             "new"
         );
+    }
+
+    #[test]
+    fn session_worktree_reservation_capture_failure_removes_only_empty_created_leaf() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("a1b2c3d4");
+        RESERVATION_FAILURE_HOOK.with(|hook| hook.set(1));
+
+        let error = reserve_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap_err();
+
+        assert!(error.reason.starts_with("SESSION_WORKTREE_IO:"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn session_worktree_reservation_sync_failure_uses_identity_bound_rollback() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("decafbad");
+        RESERVATION_FAILURE_HOOK.with(|hook| hook.set(3));
+
+        let error = reserve_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap_err();
+
+        assert!(error.reason.starts_with("SESSION_WORKTREE_IO:"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn session_worktree_reservation_failure_never_removes_raced_replacement() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("facefeed");
+        let captured = std::path::Path::new(&store.root_path).join(".test-captured-facefeed");
+        RESERVATION_FAILURE_HOOK.with(|hook| hook.set(2));
+
+        let error = reserve_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap_err();
+
+        assert!(error.reason.starts_with("SESSION_WORKTREE_IO:"));
+        assert_eq!(
+            fs::read_to_string(target.join("replacement")).unwrap(),
+            "untouched"
+        );
+        assert!(captured.exists());
     }
 
     #[cfg(unix)]
