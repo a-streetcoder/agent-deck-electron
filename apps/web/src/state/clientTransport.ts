@@ -24,6 +24,7 @@ import type {
   TerminalPush,
 } from "@agent-deck/contracts";
 import type { ConnectionStatus } from "./store.ts";
+import { setImageReadToken } from "../lib/sessionImageUrl.ts";
 
 /**
  * The client-side socket transport, factored behind one interface so wsBridge.ts
@@ -168,11 +169,14 @@ export class RpcClientTransport implements ClientTransport {
         // server replays the gap from the ring, or snapshots when it evicted it.
         const lastSeq = this.host.getLastSeq();
         void transport
-          .request({
-            type: "subscribe_session",
-            sessionId,
-            lastSeq: lastSeq > 0 ? lastSeq : undefined,
-          })
+          .hello()
+          .then(() =>
+            transport.request({
+              type: "subscribe_session",
+              sessionId,
+              lastSeq: lastSeq > 0 ? lastSeq : undefined,
+            }),
+          )
           .then(() => {
             if (myGeneration !== this.generation) return;
             this.host.onSessionSubscribed?.(sessionId);
@@ -184,6 +188,9 @@ export class RpcClientTransport implements ClientTransport {
             if (transport.getState() !== "connected") return;
             this.host.onServerMessage({ type: "error", message: String(error), sessionId });
           });
+      },
+      onImageReadToken: (token) => {
+        if (myGeneration === this.generation) setImageReadToken(token);
       },
       onPush: (message) => {
         if (myGeneration !== this.generation) return;

@@ -242,6 +242,7 @@ export interface PiHostHandle {
   readonly abort: Effect.Effect<void, PiRequestError>;
   readonly compact: Effect.Effect<void, PiRequestError>;
   readonly getState: Effect.Effect<PiCommandData<"get_state">, PiRequestError>;
+  readonly getEntries: Effect.Effect<PiCommandData<"get_entries">, PiRequestError>;
   readonly getMessages: Effect.Effect<PiCommandData<"get_messages">, PiRequestError>;
   readonly getCommands: Effect.Effect<PiCommandData<"get_commands">["commands"], PiRequestError>;
   readonly getSessionStats: Effect.Effect<PiCommandData<"get_session_stats">, PiRequestError>;
@@ -436,6 +437,7 @@ export const spawnPiProcess = (
           abort: Effect.asVoid(request({ type: "abort" })),
           compact: Effect.asVoid(request({ type: "compact" }, COMPACT_TIMEOUT_MS)),
           getState: request({ type: "get_state" }),
+          getEntries: request({ type: "get_entries" }),
           getMessages: request({ type: "get_messages" }),
           getCommands: Effect.map(request({ type: "get_commands" }), (data) => data.commands),
           getSessionStats: request({ type: "get_session_stats" }),

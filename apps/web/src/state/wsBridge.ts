@@ -1010,7 +1010,7 @@ export async function connectAndBootstrap(): Promise<void> {
 export interface ImageAttachment {
   type: "image";
   data: string;
-  mimeType: string;
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 }
 
 export function sendPrompt(

@@ -398,7 +398,7 @@ describe("createRpcConnection", () => {
     const list = [{ id: "s1", cwd: "/tmp", createdAt: "2026-01-01T00:00:00.000Z" }];
     const { conn, frames } = harness(makeManager({}, list));
     await conn.handleMessage(frame(7, { type: "hello" }));
-    expect(frames).toEqual([{ kind: "hello_ok", id: 7, sessions: list }]);
+    expect(frames).toEqual([{ kind: "hello_ok", id: 7, sessions: list, imageReadToken: "" }]);
   });
 
   it("unknown session replies with an error", async () => {

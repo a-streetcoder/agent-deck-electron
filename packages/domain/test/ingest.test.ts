@@ -77,6 +77,21 @@ function runThrough(events: unknown[]): { state: TranscriptState; deltaCount: nu
 }
 
 describe("ingest → reduce pipeline", () => {
+  it("uses Pi session-entry ids as stable user identities during history seeding", () => {
+    const ingest = createIngestState();
+    const events = ingestPiEvent(ingest, {
+      type: "message_end",
+      entryId: "entry-123",
+      message: { role: "user", content: "same", timestamp: 1 },
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_final",
+        cell: { kind: "user", id: "user-entry-123", entryId: "entry-123", text: "same" },
+      },
+    ]);
+  });
+
   it("streams deltas through (never coalesced into message_end)", () => {
     const { deltaCount } = runThrough(TURN);
     expect(deltaCount).toBe(2);

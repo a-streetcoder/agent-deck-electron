@@ -80,6 +80,7 @@ import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
+import { SessionImageStore } from "./sessionImages.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { ManagedSkillRepositories } from "./skillRepositories.ts";
 import { SupervisorLog } from "./supervisor.ts";
@@ -205,6 +206,7 @@ async function initServer(
   const dataDir = managedSkillRepositories.dataDir;
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  const sessionImages = new SessionImageStore(dataDir);
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -463,6 +465,36 @@ async function initServer(
       receipts.emit("checkpoint_captured", meta.id);
     },
     loopSnapshots,
+    (sessionId, cell, rawContent) => {
+      try {
+        return sessionImages.attachToUserCell(sessionId, cell, rawContent);
+      } catch {
+        return cell;
+      } // corrupt/missing image metadata never drops user text
+    },
+    (sourceSessionId, targetSessionId) => {
+      try {
+        sessionImages.fork(sourceSessionId, targetSessionId);
+        return () => sessionImages.deleteSession(targetSessionId);
+      } catch {
+        // A damaged optional manifest must not prevent the text session from forking.
+        return () => {};
+      }
+    },
+    (sessionId, users) => {
+      try {
+        sessionImages.reconcileHistory(sessionId, users);
+      } catch {
+        // Image cleanup is conservative and must not make an otherwise valid resume fail.
+      }
+    },
+    (sessionId) => {
+      try {
+        sessionImages.expirePending(sessionId);
+      } catch {
+        // Image cleanup must not perturb session failure or shutdown.
+      }
+    },
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -607,6 +639,40 @@ async function initServer(
   }
 
   fastify.get("/health", async () => ({ ok: true }));
+
+  // Lazy transcript-image capability. Every failure is deliberately identical:
+  // callers learn neither whether a session/ref exists nor why validation failed.
+  fastify.get("/session-images/:sessionId/:imageId", async (request, reply) => {
+    const { sessionId, imageId } = request.params as { sessionId: string; imageId: string };
+    const token = (request.query as { token?: unknown }).token;
+    const notFound = () =>
+      reply
+        .code(404)
+        .headers({
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cross-origin-resource-policy": "same-origin",
+        })
+        .send();
+    if (!sessionImages.validToken(token)) return notFound();
+    const known = sessions.get(sessionId)?.meta ?? index.find((item) => item.id === sessionId);
+    if (!known) return notFound();
+    const image = sessionImages.read(sessionId, imageId);
+    if (!image) return notFound();
+    return reply
+      .headers({
+        "content-type": image.mimeType,
+        "content-length": String(image.data.length),
+        "cache-control": "private, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin",
+      })
+      .send(image.data);
+  });
 
   // Resource scanning. `home` follows the pi subprocess HOME override (set via
   // AGENT_DECK_PI_ENV in tests) so the scanner and pi see the same catalogs.
@@ -785,6 +851,7 @@ async function initServer(
     scripts,
     checkpoints,
     rollback,
+    sessionImages,
   });
   broadcast = wsBroadcast;
   broadcastDiff = wsBroadcastDiff;
@@ -845,6 +912,7 @@ async function initServer(
   const ctx: ServerContext = {
     fastify,
     sessions,
+    sessionImages,
     index,
     projects,
     settings,

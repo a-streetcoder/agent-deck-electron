@@ -22,6 +22,7 @@ export default defineConfig({
       "/rpc": { target: serverTarget, ws: true },
       "/health": { target: serverTarget },
       "/sessions": { target: serverTarget },
+      "/session-images": { target: serverTarget },
       "/projects": { target: serverTarget },
       "/resources": { target: serverTarget },
       "/runtime": { target: serverTarget },

@@ -106,14 +106,24 @@ const fixtures: Fixture[] = [
     expected: "accept",
   },
   {
-    name: "prompt image mimeType exactly 100 chars (max boundary)",
+    name: "prompt image MIME outside raster allowlist",
     message: {
       type: "prompt",
       sessionId: "s1",
       message: "hi",
       images: [image({ mimeType: "m".repeat(100) })],
     },
-    expected: "accept",
+    expected: "reject",
+  },
+  {
+    name: "AVIF is rejected rather than shallowly parsed",
+    message: {
+      type: "prompt",
+      sessionId: "s1",
+      message: "hi",
+      images: [image({ mimeType: "image/avif" })],
+    },
+    expected: "reject",
   },
   {
     name: "prompt streaming behavior",

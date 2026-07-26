@@ -361,6 +361,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     sessions.removeLoopSessionSnapshot(id);
     index.remove(id);
     bridgeTokens.delete(id);
+    // Image ownership is removed only after every authoritative session deletion
+    // step above succeeded; failed worktree cleanup intentionally retains it.
+    try {
+      ctx.sessionImages.deleteSession(id);
+    } catch {
+      // Session deletion already committed; retain shared blobs for conservative GC.
+    }
     if (meta.piSessionFile) {
       try {
         rmSync(meta.piSessionFile, { force: true });
