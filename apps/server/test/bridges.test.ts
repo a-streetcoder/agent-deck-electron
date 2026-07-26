@@ -44,11 +44,15 @@ describe("GET /runtime/bridges", () => {
       ]),
     );
 
+    const askUser = list.find((b) => b.id === "ask_user");
+    expect(askUser).toMatchObject({ active: true, toolNames: ["ask_user"] });
+
     const deckAgents = list.find((b) => b.id === "deck_agents");
     expect(deckAgents?.active).toBe(true);
     expect(deckAgents?.toolNames).toEqual(
       expect.arrayContaining(["managed_subagent", "managed_parallel"]),
     );
+    expect(deckAgents?.toolNames).not.toContain("ask_user");
 
     // No MCP server connected → the MCP bridge is present but inactive.
     const mcp = list.find((b) => b.id === "mcp");

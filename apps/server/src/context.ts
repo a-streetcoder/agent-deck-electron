@@ -9,6 +9,7 @@ import type {
   SessionWorktreeStore,
 } from "@agent-deck/resources";
 import type { FastifyInstance } from "fastify";
+import type { AskUserCoordinator } from "./askUserCoordinator.ts";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager } from "./mcpTools.ts";
@@ -99,6 +100,7 @@ export interface ServerContext {
   settings: SettingsStore;
   bridge: BridgeRegistry;
   bridgeTokens: Map<string, string>;
+  askUser: AskUserCoordinator;
   supervisor: SupervisorLog;
   childSupervisors: Map<string, { parentSessionId: string; cellId: string }>;
   pendingSupervisor: Map<

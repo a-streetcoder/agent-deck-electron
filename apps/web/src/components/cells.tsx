@@ -13,6 +13,7 @@ import { balance } from "@/design-system/markdown/balancer";
 import { MessageBubble } from "@/components/transcript/MessageBubble";
 import { ToolGroupCard, type ToolGroupStatus } from "@/components/transcript/ToolGroupCard";
 import { toolFilePath, toolPresentation } from "@/components/transcript/toolPresentation";
+import { AskUserDecisionCard } from "./AskUserDecisionCard.tsx";
 import { RunMeta } from "./RunMeta.tsx";
 import { QuestionAnswerControls } from "./QuestionAnswerControls.tsx";
 import { sendSupervisorAnswer } from "../state/wsBridge.ts";
@@ -296,5 +297,7 @@ export function CellView({ cell }: { cell: TranscriptCell }) {
       return <SupervisorQuestionCellView cell={cell} />;
     case "question":
       return <QuestionCellView cell={cell} />;
+    case "ask_user":
+      return <AskUserDecisionCard cell={cell} />;
   }
 }

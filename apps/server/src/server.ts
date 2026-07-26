@@ -36,6 +36,8 @@ import {
   type MemoryStore,
 } from "@agent-deck/memory";
 import { FileMcpOAuthStore } from "@agent-deck/mcp";
+import { AskUserCoordinator } from "./askUserCoordinator.ts";
+import { registerAskUserBridgeTool } from "./askUserBridgeTool.ts";
 import { BridgeRegistry } from "./bridge.ts";
 import {
   asThinkingLevel,
@@ -84,10 +86,9 @@ import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
 import { setupWebSocket } from "./wsHandler.ts";
 
-/** Tools only bridge extensions provide — stripped from an agent's --tools
- * allowlist until those bridges are ported. managed_subagent is now a real
- * bridge tool, so it's no longer stripped (an agent may allowlist it). */
-const BRIDGE_ONLY_TOOLS = new Set(["contact_supervisor", "ask_user"]);
+/** Child-only tools must not leak into a parent agent's launch allowlist.
+ * Parent bridge tools remain eligible because their bridge is actually exposed. */
+const BRIDGE_ONLY_TOOLS = new Set(["contact_supervisor"]);
 
 /**
  * The child subagent's supervisor tool. Exposed ONLY through the per-child bridge
@@ -138,6 +139,8 @@ export interface AgentDeckServer {
   bridge: BridgeRegistry;
   /** Records child subagents' contact_supervisor requests (progress_update, …). */
   supervisor: SupervisorLog;
+  /** Parent-only structured human decision coordinator. */
+  askUser: AskUserCoordinator;
   /**
    * Effect composition seam (Slice 3): the ManagedRuntime serving every
    * `serverLayers` service (runtime.ts). Created per server, disposed in
@@ -549,6 +552,11 @@ async function initServer(
     );
   }
 
+  // Parent-only human decision bridge. It is intentionally separate from the
+  // Deck-agent bridge inventory and is never included in a child extension.
+  const askUser = new AskUserCoordinator(sessions, (sessionId) => bridgeTokens.get(sessionId));
+  registerAskUserBridgeTool(bridge, askUser);
+
   // Native subagents + the session activity plan: the deck-agent bridge tools
   // every parent session gets (moved verbatim to bridgeTools.ts).
   registerDeckBridgeTools(bridge, sessions);
@@ -842,6 +850,7 @@ async function initServer(
     settings,
     bridge,
     bridgeTokens,
+    askUser,
     supervisor,
     childSupervisors,
     pendingSupervisor,
@@ -901,6 +910,7 @@ async function initServer(
     receipts,
     bridge,
     supervisor,
+    askUser,
     runtime: effectRuntime,
     close: async () => {
       // Teardown is fault-tolerant: one failing subsystem must not stop the
@@ -917,6 +927,8 @@ async function initServer(
       };
       try {
         await step(() => resourceWatcher.close());
+        // Settle bridge waits while their owning sessions/transcript buses still exist.
+        await step(() => askUser.close());
         await step(() => sessions.stopAll());
         await step(() => mcp.close());
         await step(() => closeWebSockets());

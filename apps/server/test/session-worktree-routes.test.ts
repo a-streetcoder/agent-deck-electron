@@ -144,6 +144,7 @@ function makeRoute(
     },
     settings: { get: () => settingsValue },
     bridgeTokens: state.tokens,
+    askUser: { cancelSession: vi.fn() },
     worktreesRoot: WORKTREES_ROOT,
     sessionWorktreeStore: {
       rootPath: WORKTREES_ROOT,

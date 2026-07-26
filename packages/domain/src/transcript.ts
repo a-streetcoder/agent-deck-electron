@@ -110,13 +110,43 @@ export interface SupervisorQuestionCell {
   closedReason?: string;
 }
 
+/** A parent agent's ask_user request. This is intentionally separate from Pi's
+ * extension UI and from the child-to-parent supervisor channel. */
+export interface AskUserOption {
+  title: string;
+  description?: string;
+}
+
+export interface AskUserAnswer {
+  selections: string[];
+  freeform?: string;
+  comment?: string;
+}
+
+export interface AskUserCell {
+  kind: "ask_user";
+  id: string;
+  requestId: string;
+  sessionId: string;
+  question: string;
+  context?: string;
+  options: AskUserOption[];
+  allowMultiple: boolean;
+  allowFreeform: boolean;
+  allowComment: boolean;
+  status: "pending" | "answered" | "cancelled" | "timed_out";
+  answer?: AskUserAnswer;
+  closedReason?: string;
+}
+
 export type TranscriptCell =
   | UserCell
   | AssistantCell
   | ToolCell
   | QuestionCell
   | SubagentCell
-  | SupervisorQuestionCell;
+  | SupervisorQuestionCell
+  | AskUserCell;
 
 /**
  * A friendly transcript-card label for an Agent Deck memory bridge tool call
@@ -256,6 +286,13 @@ export type DomainEvent =
   | { type: "subagent_progress"; cellId: string; message: string }
   | { type: "supervisor_answered"; cellId: string; answer: string }
   | { type: "supervisor_closed"; cellId: string; reason: string }
+  | { type: "ask_user_answered"; cellId: string; answer: AskUserAnswer }
+  | {
+      type: "ask_user_closed";
+      cellId: string;
+      status: "cancelled" | "timed_out";
+      reason: string;
+    }
   | { type: "question_answered"; cellId: string }
   | { type: "cell_final"; cell: TranscriptCell }
   | { type: "agent_status"; status: AgentStatus }
@@ -428,6 +465,22 @@ export function reduceTranscript(state: TranscriptState, event: DomainEvent): Tr
       if (!cell || cell.kind !== "supervisor_question" || cell.answered) return state;
       const next = state.cells.slice();
       next[index] = { ...cell, closed: true, closedReason: event.reason };
+      return { ...state, cells: next };
+    }
+    case "ask_user_answered": {
+      const index = state.cells.findIndex((c) => c.id === event.cellId);
+      const cell = index === -1 ? undefined : state.cells[index];
+      if (!cell || cell.kind !== "ask_user" || cell.status !== "pending") return state;
+      const next = state.cells.slice();
+      next[index] = { ...cell, status: "answered", answer: event.answer };
+      return { ...state, cells: next };
+    }
+    case "ask_user_closed": {
+      const index = state.cells.findIndex((c) => c.id === event.cellId);
+      const cell = index === -1 ? undefined : state.cells[index];
+      if (!cell || cell.kind !== "ask_user" || cell.status !== "pending") return state;
+      const next = state.cells.slice();
+      next[index] = { ...cell, status: event.status, closedReason: event.reason };
       return { ...state, cells: next };
     }
     case "question_answered": {

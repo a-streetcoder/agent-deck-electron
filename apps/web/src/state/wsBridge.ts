@@ -867,6 +867,39 @@ export async function renameSkill(scope: string, name: string, newName: string):
   }
 }
 
+async function askUserAction(
+  sessionId: string,
+  requestId: string,
+  action: "answer" | "cancel",
+  body?: object,
+): Promise<void> {
+  const response = await fetch(
+    `/sessions/${encodeURIComponent(sessionId)}/asks/${encodeURIComponent(requestId)}/${action}`,
+    {
+      method: "POST",
+      ...(body
+        ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+        : {}),
+    },
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? "Could not update the decision request.");
+  }
+}
+
+export function sendAskUserAnswer(
+  sessionId: string,
+  requestId: string,
+  answer: { selections: string[]; freeform?: string; comment?: string },
+): Promise<void> {
+  return askUserAction(sessionId, requestId, "answer", answer);
+}
+
+export function sendAskUserCancel(sessionId: string, requestId: string): Promise<void> {
+  return askUserAction(sessionId, requestId, "cancel");
+}
+
 /** Answer a blocking supervisor-request card raised by a child subagent. */
 export async function sendSupervisorAnswer(requestId: string, response: string): Promise<void> {
   await fetch(`/supervisor/${encodeURIComponent(requestId)}/answer`, {

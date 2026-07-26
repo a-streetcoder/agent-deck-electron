@@ -36,6 +36,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     sessions,
     bridge,
     bridgeTokens,
+    askUser,
     supervisor,
     childSupervisors,
     pendingSupervisor,
@@ -224,8 +225,73 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     if (parsed.data.tool === "__recall__") {
       return await handleRecall(parsed.data.sessionId, parsed.data.params);
     }
-    return await bridge.dispatch(parsed.data);
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    request.raw.once("aborted", abort);
+    reply.raw.once("close", () => {
+      if (!reply.raw.writableEnded) abort();
+    });
+    return await bridge.dispatch(parsed.data, {
+      token: parsed.data.token,
+      signal: controller.signal,
+    });
   });
+
+  const askAnswerBody = z
+    .object({
+      selections: z.array(z.string()).default([]),
+      freeform: z.string().optional(),
+      comment: z.string().optional(),
+    })
+    .strict();
+  fastify.post<{ Params: { sessionId: string; requestId: string } }>(
+    "/sessions/:sessionId/asks/:requestId/answer",
+    async (request, reply) => {
+      const parsed = askAnswerBody.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ code: "ask_user_invalid_response", error: parsed.error.message });
+      const result = askUser.answer(
+        request.params.sessionId,
+        request.params.requestId,
+        parsed.data,
+      );
+      if (result === "missing")
+        return reply.code(404).send({
+          code: "ask_user_not_pending",
+          error: "No pending ask_user request with that id.",
+        });
+      if (result === "forbidden")
+        return reply.code(403).send({
+          code: "ask_user_wrong_session",
+          error: "This request does not belong to that session.",
+        });
+      if (result === "invalid")
+        return reply.code(400).send({
+          code: "ask_user_invalid_response",
+          error: "The answer is not permitted by this request.",
+        });
+      return { ok: true };
+    },
+  );
+  fastify.post<{ Params: { sessionId: string; requestId: string } }>(
+    "/sessions/:sessionId/asks/:requestId/cancel",
+    async (request, reply) => {
+      const result = askUser.cancel(request.params.sessionId, request.params.requestId);
+      if (result === "missing")
+        return reply.code(404).send({
+          code: "ask_user_not_pending",
+          error: "No pending ask_user request with that id.",
+        });
+      if (result === "forbidden")
+        return reply.code(403).send({
+          code: "ask_user_wrong_session",
+          error: "This request does not belong to that session.",
+        });
+      return { ok: true };
+    },
+  );
 
   // Answer a pending blocking supervisor request (need_decision / interview_request)
   // raised by a child subagent. The "human out-of-band" path: the parent's

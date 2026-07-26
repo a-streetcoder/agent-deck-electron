@@ -1520,6 +1520,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       match: (name: string): boolean => name.startsWith("agent_deck_memory_"),
     },
     {
+      id: "ask_user",
+      displayName: "Ask user",
+      summary: "Lets the parent agent pause for a structured decision from you.",
+      condition: "Always on for parent sessions",
+      match: (name: string): boolean => name === "ask_user",
+    },
+    {
       id: "deck_agents",
       displayName: "Deck agents",
       summary:
