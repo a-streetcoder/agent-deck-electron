@@ -8,6 +8,8 @@ import {
   emptyTranscript,
   ingestPiEvent,
   reduceTranscript,
+  type AskUserAnswer,
+  type AskUserCell,
   type DomainEvent,
   type IngestState,
   type SessionPlanItem,
@@ -218,6 +220,13 @@ export interface ManagedSessionRuntime {
   }) => Effect.Effect<void>;
   readonly answerSupervisorQuestion: (requestId: string, answer: string) => Effect.Effect<void>;
   readonly closeSupervisorQuestion: (requestId: string, reason: string) => Effect.Effect<void>;
+  readonly openAskUser: (cell: AskUserCell) => Effect.Effect<void>;
+  readonly answerAskUser: (requestId: string, answer: AskUserAnswer) => Effect.Effect<void>;
+  readonly closeAskUser: (
+    requestId: string,
+    status: "cancelled" | "timed_out",
+    reason: string,
+  ) => Effect.Effect<void>;
   /** Fails (Error) on an invalid/unknown UI-request id — surfaced to the caller. */
   readonly respondToUiRequest: (raw: Record<string, unknown>) => Effect.Effect<void, Error>;
 
@@ -622,6 +631,15 @@ export const makeManagedSessionRuntime = (
       closeSupervisorQuestion: (requestId, reason) =>
         Effect.sync(() =>
           emit({ type: "supervisor_closed", cellId: `supervisor-${requestId}`, reason }),
+        ),
+      openAskUser: (cell) => Effect.sync(() => emit({ type: "cell_open", cell })),
+      answerAskUser: (requestId, answer) =>
+        Effect.sync(() =>
+          emit({ type: "ask_user_answered", cellId: `ask-user-${requestId}`, answer }),
+        ),
+      closeAskUser: (requestId, status, reason) =>
+        Effect.sync(() =>
+          emit({ type: "ask_user_closed", cellId: `ask-user-${requestId}`, status, reason }),
         ),
       respondToUiRequest: (raw) =>
         Effect.gen(function* () {

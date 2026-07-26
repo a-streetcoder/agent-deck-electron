@@ -61,6 +61,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     projects,
     settings,
     bridgeTokens,
+    askUser,
     worktreesRoot,
     sessionWorktreeStore,
     broadcast,
@@ -327,6 +328,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         });
       }
     }
+    // Resolve parent bridge waits before destroying their transcript owner.
+    askUser.cancelSession(id);
     await sessions.destroy(id);
     // For an ordinary isolated session, physical deletion must succeed through the held
     // native root before Git metadata or persisted session metadata is removed.

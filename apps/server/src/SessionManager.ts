@@ -4,6 +4,8 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import type {
+  AskUserAnswer,
+  AskUserCell,
   SessionPlanItem,
   SessionPlanUpdate,
   SubagentCell,
@@ -157,6 +159,18 @@ export class ManagedSession {
 
   closeSupervisorQuestion(requestId: string, reason: string): void {
     runSyncUnwrapped(this.rt.closeSupervisorQuestion(requestId, reason));
+  }
+
+  openAskUser(cell: AskUserCell): void {
+    runSyncUnwrapped(this.rt.openAskUser(cell));
+  }
+
+  answerAskUser(requestId: string, answer: AskUserAnswer): void {
+    runSyncUnwrapped(this.rt.answerAskUser(requestId, answer));
+  }
+
+  closeAskUser(requestId: string, status: "cancelled" | "timed_out", reason: string): void {
+    runSyncUnwrapped(this.rt.closeAskUser(requestId, status, reason));
   }
 
   setPlan(items: SessionPlanItem[]): void {

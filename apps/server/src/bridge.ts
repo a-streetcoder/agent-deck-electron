@@ -13,6 +13,10 @@ export interface BridgeToolContext {
   sessionId: string;
   /** pi's tool-call id, stable for the life of one call. */
   toolCallId: string;
+  /** The unguessable token authenticated by /bridge for this session. */
+  token: string;
+  /** Aborted when the bridge HTTP caller disconnects. */
+  signal?: AbortSignal;
 }
 
 export type BridgeToolHandler = (
@@ -48,7 +52,10 @@ export class BridgeRegistry {
   }
 
   /** Dispatch one call from a session's bridge extension to its handler. */
-  async dispatch(call: BridgeCallRequest): Promise<BridgeCallResponse> {
+  async dispatch(
+    call: BridgeCallRequest,
+    authenticated: { token: string; signal?: AbortSignal },
+  ): Promise<BridgeCallResponse> {
     const registration = this.tools.get(call.tool);
     if (!registration) {
       return { content: `unknown bridge tool: ${call.tool}`, isError: true };
@@ -57,6 +64,8 @@ export class BridgeRegistry {
       return await registration.handler(call.params, {
         sessionId: call.sessionId,
         toolCallId: call.toolCallId,
+        token: authenticated.token,
+        signal: authenticated.signal,
       });
     } catch (error) {
       return {
