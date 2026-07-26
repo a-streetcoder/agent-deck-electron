@@ -822,6 +822,33 @@ fn normalize_windows_namespace_path(path: &str) -> Result<String> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn conventional_windows_path_from_verbatim(path: &str) -> Result<String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "Windows authority path is empty or contains NUL",
+        ));
+    }
+    let separators = path.replace('/', "\\");
+    let upper = separators.to_ascii_uppercase();
+    let conventional = if upper.starts_with(r"\\?\UNC\") {
+        format!(r"\\{}", &separators[8..])
+    } else if upper.starts_with(r"\\?\") {
+        separators[4..].to_owned()
+    } else {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "Windows authority path is not a verbatim local-drive or UNC path",
+        ));
+    };
+    // Reuse the strict namespace parser to reject device namespaces, relative
+    // drives, traversal, and alternate data streams before exposing this path
+    // to Node or Git.
+    normalize_windows_namespace_path(&conventional)?;
+    Ok(conventional)
+}
+
 #[cfg(windows)]
 fn held_windows_final_path(dir: &Dir) -> Result<String> {
     use std::os::windows::ffi::OsStringExt as _;
@@ -1714,7 +1741,10 @@ impl Task for SessionWorktreeDeleteTask {
 #[napi]
 pub struct SessionWorktreeStore {
     root: Dir,
+    // Verbatim path obtained from the held handle; retained as native authority.
     root_path: String,
+    // Conventional absolute spelling for Node and Git for Windows.
+    exposed_root_path: String,
     root_identity: StableFileIdentity,
 }
 
@@ -1759,6 +1789,21 @@ impl SessionWorktreeStore {
                 })?
             }
         };
+        let exposed_root_path = {
+            #[cfg(unix)]
+            {
+                root_path.clone()
+            }
+            #[cfg(windows)]
+            {
+                conventional_windows_path_from_verbatim(&root_path).map_err(|_| {
+                    session_worktree_error(
+                        "SESSION_WORKTREE_UNSAFE",
+                        "held root is not a safe local-drive or UNC path",
+                    )
+                })?
+            }
+        };
         let root_identity =
             cap_file_identity(&root.dir_metadata().map_err(map_session_worktree_io)?).map_err(
                 |_| session_worktree_error("SESSION_WORKTREE_UNSAFE", "root identity unavailable"),
@@ -1767,13 +1812,14 @@ impl SessionWorktreeStore {
         Ok(Self {
             root,
             root_path,
+            exposed_root_path,
             root_identity,
         })
     }
 
     #[napi(getter)]
     pub fn root_path(&self) -> String {
-        self.root_path.clone()
+        self.exposed_root_path.clone()
     }
 
     #[napi]
@@ -4232,6 +4278,34 @@ mod tests {
         let extended_unc =
             normalize_windows_namespace_path(r"\\?\UNC\server\share\SKILLS\").unwrap();
         assert_eq!(unc, extended_unc);
+    }
+
+    #[test]
+    fn windows_conventional_path_exposes_only_safe_verbatim_drive_or_unc_paths() {
+        assert_eq!(
+            conventional_windows_path_from_verbatim(r"\\?\C:\Users\Agent\session-worktrees")
+                .unwrap(),
+            r"C:\Users\Agent\session-worktrees"
+        );
+        assert_eq!(
+            conventional_windows_path_from_verbatim(
+                r"\\?\UNC\server\share\Agent Deck\session-worktrees"
+            )
+            .unwrap(),
+            r"\\server\share\Agent Deck\session-worktrees"
+        );
+        for unsafe_path in [
+            r"\\.\C:\device",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\worktrees",
+            r"\\?\C:\safe\file:stream",
+            r"C:\not-verbatim",
+        ] {
+            assert!(
+                conventional_windows_path_from_verbatim(unsafe_path).is_err(),
+                "exposed {unsafe_path}"
+            );
+        }
     }
 
     #[test]

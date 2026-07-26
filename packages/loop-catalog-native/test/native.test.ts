@@ -173,6 +173,36 @@ describe("native Loop catalog binding", () => {
     expect(readFileSync(path.join(outside, "sentinel.txt"), "utf8")).toBe("external");
   });
 
+  it.runIf(process.platform === "win32")(
+    "exposes a conventional worktree root accepted by Git and native identity operations",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "session-worktree-windows-root-"));
+      const repo = mkdtempSync(path.join(tmpdir(), "session-worktree-windows-git-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+      writeFileSync(path.join(repo, "README.md"), "test\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+      execFileSync("git", ["branch", "worktree-owner", "main"], { cwd: repo });
+
+      const store = new SessionWorktreeStore(home);
+      expect(store.rootPath.startsWith("\\\\?\\")).toBe(false);
+      expect(path.isAbsolute(store.rootPath)).toBe(true);
+      const target = path.join(store.rootPath, "a1b2c3d4");
+      expect(() =>
+        execFileSync("git", ["worktree", "add", target, "worktree-owner"], {
+          cwd: repo,
+          stdio: "ignore",
+        }),
+      ).not.toThrow();
+
+      const identity = store.captureWorktreeIdentity(target);
+      await expect(store.deleteWorktree(target, identity)).resolves.toBeUndefined();
+      expect(existsSync(target)).toBe(false);
+    },
+  );
+
   it("rejects a replacement real directory and forged allocation identity", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "session-worktree-identity-"));
     const store = new SessionWorktreeStore(home);
