@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -107,14 +115,16 @@ test.beforeAll(async () => {
     validationCommand: `${process.execPath} -e "process.stdout.write('x'.repeat(20000));process.stderr.write('bounded stderr')"`,
     maxIterations: 1,
   });
-  await putLoop({
-    name: "Retained Worktree",
-    goal: "Produce retained review evidence.",
-    agentName: "Agent A",
-    validationCommand: "exit 0",
-    writeTarget: "newWorktree",
-    maxIterations: 1,
-  });
+  for (const name of ["Retained Worktree", "Apply Worktree", "Discard Worktree"]) {
+    await putLoop({
+      name,
+      goal: "Produce retained review evidence.",
+      agentName: "Agent A",
+      validationCommand: "exit 0",
+      writeTarget: "newWorktree",
+      maxIterations: 1,
+    });
+  }
   await putLoop({
     name: "Reviewed Report",
     goal: "Produce and review evidence.",
@@ -580,8 +590,10 @@ test("retains and restores registered worktree evidence in the run panel", async
   await expect(page.getByTestId("loop-retained-worktree")).toContainText(
     "Review worktree retained.",
   );
-  await expect(page.getByTestId("loop-review-changes")).toBeVisible();
+  const reviewButton = page.getByTestId("loop-review-changes");
+  await expect(reviewButton).toBeVisible();
   await expect(page.getByTestId("loop-reveal-worktree")).toBeVisible();
+  await expect(page.getByTestId("loop-reveal-artifacts")).toBeVisible();
 
   // A plain browser reports the desktop-only reveal capability without ever
   // accepting a renderer-supplied path.
@@ -590,20 +602,145 @@ test("retains and restores registered worktree evidence in the run panel", async
     "Reveal Worktree is available in the desktop app.",
   );
 
-  await page.getByTestId("loop-review-changes").click();
-  await expect(page.getByTestId("workspace-tab-diff")).toHaveAttribute("data-active", "true", {
+  const runs = (await (await page.request.get(`${harness.baseUrl}/loops/runs`)).json()) as {
+    runs: LoopRun[];
+  };
+  const retainedRun = [...runs.runs]
+    .reverse()
+    .find((candidate) => candidate.loopName === "Retained Worktree")!;
+  writeFileSync(path.join(retainedRun.launch!.worktree!.path, "review-change.txt"), "review me\n");
+
+  await reviewButton.click();
+  const dialog = page.getByTestId("loop-review-dialog");
+  await expect(dialog).toHaveAccessibleName("Review changes · Retained Worktree");
+  await expect(page.getByTestId("loop-review-files")).toContainText("review-change.txt");
+  await expect(page.getByTestId("loop-review-patch")).toContainText("review me");
+  await expect(page.getByTestId("loop-review-apply")).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 520 });
+  await expect
+    .poll(() => dialog.evaluate((element) => element.scrollWidth <= element.clientWidth))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(reviewButton).toBeFocused();
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("applies clean changes and safely archives discard evidence without deletion", async ({
+  page,
+}) => {
+  await openLoops(page);
+  await launchLoop(page, "Apply Worktree");
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-panel")).toContainText("Apply Worktree");
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
     timeout: 30_000,
   });
-  await expect(page.getByTestId("diff-loop-review-banner")).toContainText("Read-only Loop review");
-  await expect(page.getByTestId("diff-merge")).toHaveCount(0);
-
-  await page.getByTestId("nav-git").click();
-  await expect(page.getByTestId("git-loop-review-banner")).toContainText("Read-only Loop review");
-  await expect(page.getByTestId("git-merge")).toHaveCount(0);
-  await page.getByTestId("nav-loops").click();
-  await expect(page.getByTestId("loop-retained-worktree")).toContainText(
-    "Review worktree retained.",
+  let listed = (await (await page.request.get(`${harness.baseUrl}/loops/runs`)).json()) as {
+    runs: LoopRun[];
+  };
+  const applyRun = [...listed.runs].reverse().find((run) => run.loopName === "Apply Worktree")!;
+  const directApply = await page.request.post(
+    `${harness.baseUrl}/loops/runs/${applyRun.id}/apply`,
+    {
+      data: { confirmed: true, expectedUpdatedAt: applyRun.updatedAt },
+    },
   );
+  expect(directApply.status()).toBe(409);
+  expect((await directApply.json()).code).toBe("loop_worktree_changed");
+
+  const acceptedPath = path.join(applyRun.launch!.worktree!.path, "accepted.txt");
+  writeFileSync(acceptedPath, "accepted before review\n");
+  const reviewButton = page.getByTestId("loop-review-changes");
+  await reviewButton.click();
+  await expect(page.getByTestId("loop-review-dialog")).toBeVisible();
+  await expect(page.getByTestId("loop-review-patch")).toContainText("accepted before review");
+  const reviewedRun = (
+    (await (await page.request.get(`${harness.baseUrl}/loops/runs/${applyRun.id}`)).json()) as {
+      run: LoopRun;
+    }
+  ).run;
+  expect(reviewedRun.review?.patchHash).toBeTruthy();
+  // Mutating after GET review invalidates the reviewed hash. The rejected apply
+  // leaves the parent untouched and the durable review available for refresh.
+  writeFileSync(acceptedPath, "accepted after fresh review\n");
+  await page.getByTestId("loop-review-apply-confirmation").check();
+  await page.getByTestId("loop-review-apply").click();
+  await expect(page.getByTestId("loop-review-error")).toContainText("changed after review");
+  expect(existsSync(path.join(project, "accepted.txt"))).toBe(false);
+  const rejectedRun = (
+    (await (await page.request.get(`${harness.baseUrl}/loops/runs/${applyRun.id}`)).json()) as {
+      run: LoopRun;
+    }
+  ).run;
+  expect(rejectedRun.review).toMatchObject({
+    status: "available",
+    patchHash: reviewedRun.review!.patchHash,
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(reviewButton).toBeFocused();
+  await reviewButton.click();
+  await page.getByTestId("loop-review-apply-confirmation").check();
+  await page.getByTestId("loop-review-apply").click();
+  await expect(page.getByTestId("loop-review-dialog")).toHaveCount(0);
+  const appliedPanel = page.getByTestId("loop-retained-worktree");
+  await expect(appliedPanel).toContainText("Changes applied.");
+  await expect(appliedPanel).toBeFocused();
+  expect(readFileSync(path.join(project, "accepted.txt"), "utf8")).toBe(
+    "accepted after fresh review\n",
+  );
+  expect(existsSync(applyRun.launch!.worktree!.path)).toBe(true);
+
+  await launchLoop(page, "Discard Worktree");
+  await expect(page.getByTestId("loop-launch-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("loop-run-panel")).toContainText("Discard Worktree");
+  await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed", {
+    timeout: 30_000,
+  });
+  listed = (await (await page.request.get(`${harness.baseUrl}/loops/runs`)).json()) as {
+    runs: LoopRun[];
+  };
+  const discardRun = [...listed.runs].reverse().find((run) => run.loopName === "Discard Worktree")!;
+  const originalPath = discardRun.launch!.worktree!.path;
+  writeFileSync(path.join(originalPath, "retained.txt"), "retain me\n");
+  await page.getByTestId("loop-review-changes").click();
+  const archiveButton = page.getByTestId("loop-review-discard");
+  await expect(archiveButton).toBeDisabled();
+  await page.getByTestId("loop-discard-name").fill("wrong name");
+  await expect(archiveButton).toBeDisabled();
+  await page.getByTestId("loop-discard-name").fill(discardRun.loopName);
+  await archiveButton.click();
+  await expect(page.getByTestId("loop-review-dialog")).toHaveCount(0);
+  const discardedPanel = page.getByTestId("loop-retained-worktree");
+  await expect(discardedPanel).toContainText("Worktree safely archived.");
+  await expect(discardedPanel).toBeFocused();
+  listed = (await (await page.request.get(`${harness.baseUrl}/loops/runs`)).json()) as {
+    runs: LoopRun[];
+  };
+  const discardedRun = [...listed.runs].reverse().find((run) => run.id === discardRun.id)!;
+  expect(discardedRun.review?.status).toBe("discarded");
+  expect(existsSync(originalPath)).toBe(false);
+  expect(discardedRun.review?.archivedPath).toBeTruthy();
+  expect(readFileSync(path.join(discardedRun.review!.archivedPath!, "retained.txt"), "utf8")).toBe(
+    "retain me\n",
+  );
+  const registrations = execFileSync("git", ["worktree", "list", "--porcelain"], {
+    cwd: project,
+    encoding: "utf8",
+  });
+  expect(registrations).not.toContain(originalPath);
+  expect(
+    execFileSync("git", ["branch", "--list", discardRun.launch!.worktree!.branch], {
+      cwd: project,
+      encoding: "utf8",
+    }),
+  ).toContain(discardRun.launch!.worktree!.branch);
+  expect(existsSync(discardRun.artifactDirectory!)).toBe(true);
+
+  // Restore the shared throwaway project fixture after verifying the applied patch.
+  execFileSync("git", ["reset", "--", "accepted.txt"], { cwd: project });
+  rmSync(path.join(project, "accepted.txt"), { force: true });
 });
 
 test("authors, reorders, duplicates, runs, and restores an accessible Pipeline", async ({

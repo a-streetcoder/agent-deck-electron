@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createLoopWorktree,
   createSessionWorktree,
+  gitApplyPatch,
+  gitApplyPatchCheck,
   gitBlobAtCommit,
   gitCommitsAhead,
   gitCreateAndPushReleaseTag,
   gitLocalBranchRef,
   gitLocalTagExists,
+  gitLoopWorktreePatch,
   gitOperationInProgress,
   gitRepositoryIdentity,
   gitReleaseSynchronization,
@@ -322,6 +326,76 @@ describe("strict release synchronization", () => {
     expect(result).toMatchObject({ ok: false, failure: { code: "stale_local" } });
     expect(await gitLocalTagExists(fixture.work, "v2.3.0")).toBe(false);
     expect(await gitRemoteTagExists(fixture.work, fixture.remote, "v2.3.0")).toBe(false);
+  });
+});
+
+describe("Loop worktree review patch", () => {
+  it("captures an immutable pre-add base and committed, staged, unstaged, rename, delete, untracked, and binary changes", async () => {
+    const repo = makeRepo();
+    writeFileSync(path.join(repo, "rename-me.txt"), "rename\n");
+    writeFileSync(path.join(repo, "delete-me.txt"), "delete\n");
+    git(repo, ["add", "."]);
+    git(repo, ["commit", "-m", "fixtures"]);
+    const base = git(repo, ["rev-parse", "HEAD"]).trim();
+    const root = mkdtempSync(path.join(tmpdir(), "loop-review-patch-"));
+    const target = path.join(root, "loop-owned");
+    const worktree = await createLoopWorktree(repo, target, "agent-deck/loop-review-test");
+    expect(worktree.baseCommit).toBe(base);
+
+    writeFileSync(path.join(target, "committed.txt"), "committed\n");
+    git(target, ["add", "committed.txt"]);
+    git(target, ["commit", "-m", "worktree commit"]);
+    writeFileSync(path.join(target, "staged.txt"), "staged\n");
+    git(target, ["add", "staged.txt"]);
+    writeFileSync(path.join(target, "README.md"), "unstaged\n");
+    git(target, ["mv", "rename-me.txt", "renamed.txt"]);
+    rmSync(path.join(target, "delete-me.txt"));
+    writeFileSync(path.join(target, "untracked.txt"), "untracked\n");
+    writeFileSync(path.join(target, "binary.bin"), Buffer.from([0, 1, 2, 255]));
+
+    const review = await gitLoopWorktreePatch(target, base);
+    expect(review.bytes.toString("utf8")).toContain("GIT binary patch");
+    expect(review.changedFiles.map((file) => file.path)).toEqual(
+      expect.arrayContaining([
+        "README.md",
+        "binary.bin",
+        "committed.txt",
+        "delete-me.txt",
+        "renamed.txt",
+        "staged.txt",
+        "untracked.txt",
+      ]),
+    );
+    expect(review.changedFiles).toContainEqual(
+      expect.objectContaining({ path: "renamed.txt", oldPath: "rename-me.txt", status: "renamed" }),
+    );
+    expect(review.changedFiles).toContainEqual(
+      expect.objectContaining({ path: "delete-me.txt", status: "deleted" }),
+    );
+    expect(review.changedFiles).toContainEqual(
+      expect.objectContaining({ path: "binary.bin", status: "binary" }),
+    );
+    // The real index is unchanged by review generation.
+    expect(git(target, ["diff", "--cached", "--name-only"])).toContain("staged.txt");
+    expect(git(target, ["status", "--porcelain"])).toContain("?? untracked.txt");
+  });
+
+  it("checks and applies exact patch bytes from stdin onto an evolved clean source branch", async () => {
+    const repo = makeRepo();
+    const base = git(repo, ["rev-parse", "HEAD"]).trim();
+    const target = path.join(mkdtempSync(path.join(tmpdir(), "loop-stdin-")), "worktree");
+    await createLoopWorktree(repo, target, "agent-deck/loop-stdin-test");
+    writeFileSync(path.join(target, "loop.txt"), "from loop\n");
+    const patch = await gitLoopWorktreePatch(target, base);
+
+    writeFileSync(path.join(repo, "evolved.txt"), "source evolved\n");
+    git(repo, ["add", "evolved.txt"]);
+    git(repo, ["commit", "-m", "evolve source"]);
+
+    await gitApplyPatchCheck(repo, patch.bytes);
+    await gitApplyPatch(repo, patch.bytes);
+    expect(readFileSync(path.join(repo, "loop.txt"), "utf8")).toBe("from loop\n");
+    expect(readFileSync(path.join(repo, "evolved.txt"), "utf8")).toBe("source evolved\n");
   });
 });
 

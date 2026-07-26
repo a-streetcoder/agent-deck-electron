@@ -478,8 +478,38 @@ export interface LoopOwnedWorktree {
   path: string;
   branch: string;
   sourceBranch: string;
+  /** Immutable commit captured before the owned branch/worktree was created. */
+  baseCommit?: string;
   /** Persisted proof that Agent Deck created this exact worktree/branch pair. */
   branchOwned: true;
+}
+
+export type LoopWorktreeReviewStatus =
+  | "available"
+  | "applying"
+  | "applied"
+  | "discarding"
+  | "discarded"
+  | "applyUncertain"
+  | "discardUncertain";
+
+/** Durable, honest lifecycle for an owned retained worktree. */
+export interface LoopWorktreeReview {
+  status: LoopWorktreeReviewStatus;
+  updatedAt: string;
+  availableAt: string;
+  applyingAt?: string;
+  appliedAt?: string;
+  discardingAt?: string;
+  discardedAt?: string;
+  uncertainAt?: string;
+  patchArtifact?: string;
+  patchHash?: string;
+  patchBytes?: number;
+  patchTruncated?: boolean;
+  changedFiles?: LoopChangedFile[];
+  archivedPath?: string;
+  error?: string;
 }
 
 export interface LoopRunLaunchOwnership {
@@ -515,6 +545,8 @@ export interface LoopRun {
   projectId?: string;
   retryOf?: string;
   launch?: LoopRunLaunchOwnership;
+  /** Present for retained worktrees once their explicit review lifecycle is available. */
+  review?: LoopWorktreeReview;
   /** Snapshot shown by a dedicated Human Approval checkpoint. */
   checkpointPrompt?: string;
   status: LoopRunStatus;

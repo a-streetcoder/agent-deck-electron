@@ -5913,12 +5913,15 @@ mod tests {
         assert!(error.reason.starts_with("RESOURCE_BUSY:"), "{error:?}");
         assert!(!root.path().join("stage-locked").exists());
         assert!(!root.path().join(&locked_recovery).exists());
+        assert!(root.path().join("target/SKILL.md").exists());
+
+        // An exclusive Windows handle intentionally denies even test reads.
+        // Release it before verifying bytes or attempting the required retry.
+        drop(held);
         assert_eq!(
             fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
             "old"
         );
-
-        drop(held);
         parent.create_dir("stage-retry").unwrap();
         fs::write(root.path().join("stage-retry/SKILL.md"), "new").unwrap();
         let retry_recovery = resource_recovery_name("target", "fedcba9876543210fedcba9876543210");

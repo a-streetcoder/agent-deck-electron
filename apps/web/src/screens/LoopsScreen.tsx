@@ -40,6 +40,7 @@ import {
   LOOP_WRITE_TARGET_LABEL,
   LOOP_WRITE_TARGETS,
   type AgentInfo,
+  type LoopChangedFile,
   type LoopDefinition,
   type LoopRequiredAgentRole,
   type LoopRun,
@@ -220,7 +221,6 @@ export function LoopsScreen() {
   const currentSessionId = useAppStore((state) => state.session?.id);
   const sessions = useAppStore((state) => state.sessions);
   const setView = useAppStore((state) => state.setView);
-  const openWorkspaceTab = useAppStore((state) => state.openWorkspaceTab);
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -248,12 +248,25 @@ export function LoopsScreen() {
   const [artifactActionMessage, setArtifactActionMessage] = useState<string | null>(null);
   const [worktreeRevealPending, setWorktreeRevealPending] = useState(false);
   const [reviewPending, setReviewPending] = useState(false);
+  const [reviewDialog, setReviewDialog] = useState<{
+    run: LoopRun;
+    patch: string;
+    patchTruncated: boolean;
+    changedFiles: LoopChangedFile[];
+  } | null>(null);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [discardName, setDiscardName] = useState("");
+  const [reviewActionPending, setReviewActionPending] = useState<"apply" | "discard" | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [worktreeActionMessage, setWorktreeActionMessage] = useState<string | null>(null);
   const runIdRef = useRef<string | null>(null);
   const runPendingRef = useRef(false);
   runPendingRef.current = runPending;
   const dialogRef = useRef<HTMLDivElement>(null);
   const launchDialogRef = useRef<HTMLDivElement>(null);
+  const reviewDialogRef = useRef<HTMLDivElement>(null);
+  const reviewStatusPanelRef = useRef<HTMLDivElement>(null);
+  const reviewReturnFocusRef = useRef<HTMLElement | null>(null);
   const launchReturnFocusRef = useRef<HTMLElement | null>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
@@ -705,21 +718,128 @@ export function LoopsScreen() {
     }
   };
 
-  const openLoopSession = async (run: LoopRun, reviewChanges = false): Promise<void> => {
+  const openLoopSession = async (run: LoopRun): Promise<void> => {
     const session = sessions.find((candidate) => candidate.id === run.sessionId);
     if (!session) {
-      if (reviewChanges) setWorktreeActionMessage("The durable Loop session is unavailable.");
-      else setError("The durable Loop session is unavailable.");
+      setError("The durable Loop session is unavailable.");
       return;
     }
-    if (reviewChanges) setReviewPending(true);
     setView("chat");
     await switchToSession(session);
-    if (reviewChanges) {
-      const reopened = useAppStore.getState().session;
-      if (reopened?.id === session.id) openWorkspaceTab(session.id, "diff");
-      else setWorktreeActionMessage("The durable Loop session could not be reopened.");
+  };
+
+  const reviewWorktree = async (run: LoopRun): Promise<void> => {
+    if (reviewPending) return;
+    reviewReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setReviewPending(true);
+    setReviewError(null);
+    try {
+      const response = await fetch(`/loops/runs/${encodeURIComponent(run.id)}/review`);
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = (await response.json()) as {
+        run: LoopRun;
+        patch: string;
+        patchTruncated: boolean;
+        changedFiles: LoopChangedFile[];
+      };
+      setActiveRun(result.run);
+      setRuns((items) => items.map((item) => (item.id === result.run.id ? result.run : item)));
+      setReviewConfirmed(false);
+      setDiscardName("");
+      setReviewDialog(result);
+    } catch (error) {
+      setWorktreeActionMessage(error instanceof Error ? error.message : String(error));
+      requestAnimationFrame(() => reviewReturnFocusRef.current?.focus());
+    } finally {
       setReviewPending(false);
+    }
+  };
+
+  const closeReview = useCallback((): void => {
+    if (reviewActionPending) return;
+    setReviewDialog(null);
+    setReviewError(null);
+    requestAnimationFrame(() => reviewReturnFocusRef.current?.focus());
+  }, [reviewActionPending]);
+
+  useEffect(() => {
+    const dialog = reviewDialogRef.current;
+    if (!reviewDialog || !dialog) return;
+    const focusables = (): HTMLElement[] =>
+      [...dialog.querySelectorAll<HTMLElement>("button, input")].filter(
+        (element) => !element.hasAttribute("disabled"),
+      );
+    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !reviewActionPending) {
+        event.preventDefault();
+        closeReview();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      const first = items[0];
+      const last = items.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      dialog.removeEventListener("keydown", onKeyDown);
+    };
+  }, [closeReview, reviewActionPending, reviewDialog]);
+
+  const decideWorktree = async (action: "apply" | "discard"): Promise<void> => {
+    if (!reviewDialog || reviewActionPending) return;
+    setReviewActionPending(action);
+    setReviewError(null);
+    try {
+      const response = await fetch(
+        `/loops/runs/${encodeURIComponent(reviewDialog.run.id)}/${action}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            confirmed: true,
+            expectedUpdatedAt: reviewDialog.run.updatedAt,
+            ...(action === "discard" ? { loopName: discardName } : {}),
+          }),
+        },
+      );
+      const body = (await response.json().catch(() => null)) as {
+        run?: LoopRun;
+        error?: string;
+      } | null;
+      if (!response.ok) {
+        if (body?.run) {
+          setActiveRun(body.run);
+          setRuns((items) => items.map((item) => (item.id === body.run!.id ? body.run! : item)));
+          setReviewDialog((current) => (current ? { ...current, run: body.run! } : current));
+        }
+        throw new Error(body?.error ?? `Request failed (${response.status})`);
+      }
+      if (!body?.run) throw new Error("The server returned an invalid Loop decision.");
+      setActiveRun(body.run);
+      setRuns((items) => items.map((item) => (item.id === body.run!.id ? body.run! : item)));
+      setReviewDialog(null);
+      setWorktreeActionMessage(
+        action === "apply"
+          ? "Loop changes applied. The worktree and branch were retained."
+          : `Worktree safely archived${body.run.review?.archivedPath ? ` at ${body.run.review.archivedPath}` : ""}. Branch and artifacts were retained.`,
+      );
+      requestAnimationFrame(() => reviewStatusPanelRef.current?.focus());
+    } catch (error) {
+      setReviewError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReviewActionPending(null);
     }
   };
 
@@ -1042,34 +1162,53 @@ export function LoopsScreen() {
             ) : null}
             {activeRun.launch?.worktree ? (
               <div
+                ref={reviewStatusPanelRef}
+                tabIndex={-1}
+                aria-label="Loop worktree review status"
                 className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-xs text-text-muted"
                 data-testid="loop-retained-worktree"
               >
                 <strong className="text-text-secondary">
-                  {isLoopRunTerminal(activeRun.status)
-                    ? "Review worktree retained."
-                    : "Review worktree allocated."}
+                  {activeRun.review?.status === "discarded"
+                    ? "Worktree safely archived. Branch and artifacts retained."
+                    : activeRun.review?.status === "discardUncertain"
+                      ? "Worktree archive outcome needs inspection."
+                      : activeRun.review?.status === "applied"
+                        ? "Changes applied. Review worktree and branch retained."
+                        : activeRun.review?.status === "applyUncertain"
+                          ? "Apply outcome needs inspection."
+                          : isLoopRunTerminal(activeRun.status)
+                            ? "Review worktree retained."
+                            : "Review worktree allocated."}
                 </strong>{" "}
-                <span className="break-all">{activeRun.launch.worktree.path}</span>
+                <span className="break-all">
+                  {activeRun.review?.archivedPath ?? activeRun.launch.worktree.path}
+                </span>
                 <span className="block break-all">Branch: {activeRun.launch.worktree.branch}</span>
+                {activeRun.review?.error ? (
+                  <span className="block break-words text-danger">{activeRun.review.error}</span>
+                ) : null}
                 {isLoopRunTerminal(activeRun.status) ? (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {activeRun.sessionId ? (
+                    {!activeRun.review || activeRun.review.status === "available" ? (
                       <ControlButton
                         data-testid="loop-review-changes"
                         disabled={reviewPending || worktreeRevealPending}
-                        onClick={() => void openLoopSession(activeRun, true)}
+                        onClick={() => void reviewWorktree(activeRun)}
                       >
-                        {reviewPending ? "Opening Review…" : "Review Changes"}
+                        {reviewPending ? "Preparing Review…" : "Review Changes"}
                       </ControlButton>
                     ) : null}
-                    <ControlButton
-                      data-testid="loop-reveal-worktree"
-                      disabled={worktreeRevealPending || reviewPending}
-                      onClick={() => void revealWorktree(activeRun)}
-                    >
-                      {worktreeRevealPending ? "Revealing…" : "Reveal Worktree"}
-                    </ControlButton>
+                    {activeRun.review?.status !== "discarded" &&
+                    activeRun.review?.status !== "discardUncertain" ? (
+                      <ControlButton
+                        data-testid="loop-reveal-worktree"
+                        disabled={worktreeRevealPending || reviewPending}
+                        onClick={() => void revealWorktree(activeRun)}
+                      >
+                        {worktreeRevealPending ? "Revealing…" : "Reveal Worktree"}
+                      </ControlButton>
+                    ) : null}
                   </div>
                 ) : null}
                 {worktreeActionMessage ? (
@@ -1535,6 +1674,123 @@ export function LoopsScreen() {
           ) : null}
         </div>
       </div>
+
+      {reviewDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-2 sm:p-6">
+          <div
+            ref={reviewDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="loop-review-title"
+            data-testid="loop-review-dialog"
+            className="flex max-h-[calc(100vh-1rem)] min-w-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-border-subtle p-3">
+              <h3 id="loop-review-title" className="min-w-0 break-words text-sm font-semibold">
+                Review changes · {reviewDialog.run.loopName}
+              </h3>
+              <ControlButton
+                aria-label="Close worktree review"
+                onClick={closeReview}
+                disabled={Boolean(reviewActionPending)}
+              >
+                <X size={14} />
+              </ControlButton>
+            </div>
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
+              <h4 className="text-xs font-semibold">Changed files</h4>
+              {reviewDialog.changedFiles.length ? (
+                <ul
+                  className="mt-1 max-h-36 overflow-auto rounded border border-border-subtle p-2 text-xs"
+                  data-testid="loop-review-files"
+                >
+                  {reviewDialog.changedFiles.map((file, index) => (
+                    <li key={`${file.path}-${index}`} className="break-all">
+                      {file.status}: {file.oldPath ? `${file.oldPath} → ` : ""}
+                      {file.path}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-text-muted">No changes.</p>
+              )}
+              <h4 className="mt-3 text-xs font-semibold">Patch</h4>
+              <pre
+                className="mt-1 max-h-[38vh] min-w-0 overflow-auto whitespace-pre text-xs"
+                data-testid="loop-review-patch"
+              >
+                {reviewDialog.patch || "No patch content."}
+              </pre>
+              {reviewDialog.patchTruncated ? (
+                <p className="text-xs text-warning">
+                  Preview truncated; the complete bounded binary patch is stored in run artifacts.
+                </p>
+              ) : null}
+              <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border-strong p-2 text-xs">
+                  <label className="flex items-start gap-2">
+                    <ControlInput
+                      type="checkbox"
+                      aria-label="Confirm applying the reviewed patch"
+                      data-testid="loop-review-apply-confirmation"
+                      checked={reviewConfirmed}
+                      onChange={(event) => setReviewConfirmed(event.target.checked)}
+                    />
+                    Apply this reviewed patch to the clean project checkout. The worktree and branch
+                    will be retained.
+                  </label>
+                  <ControlButton
+                    data-testid="loop-review-apply"
+                    className="mt-2"
+                    disabled={
+                      !reviewConfirmed ||
+                      Boolean(reviewActionPending) ||
+                      !reviewDialog.changedFiles.length
+                    }
+                    onClick={() => void decideWorktree("apply")}
+                  >
+                    {reviewActionPending === "apply" ? "Applying…" : "Apply Changes"}
+                  </ControlButton>
+                </div>
+                <div className="rounded-lg border border-danger p-2 text-xs">
+                  <p>
+                    Safely archive this owned worktree under Agent Deck's private root. Nothing is
+                    recursively deleted; the branch and artifacts remain.
+                  </p>
+                  <label className="mt-2 block">
+                    Type <strong className="break-all">{reviewDialog.run.loopName}</strong>
+                    <ControlInput
+                      data-testid="loop-discard-name"
+                      className="mt-1 w-full"
+                      value={discardName}
+                      onChange={(event) => setDiscardName(event.target.value)}
+                    />
+                  </label>
+                  <ControlButton
+                    data-testid="loop-review-discard"
+                    className="mt-2 text-danger"
+                    disabled={
+                      discardName !== reviewDialog.run.loopName || Boolean(reviewActionPending)
+                    }
+                    onClick={() => void decideWorktree("discard")}
+                  >
+                    {reviewActionPending === "discard" ? "Archiving…" : "Safely Archive Worktree"}
+                  </ControlButton>
+                </div>
+              </div>
+              {reviewError ? (
+                <p
+                  role="alert"
+                  data-testid="loop-review-error"
+                  className="mt-2 text-xs text-danger"
+                >
+                  {reviewError}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {draft ? (
         <div
