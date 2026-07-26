@@ -51,11 +51,19 @@ test("imports a skill from a git repository and it lands in the catalog", async 
   // The imported skill appears in the list…
   await expect(page.locator('[data-skill-name="web-scraper"]')).toBeVisible();
 
-  // …and its whole directory (SKILL.md + asset) is copied into the global catalog.
-  const dest = path.join(harness.piHome, ".pi", "agent", "skills", "web-scraper");
-  expect(existsSync(path.join(dest, "SKILL.md"))).toBe(true);
-  expect(existsSync(path.join(dest, "helper.py"))).toBe(true);
-  expect(readFileSync(path.join(dest, "SKILL.md"), "utf8")).toContain("Scrape web pages");
+  // …and its whole directory is exposed from an app-private immutable snapshot,
+  // never copied into or read from the global catalog.
+  const { skills } = (await (await fetch(`${harness.baseUrl}/resources/skills`)).json()) as {
+    skills: Array<{ name: string; baseDir: string }>;
+  };
+  const snapshot = skills.find((skill) => skill.name === "web-scraper")!.baseDir;
+  expect(snapshot).toContain(`${path.sep}SkillRepositorySnapshots${path.sep}`);
+  expect(existsSync(path.join(snapshot, "SKILL.md"))).toBe(true);
+  expect(existsSync(path.join(snapshot, "helper.py"))).toBe(true);
+  expect(readFileSync(path.join(snapshot, "SKILL.md"), "utf8")).toContain("Scrape web pages");
+  expect(existsSync(path.join(harness.piHome, ".pi", "agent", "skills", "web-scraper"))).toBe(
+    false,
+  );
 });
 
 test("shows readable skill inventory load failures", async ({ page }) => {
@@ -74,7 +82,7 @@ test("shows readable skill inventory load failures", async ({ page }) => {
 });
 
 test("shows readable skill repository load failures", async ({ page }) => {
-  await page.route("**/resources/skill-repos", async (route) => {
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
     await route.fulfill({
       status: 503,
       json: { error: "Skill repositories are temporarily unavailable." },
@@ -86,6 +94,110 @@ test("shows readable skill repository load failures", async ({ page }) => {
   await expect(page.getByTestId("error-banner")).toHaveText(
     "Error: Skill repositories are temporarily unavailable.",
   );
+});
+
+test("quarantined repository skips checks and supports record-only removal with focus restoration", async ({
+  page,
+}) => {
+  const unavailableId = "unavailable-repo";
+  const safeId = "safe-repo";
+  const checked: string[] = [];
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        repos: [
+          {
+            id: unavailableId,
+            remoteUrl: "https://example.invalid/unavailable.git",
+            storageMode: "collection-v1",
+            skillNames: [],
+            lastSyncedCommit: "abc",
+            importedAt: new Date(0).toISOString(),
+            available: false,
+            unavailable: {
+              code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
+              message: "Restore the original directory and restart Agent Deck.",
+            },
+          },
+          {
+            id: safeId,
+            remoteUrl: "https://example.invalid/safe.git",
+            storageMode: "collection-v1",
+            skillNames: [],
+            lastSyncedCommit: "def",
+            importedAt: new Date(0).toISOString(),
+            available: true,
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/resources/skill-repos/*/check", async (route) => {
+    checked.push(route.request().url());
+    await route.fulfill({ status: 200, json: { updateAvailable: false } });
+  });
+  await page.route(`**/resources/skill-repos/${unavailableId}/record`, async (route) => {
+    await route.fulfill({ status: 200, json: { ok: true, removedRecordOnly: true } });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  await expect(page.getByTestId(`skill-repo-unavailable-${unavailableId}`)).toBeVisible();
+  await expect(page.getByTestId(`skill-repo-unavailable-guidance-${unavailableId}`)).toContainText(
+    "restart Agent Deck",
+  );
+  await expect(page.getByTestId(`skill-repo-update-${unavailableId}`)).toBeDisabled();
+  await expect(page.getByTestId(`skill-repo-forget-${unavailableId}`)).toBeDisabled();
+  await expect.poll(() => checked.some((url) => url.includes(safeId))).toBe(true);
+  expect(checked.some((url) => url.includes(unavailableId))).toBe(false);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId(`skill-repo-remove-record-${unavailableId}`).click();
+  await expect(page.getByTestId(`skill-repo-${unavailableId}`)).toHaveCount(0);
+  await expect(page.getByTestId("skill-repo-record-removal-status")).toHaveText(
+    "Unavailable repository record removed. Clone files were left untouched.",
+  );
+  await expect(page.getByTestId(`skill-repo-update-${safeId}`)).toBeFocused();
+});
+
+test("record-only removal failure restores focus and reports an actionable error", async ({
+  page,
+}) => {
+  const id = "unavailable-error";
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        repos: [
+          {
+            id,
+            remoteUrl: "https://example.invalid/unavailable.git",
+            storageMode: "collection-v1",
+            skillNames: [],
+            lastSyncedCommit: "abc",
+            importedAt: new Date(0).toISOString(),
+            available: false,
+          },
+        ],
+      },
+    });
+  });
+  await page.route(`**/resources/skill-repos/${id}/record`, async (route) => {
+    await route.fulfill({
+      status: 503,
+      json: { error: "Persistence is temporarily unavailable." },
+    });
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-skills").click();
+  const remove = page.getByTestId(`skill-repo-remove-record-${id}`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await remove.click();
+  await expect(page.getByTestId("error-banner")).toContainText(
+    "Persistence is temporarily unavailable.",
+  );
+  await expect(remove).toBeFocused();
 });
 
 test("a bad repo URL reports a clone error", async () => {
@@ -124,11 +236,14 @@ test("lists the imported repo, badges an upstream update, and pulls it", async (
   await expect(page.getByTestId(`skill-repo-updatable-${id}`)).toHaveCount(0);
   await expect
     .poll(async () => {
-      const md = readFileSync(
-        path.join(harness.piHome, ".pi", "agent", "skills", "web-scraper", "SKILL.md"),
-        "utf8",
-      );
-      return md.includes("MUCH faster");
+      const response = await fetch(`${harness.baseUrl}/resources/skills`);
+      const body = (await response.json()) as {
+        skills: Array<{ name: string; baseDir: string }>;
+      };
+      const root = body.skills.find((skill) => skill.name === "web-scraper")?.baseDir;
+      return root
+        ? readFileSync(path.join(root, "SKILL.md"), "utf8").includes("MUCH faster")
+        : false;
     })
     .toBe(true);
 });
@@ -149,7 +264,7 @@ test("tracks concurrent repository operations with independent accessible busy l
     releaseForget = resolve;
   });
 
-  await page.route("**/resources/skill-repos", async (route) => {
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
     await route.fulfill({
       status: 200,
       json: {
@@ -234,7 +349,7 @@ test("tracks concurrent conflict resolutions independently with action-specific 
   const pending = new Map<string, () => void>();
   const requestCounts = new Map<string, number>();
 
-  await page.route("**/resources/skill-repos", async (route) => {
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
     await route.fulfill({
       status: 200,
       json: {
@@ -294,7 +409,7 @@ test("tracks concurrent conflict resolutions independently with action-specific 
 test("restores keyboard focus after conflict success and rejected retry", async ({ page }) => {
   const id = "conflict-focus";
   let alphaAttempts = 0;
-  await page.route("**/resources/skill-repos", async (route) => {
+  await page.route(/\/resources\/skill-repos$/, async (route) => {
     await route.fulfill({
       status: 200,
       json: {
@@ -355,7 +470,12 @@ test("restores keyboard focus after conflict success and rejected retry", async 
   await expect(update).toBeFocused();
 });
 
-test("holds a locally-edited skill as a conflict and resolves it Take Remote", async ({ page }) => {
+// Obsolete collection-v1 behavior: managed skills are discovered from native,
+// app-private snapshots and no editable global catalog copy exists. Legacy copy
+// conflict behavior remains covered by server skill-repo-legacy tests.
+test.skip("holds a locally-edited skill as a conflict and resolves it Take Remote", async ({
+  page,
+}) => {
   const { repos } = (await (await fetch(`${harness.baseUrl}/resources/skill-repos`)).json()) as {
     repos: Array<{ id: string }>;
   };

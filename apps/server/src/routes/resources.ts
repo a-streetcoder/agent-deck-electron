@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { SkillInfo } from "@agent-deck/domain";
@@ -38,11 +38,8 @@ import {
 import { z } from "zod";
 import {
   gitBlobAtCommit,
-  gitClonePersistent,
   gitHead,
-  gitHeadMatchesRef,
   gitLsRemote,
-  gitOriginRemote,
   gitPullFfInto,
   gitRepoRelativePosixPath,
   gitStatus,
@@ -50,9 +47,8 @@ import {
 import type { ImportedSkillRepository } from "../persistence.ts";
 import {
   isPathInside,
+  ManagedSkillRepositoryUnavailableError,
   normalizeGitRemote,
-  resolveManagedPath,
-  resolveManagedSkillRoot,
   sanitizedRepositoryFolder,
 } from "../skillRepositories.ts";
 import type { ServerContext } from "../context.ts";
@@ -149,16 +145,23 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     settings,
     bridge,
     skillReposRoot,
+    managedSkillRepositories,
+    managedSkillRepositoryStore,
     broadcast,
     resourceHome,
     rootsFor,
     scanSkillsFor,
+    collectionSnapshotRoots,
+    rebuildCollectionSnapshot,
+    removeCollectionSnapshot,
+    withRepositoryLock,
     watchSkillRoots,
     unwatchSkillRoots,
     extensionBridgeConflictAt,
   } = ctx;
 
   const resourceMutationFailure = (error: unknown): { status: number; error: string } => {
+    if (error instanceof ManagedSkillRepositoryUnavailableError) return unavailableFailure;
     if (!(error instanceof ResourceCatalogCapabilityError)) {
       return { status: 500, error: error instanceof Error ? error.message : String(error) };
     }
@@ -209,43 +212,30 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     return reply.status(failure.status).send({ error: failure.error });
   };
 
-  const repositoryOperations = new Set<string>();
-  const withRepositoryLock = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    if (repositoryOperations.has(key)) throw new Error("repository_busy");
-    repositoryOperations.add(key);
-    try {
-      return await operation();
-    } finally {
-      repositoryOperations.delete(key);
-    }
-  };
   const managedRepositoryPath = (candidate: string): string | undefined => {
-    const clone = resolveManagedPath(skillReposRoot, candidate);
-    if (!clone) return undefined;
-    const gitMetadata = resolveManagedPath(skillReposRoot, nodePath.join(clone, ".git"));
-    if (!gitMetadata || !isPathInside(clone, gitMetadata)) return undefined;
     try {
-      return statSync(gitMetadata).isDirectory() ? clone : undefined;
+      return managedSkillRepositories.validateRepository(candidate);
     } catch {
       return undefined;
     }
   };
-  const managedClonePath = (
-    record: ImportedSkillRepository,
-    options: { allowMissing?: boolean } = {},
-  ): string | undefined =>
-    options.allowMissing
-      ? resolveManagedPath(skillReposRoot, record.clonePath, options)
-      : managedRepositoryPath(record.clonePath);
   const managedCloneSkillRoot = (clonePath: string, candidate: string): string | undefined => {
-    const safe = resolveManagedSkillRoot(skillReposRoot, candidate);
-    return safe && isPathInside(clonePath, safe) ? safe : undefined;
+    try {
+      const safe =
+        nodePath.resolve(candidate) === nodePath.resolve(clonePath)
+          ? managedSkillRepositories.validateRepository(clonePath)
+          : managedSkillRepositories.validatePath(candidate, { kind: "directory" });
+      managedSkillRepositories.validatePath(nodePath.join(safe, "SKILL.md"), { kind: "file" });
+      return isPathInside(clonePath, safe) ? safe : undefined;
+    } catch {
+      return undefined;
+    }
   };
-  const collectionRootsFor = (clonePath: string, relativePaths: readonly string[]): string[] =>
-    relativePaths.flatMap((relative) => {
-      const safe = managedCloneSkillRoot(clonePath, nodePath.resolve(clonePath, relative));
-      return safe ? [safe] : [];
-    });
+  const unavailableFailure = {
+    status: 409,
+    error:
+      "This managed skill repository is unavailable because its stored path is outside the trusted SkillRepositories directory, linked, or changed. Restore the original directory and restart Agent Deck; the record was left unchanged.",
+  };
 
   /**
    * Catalog roots for a repo record's scope. Null when the project it was
@@ -433,59 +423,66 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const repoName = skillRepoName(source.cloneUrl);
     const repoId = randomUUID();
     const collectionId = randomUUID();
-    const clonePath = nodePath.join(skillReposRoot, sanitizedRepositoryFolder(source.cloneUrl));
-    const cleanupClone = (): void => {
+    const cloneLeaf = sanitizedRepositoryFolder(source.cloneUrl);
+    const clonePath = nodePath.join(skillReposRoot, cloneLeaf);
+    let ownedLeaf: string | undefined;
+    const cleanupOwned = (): void => {
+      if (!ownedLeaf) return;
       try {
-        rmSync(clonePath, { recursive: true, force: true, maxRetries: 5 });
+        managedSkillRepositoryStore.deleteRepository(ownedLeaf);
       } catch {
-        // Best-effort cleanup after a failed fresh import.
+        // Fail closed: never substitute ambient recursive removal. A refused
+        // cleanup remains quarantined/visible for manual recovery.
       }
+      ownedLeaf = undefined;
     };
-    mkdirSync(skillReposRoot, { recursive: true });
-    let clonedFresh = false;
     try {
       const result = await withRepositoryLock(clonePath, async () => {
+        managedSkillRepositories.validateRoot();
         let safeClonePath: string;
+        let inspectedHead: string;
         if (existsSync(clonePath)) {
           const existing = managedRepositoryPath(clonePath);
           if (!existing) throw new Error("existing_repository_invalid");
-          const alreadyRegistered = settings
-            .get()
-            .importedSkillRepositories.some(
-              (record) =>
-                record.storageMode === "collection-v1" &&
-                resolveManagedPath(skillReposRoot, record.clonePath, { allowMissing: true }) ===
-                  existing,
-            );
+          const alreadyRegistered = settings.get().importedSkillRepositories.some((record) => {
+            if (record.storageMode !== "collection-v1") return false;
+            try {
+              return managedSkillRepositories.validateRepository(record.clonePath) === existing;
+            } catch {
+              return false;
+            }
+          });
           if (alreadyRegistered) throw new Error("repository_exists");
-          let origin: string;
-          let compatibleRef: boolean;
+          let inspected: Awaited<ReturnType<typeof managedSkillRepositoryStore.inspectRepository>>;
           try {
-            origin = await gitOriginRemote(existing);
-            await gitHead(existing);
-            compatibleRef = await gitHeadMatchesRef(existing, source.ref);
+            inspected = await managedSkillRepositoryStore.inspectRepository(cloneLeaf, source.ref);
           } catch {
             throw new Error("existing_repository_invalid");
           }
           const requestedRemote = normalizeGitRemote(source.cloneUrl);
-          const existingRemote = normalizeGitRemote(origin, existing);
+          const existingRemote = normalizeGitRemote(inspected.origin, existing);
           if (!requestedRemote || !existingRemote || requestedRemote !== existingRemote) {
             throw new Error("existing_repository_origin_mismatch");
           }
-          if (!compatibleRef) throw new Error("existing_repository_ref_mismatch");
+          if (!inspected.refMatches) throw new Error("existing_repository_ref_mismatch");
+          inspectedHead = inspected.head;
           safeClonePath = existing;
         } else {
-          clonedFresh = true;
-          await gitClonePersistent(source.cloneUrl, clonePath, source.ref);
-          const cloned = managedRepositoryPath(clonePath);
-          if (!cloned) throw new Error("unsafe_collection_path");
-          safeClonePath = cloned;
+          const cloned = await managedSkillRepositoryStore.cloneRepository(
+            source.cloneUrl,
+            source.ref,
+            cloneLeaf,
+          );
+          ownedLeaf = cloneLeaf;
+          inspectedHead = cloned.head;
+          safeClonePath = managedSkillRepositories.validateRepository(clonePath);
         }
-        const lexicalScanDir = subdirScanPath(clonePath, source.subdir);
-        const scanDir = resolveManagedPath(skillReposRoot, lexicalScanDir);
-        if (!scanDir || !isPathInside(safeClonePath, scanDir)) {
-          throw new Error("unsafe_collection_path");
-        }
+        const lexicalScanDir = subdirScanPath(safeClonePath, source.subdir);
+        const scanDir =
+          nodePath.resolve(lexicalScanDir) === nodePath.resolve(safeClonePath)
+            ? managedSkillRepositories.validateRepository(safeClonePath)
+            : managedSkillRepositories.validatePath(lexicalScanDir, { kind: "directory" });
+        if (!isPathInside(safeClonePath, scanDir)) throw new Error("unsafe_collection_path");
         const selected = discoverSkillRoots(scanDir, (root) =>
           Boolean(managedCloneSkillRoot(safeClonePath, root)),
         ).map((skill) => ({
@@ -498,7 +495,8 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           return safeRoot ? [{ ...skill, rootPath: safeRoot }] : [];
         });
         if (safeSelected.length !== selected.length) throw new Error("unsafe_collection_path");
-        const skillRootPaths = safeSelected.map((skill) => skill.rootPath);
+        managedSkillRepositories.validateRepository(safeClonePath);
+        const displaySkillRoots = safeSelected.map((skill) => skill.rootPath);
         const imported = safeSelected.map((skill) => skill.name);
         const repoRecord: ImportedSkillRepository = {
           id: repoId,
@@ -511,25 +509,29 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           skillNames: imported,
           selectedSkillRelativePaths: safeSelected.map((skill) => skill.relativePath),
           syncedSkillRelativePaths: safeSelected.map((skill) => skill.relativePath),
-          skillRootPaths,
+          skillRootPaths: [],
           collectionId,
-          lastSyncedCommit: await gitHead(safeClonePath),
+          lastSyncedCommit: inspectedHead,
           importedAt: new Date().toISOString(),
         };
+        managedSkillRepositories.deriveSkillRoots(repoRecord);
+        const skillRootPaths = await rebuildCollectionSnapshot(repoRecord);
+        repoRecord.skillRootPaths = skillRootPaths;
         settings.upsertSkillRepositoryCollection(repoRecord, {
           id: collectionId,
           name: repoName,
           repositoryId: repoId,
           skillRootPaths,
         });
-        watchSkillRoots(skillRootPaths);
+        ownedLeaf = undefined;
+        watchSkillRoots(displaySkillRoots);
         return { imported, skipped: [] as string[], repoId };
       });
       broadcast({ type: "resources_changed" });
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (clonedFresh) cleanupClone();
+      cleanupOwned();
       if (message === "repository_exists" || message === "repository_busy") {
         return reply.status(409).send({ error: "That skill repository is already being managed." });
       }
@@ -551,7 +553,12 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (message === "no_skills") {
         return reply.status(400).send({ error: "No SKILL.md found in that repository." });
       }
-      if (message === "clone_failed") {
+      if (
+        message === "clone_failed" ||
+        (error instanceof ResourceCatalogCapabilityError &&
+          error.code === "RESOURCE_IO" &&
+          !existsSync(clonePath))
+      ) {
         return reply.status(400).send({
           error:
             "Couldn't clone that repository — check the URL (private repos aren't supported yet).",
@@ -565,19 +572,30 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   // a user synced skills from, so the UI can offer re-sync + forget.
   fastify.get("/resources/skill-repos", async () => {
     return {
-      repos: settings.get().importedSkillRepositories.map((r) => ({
-        id: r.id,
-        remoteUrl: r.remoteUrl,
-        ref: r.ref,
-        scope: r.scope,
-        storageMode: r.storageMode,
-        skillNames: r.skillNames,
-        skillRootPaths: r.skillRootPaths,
-        selectedSkillRelativePaths: r.selectedSkillRelativePaths,
-        syncedSkillRelativePaths: r.syncedSkillRelativePaths,
-        lastSyncedCommit: r.lastSyncedCommit,
-        importedAt: r.importedAt,
-      })),
+      repos: settings.get().importedSkillRepositories.map((r) => {
+        let unavailable: { code: string; message: string } | undefined;
+        if (r.storageMode === "collection-v1" && !collectionSnapshotRoots(r)) {
+          unavailable = {
+            code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
+            message: unavailableFailure.error,
+          };
+        }
+        return {
+          id: r.id,
+          remoteUrl: r.remoteUrl,
+          ref: r.ref,
+          scope: r.scope,
+          storageMode: r.storageMode,
+          skillNames: r.skillNames,
+          skillRootPaths: r.skillRootPaths,
+          selectedSkillRelativePaths: r.selectedSkillRelativePaths,
+          syncedSkillRelativePaths: r.syncedSkillRelativePaths,
+          lastSyncedCommit: r.lastSyncedCommit,
+          importedAt: r.importedAt,
+          available: unavailable === undefined,
+          unavailable,
+        };
+      }),
     };
   });
 
@@ -587,15 +605,50 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const record = settings.get().importedSkillRepositories.find((r) => r.id === id);
     if (!record) return reply.status(404).send({ error: "unknown skill repository" });
-    const remoteCommit = await gitLsRemote(record.remoteUrl, record.ref);
-    return {
-      updateAvailable: remoteCommit !== null && remoteCommit !== record.lastSyncedCommit,
-      // Distinguish "checked, up to date" from "couldn't reach the remote" so the
-      // UI doesn't present a transient network failure as "all good".
-      checkFailed: remoteCommit === null,
-      remoteCommit,
-      syncedCommit: record.lastSyncedCommit,
-    };
+    if (record.storageMode === "collection-v1" && !collectionSnapshotRoots(record)) {
+      return reply.status(unavailableFailure.status).send({
+        error: unavailableFailure.error,
+        code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
+      });
+    }
+    try {
+      return await withRepositoryLock(record.id, async () => {
+        if (record.storageMode === "collection-v1") {
+          managedSkillRepositories.validateRepository(record.clonePath);
+          await managedSkillRepositoryStore.inspectRepository(
+            nodePath.basename(record.clonePath),
+            record.ref,
+          );
+        }
+        const remoteCommit = await gitLsRemote(record.remoteUrl, record.ref);
+        if (record.storageMode === "collection-v1") {
+          managedSkillRepositories.validateRepository(record.clonePath);
+          await managedSkillRepositoryStore.inspectRepository(
+            nodePath.basename(record.clonePath),
+            record.ref,
+          );
+        }
+        return {
+          updateAvailable: remoteCommit !== null && remoteCommit !== record.lastSyncedCommit,
+          // Distinguish "checked, up to date" from "couldn't reach the remote" so the
+          // UI doesn't present a transient network failure as "all good".
+          checkFailed: remoteCommit === null,
+          remoteCommit,
+          syncedCommit: record.lastSyncedCommit,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ManagedSkillRepositoryUnavailableError) {
+        return reply.status(unavailableFailure.status).send({
+          error: unavailableFailure.error,
+          code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
+        });
+      }
+      if (error instanceof Error && error.message === "repository_busy") {
+        return reply.status(409).send({ error: "That repository operation is already running." });
+      }
+      return sendResourceMutationFailure(reply, error);
+    }
   });
 
   // Update a repo (native update): fetch + ff the persistent clone, re-copy its
@@ -610,27 +663,43 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         .send({ error: "Project-scoped skill repository catalogs are no longer writable." });
     }
     if (record.storageMode === "collection-v1") {
-      const safeClonePath = managedClonePath(record);
-      if (!safeClonePath) {
-        return reply.status(400).send({
-          error: "The persisted clone path is outside the managed repository root or missing.",
+      if (!collectionSnapshotRoots(record)) {
+        return reply.status(unavailableFailure.status).send({
+          error: unavailableFailure.error,
+          code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
         });
       }
       try {
         const result = await withRepositoryLock(record.id, async () => {
-          const status = await gitStatus(safeClonePath);
-          if (!status.repo || !status.clean) throw new Error("repository_dirty");
-          const newCommit = await gitPullFfInto(safeClonePath, record.ref);
-          if (newCommit === record.lastSyncedCommit) {
+          const current = settings.get().importedSkillRepositories.find((item) => item.id === id);
+          if (!current || current.storageMode !== "collection-v1") {
+            throw new Error("repository_mode_changed");
+          }
+          const safeClonePath = managedSkillRepositories.validateRepository(current.clonePath);
+          const cloneLeaf = nodePath.basename(safeClonePath);
+          const previousRoots = managedSkillRepositories.deriveSkillRoots(current);
+          const status = await managedSkillRepositoryStore.inspectRepository(
+            cloneLeaf,
+            current.ref,
+          );
+          if (!status.clean) throw new Error("repository_dirty");
+          const updated = await managedSkillRepositoryStore.updateRepository(
+            cloneLeaf,
+            current.ref,
+          );
+          const newCommit = updated.head;
+          managedSkillRepositories.validateRepository(safeClonePath);
+          if (newCommit === current.lastSyncedCommit) {
+            managedSkillRepositories.deriveSkillRoots(current);
             return {
               updated: false,
               commit: newCommit,
-              imported: record.skillNames,
+              imported: current.skillNames,
               conflicts: [],
             };
           }
           const selectedIntent = new Set(
-            record.selectedSkillRelativePaths ?? record.syncedSkillRelativePaths ?? [],
+            current.selectedSkillRelativePaths ?? current.syncedSkillRelativePaths ?? [],
           );
           const discovered = discoverSkillRoots(safeClonePath, (root) =>
             Boolean(managedCloneSkillRoot(safeClonePath, root)),
@@ -648,30 +717,42 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           });
           const selected = discovered.filter((skill) => selectedIntent.has(skill.relativePath));
           const syncedSkillRelativePaths = selected.map((skill) => skill.relativePath);
-          const skillRootPaths = collectionRootsFor(safeClonePath, syncedSkillRelativePaths);
           const next: ImportedSkillRepository = {
-            ...record,
+            ...current,
+            skillRootPaths: [],
             selectedSkillRelativePaths: [...selectedIntent],
             syncedSkillRelativePaths,
             skillNames: selected.map((skill) => skill.name),
-            skillRootPaths,
             lastSyncedCommit: newCommit,
           };
-          const collectionId = record.collectionId;
+          const skillRootPaths = await rebuildCollectionSnapshot(next);
+          next.skillRootPaths = skillRootPaths;
+          const collectionId = current.collectionId;
           if (!collectionId) throw new Error("collection_missing");
           settings.upsertSkillRepositoryCollection(next, {
             id: collectionId,
-            name: skillRepoName(record.remoteUrl),
-            repositoryId: record.id,
+            name: skillRepoName(current.remoteUrl),
+            repositoryId: current.id,
             skillRootPaths,
           });
+          const nextDisplayRoots = selected.map((skill) => skill.rootPath);
           const stillWatched = new Set(
-            settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths),
+            settings.get().importedSkillRepositories.flatMap((candidate) => {
+              if (
+                candidate.storageMode !== "collection-v1" ||
+                !collectionSnapshotRoots(candidate)
+              ) {
+                return [];
+              }
+              try {
+                return managedSkillRepositories.deriveSkillRoots(candidate);
+              } catch {
+                return [];
+              }
+            }),
           );
-          await unwatchSkillRoots(
-            (record.skillRootPaths ?? []).filter((root) => !stillWatched.has(root)),
-          );
-          watchSkillRoots(skillRootPaths);
+          await unwatchSkillRoots(previousRoots.filter((root) => !stillWatched.has(root)));
+          watchSkillRoots(nextDisplayRoots);
           return {
             updated: true,
             commit: newCommit,
@@ -686,7 +767,10 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         if (message === "repository_busy") {
           return reply.status(409).send({ error: "That repository operation is already running." });
         }
-        if (message === "repository_dirty") {
+        if (
+          message === "repository_dirty" ||
+          (error instanceof ResourceCatalogCapabilityError && error.code === "RESOURCE_BUSY")
+        ) {
           return reply.status(409).send({
             error:
               "The managed skill collection has local changes. Commit or discard them before updating.",
@@ -1083,6 +1167,51 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
   });
 
+  // Explicit quarantine escape hatch: remove only unavailable collection-v1
+  // metadata. This never validates, opens, renames, or deletes the clone path.
+  fastify.delete("/resources/skill-repos/:id/record", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const record = settings
+      .get()
+      .importedSkillRepositories.find((candidate) => candidate.id === id);
+    if (!record) return reply.status(404).send({ error: "unknown skill repository" });
+    if (record.storageMode !== "collection-v1") {
+      return reply
+        .status(400)
+        .send({ error: "Record-only removal is only available for managed collections." });
+    }
+    try {
+      await withRepositoryLock(record.id, async () => {
+        const current = settings
+          .get()
+          .importedSkillRepositories.find((candidate) => candidate.id === id);
+        if (!current || current.storageMode !== "collection-v1") {
+          throw new Error("repository_mode_changed");
+        }
+        if (collectionSnapshotRoots(current)) throw new Error("repository_available");
+        if (!current.collectionId) throw new Error("collection_missing");
+        // This touches only app-private snapshot storage. It never validates,
+        // opens, renames, or removes the unavailable clone path.
+        managedSkillRepositoryStore.deleteSnapshot(current.id);
+        settings.removeSkillRepositoryCollection(current.id, current.collectionId);
+        removeCollectionSnapshot(current.id);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "repository_busy") {
+        return reply.status(409).send({ error: "That repository operation is already running." });
+      }
+      if (message === "repository_available") {
+        return reply
+          .status(409)
+          .send({ error: "This repository is available; use Forget to remove its clone safely." });
+      }
+      return sendResourceMutationFailure(reply, error);
+    }
+    broadcast({ type: "resources_changed" });
+    return { ok: true, removedRecordOnly: true };
+  });
+
   // Forget a repo: drop the provenance record + the persistent clone. The skills
   // already copied into the catalog stay (they're independent copies).
   fastify.delete("/resources/skill-repos/:id", async (request, reply) => {
@@ -1090,19 +1219,42 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const record = settings.get().importedSkillRepositories.find((r) => r.id === id);
     if (!record) return reply.status(404).send({ error: "unknown skill repository" });
     if (record.storageMode === "collection-v1") {
+      if (!collectionSnapshotRoots(record)) {
+        return reply.status(unavailableFailure.status).send({
+          error: unavailableFailure.error,
+          code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE",
+        });
+      }
       try {
         await withRepositoryLock(record.id, async () => {
-          const safeClonePath = managedClonePath(record, { allowMissing: true });
-          if (!safeClonePath) throw new Error("unsafe_collection_path");
-          if (!record.collectionId) throw new Error("collection_missing");
-          rmSync(safeClonePath, { recursive: true, force: true, maxRetries: 5 });
-          settings.removeSkillRepositoryCollection(record.id, record.collectionId);
+          const current = settings.get().importedSkillRepositories.find((item) => item.id === id);
+          if (!current || current.storageMode !== "collection-v1") {
+            throw new Error("repository_mode_changed");
+          }
+          const safeClonePath = managedSkillRepositories.validateRepository(current.clonePath);
+          const skillRoots = managedSkillRepositories.deriveSkillRoots(current);
+          if (!current.collectionId) throw new Error("collection_missing");
+          managedSkillRepositories.validateRepository(safeClonePath);
+          managedSkillRepositoryStore.deleteRepository(nodePath.basename(safeClonePath));
+          managedSkillRepositoryStore.deleteSnapshot(current.id);
+          settings.removeSkillRepositoryCollection(current.id, current.collectionId);
+          removeCollectionSnapshot(current.id);
           const stillWatched = new Set(
-            settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths),
+            settings.get().importedSkillRepositories.flatMap((candidate) => {
+              if (
+                candidate.storageMode !== "collection-v1" ||
+                !collectionSnapshotRoots(candidate)
+              ) {
+                return [];
+              }
+              try {
+                return managedSkillRepositories.deriveSkillRoots(candidate);
+              } catch {
+                return [];
+              }
+            }),
           );
-          await unwatchSkillRoots(
-            (record.skillRootPaths ?? []).filter((root) => !stillWatched.has(root)),
-          );
+          await unwatchSkillRoots(skillRoots.filter((root) => !stillWatched.has(root)));
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -96,8 +96,8 @@ async function legacyFixture(options: { localEdit?: boolean } = {}): Promise<Leg
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: home });
   const server = await startServer({
     dataDir,
-    // Deliberately different: this record predates collection-v1 fixed-root storage.
-    skillRepositoriesRoot: path.join(dataDir, "new-collections"),
+    // Legacy clone remains external; collection-v1 storage is still anchored.
+    skillRepositoriesRoot: path.join(dataDir, "SkillRepositories"),
   });
   return {
     server,

@@ -2,14 +2,24 @@ import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
 import type { SkillInfo } from "@agent-deck/domain";
 import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
-import type { ProviderLoginManager, ResourceRoots } from "@agent-deck/resources";
+import type {
+  ManagedSkillRepositoryStore,
+  ProviderLoginManager,
+  ResourceRoots,
+} from "@agent-deck/resources";
 import type { FastifyInstance } from "fastify";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
-import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
+import type {
+  ImportedSkillRepository,
+  ProjectIndex,
+  SessionIndex,
+  SettingsStore,
+} from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
+import type { ManagedSkillRepositories } from "./skillRepositories.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -106,6 +116,8 @@ export interface ServerContext {
   memoryBaseDir: string;
   worktreesRoot: string;
   skillReposRoot: string;
+  managedSkillRepositories: ManagedSkillRepositories;
+  managedSkillRepositoryStore: ManagedSkillRepositoryStore;
   recallMemories(store: MemoryStore, query: string, limit?: number): Promise<MemorySearchHit[]>;
   resolveNamedAgent(
     name: string,
@@ -116,6 +128,10 @@ export interface ServerContext {
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
   scanSkillsFor(projectId?: string): SkillInfo[];
+  collectionSnapshotRoots(record: ImportedSkillRepository): string[] | undefined;
+  rebuildCollectionSnapshot(record: ImportedSkillRepository): Promise<string[]>;
+  removeCollectionSnapshot(repositoryId: string): void;
+  withRepositoryLock<T>(key: string, operation: () => Promise<T>): Promise<T>;
   watchSkillRoots(paths: readonly string[]): void;
   unwatchSkillRoots(paths: readonly string[]): Promise<void>;
   broadcast(message: ServerMessage): void;

@@ -19,6 +19,7 @@ export type ResourceCatalogErrorCode =
   | "RESOURCE_BUSY"
   | "RESOURCE_RECONCILE_INCOMPLETE"
   | "RESOURCE_INVALID_UTF8"
+  | "RESOURCE_OUTPUT_LIMIT"
   | "RESOURCE_IO"
   | "RESOURCE_NATIVE_UNAVAILABLE";
 
@@ -56,6 +57,45 @@ export interface NativeLoopCatalogEntry {
   content: string;
 }
 
+export interface ManagedSkillSnapshotResult {
+  generation: string;
+  skillRoots: string[];
+}
+
+export interface ManagedGitRepositoryResult {
+  head: string;
+  origin: string;
+  clean: boolean;
+  refMatches: boolean;
+}
+
+interface NativeManagedSkillRepositoryStore {
+  cloneRepository(
+    remote: string,
+    reference: string | undefined,
+    destinationLeaf: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult>;
+  inspectRepository(
+    leaf: string,
+    reference: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult>;
+  updateRepository(
+    leaf: string,
+    reference: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult>;
+  materializeSnapshot(
+    leaf: string,
+    repositoryId: string,
+    selectedRoots: string[][],
+  ): Promise<ManagedSkillSnapshotResult>;
+  validateSnapshot(repositoryId: string): ManagedSkillSnapshotResult;
+  deleteSnapshot(repositoryId: string): void;
+  deleteRepository(leaf: string): void;
+}
+
 interface NativeBinding {
   readResourceCatalogFile(home: string, catalog: ResourceCatalog, components: string[]): string;
   writeResourceCatalogFile(
@@ -80,6 +120,12 @@ interface NativeBinding {
     sourcePath: string,
     replace: boolean,
   ): void;
+  ManagedSkillRepositoryStore: new (
+    dataDir: string,
+    expectedRealpath: string,
+    expectedDev: string,
+    expectedIno: string,
+  ) => NativeManagedSkillRepositoryStore;
   scanLoopCatalog(home: string): NativeLoopCatalogEntry[];
   createLoopCatalogFile(home: string, basename: string, content: string): void;
   replaceLoopCatalogFile(home: string, basename: string, content: string): void;
@@ -139,12 +185,26 @@ const RESOURCE_CODES = new Set<ResourceCatalogErrorCode>([
   "RESOURCE_BUSY",
   "RESOURCE_RECONCILE_INCOMPLETE",
   "RESOURCE_INVALID_UTF8",
+  "RESOURCE_OUTPUT_LIMIT",
   "RESOURCE_IO",
 ]);
 
 function invokeResource<T>(operation: () => T): T {
   try {
     return operation();
+  } catch (error) {
+    if (error instanceof ResourceCatalogCapabilityError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const candidate = reason.split(":", 1)[0] as ResourceCatalogErrorCode;
+    throw new ResourceCatalogCapabilityError(
+      RESOURCE_CODES.has(candidate) ? candidate : "RESOURCE_IO",
+    );
+  }
+}
+
+async function invokeResourceAsync<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
   } catch (error) {
     if (error instanceof ResourceCatalogCapabilityError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
@@ -228,6 +288,71 @@ export const copyResourceTree = (
       replace,
     ),
   );
+
+export class ManagedSkillRepositoryStore {
+  private readonly native: NativeManagedSkillRepositoryStore;
+
+  constructor(dataDir: string, identity: { realpath: string; dev: string; ino: string }) {
+    this.native = invokeResource(
+      () =>
+        new (loadBinding("resource").ManagedSkillRepositoryStore)(
+          dataDir,
+          identity.realpath,
+          identity.dev,
+          identity.ino,
+        ),
+    );
+  }
+
+  cloneRepository(
+    remote: string,
+    reference: string | undefined,
+    destinationLeaf: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult> {
+    return invokeResourceAsync(() =>
+      this.native.cloneRepository(remote, reference, destinationLeaf, signal),
+    );
+  }
+
+  inspectRepository(
+    leaf: string,
+    reference?: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult> {
+    return invokeResourceAsync(() => this.native.inspectRepository(leaf, reference, signal));
+  }
+
+  updateRepository(
+    leaf: string,
+    reference?: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedGitRepositoryResult> {
+    return invokeResourceAsync(() => this.native.updateRepository(leaf, reference, signal));
+  }
+
+  materializeSnapshot(
+    leaf: string,
+    repositoryId: string,
+    selectedRoots: string[][],
+  ): Promise<ManagedSkillSnapshotResult> {
+    return invokeResourceAsync(() =>
+      this.native.materializeSnapshot(leaf, repositoryId, selectedRoots),
+    );
+  }
+
+  validateSnapshot(repositoryId: string): ManagedSkillSnapshotResult {
+    return invokeResource(() => this.native.validateSnapshot(repositoryId));
+  }
+
+  deleteSnapshot(repositoryId: string): void {
+    invokeResource(() => this.native.deleteSnapshot(repositoryId));
+  }
+
+  deleteRepository(leaf: string): void {
+    invokeResource(() => this.native.deleteRepository(leaf));
+  }
+}
 
 export const scanLoopCatalog = (home: string): NativeLoopCatalogEntry[] =>
   invoke(() => loadBinding("loop").scanLoopCatalog(home));

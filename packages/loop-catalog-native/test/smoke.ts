@@ -1,15 +1,46 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   copyResourceTree,
   createLoopCatalogFile,
   deleteLoopCatalogFile,
+  ManagedSkillRepositoryStore,
   readResourceCatalogFile,
   scanLoopCatalog,
   writeResourceCatalogFile,
 } from "../src/index.ts";
 const home = mkdtempSync(path.join(tmpdir(), "loop-native-smoke-"));
+const managedRoot = path.join(home, "SkillRepositories");
+mkdirSync(path.join(managedRoot, "smoke-repository", "skill"), { recursive: true });
+writeFileSync(path.join(managedRoot, "smoke-repository", "skill", "SKILL.md"), "snapshot");
+const managedStat = statSync(managedRoot, { bigint: true });
+const managedStore = new ManagedSkillRepositoryStore(home, {
+  realpath: realpathSync(managedRoot),
+  dev: managedStat.dev.toString(),
+  ino: managedStat.ino.toString(),
+});
+const managedSnapshot = await managedStore.materializeSnapshot(
+  "smoke-repository",
+  "smoke-repository",
+  [["skill"]],
+);
+if (readFileSync(path.join(managedSnapshot.skillRoots[0]!, "SKILL.md"), "utf8") !== "snapshot") {
+  throw new Error("native managed snapshot failed");
+}
+managedStore.deleteRepository("smoke-repository");
+if (existsSync(path.join(home, "SkillRepositories", "smoke-repository"))) {
+  throw new Error("native managed repository delete failed");
+}
 createLoopCatalogFile(home, "smoke.loop.md", "smoke");
 if (scanLoopCatalog(home)[0]?.content !== "smoke") throw new Error("native Loop scan failed");
 deleteLoopCatalogFile(home, "smoke.loop.md");
