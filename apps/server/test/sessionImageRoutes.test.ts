@@ -41,6 +41,16 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await server.close();
+  // Remove test-owned image bytes/manifests and session metadata deterministically.
+  rmSync(path.join(dataDir, "session-images"), { recursive: true, force: true });
+  rmSync(path.join(dataDir, "sessions.json"), { force: true });
+  if (process.platform === "win32") {
+    // The native stores may remain alive until JavaScript GC, so their empty
+    // root handles can outlive server.close(). As in the managed-security test,
+    // release timing is deliberately not part of the safety contract; leave the
+    // pinned empty roots and their temp container for OS cleanup.
+    return;
+  }
   rmSync(dataDir, { recursive: true, force: true });
 });
 
