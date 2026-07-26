@@ -116,6 +116,7 @@ interface NativeManagedSkillRepositoryStore {
 
 interface NativeSessionWorktreeStore {
   readonly rootPath: string;
+  reserveWorktree(targetPath: string): string;
   captureWorktreeIdentity(targetPath: string): string;
   deleteWorktree(targetPath: string, identityToken: string): Promise<void>;
 }
@@ -365,6 +366,10 @@ export class SessionWorktreeStore {
 
   get rootPath(): string {
     return this.native.rootPath;
+  }
+
+  reserveWorktree(targetPath: string): string {
+    return invokeSessionWorktree(() => this.native.reserveWorktree(targetPath));
   }
 
   captureWorktreeIdentity(targetPath: string): string {

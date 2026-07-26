@@ -328,7 +328,12 @@ describe("session worktree branch ownership", () => {
     writeFileSync(path.join(target, "sentinel"), "occupied\n");
 
     await expect(
-      createSessionWorktree(repo, target, "agent-deck/session-failed-add"),
+      createSessionWorktree(
+        repo,
+        target,
+        "agent-deck/session-failed-add",
+        "v1:0000000000000001:0000000000000002",
+      ),
     ).rejects.toMatchObject({
       worktree: expect.objectContaining({
         branch: "agent-deck/session-failed-add",
@@ -348,7 +353,12 @@ describe("session worktree branch ownership", () => {
     const sentinel = path.join(target, "README.md");
 
     await expect(
-      createSessionWorktree(repo, target, "agent-deck/session-collision"),
+      createSessionWorktree(
+        repo,
+        target,
+        "agent-deck/session-collision",
+        "v1:0000000000000001:0000000000000002",
+      ),
     ).rejects.toMatchObject({
       worktree: expect.objectContaining({ branch: "agent-deck/session-collision" }),
     });
@@ -382,7 +392,9 @@ describe("session worktree branch ownership", () => {
     execFileSync("git", ["branch", branch, "main"], { cwd: repo });
     const target = path.join(repo, "target");
 
-    await expect(createSessionWorktree(repo, target, branch)).rejects.toThrow();
+    await expect(
+      createSessionWorktree(repo, target, branch, "v1:0000000000000001:0000000000000002"),
+    ).rejects.toThrow();
 
     expect(branches(repo)).toEqual([branch, "main"]);
     expect(existsSync(target)).toBe(false);

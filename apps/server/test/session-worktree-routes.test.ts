@@ -127,6 +127,7 @@ function makeRoute(
     worktreesRoot: WORKTREES_ROOT,
     sessionWorktreeStore: {
       rootPath: WORKTREES_ROOT,
+      reserveWorktree: state.reserveWorktree,
       captureWorktreeIdentity: state.captureWorktreeIdentity,
       deleteWorktree: state.deleteWorktree,
     },
@@ -158,6 +159,7 @@ function makeState() {
     tokens: new Map<string, string>(),
     broadcasts: [] as unknown[],
     receipts: [] as string[],
+    reserveWorktree: vi.fn((_target: string) => "v1:0000000000000001:0000000000000002"),
     captureWorktreeIdentity: vi.fn(() => "v1:0000000000000001:0000000000000002"),
     deleteWorktree: vi.fn(async () => {}),
   };
@@ -179,6 +181,7 @@ beforeEach(() => {
     path: WORKTREE_PATH,
     branch: "agent-deck/session-allocated",
     sourceBranch: "main",
+    identityToken: "v1:0000000000000001:0000000000000002",
     branchOwned: true,
   });
 });
@@ -208,19 +211,46 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
+    expect(state.reserveWorktree).toHaveBeenCalledOnce();
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      state.reserveWorktree.mock.calls[0]![0],
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     await fastify.close();
   });
 
-  it("preserves an unregistered collision while deleting only the owned branch", async () => {
+  it("leaves a reservation collision untouched and creates no branch", async () => {
+    const { fastify, state } = makeRoute();
+    state.reserveWorktree.mockImplementation(() => {
+      throw new Error("target occupied");
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("cleans an unregistered partial target with its reservation token", async () => {
     gitMocks.createSessionWorktree.mockRejectedValue(
       new SessionWorktreeAddError(
         {
           path: WORKTREE_PATH,
           branch: "agent-deck/session-a1b2c3d4",
           sourceBranch: "main",
+          identityToken: "v1:0000000000000001:0000000000000002",
           branchOwned: true,
         },
-        new Error("target occupied"),
+        new Error("add interrupted"),
       ),
     );
     gitMocks.gitWorktreeRegistrationMatches.mockResolvedValue(false);
@@ -233,22 +263,20 @@ describe("POST /sessions worktree transaction", () => {
     });
 
     expect(response.statusCode).toBe(409);
-    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).toHaveBeenCalledOnce();
     expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
-    expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalledWith(
-      PROJECT_PATH,
-      expect.objectContaining({ branch: "agent-deck/session-a1b2c3d4" }),
-    );
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalled();
     await fastify.close();
   });
 
-  it("cleans a partial target only with exact owned Git registration", async () => {
+  it("cleans a registered partial target before pruning its exact registration", async () => {
     gitMocks.createSessionWorktree.mockRejectedValue(
       new SessionWorktreeAddError(
         {
           path: WORKTREE_PATH,
           branch: "agent-deck/session-a1b2c3d4",
           sourceBranch: "main",
+          identityToken: "v1:0000000000000001:0000000000000002",
           branchOwned: true,
         },
         new Error("add interrupted"),
@@ -281,6 +309,29 @@ describe("POST /sessions worktree transaction", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("persists the reservation identity without post-add capture", async () => {
+    const { fastify, state } = makeRoute();
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(gitMocks.createSessionWorktree).toHaveBeenCalledWith(
+      PROJECT_PATH,
+      expect.any(String),
+      expect.stringMatching(/^agent-deck\/session-/),
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(state.captureWorktreeIdentity).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      session: { worktreeIdentity: "v1:0000000000000001:0000000000000002" },
+    });
     await fastify.close();
   });
 

@@ -598,53 +598,48 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (settings.get().worktreeIsolation && project) {
       const suffix = randomUUID().slice(0, 8);
       const target = nodePath.join(worktreesRoot, suffix);
+      let reservationIdentity: string | undefined;
       try {
+        // Reserve the exact private leaf and bind its native identity before Git
+        // creates any ref or writes checkout content. Existing leaves fail
+        // atomically and are never candidates for rollback deletion.
+        reservationIdentity = sessionWorktreeStore.reserveWorktree(target);
         // Deliberately attempt the operation directly. A repo precheck would
         // collapse unavailable Git/non-repo into a silent primary-cwd fallback.
         worktree = await createSessionWorktree(
           project.path,
           target,
           `agent-deck/session-${suffix}`,
+          reservationIdentity,
         );
-        // Bind persistence and every later deletion to the directory allocated
-        // by this exact successful add, not merely its reusable path/branch.
-        worktree.identityToken = sessionWorktreeStore.captureWorktreeIdentity(target);
         cwd = target;
       } catch (error) {
-        // Allocation failures retain their primary Git error. If branch creation
-        // succeeded, safely remove a partial generated checkout first, then prune
-        // Git registration and delete only the branch proven owned by this try.
+        // Preserve the primary allocation error. A successful reservation is
+        // sufficient deletion authority even if source/branch/add fails before
+        // Git can return branch ownership proof.
+        const physicallyRemoved = reservationIdentity
+          ? await sessionWorktreeStore
+              .deleteWorktree(target, reservationIdentity)
+              .then(() => true)
+              .catch((cleanupError) => {
+                fastify.log.warn(
+                  { err: cleanupError },
+                  "failed to clean reserved session worktree",
+                );
+                return false;
+              })
+          : false;
         if (error instanceof SessionWorktreeAddError) {
-          // Git registration is the allocation commit proof. Never delete an
-          // occupied/colliding target unless this exact path is registered to
-          // the private branch conclusively created by this attempt.
-          const registeredToAttempt = await gitWorktreeRegistrationMatches(
-            project.path,
-            target,
-            error.worktree.branch,
-          ).catch(() => false);
-          if (registeredToAttempt) {
-            const identityToken = (() => {
-              try {
-                return sessionWorktreeStore.captureWorktreeIdentity(target);
-              } catch {
-                return undefined;
-              }
-            })();
-            const physicallyRemoved = identityToken
-              ? await sessionWorktreeStore
-                  .deleteWorktree(target, identityToken)
-                  .then(() => true)
-                  .catch((cleanupError) => {
-                    fastify.log.warn(
-                      { err: cleanupError },
-                      "failed to clean partial session worktree",
-                    );
-                    return false;
-                  })
-              : false;
-            if (physicallyRemoved) await gitWorktreePrune(project.path).catch(() => {});
-          }
+          // Prune only after proving this exact stale registration belongs to the
+          // branch conclusively created by this attempt.
+          const registeredToAttempt = physicallyRemoved
+            ? await gitWorktreeRegistrationMatches(
+                project.path,
+                target,
+                error.worktree.branch,
+              ).catch(() => false)
+            : false;
+          if (registeredToAttempt) await gitWorktreePrune(project.path).catch(() => {});
           // This deletes only the conclusively-owned branch and naturally fails
           // while Git still considers it checked out. Never mask the add error.
           await gitDeleteOwnedWorktreeBranch(project.path, error.worktree).catch(() => {});

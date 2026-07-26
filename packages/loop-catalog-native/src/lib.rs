@@ -1535,6 +1535,22 @@ fn parse_session_worktree_identity_token(token: &str) -> Result<StableFileIdenti
     Ok(StableFileIdentity { volume, file })
 }
 
+fn reserve_session_worktree(
+    root: &Dir,
+    root_path: &str,
+    root_identity: &StableFileIdentity,
+    target_path: &str,
+) -> Result<String> {
+    let leaf = validate_session_worktree_target(root_path, target_path)?;
+    validate_session_worktree_root(root, root_path, root_identity)?;
+    // create_dir is capability-relative and atomic. Existing files, directories,
+    // links, and reparse points all fail without being inspected or removed.
+    root.create_dir(&leaf).map_err(map_session_worktree_io)?;
+    let token = capture_session_worktree_identity(root, root_path, root_identity, target_path)?;
+    sync_dir(root).map_err(map_session_worktree_io)?;
+    Ok(token)
+}
+
 fn capture_session_worktree_identity(
     root: &Dir,
     root_path: &str,
@@ -1820,6 +1836,16 @@ impl SessionWorktreeStore {
     #[napi(getter)]
     pub fn root_path(&self) -> String {
         self.exposed_root_path.clone()
+    }
+
+    #[napi]
+    pub fn reserve_worktree(&self, target_path: String) -> Result<String> {
+        reserve_session_worktree(
+            &self.root,
+            &self.root_path,
+            &self.root_identity,
+            &target_path,
+        )
     }
 
     #[napi]

@@ -570,7 +570,7 @@ export interface GitWorktree {
   branch: string;
   /** The branch the worktree was forked from. */
   sourceBranch: string;
-  /** Native stable identity captured after the checkout directory is allocated. */
+  /** Native stable identity reserved before the checkout is populated. */
   identityToken?: string;
   /** Proof that createSessionWorktree atomically created this branch. */
   branchOwned: true;
@@ -605,14 +605,15 @@ export async function gitDeleteOwnedWorktreeBranch(
 /**
  * The shared session/loop worktree dance: fork a NEW branch off the project's
  * CURRENT branch into an isolated worktree at `targetPath`. Throws
- * "detached HEAD — check out a branch first" when there is no branch to fork,
- * and removes any partial worktree before rethrowing a git failure. Callers own
- * the surrounding policy (400 vs silent fallback) and the target/branch naming.
+ * "detached HEAD — check out a branch first" when there is no branch to fork.
+ * The caller owns token-bound rollback of its pre-reserved target, plus the
+ * surrounding policy (400 vs silent fallback) and target/branch naming.
  */
 export async function createSessionWorktree(
   projectDir: string,
   targetPath: string,
   branch: string,
+  identityToken: string,
 ): Promise<GitWorktree> {
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
@@ -620,7 +621,13 @@ export async function createSessionWorktree(
   // failure (including a pre-existing branch or a concurrent creator) means we
   // own nothing and therefore must not delete anything.
   await runGit(projectDir, ["branch", branch, sourceBranch]);
-  const worktree: GitWorktree = { path: targetPath, branch, sourceBranch, branchOwned: true };
+  const worktree: GitWorktree = {
+    path: targetPath,
+    branch,
+    sourceBranch,
+    identityToken,
+    branchOwned: true,
+  };
   try {
     await gitWorktreeAdd(projectDir, targetPath, branch);
   } catch (error) {

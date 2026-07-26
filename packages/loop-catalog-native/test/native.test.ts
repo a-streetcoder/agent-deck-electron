@@ -137,6 +137,23 @@ describe("native Loop catalog binding", () => {
     expect(() => statSync(path.join(root, "owner-repo"))).toThrow();
   });
 
+  it("reserves only a new empty generated leaf and leaves collisions untouched", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "session-worktree-reserve-"));
+    const store = new SessionWorktreeStore(home);
+    const occupied = path.join(store.rootPath, "a1b2c3d4");
+    mkdirSync(occupied);
+    writeFileSync(path.join(occupied, "sentinel"), "untouched");
+
+    expect(() => store.reserveWorktree(occupied)).toThrow();
+    expect(readFileSync(path.join(occupied, "sentinel"), "utf8")).toBe("untouched");
+
+    const reserved = path.join(store.rootPath, "decafbad");
+    const identity = store.reserveWorktree(reserved);
+    expect(readdirSync(reserved)).toEqual([]);
+    await store.deleteWorktree(reserved, identity);
+    expect(existsSync(reserved)).toBe(false);
+  });
+
   it("deletes only generated direct-child session worktrees through its held root", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "session-worktree-store-"));
     const store = new SessionWorktreeStore(home);
@@ -190,6 +207,8 @@ describe("native Loop catalog binding", () => {
       expect(store.rootPath.startsWith("\\\\?\\")).toBe(false);
       expect(path.isAbsolute(store.rootPath)).toBe(true);
       const target = path.join(store.rootPath, "a1b2c3d4");
+      const identity = store.reserveWorktree(target);
+      expect(readdirSync(target)).toEqual([]);
       expect(() =>
         execFileSync("git", ["worktree", "add", target, "worktree-owner"], {
           cwd: repo,
@@ -197,7 +216,7 @@ describe("native Loop catalog binding", () => {
         }),
       ).not.toThrow();
 
-      const identity = store.captureWorktreeIdentity(target);
+      expect(store.captureWorktreeIdentity(target)).toBe(identity);
       await expect(store.deleteWorktree(target, identity)).resolves.toBeUndefined();
       expect(existsSync(target)).toBe(false);
     },
