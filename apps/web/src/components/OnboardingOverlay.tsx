@@ -23,10 +23,10 @@ import { useAppStore, type AppView } from "../state/store.ts";
 /**
  * First-run onboarding (native WelcomeOnboardingSheet): a phased flow, not just a
  * marketing slideshow. Native runs tour → Setup Check → Preferences → Final; this
- * builds tour → Setup Check → Final (Preferences is added separately). The Setup
+ * builds tour → Setup Check → Preferences → Final. The Setup
  * Check is a real dependency doctor (the same /runtime/doctor the Doctor screen
- * uses) that flags what's missing with fixes, and the Final step smart-routes to
- * wherever setup still needs attention (native OnboardingFinalView.primaryTarget).
+ * uses) that flags what's missing with fixes, followed by Preferences and a Final
+ * step that smart-routes wherever setup still needs attention.
  * Reuses the native onboarding artwork (public/onboarding/pop-onb-*).
  */
 
@@ -156,6 +156,7 @@ interface CatalogModel {
   provider: string;
   id: string;
   name?: string;
+  disabled?: boolean;
 }
 
 // Native SetupCheckStatus mapping: ok → Ready, warn → Optional, error → Missing.
@@ -263,7 +264,6 @@ export function OnboardingOverlay() {
   const projects = useAppStore((state) => state.projects);
   const projectsLoaded = useAppStore((state) => state.projectsLoaded);
   const setView = useAppStore((state) => state.setView);
-  const session = useAppStore((state) => state.session);
   const forced = onboardingForced();
   // When forced, ignore a prior dismissal so a returning user can still replay it.
   const [dismissed, setDismissed] = useState(() => (forced ? false : wasDismissed()));
@@ -273,6 +273,12 @@ export function OnboardingOverlay() {
   const [checksLoading, setChecksLoading] = useState(false);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [models, setModels] = useState<CatalogModel[]>([]);
+  const [modelState, setModelState] = useState<
+    "idle" | "initial-loading" | "loading" | "success" | "error"
+  >("idle");
+  const modelReq = useRef(0);
+  const modelAbort = useRef<AbortController | null>(null);
+  const modelSelect = useRef<HTMLSelectElement | null>(null);
   // Monotonic request id: a slow earlier /runtime/doctor response must not
   // overwrite a newer one (rapid Re-check, or the setup→final refetch).
   const checksReq = useRef(0);
@@ -308,6 +314,14 @@ export function OnboardingOverlay() {
         if (req === checksReq.current) setChecksLoading(false);
       });
   }, []);
+
+  useEffect(
+    () => () => {
+      modelAbort.current?.abort();
+      modelReq.current += 1;
+    },
+    [],
+  );
 
   // The tour advances on its own, while direct controls remain on the artwork.
   useEffect(() => {
@@ -363,9 +377,42 @@ export function OnboardingOverlay() {
         if (req === checksReq.current) setChecksLoading(false);
       });
   };
-  // Load the current preferences + the active session's model catalog (there's no
-  // session-independent model list; the bootstrap session provides one when a
-  // provider is configured, otherwise the picker is empty until one is).
+  const discoverModels = (initial: boolean, restoreSelectFocus = false): void => {
+    modelAbort.current?.abort();
+    const controller = new AbortController();
+    modelAbort.current = controller;
+    const req = ++modelReq.current;
+    setModelState(initial ? "initial-loading" : "loading");
+    void fetch("/runtime/models/discover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("model discovery failed");
+        return response.json() as Promise<{ models: CatalogModel[] }>;
+      })
+      .then((data) => {
+        if (req !== modelReq.current || controller.signal.aborted) return;
+        setModels(data.models.filter((model) => !model.disabled));
+        setModelState("success");
+        if (restoreSelectFocus) {
+          window.requestAnimationFrame(() => {
+            if (req === modelReq.current && !controller.signal.aborted) {
+              modelSelect.current?.focus();
+            }
+          });
+        }
+      })
+      .catch(() => {
+        if (req !== modelReq.current || controller.signal.aborted) return;
+        setModelState("error");
+      });
+  };
+
+  // Load saved settings once, but discover models on every Preferences entry so
+  // a newly connected provider is reflected without a session or a client cache.
   const loadPreferences = (): void => {
     // Load the saved settings ONCE — refetching after the user has toggled would
     // overwrite the optimistic local edits with (possibly stale) server state.
@@ -384,13 +431,7 @@ export function OnboardingOverlay() {
         })
         .catch(() => {});
     }
-    const sid = session?.id;
-    if (sid && models.length === 0) {
-      void fetch(`/sessions/${encodeURIComponent(sid)}/models`)
-        .then((response) => (response.ok ? response.json() : { models: [] }))
-        .then((data: { models: CatalogModel[] }) => setModels(data.models))
-        .catch(() => setModels([]));
-    }
+    discoverModels(true);
   };
   // Optimistic locally; the PATCH is serialized through a chain so two writes to
   // the same key land in click order. The server merges only the provided fields.
@@ -408,6 +449,10 @@ export function OnboardingOverlay() {
   };
 
   const goto = (next: Phase): void => {
+    if (next !== "preferences") {
+      modelAbort.current?.abort();
+      modelAbort.current = null;
+    }
     setPhase(next);
     if (next === "setup" || next === "final") runChecks();
     if (next === "preferences") loadPreferences();
@@ -433,7 +478,7 @@ export function OnboardingOverlay() {
       : "Finish setup";
   const performSetupAction = (): void => {
     if (setupReady) {
-      finishTo(projectMissing ? "projects" : "chat");
+      goto("preferences");
     } else if (nextSetupCheck?.id === "auth") {
       setPhase("provider");
     } else {
@@ -798,13 +843,21 @@ export function OnboardingOverlay() {
                       Default model
                     </label>
                     <ControlSelect
+                      ref={modelSelect}
                       id="pref-model"
                       data-testid="pref-model"
                       className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                       value={prefs.defaultModel ?? ""}
+                      disabled={modelState === "initial-loading"}
                       onChange={(event) => patchPref({ defaultModel: event.target.value || null })}
                     >
                       <option value="">Pi&apos;s default</option>
+                      {prefs.defaultModel &&
+                      !models.some(
+                        (model) => `${model.provider}:${model.id}` === prefs.defaultModel,
+                      ) ? (
+                        <option value={prefs.defaultModel}>{prefs.defaultModel} (saved)</option>
+                      ) : null}
                       {models.map((model) => (
                         <option
                           key={`${model.provider}/${model.id}`}
@@ -814,10 +867,32 @@ export function OnboardingOverlay() {
                         </option>
                       ))}
                     </ControlSelect>
-                    {models.length === 0 ? (
-                      <span className="text-detail text-text-muted">
-                        Connect a model provider to choose a default model.
+                    {modelState === "initial-loading" ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        Discovering available models…
                       </span>
+                    ) : modelState === "loading" ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        Trying model discovery again…
+                      </span>
+                    ) : modelState === "success" && models.length === 0 ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        No models are currently available from connected providers.
+                      </span>
+                    ) : modelState === "error" ? (
+                      <div
+                        className="flex items-center gap-2 text-detail text-text-muted"
+                        role="alert"
+                      >
+                        <span>Models could not be discovered.</span>
+                        <ControlButton
+                          data-testid="pref-model-retry"
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                          onClick={() => discoverModels(false, true)}
+                        >
+                          Retry
+                        </ControlButton>
+                      </div>
                     ) : null}
                   </div>
                   <div className="flex flex-col gap-1">
@@ -853,7 +928,7 @@ export function OnboardingOverlay() {
               <ControlButton
                 data-testid="onboarding-preferences-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => setPhase("setup")}
+                onClick={() => goto("setup")}
               >
                 <ArrowLeft size={13} /> Back
               </ControlButton>
@@ -898,7 +973,7 @@ export function OnboardingOverlay() {
               <ControlButton
                 data-testid="onboarding-final-back"
                 className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => setPhase("setup")}
+                onClick={() => goto("preferences")}
               >
                 <ArrowLeft size={13} /> Back
               </ControlButton>
