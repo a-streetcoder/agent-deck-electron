@@ -1,12 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -20,7 +13,7 @@ let server: AgentDeckServer;
 let repoId: string;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
-const collectionRoot = mkdtempSync(path.join(tmpdir(), "skill-collections-"));
+const collectionRoot = path.join(dataDir, "SkillRepositories");
 const repo = mkdtempSync(path.join(tmpdir(), "skillrepo-"));
 
 function git(args: string[]): void {
@@ -67,18 +60,22 @@ describe("in-place git skill collections", () => {
 
     const clone = path.join(collectionRoot, sanitizedRepositoryFolder(repo));
     const skillRoot = path.join(clone, "web-scraper");
-    const canonicalSkillRoot = realpathSync(skillRoot);
     expect(existsSync(path.join(skillRoot, "SKILL.md"))).toBe(true);
     expect(existsSync(path.join(tmpHome, ".pi", "agent", "skills", "web-scraper"))).toBe(false);
 
-    const [record] = await repos();
+    const record = (await repos())[0]!;
+    const snapshotRoot = (record.skillRootPaths as string[])[0]!;
+    expect(snapshotRoot).toContain(`${path.sep}SkillRepositorySnapshots${path.sep}`);
+    expect(readFileSync(path.join(snapshotRoot, "SKILL.md"), "utf8")).toContain(
+      "Scrape web pages.",
+    );
     expect(record).toMatchObject({
       id: repoId,
       storageMode: "collection-v1",
       skillNames: ["web-scraper"],
       selectedSkillRelativePaths: ["web-scraper"],
       syncedSkillRelativePaths: ["web-scraper"],
-      skillRootPaths: [canonicalSkillRoot],
+      skillRootPaths: [snapshotRoot],
     });
     const persisted = JSON.parse(readFileSync(path.join(dataDir, "app-settings.json"), "utf8")) as {
       importedSkillRepositories: Array<{ id: string }>;
@@ -86,7 +83,7 @@ describe("in-place git skill collections", () => {
     };
     expect(persisted.importedSkillRepositories.some((item) => item.id === repoId)).toBe(true);
     expect(persisted.skillCollections).toContainEqual(
-      expect.objectContaining({ repositoryId: repoId, skillRootPaths: [canonicalSkillRoot] }),
+      expect.objectContaining({ repositoryId: repoId, skillRootPaths: [snapshotRoot] }),
     );
     const skills = (await (
       await fetch(`http://127.0.0.1:${server.port}/resources/skills`)
@@ -95,7 +92,7 @@ describe("in-place git skill collections", () => {
       expect.objectContaining({
         name: "web-scraper",
         scope: "library",
-        baseDir: canonicalSkillRoot,
+        baseDir: snapshotRoot,
       }),
     );
     const edit = await fetch(`http://127.0.0.1:${server.port}/resources/skills`, {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -15,8 +15,9 @@ process.env.AGENT_DECK_TEST = "1";
 const home = mkdtempSync(path.join(tmpdir(), "collection-pi-home-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "collection-pi-data-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "collection-pi-cwd-"));
-const managedRoot = path.join(dataDir, "managed");
-const skillRoot = path.join(managedRoot, "collection-skill");
+const managedRoot = path.join(dataDir, "SkillRepositories");
+const cloneRoot = path.join(managedRoot, "collection-repo");
+const skillRoot = path.join(cloneRoot, "collection-skill");
 const outsideSkillRoot = path.join(dataDir, "outside", "corrupt-skill");
 let mock: MockProviderServer;
 let server: AgentDeckServer;
@@ -40,6 +41,7 @@ async function createSession(extra: { agentName?: string; skills?: string[] }): 
 }
 
 beforeAll(async () => {
+  mkdirSync(path.join(cloneRoot, ".git"), { recursive: true });
   mkdirSync(skillRoot, { recursive: true });
   mkdirSync(outsideSkillRoot, { recursive: true });
   writeFileSync(
@@ -61,6 +63,20 @@ beforeAll(async () => {
     JSON.stringify({
       defaultSkills: ["collection-skill", "corrupt-skill"],
       importedSkillRepositories: [
+        {
+          id: "repo",
+          remoteUrl: "https://example.invalid/collection.git",
+          scope: "global",
+          clonePath: cloneRoot,
+          skillNames: ["collection-skill"],
+          storageMode: "collection-v1",
+          collectionId: "collection",
+          selectedSkillRelativePaths: ["collection-skill"],
+          syncedSkillRelativePaths: ["collection-skill"],
+          skillRootPaths: [skillRoot],
+          lastSyncedCommit: "deadbeef",
+          importedAt: new Date().toISOString(),
+        },
         {
           id: "corrupt-repo",
           remoteUrl: "https://example.invalid/corrupt.git",
@@ -127,18 +143,41 @@ describe("in-place collection skill injection", () => {
       `http://127.0.0.1:${server.port}/resources/skill-repos/corrupt-repo/update`,
       { method: "POST" },
     );
-    expect(update.status).toBe(400);
-    expect(await update.text()).toContain("outside the managed repository root");
+    expect(update.status).toBe(409);
+    expect(await update.text()).toContain("outside the trusted SkillRepositories directory");
 
     const forget = await fetch(
       `http://127.0.0.1:${server.port}/resources/skill-repos/corrupt-repo`,
       { method: "DELETE" },
     );
-    expect(forget.status).toBe(500);
-    expect(await forget.text()).toContain("unsafe_collection_path");
+    expect(forget.status).toBe(409);
+    expect(await forget.text()).toContain("outside the trusted SkillRepositories directory");
     const repositories = await (
       await fetch(`http://127.0.0.1:${server.port}/resources/skill-repos`)
     ).text();
     expect(repositories).toContain("corrupt-repo");
+  });
+
+  it("revalidates the active snapshot leaf before Pi skillDirs derivation", async () => {
+    const inventory = (await (
+      await fetch(`http://127.0.0.1:${server.port}/resources/skills`)
+    ).json()) as { skills: Array<{ name: string; baseDir: string }> };
+    const activeRoot = inventory.skills.find((skill) => skill.name === "collection-skill")!.baseDir;
+    const leaf = path.dirname(path.dirname(activeRoot));
+    renameSync(leaf, `${leaf}-captured`);
+    const outside = path.join(dataDir, "snapshot-swap-victim");
+    mkdirSync(path.join(outside, "skills", "0"), { recursive: true });
+    writeFileSync(
+      path.join(outside, "skills", "0", "SKILL.md"),
+      "---\nname: collection-skill\ndescription: External sentinel\n---\nnever inject",
+    );
+    symlinkSync(outside, leaf, process.platform === "win32" ? "junction" : "dir");
+
+    const id = await createSession({ agentName: "collector" });
+    const commands = await (
+      await fetch(`http://127.0.0.1:${server.port}/sessions/${id}/commands`)
+    ).text();
+    expect(commands).not.toContain("collection-skill");
+    expect(commands).not.toContain("External sentinel");
   });
 });

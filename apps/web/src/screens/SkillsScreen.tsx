@@ -32,6 +32,8 @@ interface SkillRepo {
   skillNames: string[];
   lastSyncedCommit: string;
   importedAt: string;
+  available: boolean;
+  unavailable?: { code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE"; message: string };
 }
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
@@ -415,8 +417,10 @@ export function SkillsScreen() {
   // available (a per-repo ls-remote check), and which is busy updating/forgetting.
   const [repos, setRepos] = useState<SkillRepo[]>([]);
   const [updatable, setUpdatable] = useState<Set<string>>(new Set());
-  const [repoBusy, setRepoBusy] = useState<Record<string, "update" | "forget">>({});
-  const repoBusyRef = useRef(new Map<string, "update" | "forget">());
+  const [repoBusy, setRepoBusy] = useState<Record<string, "update" | "forget" | "remove-record">>(
+    {},
+  );
+  const repoBusyRef = useRef(new Map<string, "update" | "forget" | "remove-record">());
   // Per-repo unresolved conflicts (skills the user edited locally that an update
   // held back rather than overwriting) — native Keep Mine / Take Remote.
   const [conflicts, setConflicts] = useState<Record<string, string[]>>({});
@@ -426,6 +430,8 @@ export function SkillsScreen() {
   const resolvingConflictsRef = useRef(new Set<string>());
   const conflictActionRefs = useRef(new Map<string, HTMLButtonElement>());
   const repoUpdateRefs = useRef(new Map<string, HTMLButtonElement>());
+  const repoRemoveRecordRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [repoRecordRemovalAnnouncement, setRepoRecordRemovalAnnouncement] = useState("");
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
@@ -556,17 +562,28 @@ export function SkillsScreen() {
         if (cancelled) return;
         setRepos(data.repos);
         for (const repo of data.repos) {
+          if (repo.available === false) continue;
           void (async () => {
             try {
-              const checkResponse = await fetch(`/resources/skill-repos/${repo.id}/check`, {
-                method: "POST",
-              });
-              if (!checkResponse.ok) {
+              let checkResponse: Response | undefined;
+              for (let attempt = 0; attempt < 4; attempt += 1) {
+                checkResponse = await fetch(`/resources/skill-repos/${repo.id}/check`, {
+                  method: "POST",
+                });
+                if (checkResponse.status !== 409 || attempt === 3 || cancelled) break;
+                // A notification-driven native snapshot rebuild can briefly own
+                // this repository. Retry the read-only check instead of leaking
+                // that internal busy window into the UI.
+                await new Promise((resolve) => window.setTimeout(resolve, 100 * (attempt + 1)));
+              }
+              if (!checkResponse?.ok) {
                 throw new Error(
-                  await responseErrorMessage(
-                    checkResponse,
-                    `Couldn't check ${repo.remoteUrl} for updates (${checkResponse.status}). Retry by reloading.`,
-                  ),
+                  checkResponse
+                    ? await responseErrorMessage(
+                        checkResponse,
+                        `Couldn't check ${repo.remoteUrl} for updates (${checkResponse.status}). Retry by reloading.`,
+                      )
+                    : `Couldn't check ${repo.remoteUrl} for updates. Retry by reloading.`,
                 );
               }
               const check = (await checkResponse.json()) as { updateAvailable: boolean };
@@ -700,6 +717,57 @@ export function SkillsScreen() {
       setRepoBusy((current) => {
         const next = { ...current };
         delete next[id];
+        return next;
+      });
+    }
+  };
+
+  const removeUnavailableRecord = async (repo: SkillRepo): Promise<void> => {
+    if (repo.available !== false || repoBusyRef.current.has(repo.id)) return;
+    if (
+      !window.confirm(
+        "Remove only this unavailable repository record? The clone will not be opened or deleted. You will need to import it again after restoring the folder.",
+      )
+    ) {
+      return;
+    }
+    const invoked = repoRemoveRecordRefs.current.get(repo.id);
+    const ownedFocus = invoked !== undefined && document.activeElement === invoked;
+    repoBusyRef.current.set(repo.id, "remove-record");
+    setRepoBusy((current) => ({ ...current, [repo.id]: "remove-record" }));
+    try {
+      const response = await fetch(`/resources/skill-repos/${repo.id}/record`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const index = repos.findIndex((candidate) => candidate.id === repo.id);
+      const remaining = repos.filter((candidate) => candidate.id !== repo.id);
+      const next = remaining[index] ?? remaining[Math.max(0, index - 1)];
+      setRepoRecordRemovalAnnouncement(
+        "Unavailable repository record removed. Clone files were left untouched.",
+      );
+      setRepos(remaining);
+      requestAnimationFrame(() => {
+        if (!ownedFocus || document.activeElement !== document.body) return;
+        const target = next
+          ? next.available !== false
+            ? repoUpdateRefs.current.get(next.id)
+            : repoRemoveRecordRefs.current.get(next.id)
+          : document.querySelector<HTMLButtonElement>('[data-testid="skill-import-git"]');
+        target?.focus();
+      });
+    } catch (error) {
+      setGlobalError(`Couldn't remove the unavailable repository record. ${String(error)}`);
+      requestAnimationFrame(() => {
+        if (ownedFocus && document.activeElement === document.body) {
+          repoRemoveRecordRefs.current.get(repo.id)?.focus();
+        }
+      });
+    } finally {
+      repoBusyRef.current.delete(repo.id);
+      setRepoBusy((current) => {
+        const next = { ...current };
+        delete next[repo.id];
         return next;
       });
     }
@@ -855,6 +923,15 @@ export function SkillsScreen() {
             </ControlButton>
           </div>
         ) : null}
+        <div
+          data-testid="skill-repo-record-removal-status"
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {repoRecordRemovalAnnouncement}
+        </div>
         {repos.length > 0 ? (
           <div className="mx-3 mb-2 space-y-1" data-testid="skill-repos">
             <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
@@ -874,7 +951,15 @@ export function SkillsScreen() {
                   >
                     {repo.remoteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "")}
                   </span>
-                  {updatable.has(repo.id) ? (
+                  {repo.available === false ? (
+                    <span
+                      data-testid={`skill-repo-unavailable-${repo.id}`}
+                      className="rounded-capsule border border-warning/55 bg-warning/10 px-1.5 py-0.5 text-micro font-medium text-warning"
+                    >
+                      Unavailable
+                    </span>
+                  ) : null}
+                  {repo.available !== false && updatable.has(repo.id) ? (
                     <span
                       data-testid={`skill-repo-updatable-${repo.id}`}
                       className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
@@ -893,7 +978,7 @@ export function SkillsScreen() {
                     }}
                     data-testid={`skill-repo-update-${repo.id}`}
                     className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={repoBusy[repo.id] !== undefined}
+                    disabled={repo.available === false || repoBusy[repo.id] !== undefined}
                     onClick={() => void updateRepo(repo.id)}
                   >
                     {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
@@ -909,12 +994,36 @@ export function SkillsScreen() {
                     aria-label={
                       repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
                     }
-                    disabled={repoBusy[repo.id] !== undefined}
+                    disabled={repo.available === false || repoBusy[repo.id] !== undefined}
                     onClick={() => void forgetRepo(repo.id)}
                   >
                     <X size={12} />
                   </ControlButton>
+                  {repo.available === false ? (
+                    <ControlButton
+                      ref={(element) => {
+                        if (element) repoRemoveRecordRefs.current.set(repo.id, element);
+                        else repoRemoveRecordRefs.current.delete(repo.id);
+                      }}
+                      data-testid={`skill-repo-remove-record-${repo.id}`}
+                      className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
+                      disabled={repoBusy[repo.id] !== undefined}
+                      onClick={() => void removeUnavailableRecord(repo)}
+                    >
+                      {repoBusy[repo.id] === "remove-record" ? "Removing…" : "Remove record only"}
+                    </ControlButton>
+                  ) : null}
                 </div>
+                {repo.available === false ? (
+                  <div
+                    data-testid={`skill-repo-unavailable-guidance-${repo.id}`}
+                    className="px-2.5 py-1 text-micro text-text-muted"
+                    role="status"
+                  >
+                    Restore the original managed repository folder, then restart Agent Deck to
+                    recover it. “Remove record only” leaves all clone files untouched.
+                  </div>
+                ) : null}
                 {(conflicts[repo.id] ?? []).length > 0 ? (
                   <div
                     data-testid={`skill-repo-conflicts-${repo.id}`}

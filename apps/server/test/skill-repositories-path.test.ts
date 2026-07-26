@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canonicalPath,
+  ManagedSkillRepositories,
   normalizeGitRemote,
   resolveManagedPath,
   sanitizedRepositoryFolder,
@@ -61,6 +62,48 @@ describe("skill repositories fixed root", () => {
     expect(
       resolveManagedPath(root, path.join(root, "safe", "missing"), { allowMissing: true }),
     ).toBe(path.join(canonicalPath(root), "safe", "missing"));
+  });
+
+  it("requires the configured root to be the direct trusted child", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "skill-gate-data-"));
+    expect(() => new ManagedSkillRepositories(dataDir, path.join(dataDir, "other"))).toThrow(
+      /direct SkillRepositories child/,
+    );
+    const alias = path.join(dataDir, "alias");
+    symlinkSync(dataDir, alias, process.platform === "win32" ? "junction" : "dir");
+    expect(
+      () => new ManagedSkillRepositories(dataDir, path.join(alias, "SkillRepositories")),
+    ).toThrow(/direct SkillRepositories child/);
+    const outside = mkdtempSync(path.join(tmpdir(), "skill-gate-outside-"));
+    symlinkSync(
+      outside,
+      path.join(dataDir, "SkillRepositories"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(() => new ManagedSkillRepositories(dataDir)).toThrow(/real directory/);
+  });
+
+  it("pins root identity and rejects linked repository components", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "skill-gate-pinned-"));
+    const gate = new ManagedSkillRepositories(dataDir);
+    const clone = path.join(gate.root, "owner-repo");
+    mkdirSync(path.join(clone, ".git"), { recursive: true });
+    mkdirSync(path.join(clone, "skill"));
+    writeFileSync(path.join(clone, "skill", "SKILL.md"), "safe");
+    expect(gate.validateRepository(clone)).toBe(clone);
+
+    const outside = mkdtempSync(path.join(tmpdir(), "skill-gate-victim-"));
+    writeFileSync(path.join(outside, "SKILL.md"), "outside");
+    symlinkSync(
+      outside,
+      path.join(clone, "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(() => gate.validateRepository(clone)).toThrow(/cannot contain links/);
+
+    renameSync(gate.root, `${gate.root}-old`);
+    mkdirSync(gate.root);
+    expect(() => gate.validateRoot()).toThrow(/changed after server startup/);
   });
 
   it("normalizes common Git transports to the same repository identity", () => {

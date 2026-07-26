@@ -1,13 +1,27 @@
+use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use cap_fs_ext::MetadataExt as _;
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 #[cfg(unix)]
 use cap_std::fs::{MetadataExt as _, OpenOptionsExt};
-use napi::{Error, Result, Status};
+use napi::bindgen_prelude::{AbortSignal, AsyncTask};
+use napi::{Error, Result, Status, Task};
 use napi_derive::napi;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle as _;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 const LOOP_SUFFIX: &str = ".loop.md";
@@ -516,6 +530,1919 @@ fn rename_noreplace(from_dir: &Dir, from: &str, to_dir: &Dir, to: &str) -> std::
     from_dir.rename(from, to_dir, to)
 }
 
+fn open_managed_repositories(data_dir: &str) -> Result<Dir> {
+    let data = Dir::open_ambient_dir(data_dir, ambient_authority()).map_err(map_resource_io)?;
+    open_child_dir(&data, "SkillRepositories", false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "SkillRepositories does not exist"))
+}
+
+/// Publish a private, direct-child clone stage without replacing a destination
+/// that appeared after the caller's validation.
+#[cfg(test)]
+fn publish_managed_skill_repository(
+    data_dir: String,
+    stage_leaf: String,
+    destination_leaf: String,
+) -> Result<()> {
+    if !valid_resource_component(&stage_leaf)
+        || !valid_resource_component(&destination_leaf)
+        || !stage_leaf.starts_with(".agent-deck-clone-")
+    {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "invalid managed repository leaf",
+        ));
+    }
+    let repositories = open_managed_repositories(&data_dir)?;
+    let source = repositories
+        .symlink_metadata(&stage_leaf)
+        .map_err(map_resource_io)?;
+    if !source.is_dir() || source.file_type().is_symlink() {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "clone stage is not a real directory",
+        ));
+    }
+    rename_noreplace(&repositories, &stage_leaf, &repositories, &destination_leaf)
+        .map_err(map_resource_io)?;
+    sync_dir(&repositories).map_err(map_resource_io)
+}
+
+/// Quarantine then recursively remove one direct-child managed repository.
+/// Traversal stays descriptor-relative and rejects links/reparse points.
+#[cfg(test)]
+fn delete_managed_skill_repository(data_dir: String, repository_leaf: String) -> Result<()> {
+    if !valid_resource_component(&repository_leaf) {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "invalid managed repository leaf",
+        ));
+    }
+    let repositories = open_managed_repositories(&data_dir)?;
+    let metadata = repositories
+        .symlink_metadata(&repository_leaf)
+        .map_err(map_resource_io)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "repository is not a real directory",
+        ));
+    }
+    let quarantine = format!(
+        "{RESOURCE_TEMP_PREFIX}managed-delete-{}",
+        private_nonce().map_err(map_resource_io)?
+    );
+    rename_noreplace(&repositories, &repository_leaf, &repositories, &quarantine)
+        .map_err(map_resource_io)?;
+    if let Err(error) = remove_tree_entry(&repositories, &quarantine) {
+        if rename_noreplace(&repositories, &quarantine, &repositories, &repository_leaf).is_err() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "managed repository quarantine could not be rolled back",
+            ));
+        }
+        return Err(error);
+    }
+    sync_dir(&repositories).map_err(map_resource_io)
+}
+
+const MANAGED_GIT_OUTPUT_LIMIT: usize = 8_000_000;
+const MANAGED_SNAPSHOT_PREFIX: &str = ".agent-deck-snapshot-";
+const MANAGED_SNAPSHOT_STAGE_PREFIX: &str = ".agent-deck-snapshot-stage-";
+const MANAGED_SNAPSHOT_MAX_FILES: usize = 10_000;
+const MANAGED_SNAPSHOT_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const MANAGED_SNAPSHOT_MAX_DEPTH: usize = 64;
+const MANAGED_GIT_TIMEOUT: Duration = Duration::from_secs(180);
+const MANAGED_STAGE_PREFIX: &str = ".agent-deck-clone-";
+
+#[napi(object)]
+pub struct ManagedGitRepositoryResult {
+    pub head: String,
+    pub origin: String,
+    pub clean: bool,
+    pub ref_matches: bool,
+}
+
+#[derive(Clone)]
+enum ManagedGitOperation {
+    Clone {
+        remote: String,
+        reference: Option<String>,
+        destination: String,
+    },
+    Inspect {
+        leaf: String,
+        reference: Option<String>,
+    },
+    Update {
+        leaf: String,
+        reference: Option<String>,
+    },
+}
+
+pub struct ManagedGitTask {
+    root: Dir,
+    root_path: String,
+    operation: ManagedGitOperation,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Task for ManagedGitTask {
+    type Output = ManagedGitRepositoryResult;
+    type JsValue = ManagedGitRepositoryResult;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        match &self.operation {
+            ManagedGitOperation::Clone {
+                remote,
+                reference,
+                destination,
+            } => managed_clone(
+                &self.root,
+                &self.root_path,
+                remote,
+                reference.as_deref(),
+                destination,
+                &self.cancelled,
+            ),
+            ManagedGitOperation::Inspect { leaf, reference } => managed_inspect(
+                &self.root,
+                &self.root_path,
+                leaf,
+                reference.as_deref(),
+                &self.cancelled,
+            ),
+            ManagedGitOperation::Update { leaf, reference } => managed_update(
+                &self.root,
+                &self.root_path,
+                leaf,
+                reference.as_deref(),
+                &self.cancelled,
+            ),
+        }
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi(object)]
+pub struct ManagedSkillSnapshotResult {
+    pub generation: String,
+    pub skill_roots: Vec<String>,
+}
+
+pub struct ManagedSnapshotTask {
+    root: Dir,
+    snapshots: Dir,
+    snapshots_path: String,
+    snapshots_identity: SnapshotIdentity,
+    snapshot_identities: Arc<Mutex<HashMap<String, ManagedSnapshotIdentity>>>,
+    repository_leaf: String,
+    repository_id: String,
+    selected_roots: Vec<Vec<String>>,
+}
+
+impl Task for ManagedSnapshotTask {
+    type Output = ManagedSkillSnapshotResult;
+    type JsValue = ManagedSkillSnapshotResult;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        materialize_managed_snapshot(
+            &self.root,
+            SnapshotAuthority {
+                root: &self.snapshots,
+                path: &self.snapshots_path,
+                identity: &self.snapshots_identity,
+                active: &self.snapshot_identities,
+            },
+            &self.repository_leaf,
+            &self.repository_id,
+            &self.selected_roots,
+        )
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_namespace_path(path: &str) -> Result<String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "managed root check failed: Windows path is empty or contains NUL",
+        ));
+    }
+    let separators = path.replace('/', "\\");
+    let upper = separators.to_ascii_uppercase();
+    let normalized_prefix = if upper.starts_with(r"\\?\UNC\") || upper.starts_with(r"\??\UNC\") {
+        format!(r"\\{}", &separators[8..])
+    } else if upper.starts_with(r"\\?\") || upper.starts_with(r"\??\") {
+        separators[4..].to_owned()
+    } else {
+        separators
+    };
+
+    let (prefix, remainder) = if let Some(unc) = normalized_prefix.strip_prefix(r"\\") {
+        let mut parts = unc.split('\\');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        if server.is_empty()
+            || share.is_empty()
+            || server == "."
+            || share == "."
+            || server == ".."
+            || share == ".."
+            || server.contains(':')
+            || share.contains(':')
+        {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows UNC path is incomplete",
+            ));
+        }
+        (
+            format!(r"\\{}\{}", server.to_lowercase(), share.to_lowercase()),
+            parts.collect::<Vec<_>>(),
+        )
+    } else {
+        let bytes = normalized_prefix.as_bytes();
+        if bytes.len() < 3
+            || !bytes[0].is_ascii_alphabetic()
+            || bytes[1] != b':'
+            || bytes[2] != b'\\'
+        {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows path is not absolute",
+            ));
+        }
+        (
+            normalized_prefix[..2].to_ascii_lowercase(),
+            normalized_prefix[3..].split('\\').collect::<Vec<_>>(),
+        )
+    };
+
+    let mut components = Vec::new();
+    for component in remainder {
+        if component.is_empty() {
+            continue;
+        }
+        if component == "." || component == ".." || component.contains(':') {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows path contains traversal or ADS",
+            ));
+        }
+        components.push(component.to_lowercase());
+    }
+    if components.is_empty() {
+        Ok(format!(r"{prefix}\"))
+    } else {
+        Ok(format!(r"{}\{}", prefix, components.join(r"\")))
+    }
+}
+
+#[cfg(windows)]
+fn held_windows_final_path(dir: &Dir) -> Result<String> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+
+    let handle = dir.as_raw_handle();
+    let mut buffer = vec![0u16; 512];
+    loop {
+        let length = unsafe {
+            GetFinalPathNameByHandleW(handle, buffer.as_mut_ptr(), buffer.len() as u32, 0)
+        };
+        if length == 0 {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: held Windows final path unavailable",
+            ));
+        }
+        if (length as usize) < buffer.len() {
+            let path = std::ffi::OsString::from_wide(&buffer[..length as usize]);
+            return path.into_string().map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: held Windows final path is invalid Unicode",
+                )
+            });
+        }
+        buffer.resize(length as usize + 1, 0);
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StableFileIdentity {
+    volume: u64,
+    file: u64,
+}
+
+#[cfg(unix)]
+fn cap_file_identity(metadata: &cap_std::fs::Metadata) -> Result<StableFileIdentity> {
+    Ok(StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn cap_file_identity(metadata: &cap_std::fs::Metadata) -> Result<StableFileIdentity> {
+    // cap-fs-ext obtains these from the opened handle. Catch its documented
+    // unavailable-handle panic and fail closed rather than inventing identity.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    }))
+    .map_err(|_| resource_error("RESOURCE_UNSAFE_COMPONENT", "file identity unavailable"))
+}
+
+#[cfg(unix)]
+fn ambient_file_identity(path: &std::path::Path) -> Result<StableFileIdentity> {
+    let metadata = std::fs::metadata(path).map_err(map_resource_io)?;
+    Ok(StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn ambient_file_identity(path: &std::path::Path) -> Result<StableFileIdentity> {
+    // Rust 1.88 does not yet expose stable std Metadata file-index methods.
+    // Open the directory as a cap-std handle, whose pinned cap-fs-ext identity
+    // obtains volume serial + file index by handle and supports directories.
+    let captured = Dir::open_ambient_dir(path, ambient_authority()).map_err(map_resource_io)?;
+    let metadata = captured.dir_metadata().map_err(map_resource_io)?;
+    cap_file_identity(&metadata)
+}
+
+fn same_cap_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> Result<bool> {
+    Ok(cap_file_identity(left)? == cap_file_identity(right)?)
+}
+
+#[derive(Clone)]
+struct SnapshotIdentity(StableFileIdentity);
+
+#[derive(Clone)]
+struct ManagedSnapshotIdentity {
+    leaf: SnapshotIdentity,
+    skill_count: usize,
+}
+
+#[napi]
+pub struct ManagedSkillRepositoryStore {
+    root: Dir,
+    root_path: String,
+    snapshots: Dir,
+    snapshots_path: String,
+    snapshots_identity: SnapshotIdentity,
+    snapshot_identities: Arc<Mutex<HashMap<String, ManagedSnapshotIdentity>>>,
+}
+
+#[napi]
+impl ManagedSkillRepositoryStore {
+    #[napi(constructor)]
+    pub fn new(
+        data_dir: String,
+        expected_realpath: String,
+        expected_dev: String,
+        expected_ino: String,
+    ) -> Result<Self> {
+        // Capture the trusted direct child first. On Windows this handle denies
+        // delete sharing and remains the authority even if namespace spelling
+        // differs between Node and Win32.
+        let root = open_managed_repositories(&data_dir)?;
+        let metadata = root.dir_metadata().map_err(map_resource_io)?;
+        #[cfg(unix)]
+        let root_path = {
+            let canonical =
+                std::fs::canonicalize(std::path::Path::new(&data_dir).join("SkillRepositories"))
+                    .map_err(map_resource_io)?;
+            if canonical != std::path::Path::new(&expected_realpath) {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Unix canonical path changed",
+                ));
+            }
+            if metadata.dev().to_string() != expected_dev
+                || metadata.ino().to_string() != expected_ino
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Unix identity changed",
+                ));
+            }
+            expected_realpath.clone()
+        };
+        #[cfg(windows)]
+        let root_path = {
+            // Node's bigint stat identity is not a cross-runtime contract on
+            // Windows. Require a safe absolute candidate, then compare its
+            // opened native identity with the already-held direct child.
+            let _node_identity = (expected_dev, expected_ino);
+            let expected_normalized = normalize_windows_namespace_path(&expected_realpath)?;
+            let held_final = held_windows_final_path(&root)?;
+            let held_normalized = normalize_windows_namespace_path(&held_final)?;
+            let candidate_path = std::path::Path::new(&expected_realpath);
+            let before = std::fs::symlink_metadata(candidate_path).map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate metadata unavailable",
+                )
+            })?;
+            if !before.is_dir()
+                || before.file_type().is_symlink()
+                || before.file_attributes() & 0x400 != 0
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate is a reparse point",
+                ));
+            }
+            let candidate =
+                Dir::open_ambient_dir(candidate_path, ambient_authority()).map_err(|_| {
+                    resource_error(
+                        "RESOURCE_UNSAFE_COMPONENT",
+                        "managed root check failed: Windows candidate handle unavailable",
+                    )
+                })?;
+            let candidate_metadata = candidate.dir_metadata().map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate handle metadata unavailable",
+                )
+            })?;
+            if cap_file_identity(&candidate_metadata)? != cap_file_identity(&metadata)? {
+                let context = if expected_normalized == held_normalized {
+                    "equivalent spelling resolved to a different identity"
+                } else {
+                    "different spelling resolved to a different identity"
+                };
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    format!("managed root check failed: {context}"),
+                ));
+            }
+            let after = std::fs::symlink_metadata(candidate_path).map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate post-check unavailable",
+                )
+            })?;
+            if !after.is_dir()
+                || after.file_type().is_symlink()
+                || after.file_attributes() & 0x400 != 0
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate changed to a reparse point",
+                ));
+            }
+            held_final
+        };
+        let data =
+            Dir::open_ambient_dir(&data_dir, ambient_authority()).map_err(map_resource_io)?;
+        let snapshots = open_child_dir(&data, "SkillRepositorySnapshots", true)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| {
+                resource_error("RESOURCE_UNSAFE_COMPONENT", "snapshot root unavailable")
+            })?;
+        #[cfg(unix)]
+        snapshots
+            .set_permissions(
+                ".",
+                cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o700)),
+            )
+            .map_err(map_resource_io)?;
+        cleanup_stale_snapshot_generations(&snapshots)?;
+        let snapshots_path =
+            std::fs::canonicalize(std::path::Path::new(&data_dir).join("SkillRepositorySnapshots"))
+                .map_err(map_resource_io)?
+                .to_string_lossy()
+                .into_owned();
+        let snapshot_metadata = snapshots.dir_metadata().map_err(map_resource_io)?;
+        Ok(Self {
+            root,
+            root_path,
+            snapshots,
+            snapshots_path,
+            snapshots_identity: SnapshotIdentity(cap_file_identity(&snapshot_metadata)?),
+            snapshot_identities: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    #[napi]
+    pub fn clone_repository(
+        &self,
+        remote: String,
+        reference: Option<String>,
+        destination_leaf: String,
+        signal: Option<AbortSignal>,
+    ) -> Result<AsyncTask<ManagedGitTask>> {
+        validate_managed_leaf(&destination_leaf)?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        if let Some(abort) = &signal {
+            let cancelled = Arc::clone(&cancelled);
+            abort.on_abort(move || cancelled.store(true, Ordering::Release));
+        }
+        Ok(AsyncTask::with_optional_signal(
+            ManagedGitTask {
+                root: self.root.try_clone().map_err(map_resource_io)?,
+                root_path: self.root_path.clone(),
+                operation: ManagedGitOperation::Clone {
+                    remote,
+                    reference,
+                    destination: destination_leaf,
+                },
+                cancelled,
+            },
+            signal,
+        ))
+    }
+
+    #[napi]
+    pub fn inspect_repository(
+        &self,
+        leaf: String,
+        reference: Option<String>,
+        signal: Option<AbortSignal>,
+    ) -> Result<AsyncTask<ManagedGitTask>> {
+        validate_managed_leaf(&leaf)?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        if let Some(abort) = &signal {
+            let cancelled = Arc::clone(&cancelled);
+            abort.on_abort(move || cancelled.store(true, Ordering::Release));
+        }
+        Ok(AsyncTask::with_optional_signal(
+            ManagedGitTask {
+                root: self.root.try_clone().map_err(map_resource_io)?,
+                root_path: self.root_path.clone(),
+                operation: ManagedGitOperation::Inspect { leaf, reference },
+                cancelled,
+            },
+            signal,
+        ))
+    }
+
+    #[napi]
+    pub fn update_repository(
+        &self,
+        leaf: String,
+        reference: Option<String>,
+        signal: Option<AbortSignal>,
+    ) -> Result<AsyncTask<ManagedGitTask>> {
+        validate_managed_leaf(&leaf)?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        if let Some(abort) = &signal {
+            let cancelled = Arc::clone(&cancelled);
+            abort.on_abort(move || cancelled.store(true, Ordering::Release));
+        }
+        Ok(AsyncTask::with_optional_signal(
+            ManagedGitTask {
+                root: self.root.try_clone().map_err(map_resource_io)?,
+                root_path: self.root_path.clone(),
+                operation: ManagedGitOperation::Update { leaf, reference },
+                cancelled,
+            },
+            signal,
+        ))
+    }
+
+    #[napi]
+    pub fn materialize_snapshot(
+        &self,
+        repository_leaf: String,
+        repository_id: String,
+        selected_roots: Vec<Vec<String>>,
+    ) -> Result<AsyncTask<ManagedSnapshotTask>> {
+        validate_managed_leaf(&repository_leaf)?;
+        validate_repository_id(&repository_id)?;
+        if selected_roots.len() > 1_000 {
+            return Err(resource_error(
+                "RESOURCE_INVALID_PATH",
+                "too many selected roots",
+            ));
+        }
+        for components in &selected_roots {
+            if components.len() > MANAGED_SNAPSHOT_MAX_DEPTH
+                || components
+                    .iter()
+                    .any(|component| !valid_resource_component(component))
+            {
+                return Err(resource_error(
+                    "RESOURCE_INVALID_PATH",
+                    "invalid selected root",
+                ));
+            }
+        }
+        Ok(AsyncTask::new(ManagedSnapshotTask {
+            root: self.root.try_clone().map_err(map_resource_io)?,
+            snapshots: self.snapshots.try_clone().map_err(map_resource_io)?,
+            snapshots_path: self.snapshots_path.clone(),
+            snapshots_identity: self.snapshots_identity.clone(),
+            snapshot_identities: Arc::clone(&self.snapshot_identities),
+            repository_leaf,
+            repository_id,
+            selected_roots,
+        }))
+    }
+
+    #[napi]
+    pub fn validate_snapshot(&self, repository_id: String) -> Result<ManagedSkillSnapshotResult> {
+        validate_repository_id(&repository_id)?;
+        let identity = self
+            .snapshot_identities
+            .lock()
+            .map_err(|_| resource_error("RESOURCE_IO", "snapshot identity lock poisoned"))?
+            .get(&repository_id)
+            .cloned()
+            .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot is not active"))?;
+        validate_managed_snapshot(
+            &self.snapshots,
+            &self.snapshots_path,
+            &self.snapshots_identity,
+            &repository_id,
+            &identity,
+        )
+    }
+
+    #[napi]
+    pub fn delete_snapshot(&self, repository_id: String) -> Result<()> {
+        validate_repository_id(&repository_id)?;
+        validate_snapshot_root_namespace(
+            &self.snapshots,
+            &self.snapshots_path,
+            &self.snapshots_identity,
+        )?;
+        let leaf = snapshot_leaf(&repository_id);
+        if self.snapshots.symlink_metadata(&leaf).is_ok() {
+            remove_tree_entry(&self.snapshots, &leaf)?;
+            sync_dir(&self.snapshots).map_err(map_resource_io)?;
+        }
+        self.snapshot_identities
+            .lock()
+            .map_err(|_| resource_error("RESOURCE_IO", "snapshot identity lock poisoned"))?
+            .remove(&repository_id);
+        Ok(())
+    }
+
+    #[napi]
+    pub fn delete_repository(&self, repository_leaf: String) -> Result<()> {
+        validate_managed_leaf(&repository_leaf)?;
+        delete_managed_from_root(&self.root, &repository_leaf)
+    }
+}
+
+fn validate_repository_id(repository_id: &str) -> Result<()> {
+    if repository_id.is_empty()
+        || repository_id.len() > 200
+        || !repository_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "invalid repository id",
+        ));
+    }
+    Ok(())
+}
+
+fn snapshot_leaf(repository_id: &str) -> String {
+    format!("{MANAGED_SNAPSHOT_PREFIX}{repository_id}")
+}
+
+fn cleanup_stale_snapshot_generations(snapshots: &Dir) -> Result<()> {
+    let names = snapshots
+        .entries()
+        .map_err(map_resource_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_resource_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 snapshot entry")
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for name in names {
+        // Snapshot leaves are process-owned capabilities. On startup there are
+        // no active Pi consumers, so clear prior-process leaves before rebuilding
+        // the persisted records. Within a process each record has one stable leaf.
+        if name.starts_with(MANAGED_SNAPSHOT_PREFIX)
+            || name.starts_with(MANAGED_SNAPSHOT_STAGE_PREFIX)
+        {
+            remove_owned_managed_stage(snapshots, &name)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct SnapshotBounds {
+    files: usize,
+    bytes: u64,
+}
+
+fn create_private_dir(parent: &Dir, name: &str) -> Result<Dir> {
+    parent.create_dir(name).map_err(map_resource_io)?;
+    let child = open_child_dir(parent, name, false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_IO", "private directory disappeared"))?;
+    #[cfg(unix)]
+    child
+        .set_permissions(
+            ".",
+            cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o700)),
+        )
+        .map_err(map_resource_io)?;
+    Ok(child)
+}
+
+fn copy_snapshot_tree(
+    source: &Dir,
+    destination: &Dir,
+    depth: usize,
+    bounds: &mut SnapshotBounds,
+) -> Result<()> {
+    if depth > MANAGED_SNAPSHOT_MAX_DEPTH {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "snapshot tree is too deep",
+        ));
+    }
+    let entries = source
+        .entries()
+        .map_err(map_resource_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_resource_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 skill entry"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for name in entries {
+        if name == ".git" {
+            continue;
+        }
+        if !valid_resource_component(&name) {
+            return Err(resource_error(
+                "RESOURCE_INVALID_PATH",
+                "non-portable skill entry",
+            ));
+        }
+        let metadata = source.symlink_metadata(&name).map_err(map_resource_io)?;
+        if metadata.file_type().is_symlink() {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "skill snapshot source contains a link",
+            ));
+        }
+        if metadata.is_dir() {
+            let source_child = open_child_dir(source, &name, false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| {
+                    resource_error("RESOURCE_NOT_FOUND", "skill directory disappeared")
+                })?;
+            let destination_child = create_private_dir(destination, &name)?;
+            copy_snapshot_tree(&source_child, &destination_child, depth + 1, bounds)?;
+        } else if metadata.is_file() {
+            if metadata.nlink() > 1 {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "skill file has multiple hard links",
+                ));
+            }
+            bounds.files += 1;
+            bounds.bytes = bounds.bytes.saturating_add(metadata.len());
+            if bounds.files > MANAGED_SNAPSHOT_MAX_FILES
+                || bounds.bytes > MANAGED_SNAPSHOT_MAX_BYTES
+            {
+                return Err(resource_error(
+                    "RESOURCE_INVALID_PATH",
+                    "skill snapshot exceeds safety bounds",
+                ));
+            }
+            let mut input = nofollow_open(source, &name, false, false).map_err(map_resource_io)?;
+            let opened = input.metadata().map_err(map_resource_io)?;
+            if !opened.is_file()
+                || opened.file_type().is_symlink()
+                || !same_cap_file(&opened, &metadata)?
+                || opened.nlink() > 1
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "skill file changed during snapshot",
+                ));
+            }
+            let mut options = OpenOptions::new();
+            options
+                .write(true)
+                .create_new(true)
+                .follow(FollowSymlinks::No)
+                .maybe_dir(false);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut output = destination
+                .open_with(&name, &options)
+                .map_err(map_resource_io)?;
+            std::io::copy(&mut input, &mut output).map_err(map_resource_io)?;
+            output.sync_all().map_err(map_resource_io)?;
+        } else {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "skill snapshot source is special",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn open_selected_skill_root(clone: &Dir, components: &[String]) -> Result<Dir> {
+    let mut current = clone.try_clone().map_err(map_resource_io)?;
+    for component in components {
+        let next = open_child_dir(&current, component, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| {
+                resource_error("RESOURCE_NOT_FOUND", "selected skill root is missing")
+            })?;
+        current = next;
+    }
+    let manifest = current
+        .symlink_metadata("SKILL.md")
+        .map_err(map_resource_io)?;
+    if !manifest.is_file() || manifest.file_type().is_symlink() || manifest.nlink() > 1 {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "SKILL.md is not a safe regular file",
+        ));
+    }
+    Ok(current)
+}
+
+fn validate_snapshot_root_namespace(
+    snapshots: &Dir,
+    snapshots_path: &str,
+    expected: &SnapshotIdentity,
+) -> Result<()> {
+    let canonical = std::fs::canonicalize(snapshots_path).map_err(map_resource_io)?;
+    if canonical != std::path::Path::new(snapshots_path) {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot root namespace changed",
+        ));
+    }
+    let ambient = std::fs::symlink_metadata(snapshots_path).map_err(map_resource_io)?;
+    let held = snapshots.dir_metadata().map_err(map_resource_io)?;
+    if ambient.file_type().is_symlink()
+        || !ambient.is_dir()
+        || ambient_file_identity(std::path::Path::new(snapshots_path))? != expected.0
+        || cap_file_identity(&held)? != expected.0
+    {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot root identity changed",
+        ));
+    }
+    Ok(())
+}
+
+fn snapshot_result(
+    snapshots_path: &str,
+    repository_id: &str,
+    skill_count: usize,
+) -> ManagedSkillSnapshotResult {
+    let generation = snapshot_leaf(repository_id);
+    let skill_roots = (0..skill_count)
+        .map(|index| {
+            std::path::Path::new(snapshots_path)
+                .join(&generation)
+                .join("skills")
+                .join(index.to_string())
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    ManagedSkillSnapshotResult {
+        generation,
+        skill_roots,
+    }
+}
+
+fn validate_snapshot_tree(
+    directory: &Dir,
+    depth: usize,
+    bounds: &mut SnapshotBounds,
+) -> Result<()> {
+    if depth > MANAGED_SNAPSHOT_MAX_DEPTH {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "snapshot tree is too deep",
+        ));
+    }
+    let names = directory
+        .entries()
+        .map_err(map_resource_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_resource_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 snapshot entry")
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for name in names {
+        if !valid_resource_component(&name) {
+            return Err(resource_error(
+                "RESOURCE_INVALID_PATH",
+                "non-portable snapshot entry",
+            ));
+        }
+        let expected = directory.symlink_metadata(&name).map_err(map_resource_io)?;
+        if expected.file_type().is_symlink() {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "snapshot tree contains a link or reparse point",
+            ));
+        }
+        if expected.is_dir() {
+            let child = open_child_dir(directory, &name, false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| {
+                    resource_error("RESOURCE_NOT_FOUND", "snapshot entry disappeared")
+                })?;
+            let opened = child.dir_metadata().map_err(map_resource_io)?;
+            if !same_cap_file(&opened, &expected)? {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "snapshot directory changed during validation",
+                ));
+            }
+            validate_snapshot_tree(&child, depth + 1, bounds)?;
+            let after = directory.symlink_metadata(&name).map_err(map_resource_io)?;
+            if after.file_type().is_symlink()
+                || !after.is_dir()
+                || !same_cap_file(&after, &expected)?
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "snapshot directory changed during validation",
+                ));
+            }
+        } else if expected.is_file() {
+            if expected.nlink() > 1 {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "snapshot file is hard-linked",
+                ));
+            }
+            bounds.files += 1;
+            if bounds.files > MANAGED_SNAPSHOT_MAX_FILES {
+                return Err(resource_error(
+                    "RESOURCE_INVALID_PATH",
+                    "skill snapshot exceeds safety bounds",
+                ));
+            }
+            let mut file =
+                nofollow_open(directory, &name, false, false).map_err(map_resource_io)?;
+            let opened = file.metadata().map_err(map_resource_io)?;
+            if opened.file_type().is_symlink()
+                || !opened.is_file()
+                || opened.nlink() > 1
+                || !same_cap_file(&opened, &expected)?
+                || opened.len() != expected.len()
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "snapshot file changed or is hard-linked",
+                ));
+            }
+            let mut actual_len = 0_u64;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer).map_err(map_resource_io)?;
+                if read == 0 {
+                    break;
+                }
+                actual_len = actual_len.saturating_add(read as u64);
+                if bounds.bytes.saturating_add(actual_len) > MANAGED_SNAPSHOT_MAX_BYTES {
+                    return Err(resource_error(
+                        "RESOURCE_INVALID_PATH",
+                        "skill snapshot exceeds safety bounds",
+                    ));
+                }
+            }
+            let after_open = file.metadata().map_err(map_resource_io)?;
+            let after_name = directory.symlink_metadata(&name).map_err(map_resource_io)?;
+            if actual_len != opened.len()
+                || !same_cap_file(&after_open, &opened)?
+                || after_open.len() != opened.len()
+                || after_open.nlink() > 1
+                || after_name.file_type().is_symlink()
+                || !after_name.is_file()
+                || !same_cap_file(&after_name, &opened)?
+                || after_name.len() != opened.len()
+                || after_name.nlink() > 1
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "snapshot file changed during validation",
+                ));
+            }
+            bounds.bytes += actual_len;
+        } else {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "snapshot tree contains a special file",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_snapshot_manifest(root: &Dir) -> Result<()> {
+    let expected = root.symlink_metadata("SKILL.md").map_err(map_resource_io)?;
+    if expected.file_type().is_symlink() || !expected.is_file() || expected.nlink() > 1 {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot SKILL.md is unsafe",
+        ));
+    }
+    let opened = nofollow_open(root, "SKILL.md", false, false).map_err(map_resource_io)?;
+    let metadata = opened.metadata().map_err(map_resource_io)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() > 1
+        || !same_cap_file(&metadata, &expected)?
+    {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot SKILL.md changed during validation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_managed_snapshot(
+    snapshots: &Dir,
+    snapshots_path: &str,
+    snapshots_identity: &SnapshotIdentity,
+    repository_id: &str,
+    identity: &ManagedSnapshotIdentity,
+) -> Result<ManagedSkillSnapshotResult> {
+    validate_snapshot_root_namespace(snapshots, snapshots_path, snapshots_identity)?;
+    let leaf = snapshot_leaf(repository_id);
+    let metadata = snapshots.symlink_metadata(&leaf).map_err(map_resource_io)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || cap_file_identity(&metadata)? != identity.leaf.0
+    {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "active snapshot leaf identity changed",
+        ));
+    }
+    let repository = open_child_dir(snapshots, &leaf, false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot leaf disappeared"))?;
+    let expected_skills = repository
+        .symlink_metadata("skills")
+        .map_err(map_resource_io)?;
+    let skills = open_child_dir(&repository, "skills", false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot skills disappeared"))?;
+    let opened_skills = skills.dir_metadata().map_err(map_resource_io)?;
+    if !same_cap_file(&opened_skills, &expected_skills)? {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot skills identity changed",
+        ));
+    }
+    let mut bounds = SnapshotBounds::default();
+    for index in 0..identity.skill_count {
+        let name = index.to_string();
+        let expected_root = skills.symlink_metadata(&name).map_err(map_resource_io)?;
+        let root = open_child_dir(&skills, &name, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot skill disappeared"))?;
+        let opened_root = root.dir_metadata().map_err(map_resource_io)?;
+        if !same_cap_file(&opened_root, &expected_root)? {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "snapshot skill identity changed",
+            ));
+        }
+        validate_snapshot_manifest(&root)?;
+        validate_snapshot_tree(&root, 0, &mut bounds)?;
+        // Re-open the required manifest after the full traversal so a concurrent
+        // replacement cannot hide behind validation of an earlier handle.
+        validate_snapshot_manifest(&root)?;
+        let after_root = skills.symlink_metadata(&name).map_err(map_resource_io)?;
+        if after_root.file_type().is_symlink()
+            || !after_root.is_dir()
+            || !same_cap_file(&after_root, &expected_root)?
+        {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "snapshot skill changed during validation",
+            ));
+        }
+    }
+    let after_skills = repository
+        .symlink_metadata("skills")
+        .map_err(map_resource_io)?;
+    if after_skills.file_type().is_symlink()
+        || !after_skills.is_dir()
+        || !same_cap_file(&after_skills, &expected_skills)?
+    {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "snapshot skills changed during validation",
+        ));
+    }
+    Ok(snapshot_result(
+        snapshots_path,
+        repository_id,
+        identity.skill_count,
+    ))
+}
+
+struct SnapshotAuthority<'a> {
+    root: &'a Dir,
+    path: &'a str,
+    identity: &'a SnapshotIdentity,
+    active: &'a Arc<Mutex<HashMap<String, ManagedSnapshotIdentity>>>,
+}
+
+fn materialize_managed_snapshot(
+    root: &Dir,
+    authority: SnapshotAuthority<'_>,
+    repository_leaf: &str,
+    repository_id: &str,
+    selected_roots: &[Vec<String>],
+) -> Result<ManagedSkillSnapshotResult> {
+    let snapshots = authority.root;
+    let snapshots_path = authority.path;
+    let snapshots_identity = authority.identity;
+    let snapshot_identities = authority.active;
+    validate_snapshot_root_namespace(snapshots, snapshots_path, snapshots_identity)?;
+    let (_identity, clone) = capture_managed_clone(root, repository_leaf)?;
+    let nonce = private_nonce().map_err(map_resource_io)?;
+    let stage_leaf = format!("{MANAGED_SNAPSHOT_STAGE_PREFIX}{nonce}");
+    let stage = create_private_dir(snapshots, &stage_leaf)?;
+    let build_result = (|| -> Result<()> {
+        // Keep every child capability inside this construction scope. Windows
+        // opens these without delete sharing, so none may survive publication.
+        let skills = create_private_dir(&stage, "skills")?;
+        let mut bounds = SnapshotBounds::default();
+        for (index, components) in selected_roots.iter().enumerate() {
+            let source = open_selected_skill_root(&clone, components)?;
+            let destination = create_private_dir(&skills, &index.to_string())?;
+            copy_snapshot_tree(&source, &destination, 0, &mut bounds)?;
+            // `source` and `destination` are dropped at the end of each loop
+            // iteration, before the `skills` capability is dropped here.
+        }
+        Ok(())
+    })();
+    // The clone and every selected source capability are no longer needed once
+    // staging is complete; close them before any Windows rename or cleanup.
+    drop(clone);
+    if let Err(error) = build_result {
+        // The stage itself must also close before recursive cleanup on Windows.
+        drop(stage);
+        return Err(cleanup_owned_managed_stage_error(
+            snapshots,
+            &stage_leaf,
+            error,
+        ));
+    }
+
+    let leaf = snapshot_leaf(repository_id);
+    let repository = match open_child_dir(snapshots, &leaf, false).map_err(map_resource_io)? {
+        Some(repository) => repository,
+        None => create_private_dir(snapshots, &leaf)?,
+    };
+    let leaf_metadata = repository.dir_metadata().map_err(map_resource_io)?;
+    if let Some(expected) = snapshot_identities
+        .lock()
+        .map_err(|_| resource_error("RESOURCE_IO", "snapshot identity lock poisoned"))?
+        .get(repository_id)
+        .cloned()
+    {
+        if cap_file_identity(&leaf_metadata)? != expected.leaf.0 {
+            drop(repository);
+            drop(stage);
+            return Err(cleanup_owned_managed_stage_error(
+                snapshots,
+                &stage_leaf,
+                resource_error("RESOURCE_UNSAFE_COMPONENT", "active snapshot leaf changed"),
+            ));
+        }
+    }
+
+    match repository.symlink_metadata("skills") {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                drop(repository);
+                drop(stage);
+                return Err(cleanup_owned_managed_stage_error(
+                    snapshots,
+                    &stage_leaf,
+                    resource_error(
+                        "RESOURCE_UNSAFE_COMPONENT",
+                        "active snapshot skills changed",
+                    ),
+                ));
+            }
+            #[cfg(unix)]
+            {
+                exchange_entries(&stage, "skills", &repository, "skills")
+                    .map_err(map_resource_io)?;
+                remove_tree_entry(&stage, "skills")?;
+            }
+            #[cfg(windows)]
+            {
+                let old = format!("old-{nonce}");
+                rename_noreplace(&repository, "skills", &repository, &old)
+                    .map_err(map_resource_io)?;
+                if let Err(error) = rename_noreplace(&stage, "skills", &repository, "skills") {
+                    let _ = rename_noreplace(&repository, &old, &repository, "skills");
+                    drop(repository);
+                    drop(stage);
+                    return Err(cleanup_owned_managed_stage_error(
+                        snapshots,
+                        &stage_leaf,
+                        map_resource_io(error),
+                    ));
+                }
+                remove_tree_entry(&repository, &old)?;
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            if let Err(error) = rename_noreplace(&stage, "skills", &repository, "skills") {
+                drop(repository);
+                drop(stage);
+                return Err(cleanup_owned_managed_stage_error(
+                    snapshots,
+                    &stage_leaf,
+                    map_resource_io(error),
+                ));
+            }
+        }
+        Err(error) => {
+            drop(repository);
+            drop(stage);
+            return Err(cleanup_owned_managed_stage_error(
+                snapshots,
+                &stage_leaf,
+                map_resource_io(error),
+            ));
+        }
+    }
+    // Publication moved `skills` out; close the now-empty stage handle before
+    // deleting its directory on Windows.
+    drop(stage);
+    remove_owned_managed_stage(snapshots, &stage_leaf)?;
+    sync_dir(&repository).map_err(map_resource_io)?;
+    sync_dir(snapshots).map_err(map_resource_io)?;
+    validate_snapshot_root_namespace(snapshots, snapshots_path, snapshots_identity)?;
+    let identity = ManagedSnapshotIdentity {
+        leaf: SnapshotIdentity(cap_file_identity(&leaf_metadata)?),
+        skill_count: selected_roots.len(),
+    };
+    snapshot_identities
+        .lock()
+        .map_err(|_| resource_error("RESOURCE_IO", "snapshot identity lock poisoned"))?
+        .insert(repository_id.to_owned(), identity.clone());
+    validate_managed_snapshot(
+        snapshots,
+        snapshots_path,
+        snapshots_identity,
+        repository_id,
+        &identity,
+    )
+}
+
+fn validate_managed_leaf(leaf: &str) -> Result<()> {
+    if !valid_resource_component(leaf) || leaf.starts_with(MANAGED_STAGE_PREFIX) {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "invalid managed repository leaf",
+        ));
+    }
+    Ok(())
+}
+
+fn allocate_managed_stage(root: &Dir) -> Result<(String, Dir)> {
+    for _ in 0..128 {
+        let leaf = format!(
+            "{MANAGED_STAGE_PREFIX}{}",
+            private_nonce().map_err(map_resource_io)?
+        );
+        match root.create_dir(&leaf) {
+            Ok(()) => {
+                let stage = open_child_dir(root, &leaf, false)
+                    .map_err(map_resource_io)?
+                    .ok_or_else(|| {
+                        resource_error("RESOURCE_UNSAFE_COMPONENT", "stage disappeared")
+                    })?;
+                return Ok((leaf, stage));
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(map_resource_io(error)),
+        }
+    }
+    Err(resource_error(
+        "RESOURCE_ALREADY_EXISTS",
+        "could not allocate managed stage",
+    ))
+}
+
+fn capture_managed_clone(root: &Dir, leaf: &str) -> Result<(cap_std::fs::Metadata, Dir)> {
+    validate_managed_leaf(leaf)?;
+    let expected = root.symlink_metadata(leaf).map_err(map_resource_io)?;
+    if !expected.is_dir() || expected.file_type().is_symlink() {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "managed clone is not a real directory",
+        ));
+    }
+    let clone = open_child_dir(root, leaf, false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "managed clone disappeared"))?;
+    let opened = clone.dir_metadata().map_err(map_resource_io)?;
+    if opened.dev() != expected.dev() || opened.ino() != expected.ino() {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "managed clone identity changed",
+        ));
+    }
+    Ok((expected, clone))
+}
+
+fn read_bounded(mut stream: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut retained = Vec::new();
+    let mut overflow = false;
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MANAGED_GIT_OUTPUT_LIMIT.saturating_sub(retained.len());
+        let keep = remaining.min(read);
+        retained.extend_from_slice(&chunk[..keep]);
+        if keep < read {
+            overflow = true;
+        }
+        // Always continue draining. Stopping at the retention bound can fill the
+        // pipe and deadlock the child before it exits.
+    }
+    Ok((retained, overflow))
+}
+
+fn managed_git_timeout() -> Duration {
+    std::env::var("AGENT_DECK_MANAGED_GIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(MANAGED_GIT_TIMEOUT)
+}
+
+fn run_managed_git(
+    dir: &Dir,
+    current_path: &str,
+    args: &[&str],
+    cancelled: &AtomicBool,
+) -> Result<String> {
+    let binary = std::env::var("AGENT_DECK_GIT_BIN").unwrap_or_else(|_| "git".into());
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        let fd = dir.as_raw_fd();
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::fchdir(fd) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = dir;
+        command.current_dir(current_path);
+    }
+    #[cfg(unix)]
+    let _ = current_path;
+
+    let mut child = command.spawn().map_err(map_resource_io)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| resource_error("RESOURCE_IO", "missing git stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| resource_error("RESOURCE_IO", "missing git stderr"))?;
+    let stdout_reader = thread::spawn(move || read_bounded(stdout));
+    let stderr_reader = thread::spawn(move || read_bounded(stderr));
+    let started = Instant::now();
+    let timeout = managed_git_timeout();
+    let mut timed_out = false;
+    let mut wait_error = None;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < timeout && !cancelled.load(Ordering::Acquire) => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                timed_out = !cancelled.load(Ordering::Acquire);
+                #[cfg(unix)]
+                unsafe {
+                    // The child established its own process group in pre_exec;
+                    // kill descendants before reaping the group leader.
+                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                }
+                #[cfg(windows)]
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    let _ = child.kill();
+                }
+                break child.wait().ok();
+            }
+            Err(error) => {
+                wait_error = Some(error);
+                #[cfg(unix)]
+                unsafe {
+                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                }
+                #[cfg(windows)]
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    let _ = child.kill();
+                }
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    // Join both readers exactly once on every exit path, after the child and its
+    // descendants no longer hold inherited pipe handles.
+    let stdout_result = stdout_reader
+        .join()
+        .map_err(|_| resource_error("RESOURCE_IO", "git stdout reader failed"))?;
+    let stderr_result = stderr_reader
+        .join()
+        .map_err(|_| resource_error("RESOURCE_IO", "git stderr reader failed"))?;
+    let (stdout, stdout_overflow) = stdout_result.map_err(map_resource_io)?;
+    let (stderr, stderr_overflow) = stderr_result.map_err(map_resource_io)?;
+    if let Some(error) = wait_error {
+        return Err(map_resource_io(error));
+    }
+    if stdout_overflow || stderr_overflow {
+        return Err(resource_error(
+            "RESOURCE_OUTPUT_LIMIT",
+            "managed git output exceeded limit",
+        ));
+    }
+    if timed_out {
+        return Err(resource_error("RESOURCE_BUSY", "managed git timed out"));
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err(resource_error("RESOURCE_BUSY", "managed git was cancelled"));
+    }
+    let status =
+        status.ok_or_else(|| resource_error("RESOURCE_IO", "managed git was not reaped"))?;
+    if !status.success() {
+        let detail = String::from_utf8_lossy(&stderr);
+        let redacted = detail.lines().next().unwrap_or("git failed");
+        return Err(resource_error(
+            "RESOURCE_IO",
+            format!("managed git failed: {redacted}"),
+        ));
+    }
+    String::from_utf8(stdout)
+        .map_err(|_| resource_error("RESOURCE_INVALID_UTF8", "managed git emitted invalid UTF-8"))
+}
+
+fn inspect_stage(
+    stage: &Dir,
+    stage_path: &str,
+    reference: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Result<ManagedGitRepositoryResult> {
+    let status = run_managed_git(
+        stage,
+        stage_path,
+        &["status", "--porcelain=v1", "--branch"],
+        cancelled,
+    )?;
+    let head = run_managed_git(stage, stage_path, &["rev-parse", "HEAD"], cancelled)?
+        .trim()
+        .to_owned();
+    let origin = run_managed_git(
+        stage,
+        stage_path,
+        &["remote", "get-url", "origin"],
+        cancelled,
+    )?
+    .trim()
+    .to_owned();
+    let ref_matches = if let Some(reference) = reference {
+        [
+            reference.to_owned(),
+            format!("refs/heads/{reference}"),
+            format!("refs/remotes/origin/{reference}"),
+        ]
+        .iter()
+        .any(|candidate| {
+            run_managed_git(
+                stage,
+                stage_path,
+                &["rev-parse", "--verify", &format!("{candidate}^{{commit}}")],
+                cancelled,
+            )
+            .is_ok_and(|commit| commit.trim() == head)
+        })
+    } else {
+        true
+    };
+    Ok(ManagedGitRepositoryResult {
+        head,
+        origin,
+        clean: status.lines().all(|line| line.starts_with("## ")),
+        ref_matches,
+    })
+}
+
+fn validate_managed_git_tree(dir: &Dir) -> Result<()> {
+    for entry in dir.entries().map_err(map_resource_io)? {
+        let entry = entry.map_err(map_resource_io)?;
+        let name = entry
+            .file_name()
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 git entry"))?;
+        if !valid_resource_component(&name) {
+            return Err(resource_error(
+                "RESOURCE_INVALID_PATH",
+                "non-portable git entry",
+            ));
+        }
+        let metadata = dir.symlink_metadata(&name).map_err(map_resource_io)?;
+        if metadata.file_type().is_symlink() {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed clone contains a link",
+            ));
+        }
+        if metadata.is_dir() {
+            let child = open_child_dir(dir, &name, false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "git directory disappeared"))?;
+            validate_managed_git_tree(&child)?;
+        } else if !metadata.is_file() || metadata.nlink() > 1 {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed clone contains a special or aliased file",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn remove_owned_managed_stage(root: &Dir, stage_leaf: &str) -> Result<()> {
+    fn remove_owned_entry(parent: &Dir, name: &str) -> Result<()> {
+        let metadata = parent.symlink_metadata(name).map_err(map_resource_io)?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            let child = open_child_dir(parent, name, false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "owned stage disappeared"))?;
+            let names = child
+                .entries()
+                .map_err(map_resource_io)?
+                .map(|entry| {
+                    entry
+                        .map_err(map_resource_io)?
+                        .file_name()
+                        .to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 stage entry")
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for child_name in names {
+                remove_owned_entry(&child, &child_name)?;
+            }
+            drop(child);
+            parent.remove_dir(name).map_err(map_resource_io)
+        } else {
+            parent.remove_file(name).map_err(map_resource_io)
+        }
+    }
+    remove_owned_entry(root, stage_leaf)
+}
+
+fn cleanup_owned_managed_stage_error(root: &Dir, stage_leaf: &str, original: Error) -> Error {
+    if remove_owned_managed_stage(root, stage_leaf).is_err() {
+        resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "managed clone failed and private-stage cleanup was interrupted",
+        )
+    } else {
+        original
+    }
+}
+
+/// Consume the stage capability before cleanup. Windows opens directory
+/// capabilities without delete sharing, so cleanup while `stage` is alive
+/// self-blocks and masks the operation's original typed error.
+fn finish_managed_stage<T>(
+    root: &Dir,
+    stage_leaf: &str,
+    stage: Dir,
+    result: Result<T>,
+) -> Result<T> {
+    drop(stage);
+    match remove_owned_managed_stage(root, stage_leaf) {
+        Ok(()) => result,
+        Err(_) => Err(resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "managed operation finished but private-stage cleanup was interrupted",
+        )),
+    }
+}
+
+fn publish_managed_stage(
+    root: &Dir,
+    stage_leaf: &str,
+    stage: Dir,
+    destination: &str,
+    replace: bool,
+    expected_identity: Option<ExpectedEntryIdentity>,
+) -> Result<()> {
+    drop(stage);
+    publish_staged_tree_with_identity(root, stage_leaf, destination, replace, expected_identity)
+}
+
+fn managed_clone(
+    root: &Dir,
+    root_path: &str,
+    remote: &str,
+    reference: Option<&str>,
+    destination: &str,
+    cancelled: &AtomicBool,
+) -> Result<ManagedGitRepositoryResult> {
+    validate_managed_leaf(destination)?;
+    let (stage_leaf, stage) = allocate_managed_stage(root)?;
+    let stage_path = std::path::Path::new(root_path)
+        .join(&stage_leaf)
+        .to_string_lossy()
+        .into_owned();
+    let mut args = vec!["clone", "--no-hardlinks"];
+    if let Some(reference) = reference {
+        args.extend(["--branch", reference, "--single-branch"]);
+    }
+    args.extend([remote, "."]);
+    let operation = (|| -> Result<ManagedGitRepositoryResult> {
+        run_managed_git(&stage, &stage_path, &args, cancelled)?;
+        validate_managed_git_tree(&stage)?;
+        inspect_stage(&stage, &stage_path, reference, cancelled)
+    })();
+    let result = match operation {
+        Ok(result) => result,
+        Err(error) => return finish_managed_stage(root, &stage_leaf, stage, Err(error)),
+    };
+    // Publishing consumes the stage capability before renaming its directory.
+    publish_managed_stage(root, &stage_leaf, stage, destination, false, None)?;
+    Ok(result)
+}
+
+fn copy_clone_to_stage(root: &Dir, leaf: &str) -> Result<(String, Dir, cap_std::fs::Metadata)> {
+    let (identity, source) = capture_managed_clone(root, leaf)?;
+    let (stage_leaf, stage) = allocate_managed_stage(root)?;
+    let copy_result = copy_tree_inner(&source, &stage, true);
+    drop(source);
+    if let Err(error) = copy_result {
+        return finish_managed_stage(root, &stage_leaf, stage, Err(error));
+    }
+    Ok((stage_leaf, stage, identity))
+}
+
+fn managed_inspect(
+    root: &Dir,
+    root_path: &str,
+    leaf: &str,
+    reference: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Result<ManagedGitRepositoryResult> {
+    let (stage_leaf, stage, _) = copy_clone_to_stage(root, leaf)?;
+    let stage_path = std::path::Path::new(root_path)
+        .join(&stage_leaf)
+        .to_string_lossy()
+        .into_owned();
+    let result = inspect_stage(&stage, &stage_path, reference, cancelled);
+    finish_managed_stage(root, &stage_leaf, stage, result)
+}
+
+fn managed_update(
+    root: &Dir,
+    root_path: &str,
+    leaf: &str,
+    reference: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Result<ManagedGitRepositoryResult> {
+    #[cfg(windows)]
+    return managed_update_windows(root, root_path, leaf, reference, cancelled);
+
+    #[cfg(unix)]
+    {
+        let (stage_leaf, stage, expected) = copy_clone_to_stage(root, leaf)?;
+        let stage_path = std::path::Path::new(root_path)
+            .join(&stage_leaf)
+            .to_string_lossy()
+            .into_owned();
+        let operation = (|| -> Result<ManagedGitRepositoryResult> {
+            let before = inspect_stage(&stage, &stage_path, reference, cancelled)?;
+            if !before.clean {
+                return Err(resource_error(
+                    "RESOURCE_BUSY",
+                    "managed repository is dirty",
+                ));
+            }
+            let branch = if let Some(reference) = reference {
+                reference.to_owned()
+            } else {
+                run_managed_git(
+                    &stage,
+                    &stage_path,
+                    &["rev-parse", "--abbrev-ref", "HEAD"],
+                    cancelled,
+                )?
+                .trim()
+                .to_owned()
+            };
+            run_managed_git(
+                &stage,
+                &stage_path,
+                &["fetch", "origin", &branch],
+                cancelled,
+            )?;
+            run_managed_git(
+                &stage,
+                &stage_path,
+                &["reset", "--hard", "FETCH_HEAD"],
+                cancelled,
+            )?;
+            let result = inspect_stage(&stage, &stage_path, reference, cancelled)?;
+            validate_managed_git_tree(&stage)?;
+            let current = root.symlink_metadata(leaf).map_err(map_resource_io)?;
+            if current.dev() != expected.dev() || current.ino() != expected.ino() {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed clone changed during update",
+                ));
+            }
+            Ok(result)
+        })();
+        let result = match operation {
+            Ok(result) => result,
+            Err(error) => return finish_managed_stage(root, &stage_leaf, stage, Err(error)),
+        };
+        let expected_identity = (expected.dev(), expected.ino());
+        publish_managed_stage(
+            root,
+            &stage_leaf,
+            stage,
+            leaf,
+            true,
+            Some(expected_identity),
+        )?;
+        Ok(result)
+    }
+}
+
+#[cfg(windows)]
+fn managed_update_windows(
+    root: &Dir,
+    root_path: &str,
+    leaf: &str,
+    reference: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Result<ManagedGitRepositoryResult> {
+    let (_expected, clone) = capture_managed_clone(root, leaf)?;
+    let clone_path = std::path::Path::new(root_path)
+        .join(leaf)
+        .to_string_lossy()
+        .into_owned();
+    let before = inspect_stage(&clone, &clone_path, reference, cancelled)?;
+    if !before.clean {
+        return Err(resource_error(
+            "RESOURCE_BUSY",
+            "managed repository is dirty",
+        ));
+    }
+    let branch = if let Some(reference) = reference {
+        reference.to_owned()
+    } else {
+        run_managed_git(
+            &clone,
+            &clone_path,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            cancelled,
+        )?
+        .trim()
+        .to_owned()
+    };
+    run_managed_git(
+        &clone,
+        &clone_path,
+        &["fetch", "origin", &branch],
+        cancelled,
+    )?;
+    run_managed_git(
+        &clone,
+        &clone_path,
+        &["reset", "--hard", "FETCH_HEAD"],
+        cancelled,
+    )?;
+    inspect_stage(&clone, &clone_path, reference, cancelled)
+}
+
+fn delete_managed_from_root(root: &Dir, repository_leaf: &str) -> Result<()> {
+    let (expected, held) = capture_managed_clone(root, repository_leaf)?;
+    #[cfg(windows)]
+    drop(held);
+    #[cfg(unix)]
+    let _held = held;
+    let quarantine = format!(
+        "{RESOURCE_TEMP_PREFIX}managed-delete-{}",
+        private_nonce().map_err(map_resource_io)?
+    );
+    rename_noreplace(root, repository_leaf, root, &quarantine).map_err(map_resource_io)?;
+    let exchanged = root
+        .symlink_metadata(&quarantine)
+        .map_err(map_resource_io)?;
+    if exchanged.dev() != expected.dev() || exchanged.ino() != expected.ino() {
+        let _ = rename_noreplace(root, &quarantine, root, repository_leaf);
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "managed clone changed during delete",
+        ));
+    }
+    if let Err(error) = remove_tree_entry(root, &quarantine) {
+        if rename_noreplace(root, &quarantine, root, repository_leaf).is_err() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "managed repository quarantine could not be rolled back",
+            ));
+        }
+        return Err(error);
+    }
+    sync_dir(root).map_err(map_resource_io)
+}
+
 fn open_source_root(source_path: &str) -> Result<Dir> {
     let source = std::path::Path::new(source_path);
     let parent_path = source
@@ -882,6 +2809,10 @@ pub fn rename_resource_catalog_entry(
 }
 
 fn copy_tree(source: &Dir, destination: &Dir) -> Result<()> {
+    copy_tree_inner(source, destination, false)
+}
+
+fn copy_tree_inner(source: &Dir, destination: &Dir, include_git: bool) -> Result<()> {
     for entry in source.entries().map_err(map_resource_io)? {
         let entry = entry.map_err(map_resource_io)?;
         let name = entry
@@ -889,7 +2820,7 @@ fn copy_tree(source: &Dir, destination: &Dir) -> Result<()> {
             .to_str()
             .map(str::to_owned)
             .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 source name"))?;
-        if name == ".git" {
+        if name == ".git" && !include_git {
             continue;
         }
         if !valid_resource_component(&name) {
@@ -913,7 +2844,7 @@ fn copy_tree(source: &Dir, destination: &Dir) -> Result<()> {
             let destination_child = open_child_dir(destination, &name, false)
                 .map_err(map_resource_io)?
                 .ok_or_else(|| resource_error("RESOURCE_IO", "staging directory disappeared"))?;
-            copy_tree(&source_child, &destination_child)?;
+            copy_tree_inner(&source_child, &destination_child, include_git)?;
         } else if metadata.is_file() {
             let mut input = nofollow_open(source, &name, false, false).map_err(|error| {
                 if error.kind() == ErrorKind::NotFound {
@@ -1365,7 +3296,19 @@ fn cleanup_owned_stage_error(parent: &Dir, stage: &str, original: Error) -> Erro
     }
 }
 
+type ExpectedEntryIdentity = (u64, u64);
+
 fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> Result<()> {
+    publish_staged_tree_with_identity(parent, stage, leaf, replace, None)
+}
+
+fn publish_staged_tree_with_identity(
+    parent: &Dir,
+    stage: &str,
+    leaf: &str,
+    replace: bool,
+    expected_identity: Option<ExpectedEntryIdentity>,
+) -> Result<()> {
     #[cfg(unix)]
     if !replace {
         if let Err(error) = rename_noreplace(parent, stage, parent, leaf) {
@@ -1401,8 +3344,33 @@ fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> 
             ));
         }
     };
+    #[cfg(unix)]
+    if let (Some((expected_dev, expected_ino)), Some(target)) = (expected_identity, target.as_ref())
+    {
+        if target.dev() != expected_dev || target.ino() != expected_ino {
+            return Err(cleanup_owned_stage_error(
+                parent,
+                stage,
+                resource_error("RESOURCE_UNSAFE_COMPONENT", "target identity changed"),
+            ));
+        }
+    }
+
     #[cfg(windows)]
-    return reconcile_staged_tree_windows(parent, stage, leaf, replace, target.is_some());
+    {
+        if let (Some((expected_dev, expected_ino)), Some(target)) =
+            (expected_identity, target.as_ref())
+        {
+            if target.dev() != expected_dev || target.ino() != expected_ino {
+                return Err(cleanup_owned_stage_error(
+                    parent,
+                    stage,
+                    resource_error("RESOURCE_UNSAFE_COMPONENT", "target identity changed"),
+                ));
+            }
+        }
+        reconcile_staged_tree_windows(parent, stage, leaf, replace, target.is_some())
+    }
 
     #[cfg(unix)]
     let Some(target) = target else {
@@ -1452,10 +3420,12 @@ fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> 
                 return Err(map_resource_io(error));
             }
         };
+        let (expected_dev, expected_ino) =
+            expected_identity.unwrap_or_else(|| (target.dev(), target.ino()));
         if !exchanged.is_dir()
             || exchanged.file_type().is_symlink()
-            || exchanged.dev() != target.dev()
-            || exchanged.ino() != target.ino()
+            || exchanged.dev() != expected_dev
+            || exchanged.ino() != expected_ino
         {
             let rollback = exchange_entries(parent, stage, parent, leaf);
             let cleanup = if rollback.is_ok() {
@@ -1645,6 +3615,41 @@ mod tests {
     }
 
     #[test]
+    fn windows_namespace_normalization_accepts_equivalent_spellings() {
+        let drive = normalize_windows_namespace_path(r"C:\Users\Agent\SkillRepositories").unwrap();
+        let extended =
+            normalize_windows_namespace_path(r"\\?\c:/users/AGENT/SkillRepositories\").unwrap();
+        assert_eq!(drive, extended);
+
+        let unc = normalize_windows_namespace_path(r"\\Server\Share\Skills").unwrap();
+        let extended_unc =
+            normalize_windows_namespace_path(r"\\?\UNC\server\share\SKILLS\").unwrap();
+        assert_eq!(unc, extended_unc);
+    }
+
+    #[test]
+    fn windows_namespace_normalization_rejects_unsafe_or_different_paths() {
+        for unsafe_path in [
+            r"C:relative\Skills",
+            r"C:\safe\..\outside",
+            r"C:\safe\file:stream",
+            r"\\server",
+            r"\\server\share:stream\Skills",
+            r"\\server\..\Skills",
+            r"relative\Skills",
+        ] {
+            assert!(
+                normalize_windows_namespace_path(unsafe_path).is_err(),
+                "accepted {unsafe_path}"
+            );
+        }
+        assert_ne!(
+            normalize_windows_namespace_path(r"C:\safe\one").unwrap(),
+            normalize_windows_namespace_path(r"C:\safe\two").unwrap()
+        );
+    }
+
+    #[test]
     fn basename_policy_rejects_cross_platform_ambiguity() {
         for invalid in [
             "../x.loop.md",
@@ -1660,6 +3665,59 @@ mod tests {
             assert!(!valid_catalog_basename(invalid), "accepted {invalid}");
         }
         assert!(valid_catalog_basename("native name.loop.md"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_child_handle_must_close_before_publication() {
+        let home = home();
+        let snapshots = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let stage = create_private_dir(&snapshots, "stage").unwrap();
+        let skills = create_private_dir(&stage, "skills").unwrap();
+        let repository = create_private_dir(&snapshots, "repository").unwrap();
+
+        let blocked = rename_noreplace(&stage, "skills", &repository, "skills").unwrap_err();
+        assert!(
+            matches!(blocked.raw_os_error(), Some(5 | 32 | 33)),
+            "unexpected rename error: {blocked:?}"
+        );
+        drop(skills);
+        rename_noreplace(&stage, "skills", &repository, "skills").unwrap();
+
+        drop(repository);
+        drop(stage);
+        drop(snapshots);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_clone_stage_is_closed_before_publication() {
+        let home = home();
+        let root = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let (stage_leaf, stage) = allocate_managed_stage(&root).unwrap();
+        stage.write("owned", b"content").unwrap();
+
+        publish_managed_stage(&root, &stage_leaf, stage, "repository", false, None).unwrap();
+        assert!(root.symlink_metadata(&stage_leaf).is_err());
+        assert!(root.symlink_metadata("repository").unwrap().is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_failed_managed_inspect_cleanup_preserves_typed_error() {
+        let home = home();
+        let root = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let (stage_leaf, stage) = allocate_managed_stage(&root).unwrap();
+        stage.write("owned", b"content").unwrap();
+        let original = resource_error("RESOURCE_OUTPUT_LIMIT", "managed git output exceeded limit");
+
+        let error =
+            finish_managed_stage::<()>(&root, &stage_leaf, stage, Err(original)).unwrap_err();
+        assert!(
+            error.reason.starts_with("RESOURCE_OUTPUT_LIMIT:"),
+            "{error:?}"
+        );
+        assert!(root.symlink_metadata(&stage_leaf).is_err());
     }
 
     #[cfg(windows)]
@@ -2605,6 +4663,210 @@ mod tests {
             Command::new("cmd")
                 .args(["/c", "rmdir"])
                 .arg(&link)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn managed_repository_publish_is_noreplace_and_delete_is_direct_child_scoped() {
+        let root = home();
+        let repositories = root.path().join("SkillRepositories");
+        fs::create_dir(&repositories).unwrap();
+        fs::create_dir(repositories.join(".agent-deck-clone-first")).unwrap();
+        fs::write(repositories.join(".agent-deck-clone-first/file"), "owned").unwrap();
+        fs::create_dir(repositories.join("collision")).unwrap();
+        fs::write(repositories.join("collision/sentinel"), "safe").unwrap();
+        assert!(
+            publish_managed_skill_repository(
+                root.path().to_string_lossy().into_owned(),
+                ".agent-deck-clone-first".into(),
+                "collision".into(),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(repositories.join("collision/sentinel")).unwrap(),
+            "safe"
+        );
+        fs::remove_dir_all(repositories.join("collision")).unwrap();
+        publish_managed_skill_repository(
+            root.path().to_string_lossy().into_owned(),
+            ".agent-deck-clone-first".into(),
+            "owner-repo".into(),
+        )
+        .unwrap();
+        delete_managed_skill_repository(
+            root.path().to_string_lossy().into_owned(),
+            "owner-repo".into(),
+        )
+        .unwrap();
+        assert!(!repositories.join("owner-repo").exists());
+        assert!(
+            delete_managed_skill_repository(
+                root.path().to_string_lossy().into_owned(),
+                "../outside".into(),
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_git_copy_stays_on_captured_clone_after_leaf_swap() {
+        let root = home();
+        let repositories = root.path().join("SkillRepositories");
+        let repository = repositories.join("owner-repo");
+        fs::create_dir(&repositories).unwrap();
+        fs::create_dir(&repository).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(cwd)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&repository, &["init", "-b", "main"]);
+        git(
+            &repository,
+            &["config", "user.email", "test@example.invalid"],
+        );
+        git(&repository, &["config", "user.name", "Test"]);
+        fs::write(repository.join("owned"), "trusted").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "-m", "initial"]);
+        git(
+            &repository,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/trusted.git",
+            ],
+        );
+        let root_dir = Dir::open_ambient_dir(&repositories, ambient_authority()).unwrap();
+        let (_, captured_clone) = capture_managed_clone(&root_dir, "owner-repo").unwrap();
+        fs::rename(&repository, repositories.join("owner-repo-held")).unwrap();
+        fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "-b", "main"]);
+
+        let (stage_leaf, stage) = allocate_managed_stage(&root_dir).unwrap();
+        copy_tree_inner(&captured_clone, &stage, true).unwrap();
+        let inspected = inspect_stage(
+            &stage,
+            "/raced/path/is/ignored",
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(inspected.origin, "https://example.invalid/trusted.git");
+        cleanup_owned_stage(&root_dir, &stage_leaf).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_git_stays_on_captured_root_after_lexical_swap() {
+        let root = home();
+        let repositories = root.path().join("SkillRepositories");
+        let repository = repositories.join("owner-repo");
+        fs::create_dir(&repositories).unwrap();
+        fs::create_dir(&repository).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repository)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        git(&["config", "user.name", "Test"]);
+        fs::write(repository.join("owned"), "trusted").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/trusted.git",
+        ]);
+
+        let captured = Dir::open_ambient_dir(&repositories, ambient_authority()).unwrap();
+        fs::rename(&repositories, root.path().join("SkillRepositories-held")).unwrap();
+        let replacement = root.path().join("SkillRepositories/owner-repo");
+        fs::create_dir_all(&replacement).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&replacement)
+            .status()
+            .unwrap();
+
+        let inspected = managed_inspect(
+            &captured,
+            repositories.to_string_lossy().as_ref(),
+            "owner-repo",
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(inspected.origin, "https://example.invalid/trusted.git");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_repository_delete_rejects_links_and_rolls_back_quarantine() {
+        use std::os::unix::fs::symlink;
+        let root = home();
+        let repositories = root.path().join("SkillRepositories");
+        let repository = repositories.join("owner-repo");
+        let victim = root.path().join("victim");
+        fs::create_dir(&repositories).unwrap();
+        fs::create_dir(&repository).unwrap();
+        fs::create_dir(&victim).unwrap();
+        fs::write(victim.join("sentinel"), "safe").unwrap();
+        symlink(victim.join("sentinel"), repository.join("link")).unwrap();
+        assert!(
+            delete_managed_skill_repository(
+                root.path().to_string_lossy().into_owned(),
+                "owner-repo".into(),
+            )
+            .is_err()
+        );
+        assert!(repository.exists());
+        assert_eq!(fs::read_to_string(victim.join("sentinel")).unwrap(), "safe");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_repository_delete_rejects_final_junction() {
+        let root = home();
+        let repositories = root.path().join("SkillRepositories");
+        let victim = root.path().join("victim");
+        fs::create_dir(&repositories).unwrap();
+        fs::create_dir(&victim).unwrap();
+        fs::write(victim.join("sentinel"), "safe").unwrap();
+        let junction = repositories.join("owner-repo");
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&victim)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let root_dir = Dir::open_ambient_dir(&repositories, ambient_authority()).unwrap();
+        assert!(delete_managed_from_root(&root_dir, "owner-repo").is_err());
+        assert_eq!(fs::read_to_string(victim.join("sentinel")).unwrap(), "safe");
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/c", "rmdir"])
+                .arg(&junction)
                 .status()
                 .unwrap()
                 .success()

@@ -16,6 +16,7 @@ import {
   scanExtensions,
   scanSkills,
   watchResources,
+  ManagedSkillRepositoryStore,
   ProviderLoginManager,
   type ResourceRoots,
 } from "@agent-deck/resources";
@@ -57,7 +58,13 @@ import {
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
-import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
+import {
+  defaultDataDir,
+  ProjectIndex,
+  SessionIndex,
+  SettingsStore,
+  type ImportedSkillRepository,
+} from "./persistence.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
@@ -71,11 +78,7 @@ import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
-import {
-  resolveManagedPath,
-  resolveManagedSkillRoot,
-  skillRepositoriesRoot as defaultSkillRepositoriesRoot,
-} from "./skillRepositories.ts";
+import { ManagedSkillRepositories } from "./skillRepositories.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
 import { setupWebSocket } from "./wsHandler.ts";
@@ -218,15 +221,24 @@ async function initServer(
   // Native memory (memory.md), on by default like the native app; storage under
   // the app data dir. AGENT_DECK_MEMORY=0 disables it entirely.
   const memoryEnabled = process.env.AGENT_DECK_MEMORY !== "0";
-  const memoryBaseDir = nodePath.join(options.dataDir ?? defaultDataDir(), "memory");
+  const dataDir = options.dataDir ?? defaultDataDir();
+  const memoryBaseDir = nodePath.join(dataDir, "memory");
   // Persistent home for session worktrees (native "Session Worktrees" dir) — under
   // the data dir, NOT tmp, so a live session's isolated checkout survives + is
   // never swept by an OS temp cleanup.
-  const worktreesRoot = nodePath.join(options.dataDir ?? defaultDataDir(), "session-worktrees");
-  // Native-compatible app-managed in-place skill collections. Existing legacy
-  // records keep their historical clone paths; only new imports use this root.
-  const skillReposRoot =
-    options.skillRepositoriesRoot ?? defaultSkillRepositoriesRoot({ home: homedir() });
+  const worktreesRoot = nodePath.join(dataDir, "session-worktrees");
+  // collection-v1 storage is capability-gated to the direct SkillRepositories
+  // child of the trusted server dataDir. The optional root is a hermetic test
+  // seam, but is subject to exactly the same containment rule.
+  const managedSkillRepositories = new ManagedSkillRepositories(
+    dataDir,
+    options.skillRepositoriesRoot,
+  );
+  const skillReposRoot = managedSkillRepositories.root;
+  const managedSkillRepositoryStore = new ManagedSkillRepositoryStore(
+    managedSkillRepositories.dataDir,
+    managedSkillRepositories.nativeIdentity(),
+  );
 
   // Recall engine. Lexical+fuzzy is the always-on default; SEMANTIC recall is
   // opt-in — an injected embedder (tests) or AGENT_DECK_SEMANTIC_MEMORY=1 (which
@@ -596,17 +608,102 @@ async function initServer(
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
-  const persistedCollectionSkillRoots = (): string[] =>
-    settings.get().skillCollections.flatMap((collection) => collection.skillRootPaths);
+  // collection-v1 discovery and Pi injection consume only native materialized
+  // snapshots. Persisted absolute roots remain migration/display data and are
+  // never treated as authority.
+  const snapshotRootsByRepository = new Map<string, string[]>();
+  const unavailableCollectionRepositories = new Set<string>();
+  const repositoryOperations = new Set<string>();
+  const repositoryWatcherOperations = new Set<string>();
+  const withRepositoryLock = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
+    // Notification rebuilds are internal serialization, not a user-visible
+    // conflict. Wait for that bounded native copy to finish; still reject a
+    // genuinely concurrent API mutation exactly as before.
+    while (repositoryOperations.has(key) && repositoryWatcherOperations.has(key)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (repositoryOperations.has(key)) throw new Error("repository_busy");
+    repositoryOperations.add(key);
+    try {
+      return await operation();
+    } finally {
+      repositoryOperations.delete(key);
+    }
+  };
+  const collectionSnapshotRoots = (record: ImportedSkillRepository): string[] | undefined => {
+    if (
+      record.storageMode !== "collection-v1" ||
+      unavailableCollectionRepositories.has(record.id)
+    ) {
+      return undefined;
+    }
+    const expected = snapshotRootsByRepository.get(record.id);
+    if (!expected) return undefined;
+    try {
+      // JS scanners and Pi receive path strings, so revalidate the held native
+      // capability and stable leaf identity immediately before deriving either.
+      const validated = managedSkillRepositoryStore.validateSnapshot(record.id).skillRoots;
+      if (
+        validated.length !== expected.length ||
+        validated.some((root, index) => root !== expected[index])
+      ) {
+        throw new Error("snapshot roots changed");
+      }
+      return validated;
+    } catch {
+      removeCollectionSnapshot(record.id);
+      return undefined;
+    }
+  };
+  const removeCollectionSnapshot = (repositoryId: string): void => {
+    snapshotRootsByRepository.delete(repositoryId);
+    unavailableCollectionRepositories.add(repositoryId);
+  };
+  const rebuildCollectionSnapshot = async (record: ImportedSkillRepository): Promise<string[]> => {
+    if (record.storageMode !== "collection-v1") return [];
+    try {
+      const clone = managedSkillRepositories.validateRepository(record.clonePath);
+      const relativeRoots =
+        record.syncedSkillRelativePaths ?? record.selectedSkillRelativePaths ?? [];
+      const components = relativeRoots.map((relative) => {
+        if (nodePath.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) {
+          throw new Error("unsafe selected skill root");
+        }
+        return relative === "" ? [] : relative.split(/[\\/]/).filter(Boolean);
+      });
+      const snapshot = await managedSkillRepositoryStore.materializeSnapshot(
+        nodePath.basename(clone),
+        record.id,
+        components,
+      );
+      snapshotRootsByRepository.set(record.id, snapshot.skillRoots);
+      unavailableCollectionRepositories.delete(record.id);
+      return snapshot.skillRoots;
+    } catch (error) {
+      removeCollectionSnapshot(record.id);
+      throw error;
+    }
+  };
+  for (const record of settings.get().importedSkillRepositories) {
+    if (record.storageMode !== "collection-v1") continue;
+    try {
+      await rebuildCollectionSnapshot(record);
+    } catch {
+      // Persist and list quarantined records; startup never follows their paths.
+    }
+  }
   const collectionSkillRootsForScan = (): string[] =>
-    persistedCollectionSkillRoots().flatMap((root) => {
-      const safe = resolveManagedSkillRoot(skillReposRoot, root);
-      return safe ? [safe] : [];
-    });
+    settings
+      .get()
+      .importedSkillRepositories.flatMap((record) => collectionSnapshotRoots(record) ?? []);
   const collectionSkillRootsForWatch = (): string[] =>
-    persistedCollectionSkillRoots().flatMap((root) => {
-      const safe = resolveManagedPath(skillReposRoot, root, { allowMissing: true });
-      return safe ? [safe] : [];
+    settings.get().importedSkillRepositories.flatMap((record) => {
+      if (record.storageMode !== "collection-v1" || !collectionSnapshotRoots(record)) return [];
+      try {
+        return managedSkillRepositories.deriveSkillRoots(record);
+      } catch {
+        return [];
+      }
     });
   const scanSkillsFor = (projectId?: string) =>
     scanSkills(rootsFor(projectId), collectionSkillRootsForScan());
@@ -682,12 +779,47 @@ async function initServer(
   broadcast = wsBroadcast;
   broadcastDiff = wsBroadcastDiff;
 
-  // One coarse watcher: global catalogs at boot, project dirs added as
-  // projects register. Any change → resources_changed → clients re-fetch.
-  const resourceWatcher = watchResources({ home: resourceHome() }, () =>
-    broadcast({ type: "resources_changed" }),
-  );
-  addResourceWatchPaths(resourceWatcher, collectionSkillRootsForWatch());
+  // Watchers are notifications only. Every event rebuilds snapshots under the
+  // same repository lock as mutations; event paths are never scan authority.
+  let watcherRefreshRunning = false;
+  const initialCollectionWatchRoots = collectionSkillRootsForWatch();
+  const watchedCollectionRoots = new Set(initialCollectionWatchRoots);
+  const resourceWatcher = watchResources({ home: resourceHome() }, () => {
+    if (watcherRefreshRunning) return;
+    watcherRefreshRunning = true;
+    void (async () => {
+      for (const record of settings.get().importedSkillRepositories) {
+        if (record.storageMode !== "collection-v1") continue;
+        if (repositoryOperations.has(record.id)) continue;
+        try {
+          repositoryWatcherOperations.add(record.id);
+          await withRepositoryLock(record.id, () => rebuildCollectionSnapshot(record));
+        } catch (error) {
+          if (error instanceof Error && error.message === "repository_busy") return;
+          removeCollectionSnapshot(record.id);
+        } finally {
+          repositoryWatcherOperations.delete(record.id);
+        }
+      }
+      const desired = new Set(collectionSkillRootsForWatch());
+      await removeResourceWatchPaths(
+        resourceWatcher,
+        [...watchedCollectionRoots].filter((root) => !desired.has(root)),
+      );
+      addResourceWatchPaths(
+        resourceWatcher,
+        [...desired].filter((root) => !watchedCollectionRoots.has(root)),
+      );
+      watchedCollectionRoots.clear();
+      for (const root of desired) watchedCollectionRoots.add(root);
+      broadcast({ type: "resources_changed" });
+    })()
+      .catch(() => {})
+      .finally(() => {
+        watcherRefreshRunning = false;
+      });
+  });
+  addResourceWatchPaths(resourceWatcher, initialCollectionWatchRoots);
   const watchedProjects = new Set<string>();
   const watchProject = (projectPath: string): void => {
     if (watchedProjects.has(projectPath)) return;
@@ -719,6 +851,8 @@ async function initServer(
     memoryBaseDir,
     worktreesRoot,
     skillReposRoot,
+    managedSkillRepositories,
+    managedSkillRepositoryStore,
     recallMemories,
     resolveNamedAgent,
     extensionBridgeConflictAt,
@@ -726,6 +860,10 @@ async function initServer(
     resourceHome,
     rootsFor,
     scanSkillsFor,
+    collectionSnapshotRoots,
+    rebuildCollectionSnapshot,
+    removeCollectionSnapshot,
+    withRepositoryLock,
     watchSkillRoots: (paths) => addResourceWatchPaths(resourceWatcher, paths),
     unwatchSkillRoots: (paths) => removeResourceWatchPaths(resourceWatcher, paths),
     broadcast,

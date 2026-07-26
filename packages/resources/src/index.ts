@@ -100,6 +100,7 @@ export {
 } from "./providerLogin.ts";
 export {
   LoopCatalogCapabilityError,
+  ManagedSkillRepositoryStore,
   ResourceCatalogCapabilityError,
   type ResourceCatalogErrorCode,
 } from "@agent-deck/loop-catalog-native";

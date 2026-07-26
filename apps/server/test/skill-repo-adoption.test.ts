@@ -45,7 +45,7 @@ async function startIsolatedServer(skillRepositoriesRoot: string): Promise<Agent
   const home = mkdtempSync(path.join(tmpdir(), "adoption-home-"));
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: home });
   return startServer({
-    dataDir: mkdtempSync(path.join(tmpdir(), "adoption-data-")),
+    dataDir: path.dirname(skillRepositoriesRoot),
     skillRepositoriesRoot,
   });
 }

@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -37,11 +38,17 @@ function findNamed(root, basename) {
   return matches;
 }
 
-const asars = findNamed(packageRoot, "app.asar");
-if (asars.length !== 1) throw new Error(`expected one packaged app.asar, found ${asars.length}`);
+const addonName = `loop-catalog-native.${expectedPlatform}-${expectedArch}.node`;
+const asars = findNamed(packageRoot, "app.asar").filter((candidate) =>
+  existsSync(path.join(path.dirname(candidate), "loop-catalog-native", addonName)),
+);
+if (asars.length !== 1) {
+  throw new Error(
+    `expected one ${expectedPlatform}-${expectedArch} packaged app.asar, found ${asars.length}`,
+  );
+}
 const asarPath = asars[0];
 const resourcesPath = path.dirname(asarPath);
-const addonName = `loop-catalog-native.${expectedPlatform}-${expectedArch}.node`;
 const addonPath = path.join(resourcesPath, "loop-catalog-native", addonName);
 if (!existsSync(addonPath)) throw new Error(`packaged addon is missing: ${addonPath}`);
 const packagedAddons = readdirSync(path.dirname(addonPath)).filter((entry) =>
@@ -92,7 +99,7 @@ const preflight = spawnSync(
   executable,
   [
     "-e",
-    `const binding=require(process.argv[1]); if(typeof binding.scanLoopCatalog!=="function") throw new Error("addon API mismatch"); console.log(${JSON.stringify(
+    `const binding=require(process.argv[1]); if(typeof binding.scanLoopCatalog!=="function"||typeof binding.ManagedSkillRepositoryStore!=="function") throw new Error("addon API mismatch"); console.log(${JSON.stringify(
       marker,
     )}+JSON.stringify({platform:process.platform,arch:process.arch,electron:process.versions.electron,addon:process.argv[1]}));`,
     addonPath,
@@ -121,7 +128,7 @@ const resourceSmoke = spawnSync(
   executable,
   [
     "-e",
-    `const fs=require("node:fs"),path=require("node:path"),b=require(process.argv[1]),home=process.argv[2],src=path.join(home,"source");fs.mkdirSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"SKILL.md"),"one");fs.writeFileSync(path.join(src,"asset","stale"),"stale");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,false);fs.rmSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"asset"),"now-file");fs.writeFileSync(path.join(src,"SKILL.md"),"two");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,true);if(b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","asset"])!=="now-file"||b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","SKILL.md"])!=="two")throw new Error("existing resource replacement failed");`,
+    `const fs=require("node:fs"),path=require("node:path"),b=require(process.argv[1]),home=process.argv[2],src=path.join(home,"source");fs.mkdirSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"SKILL.md"),"one");fs.writeFileSync(path.join(src,"asset","stale"),"stale");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,false);fs.rmSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"asset"),"now-file");fs.writeFileSync(path.join(src,"SKILL.md"),"two");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,true);if(b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","asset"])!=="now-file"||b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","SKILL.md"])!=="two")throw new Error("existing resource replacement failed");const repos=path.join(home,"SkillRepositories"),skill=path.join(repos,"packaged-repo","skill");fs.mkdirSync(skill,{recursive:true});fs.writeFileSync(path.join(skill,"SKILL.md"),"snapshot");const rs=fs.statSync(repos,{bigint:true}),store=new b.ManagedSkillRepositoryStore(home,fs.realpathSync(repos),rs.dev.toString(),rs.ino.toString());store.materializeSnapshot("packaged-repo","packaged-repo",[["skill"]]).then(s=>{if(fs.readFileSync(path.join(s.skillRoots[0],"SKILL.md"),"utf8")!=="snapshot")throw new Error("managed snapshot failed");store.deleteRepository("packaged-repo");if(fs.existsSync(path.join(repos,"packaged-repo")))throw new Error("managed repository delete failed")}).catch(e=>{console.error(e);process.exitCode=1});`,
     addonPath,
     sandbox,
   ],
@@ -133,13 +140,51 @@ if (resourceSmoke.status !== 0) {
   );
 }
 const serverEntry = path.join(asarPath, "dist", "server", "index.mjs");
+const serverDataDir = path.join(sandbox, "data");
+const managedClone = path.join(serverDataDir, "SkillRepositories", "packaged-http-repo");
+const managedSkill = path.join(managedClone, "skill");
+mkdirSync(path.join(managedClone, ".git"), { recursive: true });
+mkdirSync(managedSkill, { recursive: true });
+writeFileSync(
+  path.join(managedSkill, "SKILL.md"),
+  "---\nname: packaged-http-skill\ndescription: Packaged snapshot\n---\nsafe",
+);
+writeFileSync(
+  path.join(serverDataDir, "app-settings.json"),
+  JSON.stringify({
+    importedSkillRepositories: [
+      {
+        id: "packaged-http-repo",
+        remoteUrl: "https://example.invalid/packaged.git",
+        scope: "global",
+        clonePath: managedClone,
+        skillNames: ["packaged-http-skill"],
+        storageMode: "collection-v1",
+        collectionId: "packaged-http-collection",
+        selectedSkillRelativePaths: ["skill"],
+        syncedSkillRelativePaths: ["skill"],
+        skillRootPaths: [managedSkill],
+        lastSyncedCommit: "deadbeef",
+        importedAt: new Date(0).toISOString(),
+      },
+    ],
+    skillCollections: [
+      {
+        id: "packaged-http-collection",
+        name: "Packaged HTTP",
+        repositoryId: "packaged-http-repo",
+        skillRootPaths: [managedSkill],
+      },
+    ],
+  }),
+);
 const serverEnvironment = {
   ...baseEnvironment,
   HOME: sandbox,
   USERPROFILE: sandbox,
   PORT: "0",
   AGENT_DECK_TEST: "1",
-  AGENT_DECK_DATA_DIR: path.join(sandbox, "data"),
+  AGENT_DECK_DATA_DIR: serverDataDir,
   AGENT_DECK_WEB_DIST: path.join(asarPath, "apps", "web", "dist"),
   AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(resourcesPath, "builtin-agents"),
   AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: addonPath,
@@ -286,6 +331,39 @@ try {
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops.length !== 0) throw new Error("delete failed");
 
+  const skillInventory = await jsonRequest("GET", "/resources/skills");
+  const packagedSkill = skillInventory.skills.find((skill) => skill.name === "packaged-http-skill");
+  if (!packagedSkill?.baseDir.includes(`${path.sep}SkillRepositorySnapshots${path.sep}`)) {
+    throw new Error("packaged server did not discover the native snapshot");
+  }
+  const snapshotLeaf = path.dirname(path.dirname(packagedSkill.baseDir));
+  const capturedSnapshotLeaf = `${snapshotLeaf}-captured`;
+  renameSync(snapshotLeaf, capturedSnapshotLeaf);
+  const snapshotVictim = path.join(sandbox, "snapshot-victim");
+  mkdirSync(path.join(snapshotVictim, "skills", "0"), { recursive: true });
+  const snapshotSentinel = path.join(snapshotVictim, "skills", "0", "SKILL.md");
+  writeFileSync(
+    snapshotSentinel,
+    "---\nname: packaged-external-sentinel\ndescription: Never scan\n---\nexternal",
+  );
+  symlinkSync(snapshotVictim, snapshotLeaf, expectedPlatform === "win32" ? "junction" : "dir");
+  const quarantinedSkills = await jsonRequest("GET", "/resources/skills");
+  if (quarantinedSkills.skills.some((skill) => skill.name === "packaged-external-sentinel")) {
+    throw new Error("packaged server scanned a replaced snapshot leaf");
+  }
+  const quarantinedRepos = await jsonRequest("GET", "/resources/skill-repos");
+  if (quarantinedRepos.repos[0]?.available !== false) {
+    throw new Error("packaged server did not quarantine a replaced snapshot leaf");
+  }
+  if (
+    readFileSync(snapshotSentinel, "utf8") !==
+    "---\nname: packaged-external-sentinel\ndescription: Never scan\n---\nexternal"
+  ) {
+    throw new Error("packaged snapshot sentinel was modified");
+  }
+  rmSync(snapshotLeaf, { recursive: true });
+  renameSync(capturedSnapshotLeaf, snapshotLeaf);
+
   await stopServer();
   const catalogRoot = path.join(sandbox, ".pi");
   const retainedCatalog = path.join(sandbox, ".pi-retained");
@@ -305,7 +383,7 @@ try {
   if (readFileSync(sentinel, "utf8") !== "sentinel-safe") throw new Error("victim was modified");
 
   console.log(
-    `Packaged Electron Loop HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
+    `Packaged Electron Loop/snapshot HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
   );
 } finally {
   await stopServer();
