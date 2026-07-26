@@ -6,6 +6,7 @@ import type {
   ManagedSkillRepositoryStore,
   ProviderLoginManager,
   ResourceRoots,
+  SessionWorktreeStore,
 } from "@agent-deck/resources";
 import type { FastifyInstance } from "fastify";
 import type { BridgeRegistry } from "./bridge.ts";
@@ -115,6 +116,7 @@ export interface ServerContext {
   memoryEnabled: boolean;
   memoryBaseDir: string;
   worktreesRoot: string;
+  sessionWorktreeStore: SessionWorktreeStore;
   skillReposRoot: string;
   managedSkillRepositories: ManagedSkillRepositories;
   managedSkillRepositoryStore: ManagedSkillRepositoryStore;

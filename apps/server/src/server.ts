@@ -18,6 +18,7 @@ import {
   watchResources,
   ManagedSkillRepositoryStore,
   ProviderLoginManager,
+  SessionWorktreeStore,
   type ResourceRoots,
 } from "@agent-deck/resources";
 import { writeBridgeExtension } from "@agent-deck/pi-host";
@@ -189,8 +190,18 @@ async function initServer(
   options: StartServerOptions,
   effectRuntime: ServerRuntime,
 ): Promise<AgentDeckServer> {
+  const requestedDataDir = options.dataDir ?? defaultDataDir();
+  // Establish and validate the trusted app-data directory before any persistence
+  // or native capability opens it. This existing trust gate creates a missing
+  // directory, rejects a linked/reparse root, and resolves ancestor links to one
+  // authoritative physical directory for all app-data services below.
+  const managedSkillRepositories = new ManagedSkillRepositories(
+    requestedDataDir,
+    options.skillRepositoriesRoot,
+  );
+  const dataDir = managedSkillRepositories.dataDir;
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
-  const index = new SessionIndex(options.dataDir);
+  const index = new SessionIndex(dataDir);
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -221,19 +232,13 @@ async function initServer(
   // Native memory (memory.md), on by default like the native app; storage under
   // the app data dir. AGENT_DECK_MEMORY=0 disables it entirely.
   const memoryEnabled = process.env.AGENT_DECK_MEMORY !== "0";
-  const dataDir = options.dataDir ?? defaultDataDir();
   const memoryBaseDir = nodePath.join(dataDir, "memory");
-  // Persistent home for session worktrees (native "Session Worktrees" dir) — under
-  // the data dir, NOT tmp, so a live session's isolated checkout survives + is
-  // never swept by an OS temp cleanup.
-  const worktreesRoot = nodePath.join(dataDir, "session-worktrees");
-  // collection-v1 storage is capability-gated to the direct SkillRepositories
-  // child of the trusted server dataDir. The optional root is a hermetic test
-  // seam, but is subject to exactly the same containment rule.
-  const managedSkillRepositories = new ManagedSkillRepositories(
-    dataDir,
-    options.skillRepositoriesRoot,
-  );
+  // Construct the deletion authority once from trusted app data. Its held native
+  // direct-child capability and authoritative physical path own ordinary session
+  // worktrees for this server lifetime. Loop uses only the dedicated `loop`
+  // child, which the ordinary-session leaf policy can never select.
+  const sessionWorktreeStore = new SessionWorktreeStore(dataDir);
+  const worktreesRoot = sessionWorktreeStore.rootPath;
   const skillReposRoot = managedSkillRepositories.root;
   const managedSkillRepositoryStore = new ManagedSkillRepositoryStore(
     managedSkillRepositories.dataDir,
@@ -306,12 +311,9 @@ async function initServer(
   // Slice 18a: per-turn checkpoint capture (conversation-file snapshot + hidden
   // git-ref of the worktree) + the checkpoints_list op. Config-bound to the data
   // dir, so built directly here (not a runtime layer) — see services/checkpoints.ts.
-  const checkpoints = makeCheckpointService({
-    dataDir: options.dataDir ?? defaultDataDir(),
-  });
-  const loopSnapshots = new LoopSessionSnapshotStore(
-    options.dataDir ?? defaultDataDir(),
-    (message, error) => fastify.log.warn({ err: error }, message),
+  const checkpoints = makeCheckpointService({ dataDir });
+  const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
+    fastify.log.warn({ err: error }, message),
   );
 
   const sessions = new SessionManager(
@@ -462,13 +464,13 @@ async function initServer(
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
   const loopEngine = new LoopEngine({
-    dataDir: options.dataDir ?? defaultDataDir(),
+    dataDir,
     warn: (message, error) => fastify.log.warn({ err: error }, message),
   });
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager();
-  const projects = new ProjectIndex(options.dataDir);
-  const settings = new SettingsStore(options.dataDir);
+  const projects = new ProjectIndex(dataDir);
+  const settings = new SettingsStore(dataDir);
 
   // Resolve a named agent to the launch inputs a session (parent-backed OR a
   // delegated subagent) adopts, scoped to a project. One source of truth for
@@ -581,7 +583,7 @@ async function initServer(
   // target is where the browser lands after authorization; the loopback capture
   // of that redirect is finalized in the UI slice (env-overridable meanwhile).
   const mcpOAuth = new McpOAuthCoordinator({
-    store: new FileMcpOAuthStore(nodePath.join(options.dataDir ?? defaultDataDir(), "mcp-oauth")),
+    store: new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
     redirectUrl:
       process.env.AGENT_DECK_MCP_OAUTH_REDIRECT ?? "http://127.0.0.1:33418/mcp/oauth/callback",
   });
@@ -850,6 +852,7 @@ async function initServer(
     memoryEnabled,
     memoryBaseDir,
     worktreesRoot,
+    sessionWorktreeStore,
     skillReposRoot,
     managedSkillRepositories,
     managedSkillRepositoryStore,

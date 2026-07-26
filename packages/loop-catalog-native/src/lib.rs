@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
-use cap_fs_ext::MetadataExt as _;
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
+#[cfg(windows)]
+use cap_fs_ext::{MetadataExt as _, OsMetadataExt as _};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 #[cfg(unix)]
@@ -88,10 +88,20 @@ fn nofollow_open(
     dir.open_with(name, &options)
 }
 
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &cap_std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(unix)]
+fn metadata_is_link_or_reparse(metadata: &cap_std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
 fn open_child_dir(parent: &Dir, name: &str, create: bool) -> std::io::Result<Option<Dir>> {
     match parent.symlink_metadata(name) {
         Ok(metadata) => {
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
                 return Err(std::io::Error::new(
                     ErrorKind::PermissionDenied,
                     "unsafe directory component",
@@ -110,7 +120,7 @@ fn open_child_dir(parent: &Dir, name: &str, create: bool) -> std::io::Result<Opt
     }
     let opened = nofollow_open(parent, name, false, true)?;
     let metadata = opened.metadata()?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
         return Err(std::io::Error::new(
             ErrorKind::PermissionDenied,
             "unsafe directory component",
@@ -1195,6 +1205,571 @@ impl ManagedSkillRepositoryStore {
     pub fn delete_repository(&self, repository_leaf: String) -> Result<()> {
         validate_managed_leaf(&repository_leaf)?;
         delete_managed_from_root(&self.root, &repository_leaf)
+    }
+}
+
+const SESSION_WORKTREE_ROOT: &str = "session-worktrees";
+const SESSION_WORKTREE_QUARANTINE_PREFIX: &str = ".agent-deck-session-delete-";
+const SESSION_WORKTREE_MAX_QUARANTINES: usize = 32;
+
+fn session_worktree_error(code: &'static str, detail: impl AsRef<str>) -> Error {
+    napi_error(code, detail)
+}
+
+fn map_session_worktree_io(error: std::io::Error) -> Error {
+    #[cfg(windows)]
+    if matches!(error.raw_os_error(), Some(32 | 33)) || error.kind() == ErrorKind::PermissionDenied
+    {
+        return session_worktree_error(
+            "SESSION_WORKTREE_BUSY",
+            "session worktree is still in use; retry",
+        );
+    }
+    let code = match error.kind() {
+        ErrorKind::NotFound => "SESSION_WORKTREE_NOT_FOUND",
+        ErrorKind::PermissionDenied => "SESSION_WORKTREE_UNSAFE",
+        _ => "SESSION_WORKTREE_IO",
+    };
+    session_worktree_error(code, error.kind().to_string())
+}
+
+fn valid_session_worktree_leaf(leaf: &str) -> bool {
+    leaf.len() == 8
+        && leaf
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[cfg(windows)]
+fn session_entry_is_link(metadata: &cap_std::fs::Metadata) -> bool {
+    metadata_is_link_or_reparse(metadata)
+}
+
+#[cfg(unix)]
+fn session_entry_is_link(metadata: &cap_std::fs::Metadata) -> bool {
+    metadata_is_link_or_reparse(metadata)
+}
+
+fn validate_session_worktree_target(root_path: &str, target_path: &str) -> Result<String> {
+    let target = std::path::Path::new(target_path);
+    let leaf = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| valid_session_worktree_leaf(name))
+        .ok_or_else(|| {
+            session_worktree_error(
+                "SESSION_WORKTREE_INVALID_PATH",
+                "target must have a generated eight-lowerhex leaf",
+            )
+        })?;
+    if !target.is_absolute() {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_INVALID_PATH",
+            "target must be absolute",
+        ));
+    }
+    let expected = std::path::Path::new(root_path).join(leaf);
+    #[cfg(unix)]
+    if target != expected {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_INVALID_PATH",
+            "target must be a direct child of the held root",
+        ));
+    }
+    #[cfg(windows)]
+    if normalize_windows_namespace_path(target_path)?
+        != normalize_windows_namespace_path(&expected.to_string_lossy())?
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_INVALID_PATH",
+            "target must be a direct child of the held root",
+        ));
+    }
+    Ok(leaf.to_owned())
+}
+
+fn validate_session_worktree_root(
+    root: &Dir,
+    root_path: &str,
+    expected: &StableFileIdentity,
+) -> Result<()> {
+    let path = std::path::Path::new(root_path);
+    let namespace = std::fs::symlink_metadata(path).map_err(map_session_worktree_io)?;
+    if !namespace.is_dir() || session_entry_is_link_from_std(&namespace) {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "session worktree root namespace is not a real directory",
+        ));
+    }
+    #[cfg(unix)]
+    let canonical = std::fs::canonicalize(path).map_err(map_session_worktree_io)?;
+    #[cfg(unix)]
+    if canonical != path {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "session worktree root namespace changed",
+        ));
+    }
+    let ambient = ambient_file_identity(path).map_err(|_| {
+        session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "session worktree root identity unavailable",
+        )
+    })?;
+    let held = cap_file_identity(&root.dir_metadata().map_err(map_session_worktree_io)?)
+        .map_err(|_| session_worktree_error("SESSION_WORKTREE_UNSAFE", "held root changed"))?;
+    if &ambient != expected || &held != expected {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "session worktree root identity changed",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn session_entry_is_link_from_std(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(unix)]
+fn session_entry_is_link_from_std(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+fn remove_session_worktree_entry(parent: &Dir, name: &str) -> Result<()> {
+    let metadata = parent
+        .symlink_metadata(name)
+        .map_err(map_session_worktree_io)?;
+    if session_entry_is_link(&metadata) {
+        return if metadata.is_dir() {
+            parent.remove_dir(name).map_err(map_session_worktree_io)
+        } else {
+            parent.remove_file(name).map_err(map_session_worktree_io)
+        };
+    }
+    if metadata.is_file() {
+        return parent.remove_file(name).map_err(map_session_worktree_io);
+    }
+    if !metadata.is_dir() {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "session worktree contains a special entry",
+        ));
+    }
+    let child = open_child_dir(parent, name, false)
+        .map_err(map_session_worktree_io)?
+        .ok_or_else(|| {
+            session_worktree_error("SESSION_WORKTREE_NOT_FOUND", "directory disappeared")
+        })?;
+    let names = child
+        .entries()
+        .map_err(map_session_worktree_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_session_worktree_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    session_worktree_error(
+                        "SESSION_WORKTREE_UNSAFE",
+                        "session worktree contains a non-UTF-8 entry",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for child_name in names {
+        remove_session_worktree_entry(&child, &child_name)?;
+    }
+    drop(child);
+    parent.remove_dir(name).map_err(map_session_worktree_io)
+}
+
+fn rename_session_worktree_to_quarantine(root: &Dir, leaf: &str, quarantine: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        for attempt in 0..=10 {
+            match rename_noreplace(root, leaf, root, quarantine) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if matches!(error.raw_os_error(), Some(32 | 33))
+                        || error.kind() == ErrorKind::PermissionDenied =>
+                {
+                    if attempt == 10 {
+                        return Err(session_worktree_error(
+                            "SESSION_WORKTREE_BUSY",
+                            "session worktree is still in use; retry",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(300));
+                }
+                Err(error) => return Err(map_session_worktree_io(error)),
+            }
+        }
+        unreachable!()
+    }
+    #[cfg(unix)]
+    rename_noreplace(root, leaf, root, quarantine).map_err(map_session_worktree_io)
+}
+
+fn remove_quarantined_session_worktree(root: &Dir, quarantine: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        for attempt in 0..=10 {
+            match remove_session_worktree_entry(root, quarantine) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.reason.starts_with("SESSION_WORKTREE_BUSY:") => {
+                    if attempt == 10 {
+                        return Err(error);
+                    }
+                    thread::sleep(Duration::from_millis(300));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!()
+    }
+    #[cfg(unix)]
+    remove_session_worktree_entry(root, quarantine)
+}
+
+fn valid_session_quarantine_nonce(nonce: &str) -> bool {
+    nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn session_worktree_identity_token(identity: &StableFileIdentity) -> String {
+    format!("v1:{:016x}:{:016x}", identity.volume, identity.file)
+}
+
+fn parse_session_worktree_identity_token(token: &str) -> Result<StableFileIdentity> {
+    let mut parts = token.split(':');
+    if parts.next() != Some("v1") {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "invalid session worktree identity token",
+        ));
+    }
+    let volume = parts.next();
+    let file = parts.next();
+    if parts.next().is_some()
+        || volume.is_none_or(|part| part.len() != 16)
+        || file.is_none_or(|part| part.len() != 16)
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "invalid session worktree identity token",
+        ));
+    }
+    let volume = u64::from_str_radix(volume.unwrap(), 16).map_err(|_| {
+        session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "invalid worktree volume identity",
+        )
+    })?;
+    let file = u64::from_str_radix(file.unwrap(), 16).map_err(|_| {
+        session_worktree_error("SESSION_WORKTREE_UNSAFE", "invalid worktree file identity")
+    })?;
+    Ok(StableFileIdentity { volume, file })
+}
+
+fn capture_session_worktree_identity(
+    root: &Dir,
+    root_path: &str,
+    root_identity: &StableFileIdentity,
+    target_path: &str,
+) -> Result<String> {
+    let leaf = validate_session_worktree_target(root_path, target_path)?;
+    validate_session_worktree_root(root, root_path, root_identity)?;
+    let expected = root
+        .symlink_metadata(&leaf)
+        .map_err(map_session_worktree_io)?;
+    if !expected.is_dir() || session_entry_is_link(&expected) {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "final target is not a real directory",
+        ));
+    }
+    let opened = nofollow_open(root, &leaf, false, true).map_err(map_session_worktree_io)?;
+    let opened_metadata = opened.metadata().map_err(map_session_worktree_io)?;
+    let identity = cap_file_identity(&opened_metadata)?;
+    if !opened_metadata.is_dir()
+        || session_entry_is_link(&opened_metadata)
+        || identity != cap_file_identity(&expected)?
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "final target changed during identity capture",
+        ));
+    }
+    Ok(session_worktree_identity_token(&identity))
+}
+
+fn reconcile_session_worktree_quarantines(
+    root: &Dir,
+    leaf: &str,
+    expected_identity: &StableFileIdentity,
+) -> Result<()> {
+    let candidate_prefix = format!("{SESSION_WORKTREE_QUARANTINE_PREFIX}{leaf}-");
+    let mut matching = root
+        .entries()
+        .map_err(map_session_worktree_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_session_worktree_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    session_worktree_error(
+                        "SESSION_WORKTREE_UNSAFE",
+                        "session worktree root contains a non-UTF-8 entry",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|name| {
+            name.strip_prefix(&candidate_prefix)
+                .is_some_and(valid_session_quarantine_nonce)
+        })
+        .collect::<Vec<_>>();
+    matching.sort();
+    if matching.len() > SESSION_WORKTREE_MAX_QUARANTINES {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_IO",
+            "too many interrupted deletes require reconciliation",
+        ));
+    }
+    for quarantine in matching {
+        let metadata = root
+            .symlink_metadata(&quarantine)
+            .map_err(map_session_worktree_io)?;
+        if !metadata.is_dir()
+            || session_entry_is_link(&metadata)
+            || cap_file_identity(&metadata)? != *expected_identity
+        {
+            return Err(session_worktree_error(
+                "SESSION_WORKTREE_UNSAFE",
+                "interrupted delete quarantine is not a real directory",
+            ));
+        }
+        remove_quarantined_session_worktree(root, &quarantine)?;
+    }
+    if root
+        .entries()
+        .map_err(map_session_worktree_io)?
+        .map(|entry| {
+            entry
+                .map_err(map_session_worktree_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    session_worktree_error(
+                        "SESSION_WORKTREE_UNSAFE",
+                        "session worktree root contains a non-UTF-8 entry",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .any(|name| {
+            name.strip_prefix(&candidate_prefix)
+                .is_some_and(valid_session_quarantine_nonce)
+        })
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_IO",
+            "interrupted delete quarantine remains",
+        ));
+    }
+    Ok(())
+}
+
+fn delete_session_worktree(
+    root: &Dir,
+    root_path: &str,
+    root_identity: &StableFileIdentity,
+    target_path: &str,
+    identity_token: &str,
+) -> Result<()> {
+    let leaf = validate_session_worktree_target(root_path, target_path)?;
+    let expected_identity = parse_session_worktree_identity_token(identity_token)?;
+    validate_session_worktree_root(root, root_path, root_identity)?;
+    // Reconcile only private quarantines encoding this validated leaf. This must
+    // precede the missing-target success path: an interrupted recursive removal
+    // is still a failed delete and persisted metadata must survive until it is
+    // actually completed.
+    reconcile_session_worktree_quarantines(root, &leaf, &expected_identity)?;
+    let expected = match root.symlink_metadata(&leaf) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(map_session_worktree_io(error)),
+    };
+    if !expected.is_dir()
+        || session_entry_is_link(&expected)
+        || cap_file_identity(&expected)? != expected_identity
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "final target is not a real directory",
+        ));
+    }
+    let opened = nofollow_open(root, &leaf, false, true).map_err(map_session_worktree_io)?;
+    let opened_metadata = opened.metadata().map_err(map_session_worktree_io)?;
+    if !opened_metadata.is_dir()
+        || session_entry_is_link(&opened_metadata)
+        || cap_file_identity(&opened_metadata)? != cap_file_identity(&expected)?
+    {
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "final target changed during validation",
+        ));
+    }
+    // Windows directory handles deny delete sharing. Consume the validation
+    // handle before the descriptor-relative quarantine rename.
+    drop(opened);
+    let quarantine = format!(
+        "{SESSION_WORKTREE_QUARANTINE_PREFIX}{leaf}-{}",
+        private_nonce().map_err(map_session_worktree_io)?
+    );
+    rename_session_worktree_to_quarantine(root, &leaf, &quarantine)?;
+    let quarantined = root
+        .symlink_metadata(&quarantine)
+        .map_err(map_session_worktree_io)?;
+    if cap_file_identity(&quarantined)? != cap_file_identity(&expected)? {
+        let _ = rename_noreplace(root, &quarantine, root, &leaf);
+        return Err(session_worktree_error(
+            "SESSION_WORKTREE_UNSAFE",
+            "target identity changed during quarantine",
+        ));
+    }
+    remove_quarantined_session_worktree(root, &quarantine)?;
+    sync_dir(root).map_err(map_session_worktree_io)
+}
+
+pub struct SessionWorktreeDeleteTask {
+    root: Dir,
+    root_path: String,
+    root_identity: StableFileIdentity,
+    target_path: String,
+    identity_token: String,
+}
+
+impl Task for SessionWorktreeDeleteTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        delete_session_worktree(
+            &self.root,
+            &self.root_path,
+            &self.root_identity,
+            &self.target_path,
+            &self.identity_token,
+        )
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi]
+pub struct SessionWorktreeStore {
+    root: Dir,
+    root_path: String,
+    root_identity: StableFileIdentity,
+}
+
+#[napi]
+impl SessionWorktreeStore {
+    #[napi(constructor)]
+    pub fn new(data_dir: String) -> Result<Self> {
+        if !std::path::Path::new(&data_dir).is_absolute() {
+            return Err(session_worktree_error(
+                "SESSION_WORKTREE_UNSAFE",
+                "app data directory must be absolute",
+            ));
+        }
+        let data = Dir::open_ambient_dir(&data_dir, ambient_authority())
+            .map_err(map_session_worktree_io)?;
+        let root = open_child_dir(&data, SESSION_WORKTREE_ROOT, true)
+            .map_err(map_session_worktree_io)?
+            .ok_or_else(|| {
+                session_worktree_error("SESSION_WORKTREE_UNSAFE", "root could not be established")
+            })?;
+        #[cfg(unix)]
+        root.set_permissions(
+            ".",
+            cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o700)),
+        )
+        .map_err(map_session_worktree_io)?;
+        let root_path = {
+            #[cfg(unix)]
+            {
+                std::fs::canonicalize(std::path::Path::new(&data_dir).join(SESSION_WORKTREE_ROOT))
+                    .map_err(map_session_worktree_io)?
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            #[cfg(windows)]
+            {
+                held_windows_final_path(&root).map_err(|_| {
+                    session_worktree_error(
+                        "SESSION_WORKTREE_UNSAFE",
+                        "held root final path unavailable",
+                    )
+                })?
+            }
+        };
+        let root_identity =
+            cap_file_identity(&root.dir_metadata().map_err(map_session_worktree_io)?).map_err(
+                |_| session_worktree_error("SESSION_WORKTREE_UNSAFE", "root identity unavailable"),
+            )?;
+        validate_session_worktree_root(&root, &root_path, &root_identity)?;
+        Ok(Self {
+            root,
+            root_path,
+            root_identity,
+        })
+    }
+
+    #[napi(getter)]
+    pub fn root_path(&self) -> String {
+        self.root_path.clone()
+    }
+
+    #[napi]
+    pub fn capture_worktree_identity(&self, target_path: String) -> Result<String> {
+        capture_session_worktree_identity(
+            &self.root,
+            &self.root_path,
+            &self.root_identity,
+            &target_path,
+        )
+    }
+
+    #[napi]
+    pub fn delete_worktree(
+        &self,
+        target_path: String,
+        identity_token: String,
+    ) -> Result<AsyncTask<SessionWorktreeDeleteTask>> {
+        // Validate synchronously so malformed persisted paths never enter the
+        // worker queue, while deletion itself remains off the Node event loop.
+        validate_session_worktree_target(&self.root_path, &target_path)?;
+        Ok(AsyncTask::new(SessionWorktreeDeleteTask {
+            root: self.root.try_clone().map_err(map_session_worktree_io)?,
+            root_path: self.root_path.clone(),
+            root_identity: self.root_identity.clone(),
+            target_path,
+            identity_token,
+        }))
     }
 }
 
@@ -4900,6 +5475,178 @@ mod tests {
             fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
             "new"
         );
+    }
+
+    #[test]
+    fn session_worktree_deletion_unlinks_nested_links_and_rejects_external_paths() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("a1b2c3d4");
+        let outside = data.path().join("outside");
+        fs::create_dir_all(target.join("nested")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel"), "safe").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, target.join("nested/link")).unwrap();
+        #[cfg(windows)]
+        assert!(
+            Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(target.join("nested/link"))
+                .arg(&outside)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let identity = capture_session_worktree_identity(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap();
+        delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap();
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "safe"
+        );
+        delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap();
+        let error = delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &outside.to_string_lossy(),
+            &identity,
+        )
+        .unwrap_err();
+        assert!(error.reason.starts_with("SESSION_WORKTREE_INVALID_PATH:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_worktree_retry_reconciles_only_its_interrupted_quarantine() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("facefeed");
+        fs::create_dir(&target).unwrap();
+        let fifo = target.join("busy-fifo");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let unrelated = std::path::Path::new(&store.root_path)
+            .join(".agent-deck-session-delete-deadbeef-0123456789abcdef0123456789abcdef");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("sentinel"), "unrelated").unwrap();
+
+        let identity = capture_session_worktree_identity(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap();
+        let first = delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap_err();
+        assert!(first.reason.starts_with("SESSION_WORKTREE_UNSAFE:"));
+        assert!(!target.exists());
+        let quarantine = fs::read_dir(&store.root_path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".agent-deck-session-delete-facefeed-")
+            })
+            .unwrap();
+
+        let retry = delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap_err();
+        assert!(retry.reason.starts_with("SESSION_WORKTREE_UNSAFE:"));
+        assert!(quarantine.exists());
+        assert_eq!(
+            fs::read_to_string(unrelated.join("sentinel")).unwrap(),
+            "unrelated"
+        );
+
+        fs::remove_file(quarantine.join("busy-fifo")).unwrap();
+        delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap();
+        assert!(!quarantine.exists());
+        assert_eq!(
+            fs::read_to_string(unrelated.join("sentinel")).unwrap(),
+            "unrelated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_worktree_root_identity_swap_fails_closed() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let original = std::path::Path::new(&store.root_path).join("cafebabe");
+        fs::create_dir(&original).unwrap();
+        let identity = capture_session_worktree_identity(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &original.to_string_lossy(),
+        )
+        .unwrap();
+        fs::remove_dir(&original).unwrap();
+        let captured = data.path().join("captured-root");
+        fs::rename(&store.root_path, &captured).unwrap();
+        fs::create_dir(&store.root_path).unwrap();
+        let replacement = std::path::Path::new(&store.root_path).join("deadbeef");
+        fs::create_dir(&replacement).unwrap();
+        let error = delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &replacement.to_string_lossy(),
+            &identity,
+        )
+        .unwrap_err();
+        assert!(error.reason.starts_with("SESSION_WORKTREE_UNSAFE:"));
+        assert!(replacement.exists());
     }
 
     #[cfg(windows)]

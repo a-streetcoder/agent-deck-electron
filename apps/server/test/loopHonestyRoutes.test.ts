@@ -22,7 +22,7 @@ import type { ServerContext } from "../src/context.ts";
 vi.mock("../src/git.ts", () => ({
   createLoopWorktree: vi.fn(),
   gitWorktreeRegistrations: vi.fn(),
-  gitWorktreeRemove: vi.fn(),
+  gitWorktreePrune: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
 }));
 
@@ -30,7 +30,7 @@ import {
   createLoopWorktree,
   gitDeleteOwnedWorktreeBranch,
   gitWorktreeRegistrations,
-  gitWorktreeRemove,
+  gitWorktreePrune,
 } from "../src/git.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
 import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
@@ -392,7 +392,7 @@ describe("loop route honesty gate", () => {
       }),
     );
     expect(order).toEqual(["pi"]);
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     const generatedTarget = vi.mocked(createLoopWorktree).mock.calls[0]![1];
     expect(response.json().error).toContain(generatedTarget);
@@ -687,7 +687,7 @@ describe("loop route honesty gate", () => {
     expect(destroySession).toHaveBeenCalledOnce();
     expect(recordFailedStart).toHaveBeenCalledOnce();
     expect(response.json()).toMatchObject({ run: { status: "failed", stopReason: "toolFailed" } });
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
@@ -747,7 +747,7 @@ describe("loop route honesty gate", () => {
     settle();
     await vi.waitFor(() => expect(destroySession).toHaveBeenCalledOnce());
     expect(indexRows.has("retained-parent")).toBe(true);
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
@@ -858,7 +858,7 @@ describe("loop route honesty gate", () => {
     });
     expect(refused.body).not.toContain(home);
     expect(readFileSync(sentinel, "utf8")).toBe("retained evidence");
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
@@ -1454,7 +1454,7 @@ describe("loop route honesty gate", () => {
     expect(indexRows.has("stale-parent")).toBe(true);
     expect(bridgeTokens.has("stale-parent")).toBe(false);
     expect(markSessionReconciled).toHaveBeenCalledOnce();
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
 
     const acknowledged = {
@@ -1471,7 +1471,7 @@ describe("loop route honesty gate", () => {
     // Fastify onReady recovery is not repeated for later requests, and retained
     // worktree evidence is never touched by recovery.
     expect(destroySession).toHaveBeenCalledTimes(2);
-    expect(gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
   });
 
