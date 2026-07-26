@@ -1,5 +1,5 @@
 import { type KeybindingCommand } from "@agent-deck/contracts";
-import { type AppView, useAppStore } from "./store.ts";
+import { type AppView, type GitAction, useAppStore } from "./store.ts";
 import { newChat, sendAbort, switchToSession } from "./wsBridge.ts";
 
 /**
@@ -69,6 +69,18 @@ export function cycleSession(direction: 1 | -1): void {
     setView("chat");
     void switchToSession(target);
   }
+}
+
+function requestGitAction(action: GitAction): void {
+  const store = useAppStore.getState();
+  store.requestGitAction({
+    action,
+    projectId: store.currentProjectId,
+    // Only worktree merge is session-scoped; the other workflows belong to the
+    // selected project and remain valid while session activation settles.
+    sessionId: action === "mergeWorktree" ? (store.session?.id ?? null) : null,
+  });
+  store.setView("git");
 }
 
 const ACTION_COMMANDS: readonly CommandDefinition[] = [
@@ -180,6 +192,34 @@ const ACTION_COMMANDS: readonly CommandDefinition[] = [
       const store = useAppStore.getState();
       store.setPanelExpanded(!store.panelExpanded);
     },
+  },
+  {
+    command: "git.commit",
+    label: "Commit all",
+    group: "actions",
+    keywords: ["git", "commit", "stage", "changes"],
+    run: () => requestGitAction("commit"),
+  },
+  {
+    command: "git.push",
+    label: "Push branch",
+    group: "actions",
+    keywords: ["git", "push", "publish", "remote"],
+    run: () => requestGitAction("push"),
+  },
+  {
+    command: "git.mergeWorktree",
+    label: "Merge worktree",
+    group: "actions",
+    keywords: ["git", "merge", "worktree", "branch"],
+    run: () => requestGitAction("mergeWorktree"),
+  },
+  {
+    command: "git.release",
+    label: "Release…",
+    group: "actions",
+    keywords: ["git", "release", "tag", "version"],
+    run: () => requestGitAction("release"),
   },
   {
     command: "keybindings.open",

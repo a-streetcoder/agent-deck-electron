@@ -29,6 +29,11 @@ export const KEYBINDING_COMMANDS = [
   "session.previous",
   "panel.sessions.toggle",
   "keybindings.open",
+  // Git workflows — palette-only until the user assigns a chord.
+  "git.commit",
+  "git.push",
+  "git.mergeWorktree",
+  "git.release",
   // Navigation — one per AppView reachable from the sidebar / chat surface.
   "view.chat",
   "view.projects",

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { chooseDirectory, nativeBridge } from "@/lib/native";
+import { runCommand } from "./commands.ts";
 import { useAppStore } from "./store.ts";
 import { addProject, newChat } from "./wsBridge.ts";
 
@@ -32,6 +33,10 @@ export function useMenuCommands(): void {
         const store = useAppStore.getState();
         store.setCommandPaletteOpen(false);
         store.setKeybindingsEditorOpen(true);
+      } else {
+        // Git menu actions use the same catalog path as palette selections and
+        // user-rebound shortcuts; GitScreen remains the sole workflow owner.
+        runCommand(action);
       }
     });
   }, []);

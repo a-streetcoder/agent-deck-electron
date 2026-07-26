@@ -33,8 +33,8 @@ contextBridge.exposeInMainWorld("agentDeck", {
    */
   signalAttention: (payload) => ipcRenderer.send("attention", payload),
   /**
-   * Subscribe to native-menu commands ("new-chat", "add-project",
-   * "open-keybindings"). Returns an unsubscribe function.
+   * Subscribe to allow-listed semantic native-menu commands. Returns an
+   * unsubscribe function; raw IPC events are never exposed to the renderer.
    * @param {(action: string) => void} handler
    * @returns {() => void}
    */
@@ -43,7 +43,18 @@ contextBridge.exposeInMainWorld("agentDeck", {
     // owned by the previous React tree so one native menu click stays one
     // action after reloads (including development hot reloads).
     ipcRenderer.removeAllListeners("menu");
-    const listener = (_event, action) => handler(action);
+    const allowed = new Set([
+      "new-chat",
+      "add-project",
+      "open-keybindings",
+      "git.commit",
+      "git.push",
+      "git.mergeWorktree",
+      "git.release",
+    ]);
+    const listener = (_event, action) => {
+      if (typeof action === "string" && allowed.has(action)) handler(action);
+    };
     ipcRenderer.on("menu", listener);
     return () => ipcRenderer.removeListener("menu", listener);
   },

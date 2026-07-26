@@ -11,6 +11,16 @@ export interface AttentionPayload {
   sessionId?: string;
 }
 
+export type AppMenuName = "file" | "edit" | "view" | "git" | "help";
+export type NativeMenuAction =
+  | "new-chat"
+  | "add-project"
+  | "open-keybindings"
+  | "git.commit"
+  | "git.push"
+  | "git.mergeWorktree"
+  | "git.release";
+
 export interface AgentDeckBridge {
   isElectron?: boolean;
   platform?: string;
@@ -23,12 +33,9 @@ export interface AgentDeckBridge {
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
-  openAppMenu?(
-    name: "file" | "edit" | "view" | "help",
-    anchor: { x: number; y: number },
-  ): Promise<boolean>;
+  openAppMenu?(name: AppMenuName, anchor: { x: number; y: number }): Promise<boolean>;
   /** Subscribe to native-menu commands; returns an unsubscribe function. */
-  onMenu?(handler: (action: string) => void): () => void;
+  onMenu?(handler: (action: NativeMenuAction) => void): () => void;
   /** Forward a semantic attention event; the main process owns the focus gate. */
   signalAttention?(payload: AttentionPayload): void;
   /**
@@ -113,7 +120,7 @@ export function hasIntegratedDesktopChrome(): boolean {
 
 /** Open one of the native menus from the integrated desktop title bar. */
 export async function openAppMenu(
-  name: "file" | "edit" | "view" | "help",
+  name: AppMenuName,
   anchor: { x: number; y: number },
 ): Promise<boolean> {
   try {

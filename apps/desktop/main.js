@@ -405,6 +405,17 @@ function buildAppMenu() {
           ],
         }
       : { id: "menu-view", role: "viewMenu" },
+    {
+      id: "menu-git",
+      label: "Git",
+      submenu: [
+        { label: "Commit all", click: () => sendMenu("git.commit") },
+        { label: "Push branch", click: () => sendMenu("git.push") },
+        { label: "Merge worktree", click: () => sendMenu("git.mergeWorktree") },
+        { type: "separator" },
+        { label: "Release…", click: () => sendMenu("git.release") },
+      ],
+    },
     { role: "windowMenu" },
     {
       id: "menu-help",
@@ -501,7 +512,7 @@ ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
 /** Open a renderer titlebar button's native menu directly below the top bar. */
 ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
   const name = String(menuName ?? "").toLowerCase();
-  if (!new Set(["file", "edit", "view", "help"]).has(name)) {
+  if (!new Set(["file", "edit", "view", "git", "help"]).has(name)) {
     throw new Error("Unknown application menu");
   }
   const item = Menu.getApplicationMenu()?.getMenuItemById(`menu-${name}`);

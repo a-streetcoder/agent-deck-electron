@@ -5,6 +5,7 @@ import {
   DEFAULT_KEYBINDINGS,
   findChordConflicts,
   formatChordString,
+  isKeybindingCommand,
   isValidChord,
   matchesChord,
   parseChord,
@@ -106,6 +107,13 @@ describe("matchesChord", () => {
 });
 
 describe("resolveKeybindings + commandForChordEvent", () => {
+  it("catalogs Git workflows without assigning fixed defaults", () => {
+    for (const command of ["git.commit", "git.push", "git.mergeWorktree", "git.release"] as const) {
+      expect(isKeybindingCommand(command)).toBe(true);
+      expect(resolveKeybindings([]).has(command)).toBe(false);
+    }
+  });
+
   it("applies user overrides on top of defaults and matches live", () => {
     // Rebind the terminal toggle from mod+` to mod+j.
     const overrides: KeybindingBinding[] = [{ command: "terminal.toggle", key: "mod+j" }];

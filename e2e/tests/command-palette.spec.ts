@@ -34,6 +34,20 @@ test("opens on ⌘K, filters to a nav command, and runs it", async ({ page }) =>
   await expect(page.getByTestId("app-view-title")).toHaveText("Skills");
 });
 
+test("discovers all Git workflow commands without fixed shortcuts", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+
+  for (const label of ["Commit all", "Push branch", "Merge worktree", "Release…"]) {
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.getByTestId("command-palette-input");
+    await input.fill(label);
+    const item = page.getByTestId("command-palette-item").first();
+    await expect(item).toContainText(label.replace("…", ""));
+    await expect(item).not.toContainText(/Ctrl|⌘/);
+    await page.keyboard.press("Escape");
+  }
+});
+
 test("closes on Escape without running anything", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await page.keyboard.press("ControlOrMeta+k");

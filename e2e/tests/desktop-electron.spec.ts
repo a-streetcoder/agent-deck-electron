@@ -124,107 +124,114 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   expect(bridge).toBe(true);
 
   // Windows/Linux use the CrunchyMurmur-style integrated title bar while the
-  // native window controls remain owned by Electron's titleBarOverlay.
+  // native window controls remain owned by Electron's titleBarOverlay. macOS
+  // instead keeps its native menu bar and traffic-light chrome.
+  const platform = await app.evaluate(() => process.platform);
   const titlebar = window.getByTestId("desktop-titlebar");
-  await expect(titlebar).toBeVisible();
   await expect(window.getByTestId("sidebar-brand")).toHaveText("AGENTDECK");
-  const sidebarToggle = window.getByTestId("desktop-sidebar-toggle");
-  await expect(sidebarToggle).toHaveAttribute("aria-label", "Hide sidebar");
-  await expect(window.getByTestId("desktop-menu-file")).toHaveText("File");
-  await expect(window.getByTestId("desktop-menu-edit")).toHaveText("Edit");
-  await expect(window.getByTestId("desktop-menu-view")).toHaveText("View");
-  await expect(window.getByTestId("desktop-menu-help")).toHaveText("Help");
+  if (platform === "darwin") {
+    await expect(titlebar).toHaveCount(0);
+  } else {
+    await expect(titlebar).toBeVisible();
+    const sidebarToggle = window.getByTestId("desktop-sidebar-toggle");
+    await expect(sidebarToggle).toHaveAttribute("aria-label", "Hide sidebar");
+    await expect(window.getByTestId("desktop-menu-file")).toHaveText("File");
+    await expect(window.getByTestId("desktop-menu-edit")).toHaveText("Edit");
+    await expect(window.getByTestId("desktop-menu-view")).toHaveText("View");
+    await expect(window.getByTestId("desktop-menu-git")).toHaveText("Git");
+    await expect(window.getByTestId("desktop-menu-help")).toHaveText("Help");
 
-  const chrome = await window.evaluate(() => {
-    const browser = globalThis as unknown as {
-      document: { querySelector(selector: string): unknown };
-      getComputedStyle(
-        element: unknown,
-        pseudo?: string,
-      ): {
-        height: string;
-        borderTopLeftRadius: string;
-        borderTopRightRadius: string;
-        backgroundColor: string;
-        width: string;
-        marginLeft: string;
-      };
-      agentDeck?: { openAppMenu?: unknown };
-    };
-    const titlebar = browser.document.querySelector('[data-testid="desktop-titlebar"]');
-    const workspaceRow = browser.document.querySelector('[data-testid="workspace-row"]');
-    const workspace = browser.document.querySelector('[data-testid="workspace-shell"]');
-    const sidebar = browser.document.querySelector('[data-testid="sidebar"]');
-    const transcript = browser.document.querySelector('[data-testid="transcript"]');
-    return {
-      titlebarHeight: titlebar ? browser.getComputedStyle(titlebar).height : "",
-      workspaceTopLeftRadius: workspace
-        ? browser.getComputedStyle(workspace).borderTopLeftRadius
-        : "",
-      workspaceTopRightRadius: workspace
-        ? browser.getComputedStyle(workspace).borderTopRightRadius
-        : "",
-      workspaceInset: workspace ? browser.getComputedStyle(workspace).marginLeft : "",
-      cornerBackgroundMatchesSidebar:
-        workspaceRow && sidebar
-          ? browser.getComputedStyle(workspaceRow).backgroundColor ===
-            browser.getComputedStyle(sidebar).backgroundColor
-          : false,
-      scrollbarWidth: transcript
-        ? browser.getComputedStyle(transcript, "::-webkit-scrollbar").width
-        : "",
-      menuBridge: typeof browser.agentDeck?.openAppMenu === "function",
-    };
-  });
-  expect(chrome).toEqual({
-    titlebarHeight: "40px",
-    workspaceTopLeftRadius: "14px",
-    workspaceTopRightRadius: "0px",
-    workspaceInset: "0px",
-    cornerBackgroundMatchesSidebar: true,
-    scrollbarWidth: "8px",
-    menuBridge: true,
-  });
-
-  // Native menus open at the clicked item's left edge and the titlebar's
-  // bottom edge, matching Codex instead of Electron's cursor-position default.
-  await app.evaluate(({ Menu }) => {
-    const file = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
-    if (!file?.submenu) throw new Error("File menu unavailable");
-    const state = globalThis as typeof globalThis & {
-      agentDeckPopupAnchor?: { x: number; y: number };
-    };
-    file.submenu.popup = (options) => {
-      state.agentDeckPopupAnchor = { x: options?.x ?? -1, y: options?.y ?? -1 };
-    };
-  });
-  const fileButton = window.getByTestId("desktop-menu-file");
-  const fileBounds = await fileButton.boundingBox();
-  const titlebarBounds = await titlebar.boundingBox();
-  if (!fileBounds || !titlebarBounds) throw new Error("Titlebar bounds unavailable");
-  await fileButton.click();
-  await expect
-    .poll(() =>
-      app.evaluate(() => {
-        const state = globalThis as typeof globalThis & {
-          agentDeckPopupAnchor?: { x: number; y: number };
+    const chrome = await window.evaluate(() => {
+      const browser = globalThis as unknown as {
+        document: { querySelector(selector: string): unknown };
+        getComputedStyle(
+          element: unknown,
+          pseudo?: string,
+        ): {
+          height: string;
+          borderTopLeftRadius: string;
+          borderTopRightRadius: string;
+          backgroundColor: string;
+          width: string;
+          marginLeft: string;
         };
-        return state.agentDeckPopupAnchor;
-      }),
-    )
-    .toEqual({
-      x: Math.round(fileBounds.x),
-      y: Math.round(titlebarBounds.y + titlebarBounds.height),
+        agentDeck?: { openAppMenu?: unknown };
+      };
+      const titlebar = browser.document.querySelector('[data-testid="desktop-titlebar"]');
+      const workspaceRow = browser.document.querySelector('[data-testid="workspace-row"]');
+      const workspace = browser.document.querySelector('[data-testid="workspace-shell"]');
+      const sidebar = browser.document.querySelector('[data-testid="sidebar"]');
+      const transcript = browser.document.querySelector('[data-testid="transcript"]');
+      return {
+        titlebarHeight: titlebar ? browser.getComputedStyle(titlebar).height : "",
+        workspaceTopLeftRadius: workspace
+          ? browser.getComputedStyle(workspace).borderTopLeftRadius
+          : "",
+        workspaceTopRightRadius: workspace
+          ? browser.getComputedStyle(workspace).borderTopRightRadius
+          : "",
+        workspaceInset: workspace ? browser.getComputedStyle(workspace).marginLeft : "",
+        cornerBackgroundMatchesSidebar:
+          workspaceRow && sidebar
+            ? browser.getComputedStyle(workspaceRow).backgroundColor ===
+              browser.getComputedStyle(sidebar).backgroundColor
+            : false,
+        scrollbarWidth: transcript
+          ? browser.getComputedStyle(transcript, "::-webkit-scrollbar").width
+          : "",
+        menuBridge: typeof browser.agentDeck?.openAppMenu === "function",
+      };
+    });
+    expect(chrome).toEqual({
+      titlebarHeight: "40px",
+      workspaceTopLeftRadius: "14px",
+      workspaceTopRightRadius: "0px",
+      workspaceInset: "0px",
+      cornerBackgroundMatchesSidebar: true,
+      scrollbarWidth: "8px",
+      menuBridge: true,
     });
 
-  // The titlebar icon hides and restores the native-style sidebar. With no
-  // sidebar junction, the workspace returns to a square top-left corner.
-  await sidebarToggle.click();
-  await expect(window.getByTestId("sidebar")).toHaveCount(0);
-  await expect(sidebarToggle).toHaveAttribute("aria-label", "Show sidebar");
-  await expect(window.getByTestId("workspace-shell")).toHaveCSS("border-top-left-radius", "0px");
-  await sidebarToggle.click();
-  await expect(window.getByTestId("sidebar")).toBeVisible();
+    // Native menus open at the clicked item's left edge and the titlebar's
+    // bottom edge, matching Codex instead of Electron's cursor-position default.
+    await app.evaluate(({ Menu }) => {
+      const file = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
+      if (!file?.submenu) throw new Error("File menu unavailable");
+      const state = globalThis as typeof globalThis & {
+        agentDeckPopupAnchor?: { x: number; y: number };
+      };
+      file.submenu.popup = (options) => {
+        state.agentDeckPopupAnchor = { x: options?.x ?? -1, y: options?.y ?? -1 };
+      };
+    });
+    const fileButton = window.getByTestId("desktop-menu-file");
+    const fileBounds = await fileButton.boundingBox();
+    const titlebarBounds = await titlebar.boundingBox();
+    if (!fileBounds || !titlebarBounds) throw new Error("Titlebar bounds unavailable");
+    await fileButton.click();
+    await expect
+      .poll(() =>
+        app.evaluate(() => {
+          const state = globalThis as typeof globalThis & {
+            agentDeckPopupAnchor?: { x: number; y: number };
+          };
+          return state.agentDeckPopupAnchor;
+        }),
+      )
+      .toEqual({
+        x: Math.round(fileBounds.x),
+        y: Math.round(titlebarBounds.y + titlebarBounds.height),
+      });
+
+    // The titlebar icon hides and restores the native-style sidebar. With no
+    // sidebar junction, the workspace returns to a square top-left corner.
+    await sidebarToggle.click();
+    await expect(window.getByTestId("sidebar")).toHaveCount(0);
+    await expect(sidebarToggle).toHaveAttribute("aria-label", "Show sidebar");
+    await expect(window.getByTestId("workspace-shell")).toHaveCSS("border-top-left-radius", "0px");
+    await sidebarToggle.click();
+    await expect(window.getByTestId("sidebar")).toBeVisible();
+  }
 
   // The same-origin server the main process spawned answers health checks.
   const health = await window.evaluate(async () => {
@@ -436,6 +443,47 @@ test("the native File menu exposes New Chat and it creates a session", async () 
     file?.submenu?.items.find((i) => i.label === "New Chat")?.click();
   });
   await expect.poll(sessionCount, { timeout: 10_000 }).toBe(before + 1);
+});
+
+test("the native Git menu routes commands without bypassing disabled actions", async () => {
+  const window = await app.firstWindow();
+
+  // Make the gate explicit rather than depending on onboarding state left by
+  // earlier desktop tests.
+  await window.evaluate(async () => {
+    const response = await fetch("/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gitAutomation: false }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+  });
+
+  // Git is a top-level menu with semantic actions and no fixed accelerators;
+  // clicking routes through preload → useMenuCommands → the shared catalog.
+  const gitItems = await app.evaluate(({ Menu }) => {
+    const gitMenu = Menu.getApplicationMenu()?.items.find((i) => i.label === "Git");
+    return (
+      gitMenu?.submenu?.items
+        .filter((item) => item.type !== "separator")
+        .map((item) => ({ label: item.label, accelerator: item.accelerator ?? null })) ?? []
+    );
+  });
+  expect(gitItems).toEqual([
+    { label: "Commit all", accelerator: null },
+    { label: "Push branch", accelerator: null },
+    { label: "Merge worktree", accelerator: null },
+    { label: "Release…", accelerator: null },
+  ]);
+  await app.evaluate(({ Menu }) => {
+    const gitMenu = Menu.getApplicationMenu()?.items.find((i) => i.label === "Git");
+    gitMenu?.submenu?.items.find((i) => i.label === "Commit all")?.click();
+  });
+  await expect(window.getByTestId("git-screen")).toBeVisible();
+  // This fixture deliberately leaves gitAutomation disabled. Menu routing must
+  // reach GitScreen but cannot bypass that existing preference gate.
+  await expect(window.getByTestId("git-actions-off")).toBeVisible();
+  await expect(window.getByTestId("git-commit-message")).toHaveCount(0);
 });
 
 test("File → Edit Keybindings… opens the editor (palette-independent recovery)", async () => {

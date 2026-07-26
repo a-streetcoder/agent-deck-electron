@@ -59,8 +59,12 @@ export function GitScreen() {
   const agentRunning = useAppStore((state) => state.transcript.agentStatus === "running");
   const pushToast = useAppStore((state) => state.pushToast);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
+  const gitActionRequest = useAppStore((state) => state.gitActionRequest);
+  const clearGitActionRequest = useAppStore((state) => state.clearGitActionRequest);
   const setError = useAppStore((state) => state.setError);
   const [status, setStatus] = useState<GitStatus | null>(null);
+  const [statusProjectId, setStatusProjectId] = useState<string | null>(null);
+  const [statusLoadFailedProjectId, setStatusLoadFailedProjectId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -71,6 +75,8 @@ export function GitScreen() {
   // the setting loads, so neither the actions nor the "off" note flashes first
   // (a flash of enabled actions could let a quick click fire while off).
   const [gitActions, setGitActions] = useState<boolean | null>(null);
+  const [settingsSettled, setSettingsSettled] = useState(false);
+  const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   // Native ReleaseService (generalized to any repo): tag a version + AI notes.
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [preflight, setPreflight] = useState<ReleasePreflight | null>(null);
@@ -79,6 +85,7 @@ export function GitScreen() {
   const [preflighting, setPreflighting] = useState(false);
   const [draftingNotes, setDraftingNotes] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const commitMessageRef = useRef<HTMLTextAreaElement>(null);
   const releaseTriggerRef = useRef<HTMLButtonElement>(null);
   const releaseCancelRef = useRef<HTMLButtonElement>(null);
   const bumpButtonRefs = useRef<Record<ReleaseBump, HTMLButtonElement | null>>({
@@ -90,17 +97,45 @@ export function GitScreen() {
     generation: 0,
     controller: null,
   });
+  const statusRequestGeneration = useRef(0);
+  const statusReady = statusProjectId === currentProjectId && status !== null;
+  const statusFailed = statusLoadFailedProjectId === currentProjectId;
 
   const load = useCallback(async (): Promise<void> => {
-    if (!currentProjectId) return;
+    const projectId = currentProjectId;
+    // An async handler can retain an older callback after project activation.
+    // Do not let that stale callback clear/supersede the current project's load.
+    if (useAppStore.getState().currentProjectId !== projectId) return;
+    const generation = ++statusRequestGeneration.current;
+    setStatus(null);
+    setStatusProjectId(null);
+    setStatusLoadFailedProjectId(null);
+    if (!projectId) return;
     try {
-      const response = await fetch(`/projects/${encodeURIComponent(currentProjectId)}/git/status`);
+      const response = await fetch(`/projects/${encodeURIComponent(projectId)}/git/status`);
       if (!response.ok) throw new Error(await response.text());
-      setStatus((await response.json()) as GitStatus);
+      const nextStatus = (await response.json()) as GitStatus;
+      if (
+        statusRequestGeneration.current !== generation ||
+        useAppStore.getState().currentProjectId !== projectId
+      )
+        return;
+      setStatus(nextStatus);
+      setStatusProjectId(projectId);
     } catch (err) {
+      if (
+        statusRequestGeneration.current !== generation ||
+        useAppStore.getState().currentProjectId !== projectId
+      )
+        return;
+      setStatusLoadFailedProjectId(projectId);
       setError(String(err));
     }
   }, [currentProjectId, setError]);
+
+  useEffect(() => {
+    setMessage("");
+  }, [currentProjectId]);
 
   useEffect(() => {
     void load();
@@ -111,64 +146,98 @@ export function GitScreen() {
   // time you open Git.
   useEffect(() => {
     void fetch("/settings")
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) throw new Error(`Settings request failed (${response.status})`);
+        return response.json();
+      })
       .then((data: { settings: { gitAutomation: boolean } }) =>
         setGitActions(data.settings.gitAutomation),
       )
-      .catch(() => {});
+      .catch(() => setSettingsLoadFailed(true))
+      .finally(() => setSettingsSettled(true));
   }, []);
 
   const commit = async (push: boolean): Promise<void> => {
-    if (!currentProjectId || !message.trim()) return;
+    if (
+      !currentProjectId ||
+      useAppStore.getState().currentProjectId !== currentProjectId ||
+      statusProjectId !== currentProjectId ||
+      !status?.repo ||
+      status.clean ||
+      committing ||
+      !message.trim()
+    )
+      return;
+    const projectId = currentProjectId;
     setCommitting(true);
     setError(null);
     try {
-      const response = await fetch(`/projects/${encodeURIComponent(currentProjectId)}/git/commit`, {
+      const response = await fetch(`/projects/${encodeURIComponent(projectId)}/git/commit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: message.trim(), push }),
       });
       if (!response.ok) throw new Error(await response.text());
+      if (useAppStore.getState().currentProjectId !== projectId) return;
       setMessage("");
       pushToast({ kind: "success", message: push ? "Committed & pushed" : "Committed" });
       await load();
     } catch (err) {
-      setError(String(err));
+      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
     } finally {
       setCommitting(false);
     }
   };
 
   const generateMessage = async (): Promise<void> => {
-    if (!currentProjectId) return;
+    if (
+      !currentProjectId ||
+      useAppStore.getState().currentProjectId !== currentProjectId ||
+      statusProjectId !== currentProjectId ||
+      !status?.repo ||
+      status.clean ||
+      generating ||
+      committing
+    )
+      return;
+    const projectId = currentProjectId;
     setGenerating(true);
     setError(null);
     try {
       const response = await fetch(
-        `/projects/${encodeURIComponent(currentProjectId)}/git/generate-message`,
+        `/projects/${encodeURIComponent(projectId)}/git/generate-message`,
         { method: "POST" },
       );
       if (!response.ok) throw new Error(await response.text());
       const { message: generated } = (await response.json()) as { message: string };
-      setMessage(generated);
+      if (useAppStore.getState().currentProjectId === projectId) setMessage(generated);
     } catch (err) {
-      setError(String(err));
+      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
     } finally {
       setGenerating(false);
     }
   };
 
   const push = async (): Promise<void> => {
-    if (!currentProjectId) return;
+    if (
+      !currentProjectId ||
+      useAppStore.getState().currentProjectId !== currentProjectId ||
+      statusProjectId !== currentProjectId ||
+      !status?.repo ||
+      committing ||
+      pushing
+    )
+      return;
+    const projectId = currentProjectId;
     setPushing(true);
     setError(null);
     try {
-      const response = await fetch(`/projects/${encodeURIComponent(currentProjectId)}/git/push`, {
+      const response = await fetch(`/projects/${encodeURIComponent(projectId)}/git/push`, {
         method: "POST",
       });
       if (!response.ok) throw new Error(await response.text());
     } catch (err) {
-      setError(String(err));
+      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
     } finally {
       setPushing(false);
     }
@@ -177,7 +246,19 @@ export function GitScreen() {
   // Merge the current session's isolated worktree back into its source branch
   // (native Merge). Only shown when the session runs in a worktree.
   const merge = async (): Promise<void> => {
-    if (!session?.id) return;
+    if (
+      !statusReady ||
+      useAppStore.getState().currentProjectId !== currentProjectId ||
+      gitActions !== true ||
+      !session?.id ||
+      useAppStore.getState().session?.id !== session.id ||
+      session.loopReviewRunId ||
+      !session.worktreeBranch ||
+      !session.worktreeSourceBranch ||
+      agentRunning ||
+      merging
+    )
+      return;
     setMerging(true);
     setError(null);
     try {
@@ -268,7 +349,16 @@ export function GitScreen() {
 
   // Open the release panel and load the fetched upstream synchronization state.
   const openRelease = async (): Promise<void> => {
-    if (!currentProjectId) return;
+    if (
+      !currentProjectId ||
+      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !statusReady ||
+      !status?.repo ||
+      gitActions !== true ||
+      preflighting ||
+      releaseOpen
+    )
+      return;
     setReleaseOpen(true);
     setError(null);
     try {
@@ -336,6 +426,131 @@ export function GitScreen() {
     }
   };
 
+  // Palette, shortcut, and native-menu requests all stop here. Wait for the
+  // project status and automation setting, re-check the captured identities,
+  // then clear before invoking an existing guarded handler (at-most-once).
+  useEffect(() => {
+    if (!gitActionRequest) return;
+    const reject = (message: string): void => {
+      clearGitActionRequest(gitActionRequest.token);
+      pushToast({ kind: "info", message });
+    };
+
+    if (!gitActionRequest.projectId) {
+      reject("Open a project before running a Git command.");
+      return;
+    }
+    if (gitActionRequest.projectId !== currentProjectId) {
+      reject("The selected project changed; the Git command was not run.");
+      return;
+    }
+    if (
+      gitActionRequest.action === "mergeWorktree" &&
+      gitActionRequest.sessionId !== (session?.id ?? null)
+    ) {
+      reject("The selected session changed; the Git command was not run.");
+      return;
+    }
+    if (!settingsSettled || (!statusReady && !statusFailed)) return;
+    if (settingsLoadFailed) {
+      reject("Git settings could not be loaded; the command was not run.");
+      return;
+    }
+    if (statusFailed || !statusReady) {
+      reject("Git status could not be loaded; the command was not run.");
+      return;
+    }
+
+    clearGitActionRequest(gitActionRequest.token);
+    if (gitActions !== true) {
+      pushToast({ kind: "info", message: "Git actions are turned off in Preferences." });
+      return;
+    }
+
+    switch (gitActionRequest.action) {
+      case "commit":
+        if (!status?.repo) {
+          pushToast({ kind: "info", message: "This project is not a Git repository." });
+        } else if (committing || status.clean) {
+          pushToast({
+            kind: "info",
+            message: committing
+              ? "A commit is already running."
+              : "There are no changes to commit.",
+          });
+        } else if (!message.trim()) {
+          commitMessageRef.current?.focus();
+          pushToast({ kind: "info", message: "Enter a commit message to commit all changes." });
+        } else {
+          void commit(false);
+        }
+        break;
+      case "push":
+        if (!status?.repo) {
+          pushToast({ kind: "info", message: "This project is not a Git repository." });
+        } else if (committing || pushing) {
+          pushToast({ kind: "info", message: "A Git operation is already running." });
+        } else {
+          void push();
+        }
+        break;
+      case "mergeWorktree":
+        if (session?.loopReviewRunId) {
+          pushToast({
+            kind: "info",
+            message: "Loop review sessions are read-only and cannot be merged.",
+          });
+        } else if (!session?.worktreeBranch || !session.worktreeSourceBranch) {
+          pushToast({
+            kind: "info",
+            message: "The current session is not using an isolated worktree.",
+          });
+        } else if (agentRunning) {
+          pushToast({
+            kind: "info",
+            message: "Wait for the current turn to finish before merging.",
+          });
+        } else if (merging) {
+          pushToast({ kind: "info", message: "A worktree merge is already running." });
+        } else {
+          void merge();
+        }
+        break;
+      case "release":
+        if (!status?.repo) {
+          pushToast({ kind: "info", message: "This project is not a Git repository." });
+        } else if (preflighting || releaseOpen) {
+          pushToast({ kind: "info", message: "The release preflight is already open." });
+        } else {
+          void openRelease();
+        }
+        break;
+    }
+  }, [
+    agentRunning,
+    clearGitActionRequest,
+    commit,
+    committing,
+    currentProjectId,
+    gitActionRequest,
+    gitActions,
+    merge,
+    merging,
+    message,
+    openRelease,
+    preflighting,
+    push,
+    pushToast,
+    pushing,
+    releaseOpen,
+    session,
+    settingsLoadFailed,
+    settingsSettled,
+    status,
+    statusFailed,
+    statusReady,
+  ]);
+
   if (!currentProjectId) {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="git-screen">
@@ -360,7 +575,7 @@ export function GitScreen() {
           >
             Git
           </h2>
-          {status?.repo && status.branch ? (
+          {statusReady && status?.repo && status.branch ? (
             <span
               data-testid="git-branch"
               className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-detail text-text-secondary"
@@ -368,7 +583,7 @@ export function GitScreen() {
               {status.branch}
             </span>
           ) : null}
-          {gitActions === true && status?.repo && !releaseOpen ? (
+          {gitActions === true && statusReady && status?.repo && !releaseOpen ? (
             <ControlButton
               ref={releaseTriggerRef}
               data-testid="git-release"
@@ -536,6 +751,7 @@ export function GitScreen() {
         ) : null}
 
         {gitActions === true &&
+        statusReady &&
         !session?.loopReviewRunId &&
         session?.worktreeBranch &&
         session.worktreeSourceBranch ? (
@@ -566,7 +782,23 @@ export function GitScreen() {
           </div>
         ) : null}
 
-        {status && !status.repo ? (
+        {statusFailed ? (
+          <div
+            className="py-10 text-center text-sm text-text-muted"
+            data-testid="git-status-error"
+            role="alert"
+          >
+            Git status could not be loaded. Mutation actions are unavailable.
+          </div>
+        ) : !statusReady || !status ? (
+          <div
+            className="py-10 text-center text-sm text-text-muted"
+            data-testid="git-status-loading"
+            role="status"
+          >
+            Loading Git status…
+          </div>
+        ) : !status.repo ? (
           <div className="py-10 text-center text-sm text-text-muted" data-testid="git-not-repo">
             This project isn&apos;t a git repository.
           </div>
@@ -578,7 +810,7 @@ export function GitScreen() {
             </p>
 
             <div className="space-y-1" data-testid="git-file-list">
-              {(status?.files ?? []).map((file) => (
+              {status.files.map((file) => (
                 <div
                   key={file.path}
                   data-git-path={file.path}
@@ -592,7 +824,7 @@ export function GitScreen() {
                   </span>
                 </div>
               ))}
-              {status?.clean ? (
+              {status.clean ? (
                 <div className="py-8 text-center text-sm text-text-muted" data-testid="git-clean">
                   Working tree clean — nothing to commit.
                 </div>
@@ -610,6 +842,7 @@ export function GitScreen() {
             ) : gitActions === null ? null : (
               <div className="mt-4 flex flex-col gap-2">
                 <ControlTextArea
+                  ref={commitMessageRef}
                   data-testid="git-commit-message"
                   className="min-h-[64px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
                   placeholder="Commit message"
@@ -620,7 +853,7 @@ export function GitScreen() {
                   <ControlButton
                     data-testid="git-generate-message"
                     className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={generating || committing || status?.clean}
+                    disabled={generating || committing || status.clean}
                     onClick={() => void generateMessage()}
                     title="Draft a commit message from your changes"
                   >
@@ -638,7 +871,7 @@ export function GitScreen() {
                   <ControlButton
                     data-testid="git-commit"
                     className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={committing || status?.clean || !message.trim()}
+                    disabled={committing || status.clean || !message.trim()}
                     onClick={() => void commit(false)}
                   >
                     {committing ? "Committing…" : "Commit all"}
@@ -651,7 +884,7 @@ export function GitScreen() {
                         "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                       color: "var(--color-accent-foreground)",
                     }}
-                    disabled={committing || status?.clean || !message.trim()}
+                    disabled={committing || status.clean || !message.trim()}
                     onClick={() => void commit(true)}
                   >
                     Commit &amp; Push

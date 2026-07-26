@@ -19,6 +19,17 @@ export interface DiffJumpRequest {
   token: number;
 }
 
+export type GitAction = "commit" | "push" | "mergeWorktree" | "release";
+
+/** One-shot request consumed by GitScreen after its project-scoped guards settle. */
+export interface GitActionRequest {
+  action: GitAction;
+  projectId: string | null;
+  sessionId: string | null;
+  /** Distinguishes repeated requests, including repeats of the same action. */
+  token: number;
+}
+
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
 export type AppView =
@@ -245,6 +256,8 @@ export interface AppState {
   commandPaletteOpen: boolean;
   /** Whether the keybindings editor sheet is open (from the palette). */
   keybindingsEditorOpen: boolean;
+  /** One-shot, identity-bound Git workflow request consumed only by GitScreen. */
+  gitActionRequest: GitActionRequest | null;
   transcript: TranscriptState;
   /** Last seq applied — sent on resubscribe so the server replays the gap. */
   lastSeq: number;
@@ -265,6 +278,9 @@ export interface AppState {
   setKeybindings(keybindings: KeybindingBinding[]): void;
   setCommandPaletteOpen(open: boolean): void;
   setKeybindingsEditorOpen(open: boolean): void;
+  requestGitAction(request: Omit<GitActionRequest, "token">): void;
+  /** Token-scoped so an older consumer cannot clear a newer request. */
+  clearGitActionRequest(token: number): void;
   setTerminalOpen(open: boolean): void;
   /** Open `kind` as a tab for `sessionId` (add if absent) and make it active. */
   openWorkspaceTab(sessionId: string, kind: WorkspaceTabKind): void;
@@ -332,6 +348,8 @@ function initialPanelExpanded(): boolean {
   }
 }
 
+let nextGitActionToken = 0;
+
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
   sessionSubscriptionSettled: false,
@@ -359,6 +377,7 @@ export const useAppStore = create<AppState>((set) => ({
   keybindings: [],
   commandPaletteOpen: false,
   keybindingsEditorOpen: false,
+  gitActionRequest: null,
   transcript: emptyTranscript(),
   lastSeq: 0,
   error: null,
@@ -391,6 +410,15 @@ export const useAppStore = create<AppState>((set) => ({
   setKeybindings: (keybindings) => set({ keybindings }),
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   setKeybindingsEditorOpen: (keybindingsEditorOpen) => set({ keybindingsEditorOpen }),
+  requestGitAction: (request) =>
+    set({
+      gitActionRequest: {
+        ...request,
+        token: ++nextGitActionToken,
+      },
+    }),
+  clearGitActionRequest: (token) =>
+    set((state) => (state.gitActionRequest?.token === token ? { gitActionRequest: null } : {})),
   setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
   openWorkspaceTab: (sessionId, kind) =>
     set((state) => ({
