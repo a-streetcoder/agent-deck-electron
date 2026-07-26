@@ -18,6 +18,10 @@ use napi::{Error, Result, Status, Task};
 use napi_derive::napi;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle as _;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 const LOOP_SUFFIX: &str = ".loop.md";
@@ -725,6 +729,114 @@ impl Task for ManagedSnapshotTask {
     }
 }
 
+#[cfg(any(windows, test))]
+fn normalize_windows_namespace_path(path: &str) -> Result<String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "managed root check failed: Windows path is empty or contains NUL",
+        ));
+    }
+    let separators = path.replace('/', "\\");
+    let upper = separators.to_ascii_uppercase();
+    let normalized_prefix = if upper.starts_with(r"\\?\UNC\") || upper.starts_with(r"\??\UNC\") {
+        format!(r"\\{}", &separators[8..])
+    } else if upper.starts_with(r"\\?\") || upper.starts_with(r"\??\") {
+        separators[4..].to_owned()
+    } else {
+        separators
+    };
+
+    let (prefix, remainder) = if let Some(unc) = normalized_prefix.strip_prefix(r"\\") {
+        let mut parts = unc.split('\\');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        if server.is_empty()
+            || share.is_empty()
+            || server == "."
+            || share == "."
+            || server == ".."
+            || share == ".."
+            || server.contains(':')
+            || share.contains(':')
+        {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows UNC path is incomplete",
+            ));
+        }
+        (
+            format!(r"\\{}\{}", server.to_lowercase(), share.to_lowercase()),
+            parts.collect::<Vec<_>>(),
+        )
+    } else {
+        let bytes = normalized_prefix.as_bytes();
+        if bytes.len() < 3
+            || !bytes[0].is_ascii_alphabetic()
+            || bytes[1] != b':'
+            || bytes[2] != b'\\'
+        {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows path is not absolute",
+            ));
+        }
+        (
+            normalized_prefix[..2].to_ascii_lowercase(),
+            normalized_prefix[3..].split('\\').collect::<Vec<_>>(),
+        )
+    };
+
+    let mut components = Vec::new();
+    for component in remainder {
+        if component.is_empty() {
+            continue;
+        }
+        if component == "." || component == ".." || component.contains(':') {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: Windows path contains traversal or ADS",
+            ));
+        }
+        components.push(component.to_lowercase());
+    }
+    if components.is_empty() {
+        Ok(format!(r"{prefix}\"))
+    } else {
+        Ok(format!(r"{}\{}", prefix, components.join(r"\")))
+    }
+}
+
+#[cfg(windows)]
+fn held_windows_final_path(dir: &Dir) -> Result<String> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+
+    let handle = dir.as_raw_handle();
+    let mut buffer = vec![0u16; 512];
+    loop {
+        let length = unsafe {
+            GetFinalPathNameByHandleW(handle, buffer.as_mut_ptr(), buffer.len() as u32, 0)
+        };
+        if length == 0 {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "managed root check failed: held Windows final path unavailable",
+            ));
+        }
+        if (length as usize) < buffer.len() {
+            let path = std::ffi::OsString::from_wide(&buffer[..length as usize]);
+            return path.into_string().map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: held Windows final path is invalid Unicode",
+                )
+            });
+        }
+        buffer.resize(length as usize + 1, 0);
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct StableFileIdentity {
     volume: u64,
@@ -801,47 +913,98 @@ impl ManagedSkillRepositoryStore {
         expected_dev: String,
         expected_ino: String,
     ) -> Result<Self> {
-        let canonical =
-            std::fs::canonicalize(std::path::Path::new(&data_dir).join("SkillRepositories"))
-                .map_err(map_resource_io)?;
-        if canonical != std::path::Path::new(&expected_realpath) {
-            return Err(resource_error(
-                "RESOURCE_UNSAFE_COMPONENT",
-                "managed root realpath changed",
-            ));
-        }
+        // Capture the trusted direct child first. On Windows this handle denies
+        // delete sharing and remains the authority even if namespace spelling
+        // differs between Node and Win32.
         let root = open_managed_repositories(&data_dir)?;
         let metadata = root.dir_metadata().map_err(map_resource_io)?;
         #[cfg(unix)]
-        if metadata.dev().to_string() != expected_dev || metadata.ino().to_string() != expected_ino
-        {
-            return Err(resource_error(
-                "RESOURCE_UNSAFE_COMPONENT",
-                "managed root identity changed",
-            ));
-        }
-        #[cfg(windows)]
-        {
-            // Node's stat dev/ino representation is not a stable cross-runtime
-            // contract on Windows. Reconcile the held no-delete-share handle
-            // against the current canonical namespace using native identities.
-            let _node_identity = (expected_dev, expected_ino);
-            let current_canonical =
+        let root_path = {
+            let canonical =
                 std::fs::canonicalize(std::path::Path::new(&data_dir).join("SkillRepositories"))
                     .map_err(map_resource_io)?;
-            if current_canonical != std::path::Path::new(&expected_realpath) {
+            if canonical != std::path::Path::new(&expected_realpath) {
                 return Err(resource_error(
                     "RESOURCE_UNSAFE_COMPONENT",
-                    "managed root namespace changed",
+                    "managed root check failed: Unix canonical path changed",
                 ));
             }
-            if ambient_file_identity(&current_canonical)? != cap_file_identity(&metadata)? {
+            if metadata.dev().to_string() != expected_dev
+                || metadata.ino().to_string() != expected_ino
+            {
                 return Err(resource_error(
                     "RESOURCE_UNSAFE_COMPONENT",
-                    "managed root identity changed",
+                    "managed root check failed: Unix identity changed",
                 ));
             }
-        }
+            expected_realpath.clone()
+        };
+        #[cfg(windows)]
+        let root_path = {
+            // Node's bigint stat identity is not a cross-runtime contract on
+            // Windows. Require a safe absolute candidate, then compare its
+            // opened native identity with the already-held direct child.
+            let _node_identity = (expected_dev, expected_ino);
+            let expected_normalized = normalize_windows_namespace_path(&expected_realpath)?;
+            let held_final = held_windows_final_path(&root)?;
+            let held_normalized = normalize_windows_namespace_path(&held_final)?;
+            let candidate_path = std::path::Path::new(&expected_realpath);
+            let before = std::fs::symlink_metadata(candidate_path).map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate metadata unavailable",
+                )
+            })?;
+            if !before.is_dir()
+                || before.file_type().is_symlink()
+                || before.file_attributes() & 0x400 != 0
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate is a reparse point",
+                ));
+            }
+            let candidate =
+                Dir::open_ambient_dir(candidate_path, ambient_authority()).map_err(|_| {
+                    resource_error(
+                        "RESOURCE_UNSAFE_COMPONENT",
+                        "managed root check failed: Windows candidate handle unavailable",
+                    )
+                })?;
+            let candidate_metadata = candidate.dir_metadata().map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate handle metadata unavailable",
+                )
+            })?;
+            if cap_file_identity(&candidate_metadata)? != cap_file_identity(&metadata)? {
+                let context = if expected_normalized == held_normalized {
+                    "equivalent spelling resolved to a different identity"
+                } else {
+                    "different spelling resolved to a different identity"
+                };
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    format!("managed root check failed: {context}"),
+                ));
+            }
+            let after = std::fs::symlink_metadata(candidate_path).map_err(|_| {
+                resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate post-check unavailable",
+                )
+            })?;
+            if !after.is_dir()
+                || after.file_type().is_symlink()
+                || after.file_attributes() & 0x400 != 0
+            {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root check failed: Windows candidate changed to a reparse point",
+                ));
+            }
+            held_final
+        };
         let data =
             Dir::open_ambient_dir(&data_dir, ambient_authority()).map_err(map_resource_io)?;
         let snapshots = open_child_dir(&data, "SkillRepositorySnapshots", true)
@@ -865,7 +1028,7 @@ impl ManagedSkillRepositoryStore {
         let snapshot_metadata = snapshots.dir_metadata().map_err(map_resource_io)?;
         Ok(Self {
             root,
-            root_path: expected_realpath,
+            root_path,
             snapshots,
             snapshots_path,
             snapshots_identity: SnapshotIdentity(cap_file_identity(&snapshot_metadata)?),
@@ -3398,6 +3561,41 @@ mod tests {
 
     fn home() -> TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn windows_namespace_normalization_accepts_equivalent_spellings() {
+        let drive = normalize_windows_namespace_path(r"C:\Users\Agent\SkillRepositories").unwrap();
+        let extended =
+            normalize_windows_namespace_path(r"\\?\c:/users/AGENT/SkillRepositories\").unwrap();
+        assert_eq!(drive, extended);
+
+        let unc = normalize_windows_namespace_path(r"\\Server\Share\Skills").unwrap();
+        let extended_unc =
+            normalize_windows_namespace_path(r"\\?\UNC\server\share\SKILLS\").unwrap();
+        assert_eq!(unc, extended_unc);
+    }
+
+    #[test]
+    fn windows_namespace_normalization_rejects_unsafe_or_different_paths() {
+        for unsafe_path in [
+            r"C:relative\Skills",
+            r"C:\safe\..\outside",
+            r"C:\safe\file:stream",
+            r"\\server",
+            r"\\server\share:stream\Skills",
+            r"\\server\..\Skills",
+            r"relative\Skills",
+        ] {
+            assert!(
+                normalize_windows_namespace_path(unsafe_path).is_err(),
+                "accepted {unsafe_path}"
+            );
+        }
+        assert_ne!(
+            normalize_windows_namespace_path(r"C:\safe\one").unwrap(),
+            normalize_windows_namespace_path(r"C:\safe\two").unwrap()
+        );
     }
 
     #[test]
