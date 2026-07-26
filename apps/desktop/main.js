@@ -603,9 +603,25 @@ ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
   }
 });
 
-ipcMain.handle("loops:revealArtifacts", async (_event, rawRunId) => {
-  const runId = String(rawRunId ?? "");
-  if (!serverPort || !/^[0-9a-f-]{36}$/i.test(runId)) {
+ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
+  const runId = typeof rawRunId === "string" ? rawRunId : "";
+  const expectedRendererOrigin = serverPort
+    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
+    : null;
+  let senderOrigin = null;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
+  } catch {
+    // Rejected below.
+  }
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    senderOrigin !== expectedRendererOrigin ||
+    !serverPort ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+  ) {
     throw new Error("Loop run is unavailable");
   }
   const response = await fetch(
@@ -664,9 +680,20 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
 
 ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
   const runId = typeof rawRunId === "string" ? rawRunId : "";
+  const expectedRendererOrigin = serverPort
+    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
+    : null;
+  let senderOrigin = null;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
+  } catch {
+    // Rejected below.
+  }
   if (
     !mainWindow ||
     event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    senderOrigin !== expectedRendererOrigin ||
     !serverPort ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
   ) {

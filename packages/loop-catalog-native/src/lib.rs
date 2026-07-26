@@ -352,7 +352,7 @@ fn map_resource_io(error: std::io::Error) -> Error {
 fn map_validated_resource_mutation_io(error: std::io::Error) -> Error {
     // Windows may report a sharing conflict from rename as ERROR_ACCESS_DENIED
     // rather than ERROR_SHARING_VIOLATION. This mapper is intentionally used
-    // only after the named target was validated as a regular, non-reparse file;
+    // only after the named target was validated as a regular, non-reparse entry;
     // validation and traversal permission failures remain unsafe-component
     // errors through map_resource_io.
     #[cfg(windows)]
@@ -3688,47 +3688,6 @@ fn copy_tree_inner(source: &Dir, destination: &Dir, include_git: bool) -> Result
     Ok(())
 }
 
-#[cfg(test)]
-thread_local! {
-    static RECONCILE_TEST_ORDER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
-    static RECONCILE_TEST_FAIL_AT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_capability_error(error: Error, mutated: bool) -> Error {
-    if error.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:") {
-        return error;
-    }
-    if !mutated && error.reason.starts_with("RESOURCE_BUSY:") {
-        return error;
-    }
-    if mutated {
-        return resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource reconciliation was interrupted; retry the operation",
-        );
-    }
-    error
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_io(error: std::io::Error, mutated: bool) -> Error {
-    if mutated {
-        return resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource reconciliation was interrupted; retry the operation",
-        );
-    }
-    #[cfg(windows)]
-    if matches!(error.raw_os_error(), Some(32 | 33)) {
-        return resource_error(
-            "RESOURCE_BUSY",
-            "resource is in use by another process; close it and retry",
-        );
-    }
-    map_resource_io(error)
-}
-
 fn validate_reconcile_tree(dir: &Dir) -> Result<()> {
     for entry in dir.entries().map_err(map_resource_io)? {
         let entry = entry.map_err(map_resource_io)?;
@@ -3769,242 +3728,6 @@ fn validate_reconcile_tree(dir: &Dir) -> Result<()> {
                 "tree contains an unsupported entry",
             ));
         }
-    }
-    Ok(())
-}
-
-#[cfg(any(windows, test))]
-fn staged_file_temp(
-    source: &Dir,
-    name: &str,
-    destination: &Dir,
-) -> Result<(String, cap_std::fs::File)> {
-    let mut input = nofollow_open(source, name, false, false).map_err(map_resource_io)?;
-    if !input.metadata().map_err(map_resource_io)?.is_file() {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "staged file changed type",
-        ));
-    }
-    for _ in 0..128 {
-        let temporary = format!(
-            "{RESOURCE_TEMP_PREFIX}reconcile-{}",
-            private_nonce().map_err(map_resource_io)?
-        );
-        let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .follow(FollowSymlinks::No)
-            .maybe_dir(false);
-        #[cfg(unix)]
-        options.mode(0o600);
-
-        match destination.open_with(&temporary, &options) {
-            Ok(mut output) => {
-                if let Err(error) =
-                    std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all())
-                {
-                    drop(output);
-                    let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-                    if cleanup.is_err() {
-                        return Err(resource_error(
-                            "RESOURCE_RECONCILE_INCOMPLETE",
-                            "reconcile-temporary write cleanup was interrupted; retry",
-                        ));
-                    }
-                    return Err(map_resource_io(error));
-                }
-                return Ok((temporary, output));
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(map_resource_io(error)),
-        }
-    }
-    Err(resource_error(
-        "RESOURCE_IO",
-        "could not allocate reconcile temporary",
-    ))
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_staged_entry(
-    staged: &Dir,
-    destination: &Dir,
-    name: &str,
-    mutated: &mut bool,
-) -> Result<()> {
-    #[cfg(test)]
-    {
-        RECONCILE_TEST_ORDER.with(|order| order.borrow_mut().push(name.to_owned()));
-        let injected =
-            RECONCILE_TEST_FAIL_AT.with(|failure| failure.borrow().as_deref() == Some(name));
-        if injected {
-            return Err(if *mutated {
-                resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "injected reconciliation interruption",
-                )
-            } else {
-                resource_error("RESOURCE_BUSY", "injected pre-mutation interruption")
-            });
-        }
-    }
-    let source = staged.symlink_metadata(name).map_err(map_resource_io)?;
-    if source.file_type().is_symlink() || (!source.is_file() && !source.is_dir()) {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "unsafe staged entry",
-        ));
-    }
-    let target = match destination.symlink_metadata(name) {
-        Ok(metadata) => Some(metadata),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return Err(reconcile_io(error, *mutated)),
-    };
-
-    if source.is_dir()
-        && target
-            .as_ref()
-            .is_some_and(|entry| entry.is_dir() && !entry.file_type().is_symlink())
-    {
-        let source_child = open_child_dir(staged, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "staged directory changed")
-            })?;
-        let target_child = open_child_dir(destination, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "target directory changed")
-            })?;
-        return reconcile_staged_dir(&source_child, &target_child, mutated);
-    }
-
-    if source.is_file()
-        && target
-            .as_ref()
-            .is_some_and(|entry| entry.is_file() && !entry.file_type().is_symlink())
-    {
-        let (temporary, file) = staged_file_temp(staged, name, destination)?;
-        drop(file);
-        let result = destination.rename(&temporary, destination, name);
-        if let Err(error) = result {
-            let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-            if cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "file reconciliation failed and private-temporary cleanup was interrupted; retry",
-                ));
-            }
-            return Err(reconcile_io(error, *mutated));
-        }
-        *mutated = true;
-        return Ok(());
-    }
-
-    if let Some(target) = target.as_ref() {
-        if target.file_type().is_symlink() || (!target.is_file() && !target.is_dir()) {
-            return Err(resource_error(
-                "RESOURCE_UNSAFE_COMPONENT",
-                "unsafe target entry",
-            ));
-        }
-        remove_tree_entry(destination, name)
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
-    }
-
-    if source.is_dir() {
-        destination
-            .create_dir(name)
-            .map_err(|error| reconcile_io(error, *mutated))?;
-        *mutated = true;
-        let source_child = open_child_dir(staged, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "staged directory changed")
-            })?;
-        let target_child = open_child_dir(destination, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "new directory changed"))?;
-        reconcile_staged_dir(&source_child, &target_child, mutated)
-    } else {
-        let (temporary, file) = staged_file_temp(staged, name, destination)?;
-        drop(file);
-        let result = destination.hard_link(&temporary, destination, name);
-        let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-        if let Err(error) = result {
-            if cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "file reconciliation failed and private-temporary cleanup was interrupted; retry",
-                ));
-            }
-            return Err(reconcile_io(error, *mutated));
-        }
-        if cleanup.is_err() {
-            return Err(resource_error(
-                "RESOURCE_RECONCILE_INCOMPLETE",
-                "file reconciliation succeeded but private-temporary cleanup was interrupted; retry",
-            ));
-        }
-        *mutated = true;
-        Ok(())
-    }
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_staged_dir(staged: &Dir, destination: &Dir, mutated: &mut bool) -> Result<()> {
-    let mut staged_names = Vec::new();
-    for entry in staged.entries().map_err(map_resource_io)? {
-        let entry = entry.map_err(map_resource_io)?;
-        let name = entry
-            .file_name()
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 staged entry"))?;
-        staged_names.push(name);
-    }
-    staged_names.sort();
-    for name in staged_names
-        .iter()
-        .filter(|name| name.as_str() != "SKILL.md")
-    {
-        reconcile_staged_entry(staged, destination, name, mutated)?;
-    }
-
-    let mut stale = Vec::new();
-    for entry in destination
-        .entries()
-        .map_err(|error| reconcile_io(error, *mutated))?
-    {
-        let entry = entry.map_err(|error| reconcile_io(error, *mutated))?;
-        let name = entry
-            .file_name()
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 target entry"))?;
-        if !name.starts_with(RESOURCE_TEMP_PREFIX)
-            && name != "SKILL.md"
-            && !staged_names.iter().any(|staged_name| staged_name == &name)
-        {
-            stale.push(name);
-        }
-    }
-    stale.sort();
-    for name in stale {
-        remove_tree_entry(destination, &name)
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
-    }
-
-    if staged_names.iter().any(|name| name == "SKILL.md") {
-        reconcile_staged_entry(staged, destination, "SKILL.md", mutated)?;
-    } else if destination.symlink_metadata("SKILL.md").is_ok() {
-        remove_tree_entry(destination, "SKILL.md")
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
     }
     Ok(())
 }
@@ -4204,6 +3927,8 @@ fn publish_staged_tree_with_identity(
         sync_dir(parent).map_err(map_resource_io)?;
         return Ok(None);
     };
+    #[cfg(windows)]
+    let _ = target;
 
     #[cfg(unix)]
     {
@@ -4255,12 +3980,15 @@ fn publish_staged_tree_with_identity(
         // Windows has no directory exchange. Quarantine the descriptor-validated
         // old tree first, then publish the complete stage with no-replace. A
         // failed publication restores no-replace and never overwrites drift.
-        rename_noreplace(parent, leaf, parent, recovery).map_err(|error| match error.kind() {
-            ErrorKind::NotFound | ErrorKind::AlreadyExists => {
-                resource_error("RESOURCE_BUSY", "target changed during quarantine")
-            }
-            _ => map_resource_io(error),
-        })?;
+        if let Err(error) = rename_noreplace(parent, leaf, parent, recovery) {
+            let mapped = match error.kind() {
+                ErrorKind::NotFound | ErrorKind::AlreadyExists => {
+                    resource_error("RESOURCE_BUSY", "target changed during quarantine")
+                }
+                _ => map_validated_resource_mutation_io(error),
+            };
+            return Err(cleanup_owned_stage_error(parent, stage, mapped));
+        }
         let quarantined = open_child_dir(parent, recovery, false)
             .map_err(map_resource_io)?
             .ok_or_else(|| {
@@ -5834,141 +5562,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn windows_reconciler_converges_exactly_with_stale_and_type_changes() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        let stage_path = root.path().join("stage");
-        let target_path = root.path().join("target");
-        fs::create_dir(stage_path.join("nested")).unwrap();
-        fs::write(stage_path.join("nested/asset"), "new asset").unwrap();
-        fs::write(stage_path.join("was-dir"), "now file").unwrap();
-        fs::create_dir(stage_path.join("was-file")).unwrap();
-        fs::write(stage_path.join("was-file/child"), "child").unwrap();
-        fs::write(stage_path.join("SKILL.md"), "new manifest").unwrap();
-        fs::create_dir(target_path.join("was-dir")).unwrap();
-        fs::write(target_path.join("was-dir/old"), "old").unwrap();
-        fs::write(target_path.join("was-file"), "old file").unwrap();
-        fs::write(target_path.join("stale"), "stale").unwrap();
-        fs::write(target_path.join("SKILL.md"), "old manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-
-        validate_reconcile_tree(&staged).unwrap();
-        validate_reconcile_tree(&destination).unwrap();
-        let mut mutated = false;
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        assert!(mutated);
-        validate_exact_tree(&staged, &destination).unwrap();
-        assert_eq!(
-            fs::read_to_string(target_path.join("SKILL.md")).unwrap(),
-            "new manifest"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("nested/asset")).unwrap(),
-            "new asset"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("was-dir")).unwrap(),
-            "now file"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("was-file/child")).unwrap(),
-            "child"
-        );
-        assert!(!target_path.join("stale").exists());
-        assert!(fs::read_dir(&target_path).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(RESOURCE_TEMP_PREFIX)
-        }));
-    }
-
-    #[test]
-    fn windows_reconciler_processes_manifest_last() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        fs::write(root.path().join("stage/asset"), "asset").unwrap();
-        fs::write(root.path().join("stage/SKILL.md"), "manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-        RECONCILE_TEST_ORDER.with(|order| order.borrow_mut().clear());
-        let mut mutated = false;
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        let order = RECONCILE_TEST_ORDER.with(|order| order.borrow().clone());
-        assert_eq!(order.last().map(String::as_str), Some("SKILL.md"));
-    }
-
-    #[test]
-    fn windows_reconciler_partial_failure_then_retry_converges_exactly() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        fs::write(root.path().join("stage/a"), "new-a").unwrap();
-        fs::write(root.path().join("stage/z"), "new-z").unwrap();
-        fs::write(root.path().join("stage/SKILL.md"), "new-manifest").unwrap();
-        fs::write(root.path().join("target/a"), "old-a").unwrap();
-        fs::write(root.path().join("target/z"), "old-z").unwrap();
-        fs::write(root.path().join("target/SKILL.md"), "old-manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-        RECONCILE_TEST_FAIL_AT.with(|failure| *failure.borrow_mut() = Some("z".into()));
-        let mut mutated = false;
-        let error = reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap_err();
-        assert!(error.reason.starts_with("RESOURCE_RECONCILE_INCOMPLETE:"));
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/a")).unwrap(),
-            "new-a"
-        );
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/z")).unwrap(),
-            "old-z"
-        );
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
-            "old-manifest"
-        );
-        RECONCILE_TEST_FAIL_AT.with(|failure| *failure.borrow_mut() = None);
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        validate_exact_tree(&staged, &destination).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn windows_reconciler_rejects_swapped_child_link_without_touching_outside() {
-        use std::os::unix::fs::symlink;
-        let root = home();
-        let victim = root.path().join("victim-reconcile");
-        fs::create_dir(&victim).unwrap();
-        fs::write(victim.join("sentinel"), "outside-safe").unwrap();
-        fs::create_dir(root.path().join("stage-reconcile")).unwrap();
-        fs::create_dir(root.path().join("stage-reconcile/child")).unwrap();
-        fs::write(root.path().join("stage-reconcile/child/file"), "new").unwrap();
-        fs::create_dir(root.path().join("target-reconcile")).unwrap();
-        symlink(&victim, root.path().join("target-reconcile/child")).unwrap();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        let staged = open_child_dir(&parent, "stage-reconcile", false)
-            .unwrap()
-            .unwrap();
-        let destination = open_child_dir(&parent, "target-reconcile", false)
-            .unwrap()
-            .unwrap();
-        let mut mutated = false;
-        let error = reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap_err();
-        assert!(error.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:"));
-        assert_eq!(
-            fs::read_to_string(victim.join("sentinel")).unwrap(),
-            "outside-safe"
-        );
-    }
-
     #[cfg(windows)]
     #[test]
     fn windows_exact_child_dir_capability_pins_identity_until_drop() {
@@ -6291,7 +5884,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_locked_reconcile_is_busy_then_retry_succeeds() {
+    fn windows_locked_replacement_is_busy_then_retry_returns_recovery() {
         use std::os::windows::fs::OpenOptionsExt as _;
         let root = home();
         let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
@@ -6305,16 +5898,51 @@ mod tests {
             .unwrap();
         parent.create_dir("stage-locked").unwrap();
         fs::write(root.path().join("stage-locked/SKILL.md"), "new").unwrap();
-        let error = publish_staged_tree(&parent, "stage-locked", "target", true).unwrap_err();
+        let locked_recovery = resource_recovery_name("target", "0123456789abcdef0123456789abcdef");
+        let error = publish_staged_tree_with_identity(
+            &parent,
+            "stage-locked",
+            "target",
+            true,
+            None,
+            None,
+            false,
+            &locked_recovery,
+        )
+        .unwrap_err();
         assert!(error.reason.starts_with("RESOURCE_BUSY:"), "{error:?}");
         assert!(!root.path().join("stage-locked").exists());
+        assert!(!root.path().join(&locked_recovery).exists());
+        assert_eq!(
+            fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
+            "old"
+        );
+
         drop(held);
         parent.create_dir("stage-retry").unwrap();
         fs::write(root.path().join("stage-retry/SKILL.md"), "new").unwrap();
-        publish_staged_tree(&parent, "stage-retry", "target", true).unwrap();
+        let retry_recovery = resource_recovery_name("target", "fedcba9876543210fedcba9876543210");
+        let recovery = publish_staged_tree_with_identity(
+            &parent,
+            "stage-retry",
+            "target",
+            true,
+            None,
+            None,
+            false,
+            &retry_recovery,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(recovery.token, retry_recovery);
+        assert_eq!(recovery.skill_name, "target");
         assert_eq!(
             fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
             "new"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(&recovery.token).join("SKILL.md")).unwrap(),
+            "old"
         );
     }
 

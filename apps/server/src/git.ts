@@ -117,7 +117,7 @@ async function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): P
 }
 
 /** Run Git without a shell while supplying plumbing input on stdin. */
-async function runGitInput(cwd: string, args: string[], input: string): Promise<string> {
+async function runGitInput(cwd: string, args: string[], input: string | Buffer): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(gitBin(), args, {
       cwd,
@@ -577,6 +577,8 @@ export interface GitWorktree {
   branch: string;
   /** The branch the worktree was forked from. */
   sourceBranch: string;
+  /** Immutable commit resolved before branch/worktree creation. */
+  baseCommit?: string;
   /** Native stable identity reserved before the checkout is populated. */
   identityToken?: string;
   /** Proof that createSessionWorktree atomically created this branch. */
@@ -659,8 +661,17 @@ export async function createLoopWorktree(
 ): Promise<GitWorktree> {
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
-  await runGit(projectDir, ["branch", branch, sourceBranch]);
-  const worktree: GitWorktree = { path: targetPath, branch, sourceBranch, branchOwned: true };
+  // Resolve before either ref or filesystem mutation. This immutable object is
+  // the review/apply base; a branch name is never accepted as a substitute.
+  const baseCommit = await gitCommitOid(projectDir, `refs/heads/${sourceBranch}`);
+  await runGit(projectDir, ["branch", branch, baseCommit]);
+  const worktree: GitWorktree = {
+    path: targetPath,
+    branch,
+    sourceBranch,
+    baseCommit,
+    branchOwned: true,
+  };
   try {
     await gitWorktreeAdd(projectDir, targetPath, branch);
     return worktree;
@@ -684,6 +695,7 @@ export interface OwnedLoopWorktreeProof {
   path: string;
   branch: string;
   sourceBranch: string;
+  baseCommit?: string;
   branchOwned: true;
 }
 
@@ -792,6 +804,93 @@ export async function gitLocalBranchRef(cwd: string, branch: string): Promise<st
 
 export async function gitWorkingTreeClean(cwd: string): Promise<boolean> {
   return (await runGit(cwd, ["status", "--porcelain=v1", "-z"])).length === 0;
+}
+
+export interface LoopWorktreePatch {
+  bytes: Buffer;
+  changedFiles: Array<{
+    path: string;
+    oldPath?: string;
+    status: "staged" | "unstaged" | "untracked" | "deleted" | "renamed" | "binary";
+  }>;
+}
+
+/**
+ * Snapshot committed, indexed, working-tree, and untracked changes against an
+ * immutable base without changing the worktree's real index. The throwaway
+ * index is equivalent to an isolated intent-to-add review and makes binary
+ * additions available to `--binary`.
+ */
+export async function gitLoopWorktreePatch(
+  cwd: string,
+  baseCommit: string,
+  maxBytes = 8_000_000,
+): Promise<LoopWorktreePatch> {
+  validateGitObjectId(baseCommit);
+  await gitCommitOid(cwd, baseCommit);
+  const commonDir = await gitCommonDir(cwd);
+  const tempIndex = path.join(commonDir, `agent-deck-loop-review-${randomUUID()}.index`);
+  const env = { ...process.env, GIT_INDEX_FILE: tempIndex };
+  try {
+    await runGitEnv(cwd, ["read-tree", baseCommit], env);
+    await runGitEnv(cwd, ["add", "-A", "--", "."], env);
+    const options = {
+      cwd,
+      env,
+      encoding: "buffer" as const,
+      timeout: 30_000,
+      maxBuffer: maxBytes + 1,
+    };
+    let bytes: Buffer;
+    try {
+      ({ stdout: bytes } = await execFileAsync(
+        gitBin(),
+        ["diff", "--cached", "--binary", "--full-index", "-M", baseCommit, "--"],
+        options,
+      ));
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        throw new Error("loop_patch_too_large");
+      }
+      throw error;
+    }
+    if (bytes.length > maxBytes) throw new Error("loop_patch_too_large");
+    const nameStatus = await runGitEnv(
+      cwd,
+      ["diff", "--cached", "--name-status", "-z", "-M", baseCommit, "--"],
+      env,
+    );
+    const binary = new Set(
+      (await runGitEnv(cwd, ["diff", "--cached", "--numstat", "-z", "-M", baseCommit, "--"], env))
+        .split("\0")
+        .flatMap((record) => {
+          const [added, deleted, file] = record.split("\t");
+          return added === "-" && deleted === "-" && file ? [file] : [];
+        }),
+    );
+    const changedFiles = parseNameStatusZ(nameStatus).map((entry) => ({
+      path: entry.path,
+      ...(entry.oldPath ? { oldPath: entry.oldPath } : {}),
+      status: binary.has(entry.path)
+        ? ("binary" as const)
+        : entry.status === "D"
+          ? ("deleted" as const)
+          : entry.status === "R"
+            ? ("renamed" as const)
+            : ("staged" as const),
+    }));
+    return { bytes, changedFiles };
+  } finally {
+    await rm(tempIndex, { force: true }).catch(() => {});
+  }
+}
+
+export async function gitApplyPatchCheck(cwd: string, patchBytes: Buffer): Promise<void> {
+  await runGitInput(cwd, ["apply", "--check", "--3way", "--binary", "-"], patchBytes);
+}
+
+export async function gitApplyPatch(cwd: string, patchBytes: Buffer): Promise<void> {
+  await runGitInput(cwd, ["apply", "--3way", "--binary", "-"], patchBytes);
 }
 
 /** Detect sequencer and merge state without asking Git to repair or abort it. */
