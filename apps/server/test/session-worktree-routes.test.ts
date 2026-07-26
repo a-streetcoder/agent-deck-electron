@@ -7,14 +7,24 @@ import type { ServerContext } from "../src/context.ts";
 import type * as GitModule from "../src/git.ts";
 
 const gitMocks = vi.hoisted(() => ({
+  canonicalWorktreePath: vi.fn(),
   createSessionWorktree: vi.fn(),
   gitWorktreePrune: vi.fn(),
   gitWorktreeRegistrationAtPath: vi.fn(),
   gitWorktreeRegistrationMatches: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
+  gitCheckoutBranch: vi.fn(),
   gitCommitAll: vi.fn(),
   gitCommitsAhead: vi.fn(),
-  gitMerge: vi.fn(),
+  gitCurrentBranch: vi.fn(),
+  gitHasUnmergedEntries: vi.fn(),
+  gitLocalBranchRef: vi.fn(),
+  gitMergeInProgress: vi.fn(),
+  gitMergeNoCheckout: vi.fn(),
+  gitOperationInProgress: vi.fn(),
+  gitRepositoryIdentity: vi.fn(),
+  gitWorkingTreeClean: vi.fn(),
+  gitWorktreeRegistrations: vi.fn(),
 }));
 
 vi.mock("@agent-deck/resources", () => ({
@@ -24,14 +34,24 @@ vi.mock("@agent-deck/resources", () => ({
 
 vi.mock("../src/git.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof GitModule>()),
+  canonicalWorktreePath: gitMocks.canonicalWorktreePath,
   createSessionWorktree: gitMocks.createSessionWorktree,
   gitWorktreePrune: gitMocks.gitWorktreePrune,
   gitWorktreeRegistrationAtPath: gitMocks.gitWorktreeRegistrationAtPath,
   gitWorktreeRegistrationMatches: gitMocks.gitWorktreeRegistrationMatches,
   gitDeleteOwnedWorktreeBranch: gitMocks.gitDeleteOwnedWorktreeBranch,
+  gitCheckoutBranch: gitMocks.gitCheckoutBranch,
   gitCommitAll: gitMocks.gitCommitAll,
   gitCommitsAhead: gitMocks.gitCommitsAhead,
-  gitMerge: gitMocks.gitMerge,
+  gitCurrentBranch: gitMocks.gitCurrentBranch,
+  gitHasUnmergedEntries: gitMocks.gitHasUnmergedEntries,
+  gitLocalBranchRef: gitMocks.gitLocalBranchRef,
+  gitMergeInProgress: gitMocks.gitMergeInProgress,
+  gitMergeNoCheckout: gitMocks.gitMergeNoCheckout,
+  gitOperationInProgress: gitMocks.gitOperationInProgress,
+  gitRepositoryIdentity: gitMocks.gitRepositoryIdentity,
+  gitWorkingTreeClean: gitMocks.gitWorkingTreeClean,
+  gitWorktreeRegistrations: gitMocks.gitWorktreeRegistrations,
 }));
 
 import { SessionWorktreeAddError } from "../src/git.ts";
@@ -146,7 +166,7 @@ function makeRoute(
         },
       })),
     enabledExtensionPaths: () => [],
-    dropDiffCache: () => {},
+    dropDiffCache: state.dropDiffCache,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
   return { fastify, state, sessions, index };
@@ -162,10 +182,14 @@ function makeState() {
     reserveWorktree: vi.fn((_target: string) => "v1:0000000000000001:0000000000000002"),
     captureWorktreeIdentity: vi.fn(() => "v1:0000000000000001:0000000000000002"),
     deleteWorktree: vi.fn(async () => {}),
+    dropDiffCache: vi.fn(),
   };
 }
 
 beforeEach(() => {
+  gitMocks.canonicalWorktreePath
+    .mockReset()
+    .mockImplementation(async (candidate: string) => path.resolve(candidate));
   gitMocks.createSessionWorktree.mockReset();
   gitMocks.gitWorktreePrune.mockReset().mockResolvedValue(undefined);
   gitMocks.gitWorktreeRegistrationAtPath.mockReset().mockResolvedValue({
@@ -174,9 +198,25 @@ beforeEach(() => {
   });
   gitMocks.gitWorktreeRegistrationMatches.mockReset().mockResolvedValue(true);
   gitMocks.gitDeleteOwnedWorktreeBranch.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitCheckoutBranch.mockReset().mockResolvedValue(undefined);
   gitMocks.gitCommitAll.mockReset().mockResolvedValue({ committed: true });
   gitMocks.gitCommitsAhead.mockReset().mockResolvedValue(1);
-  gitMocks.gitMerge.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitCurrentBranch
+    .mockReset()
+    .mockImplementation(async (cwd: string) =>
+      cwd === WORKTREE_PATH ? "agent-deck/session-a1b2c3d4" : "main",
+    );
+  gitMocks.gitHasUnmergedEntries.mockReset().mockResolvedValue(false);
+  gitMocks.gitLocalBranchRef.mockReset().mockResolvedValue("refs/heads/main");
+  gitMocks.gitMergeInProgress.mockReset().mockResolvedValue(false);
+  gitMocks.gitMergeNoCheckout.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitOperationInProgress.mockReset().mockResolvedValue(false);
+  gitMocks.gitRepositoryIdentity.mockReset().mockResolvedValue("repo-identity");
+  gitMocks.gitWorkingTreeClean.mockReset().mockResolvedValue(true);
+  gitMocks.gitWorktreeRegistrations.mockReset().mockResolvedValue([
+    { path: PROJECT_PATH, branch: "main" },
+    { path: WORKTREE_PATH, branch: "agent-deck/session-a1b2c3d4" },
+  ]);
   gitMocks.createSessionWorktree.mockResolvedValue({
     path: WORKTREE_PATH,
     branch: "agent-deck/session-allocated",
@@ -597,6 +637,320 @@ describe("POST /sessions worktree transaction", () => {
     await fastify.close();
   });
 
+  it("returns typed preflight, ahead, conflict, generic, and success outcomes", async () => {
+    const seed = (state: ReturnType<typeof makeState>) => {
+      state.index.set("merge-session", {
+        id: "merge-session",
+        cwd: WORKTREE_PATH,
+        projectId: "project-1",
+        worktreePath: WORKTREE_PATH,
+        worktreeIdentity: "v1:0000000000000001:0000000000000002",
+        worktreeBranch: "agent-deck/session-a1b2c3d4",
+        worktreeSourceBranch: "main",
+      });
+    };
+
+    const dirtyRoute = makeRoute();
+    seed(dirtyRoute.state);
+    gitMocks.gitWorkingTreeClean.mockResolvedValueOnce(false);
+    const dirty = await dirtyRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(dirty.json()).toMatchObject({
+      code: "merge_parent_dirty",
+      outcome: "dirty",
+      worktreeCommitted: false,
+    });
+    expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
+    await dirtyRoute.fastify.close();
+
+    const missingRoute = makeRoute();
+    seed(missingRoute.state);
+    gitMocks.gitLocalBranchRef
+      .mockResolvedValueOnce("refs/heads/session")
+      .mockRejectedValueOnce(new Error("missing"));
+    const missing = await missingRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(missing.json()).toMatchObject({
+      code: "merge_source_missing",
+      outcome: "stale_ownership",
+    });
+    await missingRoute.fastify.close();
+
+    const occupiedRoute = makeRoute();
+    seed(occupiedRoute.state);
+    gitMocks.gitWorktreeRegistrations.mockResolvedValueOnce([
+      { path: PROJECT_PATH, branch: "other" },
+      { path: path.join(tmpdir(), "other-worktree"), branch: "main" },
+      { path: WORKTREE_PATH, branch: "agent-deck/session-a1b2c3d4" },
+    ]);
+    const occupied = await occupiedRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(occupied.json()).toMatchObject({ code: "merge_source_occupied" });
+    await occupiedRoute.fastify.close();
+
+    const aheadRoute = makeRoute();
+    seed(aheadRoute.state);
+    gitMocks.gitCommitsAhead.mockRejectedValueOnce(new Error("rev-list failed"));
+    const ahead = await aheadRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(ahead.statusCode).toBe(500);
+    expect(ahead.json()).toMatchObject({ code: "merge_ahead_failed", worktreeCommitted: true });
+    expect(aheadRoute.state.dropDiffCache).toHaveBeenCalledWith("merge-session");
+    await aheadRoute.fastify.close();
+
+    const zeroRoute = makeRoute();
+    seed(zeroRoute.state);
+    gitMocks.gitCommitsAhead.mockResolvedValueOnce(0);
+    const zero = await zeroRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(zero.json()).toMatchObject({
+      code: "merge_nothing_to_merge",
+      outcome: "nothing_to_merge",
+      worktreeCommitted: true,
+    });
+    await zeroRoute.fastify.close();
+
+    const conflictRoute = makeRoute();
+    seed(conflictRoute.state);
+    gitMocks.gitMergeNoCheckout.mockRejectedValueOnce(new Error("merge stopped"));
+    gitMocks.gitHasUnmergedEntries.mockResolvedValueOnce(true);
+    const conflict = await conflictRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(conflict.json()).toMatchObject({
+      code: "merge_conflict",
+      outcome: "conflict",
+      worktreeCommitted: true,
+    });
+    expect(conflictRoute.state.dropDiffCache).toHaveBeenCalledWith("merge-session");
+    expect(gitMocks.gitCheckoutBranch).not.toHaveBeenCalled();
+    await conflictRoute.fastify.close();
+
+    const activeRoute = makeRoute();
+    seed(activeRoute.state);
+    gitMocks.gitMergeNoCheckout.mockRejectedValueOnce(new Error("commit hook rejected merge"));
+    gitMocks.gitMergeInProgress.mockResolvedValueOnce(true);
+    const active = await activeRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(active.json()).toMatchObject({
+      code: "merge_active_failure",
+      outcome: "failed",
+      error: expect.stringContaining("commit hook rejected merge"),
+      worktreeCommitted: true,
+    });
+    await activeRoute.fastify.close();
+
+    const failedRoute = makeRoute();
+    seed(failedRoute.state);
+    gitMocks.gitMergeNoCheckout.mockRejectedValueOnce(new Error("hook failed"));
+    const failed = await failedRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toMatchObject({ code: "merge_failed", outcome: "failed" });
+    await failedRoute.fastify.close();
+
+    const successRoute = makeRoute();
+    seed(successRoute.state);
+    const success = await successRoute.fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+    expect(success.json()).toMatchObject({
+      code: "merge_succeeded",
+      outcome: "merged",
+      commits: 1,
+      worktreeCommitted: true,
+    });
+    await successRoute.fastify.close();
+  });
+
+  it("rejects duplicate, replaced, non-source, and operation-busy session ownership before commit", async () => {
+    const createOwned = () => {
+      const route = makeRoute();
+      route.state.index.set("merge-session", {
+        id: "merge-session",
+        cwd: WORKTREE_PATH,
+        projectId: "project-1",
+        worktreePath: WORKTREE_PATH,
+        worktreeIdentity: "v1:0000000000000001:0000000000000002",
+        worktreeBranch: "agent-deck/session-a1b2c3d4",
+        worktreeSourceBranch: "main",
+      });
+      return route;
+    };
+
+    const duplicate = createOwned();
+    duplicate.state.index.set("duplicate", {
+      ...duplicate.state.index.get("merge-session")!,
+      id: "duplicate",
+    });
+    expect(
+      (
+        await duplicate.fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" })
+      ).json(),
+    ).toMatchObject({ code: "merge_stale_ownership" });
+    await duplicate.fastify.close();
+
+    const replaced = createOwned();
+    replaced.state.captureWorktreeIdentity.mockReturnValueOnce(
+      "v1:ffffffffffffffff:eeeeeeeeeeeeeeee",
+    );
+    expect(
+      (
+        await replaced.fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" })
+      ).json(),
+    ).toMatchObject({ code: "merge_stale_ownership" });
+    await replaced.fastify.close();
+
+    const registrationChanged = createOwned();
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValueOnce({
+      path: WORKTREE_PATH,
+      branch: "agent-deck/session-other",
+    });
+    expect(
+      (
+        await registrationChanged.fastify.inject({
+          method: "POST",
+          url: "/sessions/merge-session/merge",
+        })
+      ).json(),
+    ).toMatchObject({ code: "merge_stale_ownership" });
+    await registrationChanged.fastify.close();
+
+    const branchChanged = createOwned();
+    gitMocks.gitCurrentBranch
+      .mockImplementationOnce(async () => "main")
+      .mockImplementationOnce(async () => "other");
+    expect(
+      (
+        await branchChanged.fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" })
+      ).json(),
+    ).toMatchObject({ code: "merge_stale_ownership" });
+    await branchChanged.fastify.close();
+
+    const busy = createOwned();
+    gitMocks.gitOperationInProgress.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    expect(
+      (await busy.fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" })).json(),
+    ).toMatchObject({ code: "merge_worktree_busy", outcome: "busy" });
+    expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
+    await busy.fastify.close();
+  });
+
+  it("wraps deleted, unreadable, and canonical path failures in typed envelopes", async () => {
+    const owned = () => {
+      const route = makeRoute();
+      route.state.index.set("merge-session", {
+        id: "merge-session",
+        cwd: WORKTREE_PATH,
+        projectId: "project-1",
+        worktreePath: WORKTREE_PATH,
+        worktreeIdentity: "v1:0000000000000001:0000000000000002",
+        worktreeBranch: "agent-deck/session-a1b2c3d4",
+        worktreeSourceBranch: "main",
+      });
+      return route;
+    };
+
+    const deleted = owned();
+    deleted.state.captureWorktreeIdentity.mockImplementationOnce(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    expect(
+      (
+        await deleted.fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" })
+      ).json(),
+    ).toMatchObject({
+      code: "merge_stale_ownership",
+      outcome: "stale_ownership",
+      worktreeCommitted: false,
+    });
+    await deleted.fastify.close();
+
+    const unresolvedSession = owned();
+    gitMocks.canonicalWorktreePath.mockRejectedValueOnce(
+      Object.assign(new Error("unreadable"), { code: "EACCES" }),
+    );
+    expect(
+      (
+        await unresolvedSession.fastify.inject({
+          method: "POST",
+          url: "/sessions/merge-session/merge",
+        })
+      ).json(),
+    ).toMatchObject({
+      code: "merge_path_validation_failed",
+      outcome: "stale_ownership",
+      worktreeCommitted: false,
+    });
+    await unresolvedSession.fastify.close();
+
+    const unresolvedProject = owned();
+    gitMocks.canonicalWorktreePath.mockImplementation(async (candidate: string) => {
+      if (candidate === PROJECT_PATH)
+        throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+      return path.resolve(candidate);
+    });
+    expect(
+      (
+        await unresolvedProject.fastify.inject({
+          method: "POST",
+          url: "/sessions/merge-session/merge",
+        })
+      ).json(),
+    ).toMatchObject({
+      code: "merge_path_validation_failed",
+      outcome: "stale_ownership",
+      worktreeCommitted: false,
+    });
+    await unresolvedProject.fastify.close();
+  });
+
+  it("fails fast when another merge holds the canonical project lock", async () => {
+    const { fastify, state } = makeRoute();
+    state.index.set("merge-session", {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+    let release!: () => void;
+    const held = new Promise<boolean>((resolve) => {
+      release = () => resolve(false);
+    });
+    gitMocks.gitOperationInProgress.mockImplementationOnce(() => held);
+
+    const first = fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" });
+    await vi.waitFor(() => expect(gitMocks.gitOperationInProgress).toHaveBeenCalledOnce());
+    const second = await fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" });
+    expect(second.json()).toMatchObject({
+      code: "merge_busy",
+      outcome: "busy",
+      worktreeCommitted: false,
+    });
+    release();
+    expect((await first).statusCode).toBe(200);
+    await fastify.close();
+  });
+
   it("refuses Loop review merge before any Git mutation", async () => {
     const { fastify, state } = makeRoute();
     state.index.set("loop-review-session", {
@@ -616,11 +970,13 @@ describe("POST /sessions worktree transaction", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({
       code: "loop_review_read_only",
+      outcome: "read_only",
       error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+      worktreeCommitted: false,
     });
     expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
     expect(gitMocks.gitCommitsAhead).not.toHaveBeenCalled();
-    expect(gitMocks.gitMerge).not.toHaveBeenCalled();
+    expect(gitMocks.gitMergeNoCheckout).not.toHaveBeenCalled();
 
     const removed = await fastify.inject({
       method: "DELETE",

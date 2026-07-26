@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -244,11 +252,75 @@ describe("session worktree isolation", () => {
     expect(res.status).toBe(400);
   });
 
-  it("400s for a session that isn't running in a worktree", async () => {
+  it("returns typed stale ownership for a session that isn't running in a worktree", async () => {
     const projectId = await addProject();
     expect((await patchSettings({ worktreeIsolation: false })).status).toBe(200);
     const session = await createSession(projectId); // runs in the project root
     const res = await merge(session.id);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({
+        code: "merge_stale_ownership",
+        outcome: "stale_ownership",
+        worktreeCommitted: false,
+      }),
+    );
+  });
+
+  it("keeps a hook-failed active merge distinct from a conflict", async () => {
+    const projectId = await addProject();
+    expect((await patchSettings({ worktreeIsolation: true })).status).toBe(200);
+    const session = await createSession(projectId);
+    writeFileSync(path.join(session.cwd, "hook-change.txt"), "session\n");
+    const hook = path.join(repoDir, ".git", "hooks", "pre-merge-commit");
+    writeFileSync(hook, "#!/bin/sh\necho 'merge hook rejected commit' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+
+    try {
+      const res = await merge(session.id);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual(
+        expect.objectContaining({
+          code: "merge_active_failure",
+          outcome: "failed",
+          error: expect.stringContaining("merge hook rejected commit"),
+          worktreeCommitted: true,
+        }),
+      );
+      expect(execFileSync("git", ["ls-files", "-u"], { cwd: repoDir }).toString()).toBe("");
+      expect(existsSync(path.join(repoDir, ".git", "MERGE_HEAD"))).toBe(true);
+    } finally {
+      rmSync(hook, { force: true });
+      if (existsSync(path.join(repoDir, ".git", "MERGE_HEAD"))) git(["merge", "--abort"]);
+    }
+  });
+
+  it("classifies and retains a real merge conflict for user resolution", async () => {
+    const projectId = await addProject();
+    expect((await patchSettings({ worktreeIsolation: true })).status).toBe(200);
+    writeFileSync(path.join(repoDir, "conflict.txt"), "base\n");
+    git(["add", "conflict.txt"]);
+    git(["commit", "-m", "conflict base"]);
+    const session = await createSession(projectId);
+
+    writeFileSync(path.join(session.cwd, "conflict.txt"), "session\n");
+    writeFileSync(path.join(repoDir, "conflict.txt"), "parent\n");
+    git(["add", "conflict.txt"]);
+    git(["commit", "-m", "parent conflict"]);
+
+    const res = await merge(session.id);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({
+        code: "merge_conflict",
+        outcome: "conflict",
+        worktreeCommitted: true,
+      }),
+    );
+    expect(execFileSync("git", ["ls-files", "-u"], { cwd: repoDir }).toString()).not.toBe("");
+    expect(existsSync(path.join(repoDir, ".git", "MERGE_HEAD"))).toBe(true);
+
+    // The route deliberately leaves recovery to the user; clean up only for suite teardown.
+    git(["merge", "--abort"]);
   });
 });
