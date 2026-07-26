@@ -329,6 +329,7 @@ pub fn delete_loop_catalog_file(home: String, basename: String) -> Result<()> {
 
 const RESOURCE_TEMP_PREFIX: &str = ".agent-deck-resource-tmp-";
 const RESOURCE_BACKUP_PREFIX: &str = ".agent-deck-resource-backup-";
+const RESOURCE_RECOVERY_PREFIX: &str = ".agent-deck-resource-recovery-v1-";
 
 fn resource_error(code: &'static str, detail: impl AsRef<str>) -> Error {
     napi_error(code, detail)
@@ -351,7 +352,7 @@ fn map_resource_io(error: std::io::Error) -> Error {
 fn map_validated_resource_mutation_io(error: std::io::Error) -> Error {
     // Windows may report a sharing conflict from rename as ERROR_ACCESS_DENIED
     // rather than ERROR_SHARING_VIOLATION. This mapper is intentionally used
-    // only after the named target was validated as a regular, non-reparse file;
+    // only after the named target was validated as a regular, non-reparse entry;
     // validation and traversal permission failures remain unsafe-component
     // errors through map_resource_io.
     #[cfg(windows)]
@@ -369,6 +370,7 @@ fn valid_resource_component(name: &str) -> bool {
         || name.ends_with(['.', ' '])
         || name.starts_with(RESOURCE_TEMP_PREFIX)
         || name.starts_with(RESOURCE_BACKUP_PREFIX)
+        || name.starts_with(RESOURCE_RECOVERY_PREFIX)
     {
         return false;
     }
@@ -3009,7 +3011,24 @@ fn publish_managed_stage(
     expected_identity: Option<ExpectedEntryIdentity>,
 ) -> Result<()> {
     drop(stage);
-    publish_staged_tree_with_identity(root, stage_leaf, destination, replace, expected_identity)
+    let recovery = format!(
+        "{RESOURCE_TEMP_PREFIX}{}",
+        private_nonce().map_err(map_resource_io)?
+    );
+    let displaced = publish_staged_tree_with_identity(
+        root,
+        stage_leaf,
+        destination,
+        replace,
+        expected_identity,
+        None,
+        false,
+        &recovery,
+    )?;
+    if displaced.is_some() {
+        remove_tree_entry(root, &recovery)?;
+    }
+    Ok(())
 }
 
 fn managed_clone(
@@ -3669,48 +3688,6 @@ fn copy_tree_inner(source: &Dir, destination: &Dir, include_git: bool) -> Result
     Ok(())
 }
 
-#[cfg(test)]
-thread_local! {
-    static RECONCILE_TEST_ORDER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
-    static RECONCILE_TEST_FAIL_AT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_capability_error(error: Error, mutated: bool) -> Error {
-    if error.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:") {
-        return error;
-    }
-    if !mutated && error.reason.starts_with("RESOURCE_BUSY:") {
-        return error;
-    }
-    if mutated {
-        return resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource reconciliation was interrupted; retry the operation",
-        );
-    }
-    error
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_io(error: std::io::Error, mutated: bool) -> Error {
-    if mutated {
-        return resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource reconciliation was interrupted; retry the operation",
-        );
-    }
-    #[cfg(windows)]
-    if matches!(error.raw_os_error(), Some(32 | 33)) {
-        return resource_error(
-            "RESOURCE_BUSY",
-            "resource is in use by another process; close it and retry",
-        );
-    }
-    map_resource_io(error)
-}
-
-#[cfg(any(windows, test))]
 fn validate_reconcile_tree(dir: &Dir) -> Result<()> {
     for entry in dir.entries().map_err(map_resource_io)? {
         let entry = entry.map_err(map_resource_io)?;
@@ -3755,243 +3732,6 @@ fn validate_reconcile_tree(dir: &Dir) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(windows, test))]
-fn staged_file_temp(
-    source: &Dir,
-    name: &str,
-    destination: &Dir,
-) -> Result<(String, cap_std::fs::File)> {
-    let mut input = nofollow_open(source, name, false, false).map_err(map_resource_io)?;
-    if !input.metadata().map_err(map_resource_io)?.is_file() {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "staged file changed type",
-        ));
-    }
-    for _ in 0..128 {
-        let temporary = format!(
-            "{RESOURCE_TEMP_PREFIX}reconcile-{}",
-            private_nonce().map_err(map_resource_io)?
-        );
-        let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .follow(FollowSymlinks::No)
-            .maybe_dir(false);
-        #[cfg(unix)]
-        options.mode(0o600);
-
-        match destination.open_with(&temporary, &options) {
-            Ok(mut output) => {
-                if let Err(error) =
-                    std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all())
-                {
-                    drop(output);
-                    let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-                    if cleanup.is_err() {
-                        return Err(resource_error(
-                            "RESOURCE_RECONCILE_INCOMPLETE",
-                            "reconcile-temporary write cleanup was interrupted; retry",
-                        ));
-                    }
-                    return Err(map_resource_io(error));
-                }
-                return Ok((temporary, output));
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(map_resource_io(error)),
-        }
-    }
-    Err(resource_error(
-        "RESOURCE_IO",
-        "could not allocate reconcile temporary",
-    ))
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_staged_entry(
-    staged: &Dir,
-    destination: &Dir,
-    name: &str,
-    mutated: &mut bool,
-) -> Result<()> {
-    #[cfg(test)]
-    {
-        RECONCILE_TEST_ORDER.with(|order| order.borrow_mut().push(name.to_owned()));
-        let injected =
-            RECONCILE_TEST_FAIL_AT.with(|failure| failure.borrow().as_deref() == Some(name));
-        if injected {
-            return Err(if *mutated {
-                resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "injected reconciliation interruption",
-                )
-            } else {
-                resource_error("RESOURCE_BUSY", "injected pre-mutation interruption")
-            });
-        }
-    }
-    let source = staged.symlink_metadata(name).map_err(map_resource_io)?;
-    if source.file_type().is_symlink() || (!source.is_file() && !source.is_dir()) {
-        return Err(resource_error(
-            "RESOURCE_UNSAFE_COMPONENT",
-            "unsafe staged entry",
-        ));
-    }
-    let target = match destination.symlink_metadata(name) {
-        Ok(metadata) => Some(metadata),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return Err(reconcile_io(error, *mutated)),
-    };
-
-    if source.is_dir()
-        && target
-            .as_ref()
-            .is_some_and(|entry| entry.is_dir() && !entry.file_type().is_symlink())
-    {
-        let source_child = open_child_dir(staged, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "staged directory changed")
-            })?;
-        let target_child = open_child_dir(destination, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "target directory changed")
-            })?;
-        return reconcile_staged_dir(&source_child, &target_child, mutated);
-    }
-
-    if source.is_file()
-        && target
-            .as_ref()
-            .is_some_and(|entry| entry.is_file() && !entry.file_type().is_symlink())
-    {
-        let (temporary, file) = staged_file_temp(staged, name, destination)?;
-        drop(file);
-        let result = destination.rename(&temporary, destination, name);
-        if let Err(error) = result {
-            let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-            if cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "file reconciliation failed and private-temporary cleanup was interrupted; retry",
-                ));
-            }
-            return Err(reconcile_io(error, *mutated));
-        }
-        *mutated = true;
-        return Ok(());
-    }
-
-    if let Some(target) = target.as_ref() {
-        if target.file_type().is_symlink() || (!target.is_file() && !target.is_dir()) {
-            return Err(resource_error(
-                "RESOURCE_UNSAFE_COMPONENT",
-                "unsafe target entry",
-            ));
-        }
-        remove_tree_entry(destination, name)
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
-    }
-
-    if source.is_dir() {
-        destination
-            .create_dir(name)
-            .map_err(|error| reconcile_io(error, *mutated))?;
-        *mutated = true;
-        let source_child = open_child_dir(staged, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| {
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "staged directory changed")
-            })?;
-        let target_child = open_child_dir(destination, name, false)
-            .map_err(|error| reconcile_io(error, *mutated))?
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "new directory changed"))?;
-        reconcile_staged_dir(&source_child, &target_child, mutated)
-    } else {
-        let (temporary, file) = staged_file_temp(staged, name, destination)?;
-        drop(file);
-        let result = destination.hard_link(&temporary, destination, name);
-        let cleanup = destination.remove_file(&temporary).map_err(map_resource_io);
-        if let Err(error) = result {
-            if cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "file reconciliation failed and private-temporary cleanup was interrupted; retry",
-                ));
-            }
-            return Err(reconcile_io(error, *mutated));
-        }
-        if cleanup.is_err() {
-            return Err(resource_error(
-                "RESOURCE_RECONCILE_INCOMPLETE",
-                "file reconciliation succeeded but private-temporary cleanup was interrupted; retry",
-            ));
-        }
-        *mutated = true;
-        Ok(())
-    }
-}
-
-#[cfg(any(windows, test))]
-fn reconcile_staged_dir(staged: &Dir, destination: &Dir, mutated: &mut bool) -> Result<()> {
-    let mut staged_names = Vec::new();
-    for entry in staged.entries().map_err(map_resource_io)? {
-        let entry = entry.map_err(map_resource_io)?;
-        let name = entry
-            .file_name()
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 staged entry"))?;
-        staged_names.push(name);
-    }
-    staged_names.sort();
-    for name in staged_names
-        .iter()
-        .filter(|name| name.as_str() != "SKILL.md")
-    {
-        reconcile_staged_entry(staged, destination, name, mutated)?;
-    }
-
-    let mut stale = Vec::new();
-    for entry in destination
-        .entries()
-        .map_err(|error| reconcile_io(error, *mutated))?
-    {
-        let entry = entry.map_err(|error| reconcile_io(error, *mutated))?;
-        let name = entry
-            .file_name()
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "non-UTF-8 target entry"))?;
-        if !name.starts_with(RESOURCE_TEMP_PREFIX)
-            && name != "SKILL.md"
-            && !staged_names.iter().any(|staged_name| staged_name == &name)
-        {
-            stale.push(name);
-        }
-    }
-    stale.sort();
-    for name in stale {
-        remove_tree_entry(destination, &name)
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
-    }
-
-    if staged_names.iter().any(|name| name == "SKILL.md") {
-        reconcile_staged_entry(staged, destination, "SKILL.md", mutated)?;
-    } else if destination.symlink_metadata("SKILL.md").is_ok() {
-        remove_tree_entry(destination, "SKILL.md")
-            .map_err(|error| reconcile_capability_error(error, *mutated))?;
-        *mutated = true;
-    }
-    Ok(())
-}
-
-#[cfg(any(windows, test))]
 fn validate_exact_tree(staged: &Dir, destination: &Dir) -> Result<()> {
     let mut staged_names = Vec::new();
     let mut destination_names = Vec::new();
@@ -4084,29 +3824,32 @@ fn cleanup_owned_stage_error(parent: &Dir, stage: &str, original: Error) -> Erro
 
 type ExpectedEntryIdentity = (u64, u64);
 
+#[cfg(test)]
 fn publish_staged_tree(parent: &Dir, stage: &str, leaf: &str, replace: bool) -> Result<()> {
-    publish_staged_tree_with_identity(parent, stage, leaf, replace, None)
+    let recovery = format!(
+        "{RESOURCE_TEMP_PREFIX}{}",
+        private_nonce().map_err(map_resource_io)?
+    );
+    let displaced = publish_staged_tree_with_identity(
+        parent, stage, leaf, replace, None, None, false, &recovery,
+    )?;
+    if displaced.is_some() {
+        remove_tree_entry(parent, &recovery)?;
+    }
+    Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Internal capability commit keeps every precondition explicit.
 fn publish_staged_tree_with_identity(
     parent: &Dir,
     stage: &str,
     leaf: &str,
     replace: bool,
     expected_identity: Option<ExpectedEntryIdentity>,
-) -> Result<()> {
-    #[cfg(unix)]
-    if !replace {
-        if let Err(error) = rename_noreplace(parent, stage, parent, leaf) {
-            return Err(cleanup_owned_stage_error(
-                parent,
-                stage,
-                map_resource_io(error),
-            ));
-        }
-        return sync_dir(parent).map_err(map_resource_io);
-    }
-
+    expected_tree: Option<&Dir>,
+    expected_missing: bool,
+    recovery: &str,
+) -> Result<Option<ResourceRecovery>> {
     let target = match parent.symlink_metadata(leaf) {
         Ok(metadata) => {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -4130,35 +3873,49 @@ fn publish_staged_tree_with_identity(
             ));
         }
     };
-    #[cfg(unix)]
+    if !replace && target.is_some() {
+        return Err(cleanup_owned_stage_error(
+            parent,
+            stage,
+            resource_error("RESOURCE_ALREADY_EXISTS", "target exists"),
+        ));
+    }
+    if expected_missing && target.is_some() {
+        return Err(cleanup_owned_stage_error(
+            parent,
+            stage,
+            resource_error("RESOURCE_BUSY", "target appeared after merge preparation"),
+        ));
+    }
+    if !expected_missing && expected_tree.is_some() && target.is_none() {
+        return Err(cleanup_owned_stage_error(
+            parent,
+            stage,
+            resource_error(
+                "RESOURCE_BUSY",
+                "target disappeared after merge preparation",
+            ),
+        ));
+    }
+    if let (Some(expected), Some(_)) = (expected_tree, target.as_ref()) {
+        let destination = open_child_dir(parent, leaf, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| resource_error("RESOURCE_BUSY", "target disappeared"))?;
+        validate_exact_tree(expected, &destination).map_err(|_| {
+            resource_error("RESOURCE_BUSY", "target changed after merge preparation")
+        })?;
+    }
     if let (Some((expected_dev, expected_ino)), Some(target)) = (expected_identity, target.as_ref())
     {
         if target.dev() != expected_dev || target.ino() != expected_ino {
             return Err(cleanup_owned_stage_error(
                 parent,
                 stage,
-                resource_error("RESOURCE_UNSAFE_COMPONENT", "target identity changed"),
+                resource_error("RESOURCE_BUSY", "target identity changed"),
             ));
         }
     }
 
-    #[cfg(windows)]
-    {
-        if let (Some((expected_dev, expected_ino)), Some(target)) =
-            (expected_identity, target.as_ref())
-        {
-            if target.dev() != expected_dev || target.ino() != expected_ino {
-                return Err(cleanup_owned_stage_error(
-                    parent,
-                    stage,
-                    resource_error("RESOURCE_UNSAFE_COMPONENT", "target identity changed"),
-                ));
-            }
-        }
-        reconcile_staged_tree_windows(parent, stage, leaf, replace, target.is_some())
-    }
-
-    #[cfg(unix)]
     let Some(target) = target else {
         if let Err(error) = rename_noreplace(parent, stage, parent, leaf) {
             return Err(cleanup_owned_stage_error(
@@ -4167,186 +3924,303 @@ fn publish_staged_tree_with_identity(
                 map_resource_io(error),
             ));
         }
-        return sync_dir(parent).map_err(map_resource_io);
+        sync_dir(parent).map_err(map_resource_io)?;
+        return Ok(None);
     };
+    #[cfg(windows)]
+    let _ = target;
 
     #[cfg(unix)]
     {
-        // Exchange keeps `leaf` occupied for the entire commit. An attacker can
-        // therefore never wedge an entry into the old backup/publication gap.
-        // The prior target lands at `stage`, where its identity is verified
-        // before it is removed. A raced replacement is exchanged back intact.
+        // The stage is deliberately created under its final recovery token. One
+        // exchange publishes the new tree while placing the displaced directory
+        // at that crash-enumerable token. Never recursively remove it: writes
+        // through handles opened before the exchange must remain recoverable.
         if let Err(error) = exchange_entries(parent, stage, parent, leaf) {
-            if remove_tree_entry(parent, stage).is_err() {
+            return Err(cleanup_owned_stage_error(
+                parent,
+                stage,
+                map_resource_io(error),
+            ));
+        }
+        if stage != recovery {
+            rename_noreplace(parent, stage, parent, recovery).map_err(|_| {
+                resource_error(
+                    "RESOURCE_RECONCILE_INCOMPLETE",
+                    "replacement published but displaced tree could not be named for recovery",
+                )
+            })?;
+        }
+        let displaced = parent.symlink_metadata(recovery).map_err(map_resource_io)?;
+        let expected = expected_identity.unwrap_or((target.dev(), target.ino()));
+        if !displaced.is_dir()
+            || displaced.file_type().is_symlink()
+            || (displaced.dev(), displaced.ino()) != expected
+        {
+            exchange_entries(parent, recovery, parent, leaf).map_err(|_| {
+                resource_error(
+                    "RESOURCE_RECONCILE_INCOMPLETE",
+                    "replacement identity was ambiguous; both trees were retained",
+                )
+            })?;
+            return Err(resource_error(
+                "RESOURCE_BUSY",
+                "target changed during replacement",
+            ));
+        }
+        sync_dir(parent).map_err(map_resource_io)?;
+        Ok(Some(ResourceRecovery {
+            token: recovery.to_owned(),
+            skill_name: leaf.to_owned(),
+        }))
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows has no directory exchange. Quarantine the descriptor-validated
+        // old tree first, then publish the complete stage with no-replace. A
+        // failed publication restores no-replace and never overwrites drift.
+        if let Err(error) = rename_noreplace(parent, leaf, parent, recovery) {
+            let mapped = match error.kind() {
+                ErrorKind::NotFound | ErrorKind::AlreadyExists => {
+                    resource_error("RESOURCE_BUSY", "target changed during quarantine")
+                }
+                _ => map_validated_resource_mutation_io(error),
+            };
+            return Err(cleanup_owned_stage_error(parent, stage, mapped));
+        }
+        let quarantined = open_child_dir(parent, recovery, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| {
+                resource_error("RESOURCE_RECONCILE_INCOMPLETE", "recovery disappeared")
+            })?;
+        if let Some(expected) = expected_tree {
+            if validate_exact_tree(expected, &quarantined).is_err() {
+                drop(quarantined);
+                restore_resource_quarantine(parent, recovery, leaf)?;
+                return Err(resource_error(
+                    "RESOURCE_BUSY",
+                    "target changed during replacement",
+                ));
+            }
+        }
+        drop(quarantined);
+        if let Err(error) = rename_noreplace(parent, stage, parent, leaf) {
+            let restored = restore_resource_quarantine(parent, recovery, leaf);
+            let cleaned = cleanup_owned_stage(parent, stage);
+            if restored.is_err() || cleaned.is_err() {
                 return Err(resource_error(
                     "RESOURCE_RECONCILE_INCOMPLETE",
-                    "resource replacement failed and private-stage cleanup was interrupted; retry",
+                    "publication failed; all trees were retained for reconciliation",
                 ));
             }
             return Err(map_resource_io(error));
         }
-        let exchanged = match parent.symlink_metadata(stage) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                let rollback = exchange_entries(parent, stage, parent, leaf);
-                let cleanup = if rollback.is_ok() {
-                    remove_tree_entry(parent, stage)
-                } else {
-                    Err(resource_error(
-                        "RESOURCE_RECONCILE_INCOMPLETE",
-                        "resource replacement rollback was interrupted; retry",
-                    ))
-                };
-                if rollback.is_err() || cleanup.is_err() {
-                    return Err(resource_error(
-                        "RESOURCE_RECONCILE_INCOMPLETE",
-                        "resource replacement rollback or private-stage cleanup was interrupted; retry",
-                    ));
-                }
-                return Err(map_resource_io(error));
-            }
-        };
-        let (expected_dev, expected_ino) =
-            expected_identity.unwrap_or_else(|| (target.dev(), target.ino()));
-        if !exchanged.is_dir()
-            || exchanged.file_type().is_symlink()
-            || exchanged.dev() != expected_dev
-            || exchanged.ino() != expected_ino
-        {
-            let rollback = exchange_entries(parent, stage, parent, leaf);
-            let cleanup = if rollback.is_ok() {
-                remove_tree_entry(parent, stage)
-            } else {
-                Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "resource replacement rollback was interrupted; retry",
-                ))
-            };
-            if rollback.is_err() || cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "unsafe replacement rollback or private-stage cleanup was interrupted; retry",
-                ));
-            }
-            return Err(resource_error(
-                "RESOURCE_UNSAFE_COMPONENT",
-                "target changed during replacement",
-            ));
-        }
-        if let Err(error) = remove_tree_entry(parent, stage) {
-            // Publication succeeded and the original remains recoverable under
-            // the owned stage name. Attempt an atomic rollback before failing.
-            let rollback = exchange_entries(parent, stage, parent, leaf);
-            let cleanup = if rollback.is_ok() {
-                remove_tree_entry(parent, stage)
-            } else {
-                Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "resource replacement rollback was interrupted; retry",
-                ))
-            };
-            if rollback.is_err() || cleanup.is_err() {
-                return Err(resource_error(
-                    "RESOURCE_RECONCILE_INCOMPLETE",
-                    "resource replacement cleanup and rollback were interrupted; retry",
-                ));
-            }
-            return Err(error);
-        }
-        sync_dir(parent).map_err(map_resource_io)
+        sync_dir(parent).map_err(map_resource_io)?;
+        Ok(Some(ResourceRecovery {
+            token: recovery.to_owned(),
+            skill_name: leaf.to_owned(),
+        }))
     }
 }
 
-#[cfg(windows)]
-fn reconcile_staged_tree_windows(
+#[derive(Debug)]
+#[napi(object)]
+pub struct ResourceRecovery {
+    pub token: String,
+    pub skill_name: String,
+}
+
+fn resource_recovery_name(skill_name: &str, nonce: &str) -> String {
+    format!(
+        "{RESOURCE_RECOVERY_PREFIX}{}-{skill_name}-{nonce}",
+        skill_name.len()
+    )
+}
+
+fn parse_resource_recovery_name(name: &str) -> Option<String> {
+    let suffix = name.strip_prefix(RESOURCE_RECOVERY_PREFIX)?;
+    let (length, remainder) = suffix.split_once('-')?;
+    let length = length.parse::<usize>().ok()?;
+    if length == 0 || remainder.len() <= length || remainder.as_bytes().get(length) != Some(&b'-') {
+        return None;
+    }
+    let skill_name = &remainder[..length];
+    let nonce = &remainder[length + 1..];
+    if !valid_resource_component(skill_name)
+        || nonce.len() != 32
+        || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(skill_name.to_owned())
+}
+
+fn restore_resource_quarantine(parent: &Dir, quarantine: &str, leaf: &str) -> Result<()> {
+    rename_noreplace(parent, quarantine, parent, leaf)
+        .and_then(|()| sync_dir(parent))
+        .map_err(|_| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "changed deletion target is retained under a private name",
+            )
+        })
+}
+
+fn conditional_quarantine_delete_with_hooks<AfterQuarantine, BeforeRestore>(
     parent: &Dir,
-    stage: &str,
     leaf: &str,
-    replace: bool,
-    mut target_exists: bool,
-) -> Result<()> {
-    if target_exists && !replace {
-        return Err(cleanup_owned_stage_error(
-            parent,
-            stage,
-            resource_error("RESOURCE_ALREADY_EXISTS", "target exists"),
-        ));
-    }
-
-    let mut mutated = false;
-    if !target_exists {
-        match parent.create_dir(leaf) {
-            Ok(()) => {
-                target_exists = true;
-                mutated = true;
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists && replace => {
-                target_exists = true;
-            }
-            Err(error) => {
-                return Err(cleanup_owned_stage_error(
-                    parent,
-                    stage,
-                    map_resource_io(error),
-                ));
-            }
+    expected_tree: Option<&Dir>,
+    expected_missing: bool,
+    quarantine: &str,
+    after_quarantine: AfterQuarantine,
+    before_restore: BeforeRestore,
+) -> Result<Option<ResourceRecovery>>
+where
+    AfterQuarantine: FnOnce(&str),
+    BeforeRestore: FnOnce(&str),
+{
+    let target = match parent.symlink_metadata(leaf) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound && expected_missing => return Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(resource_error(
+                "RESOURCE_BUSY",
+                "deletion target disappeared after merge preparation",
+            ));
         }
-    }
-    debug_assert!(target_exists);
-
-    let result = (|| {
-        // open_child_dir converts the exact no-follow File into a Dir. Keeping
-        // these capabilities alive pins both directory identities throughout
-        // validation and reconciliation; never reopen either handle.
-        let staged = open_child_dir(parent, stage, false)
-            .map_err(|error| reconcile_io(error, mutated))?
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "staging changed"))?;
-        let destination = open_child_dir(parent, leaf, false)
-            .map_err(|error| reconcile_io(error, mutated))?
-            .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "target changed"))?;
-        validate_reconcile_tree(&staged)?;
-        validate_reconcile_tree(&destination)?;
-        reconcile_staged_dir(&staged, &destination, &mut mutated)?;
-        validate_exact_tree(&staged, &destination)
-    })();
-    let cleanup = cleanup_owned_stage(parent, stage);
-    if let Err(error) = result {
-        return Err(if cleanup.is_err() {
-            resource_error(
-                "RESOURCE_RECONCILE_INCOMPLETE",
-                "reconciliation and private-stage cleanup were interrupted; retry",
-            )
-        } else if mutated && !error.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:") {
-            resource_error(
-                "RESOURCE_RECONCILE_INCOMPLETE",
-                "resource reconciliation was interrupted; retry the operation",
-            )
-        } else {
-            error
-        });
-    }
-    if cleanup.is_err() {
+        Err(error) => return Err(map_resource_io(error)),
+    };
+    if expected_missing {
         return Err(resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "resource was reconciled but private-stage cleanup was interrupted; retry",
+            "RESOURCE_BUSY",
+            "deletion target appeared after merge preparation",
         ));
     }
-    sync_dir(parent).map_err(map_resource_io)
+    let expected_tree = expected_tree.ok_or_else(|| {
+        resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "conditional deletion requires an expected tree",
+        )
+    })?;
+    if !target.is_dir() || target.file_type().is_symlink() {
+        return Err(resource_error(
+            "RESOURCE_UNSAFE_COMPONENT",
+            "deletion target is not a regular directory",
+        ));
+    }
+    let expected_identity = (target.dev(), target.ino());
+
+    rename_noreplace(parent, leaf, parent, quarantine).map_err(|error| match error.kind() {
+        ErrorKind::NotFound | ErrorKind::AlreadyExists => {
+            resource_error("RESOURCE_BUSY", "deletion target changed during quarantine")
+        }
+        _ => map_resource_io(error),
+    })?;
+    after_quarantine(quarantine);
+
+    let validation = (|| {
+        let metadata = parent
+            .symlink_metadata(quarantine)
+            .map_err(map_resource_io)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || (metadata.dev(), metadata.ino()) != expected_identity
+        {
+            return Err(resource_error(
+                "RESOURCE_BUSY",
+                "deletion target identity changed during quarantine",
+            ));
+        }
+        let quarantined = open_child_dir(parent, quarantine, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| resource_error("RESOURCE_BUSY", "deletion quarantine disappeared"))?;
+        validate_exact_tree(expected_tree, &quarantined).map_err(|_| {
+            resource_error(
+                "RESOURCE_BUSY",
+                "deletion target changed after merge preparation",
+            )
+        })
+    })();
+    if let Err(error) = validation {
+        before_restore(quarantine);
+        restore_resource_quarantine(parent, quarantine, leaf)?;
+        return Err(error);
+    }
+
+    // Keep the validated tree as private recoverable evidence: an old directory
+    // handle can still mutate it after validation. Private names are excluded
+    // from catalog APIs, scans, and watches; cleanup is intentionally deferred
+    // to bounded/manual reconciliation rather than risking user-data deletion.
+    sync_dir(parent).map_err(|_| {
+        resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "deletion quarantine was retained but directory sync failed",
+        )
+    })?;
+    Ok(Some(ResourceRecovery {
+        token: quarantine.to_owned(),
+        skill_name: leaf.to_owned(),
+    }))
 }
 
 #[napi]
+#[allow(clippy::too_many_arguments)] // Narrow N-API contract; grouping would expose a generic object parser.
 pub fn copy_resource_tree(
     home: String,
     catalog: String,
     destination_components: Vec<String>,
     source_path: String,
     replace: bool,
-) -> Result<()> {
+    expected_destination_path: Option<String>,
+    expected_destination_missing: Option<bool>,
+    remove_after_replace: Option<bool>,
+    recovery_token: Option<String>,
+) -> Result<Option<ResourceRecovery>> {
     validate_resource_path(&destination_components)?;
-    let source = open_source_root(&source_path)?;
     let dir = open_resource_catalog(&home, &catalog, true)?
         .ok_or_else(|| resource_error("RESOURCE_UNSAFE_COMPONENT", "catalog unavailable"))?;
     let (parent, leaf) = open_resource_parent(&dir, &destination_components, true)?;
+    let expected_tree = expected_destination_path
+        .as_deref()
+        .map(open_source_root)
+        .transpose()?;
+    let recovery = match recovery_token {
+        Some(token) => {
+            if parse_resource_recovery_name(&token).as_deref() != Some(leaf.as_str()) {
+                return Err(resource_error(
+                    "RESOURCE_INVALID_PATH",
+                    "recovery token does not match the destination",
+                ));
+            }
+            token
+        }
+        None => resource_recovery_name(&leaf, &private_nonce().map_err(map_resource_io)?),
+    };
+    if remove_after_replace.unwrap_or(false) {
+        if !replace {
+            return Err(resource_error(
+                "RESOURCE_UNSAFE_COMPONENT",
+                "conditional deletion requires replacement mode",
+            ));
+        }
+        return conditional_quarantine_delete_with_hooks(
+            &parent,
+            &leaf,
+            expected_tree.as_ref(),
+            expected_destination_missing.unwrap_or(false),
+            &recovery,
+            |_| {},
+            |_| {},
+        );
+    }
+
+    let source = open_source_root(&source_path)?;
+    let expected_identity = match parent.symlink_metadata(&leaf) {
+        Ok(metadata) => Some((metadata.dev(), metadata.ino())),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(map_resource_io(error)),
+    };
     if let Ok(metadata) = parent.symlink_metadata(&leaf) {
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(resource_error(
@@ -4358,6 +4232,9 @@ pub fn copy_resource_tree(
             return Err(resource_error("RESOURCE_ALREADY_EXISTS", "target exists"));
         }
     }
+    #[cfg(unix)]
+    let stage = recovery.clone();
+    #[cfg(windows)]
     let stage = format!(
         "{RESOURCE_TEMP_PREFIX}{}",
         private_nonce().map_err(map_resource_io)?
@@ -4387,7 +4264,253 @@ pub fn copy_resource_tree(
     // Drop the pinned stage view before capability-relative publication or
     // recursive cleanup by its reserved name.
     drop(stage_dir);
-    publish_staged_tree(&parent, &stage, &leaf, replace)
+    publish_staged_tree_with_identity(
+        &parent,
+        &stage,
+        &leaf,
+        replace,
+        expected_identity,
+        expected_tree.as_ref(),
+        expected_destination_missing.unwrap_or(false),
+        &recovery,
+    )
+}
+
+fn validated_resource_recovery(dir: &Dir, token: &str) -> Result<ResourceRecovery> {
+    let skill_name = parse_resource_recovery_name(token).ok_or_else(|| {
+        resource_error("RESOURCE_INVALID_PATH", "invalid resource recovery token")
+    })?;
+    let recovery = open_child_dir(dir, token, false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "resource recovery is unavailable"))?;
+    validate_reconcile_tree(&recovery)?;
+    Ok(ResourceRecovery {
+        token: token.to_owned(),
+        skill_name,
+    })
+}
+
+#[napi]
+pub fn list_resource_recoveries(home: String, catalog: String) -> Result<Vec<ResourceRecovery>> {
+    let Some(dir) = open_resource_catalog(&home, &catalog, false)? else {
+        return Ok(Vec::new());
+    };
+    let mut recoveries = Vec::new();
+    for entry in dir.entries().map_err(map_resource_io)? {
+        let name = entry
+            .map_err(map_resource_io)?
+            .file_name()
+            .to_str()
+            .map(str::to_owned);
+        let Some(name) = name else { continue };
+        if parse_resource_recovery_name(&name).is_none() {
+            continue;
+        }
+        recoveries.push(validated_resource_recovery(&dir, &name)?);
+    }
+    recoveries.sort_by(|left, right| left.token.cmp(&right.token));
+    Ok(recoveries)
+}
+
+#[napi]
+pub fn resource_recovery_path(home: String, catalog: String, token: String) -> Result<String> {
+    let dir = open_resource_catalog(&home, &catalog, false)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "resource catalog is unavailable"))?;
+    validated_resource_recovery(&dir, &token)?;
+    let parts = resource_catalog_parts(&catalog)
+        .ok_or_else(|| resource_error("RESOURCE_INVALID_PATH", "unknown resource catalog"))?;
+    let mut path = std::path::PathBuf::from(&home);
+    if !path.is_absolute() {
+        return Err(resource_error(
+            "RESOURCE_INVALID_PATH",
+            "resource home must be absolute",
+        ));
+    }
+    for part in parts {
+        path.push(part);
+    }
+    path.push(token);
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[napi]
+pub fn restore_resource_recovery(
+    home: String,
+    catalog: String,
+    token: String,
+) -> Result<ResourceRecovery> {
+    let dir = open_resource_catalog(&home, &catalog, false)?
+        .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "resource catalog is unavailable"))?;
+    let recovery = validated_resource_recovery(&dir, &token)?;
+    rename_noreplace(&dir, &token, &dir, &recovery.skill_name).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            resource_error("RESOURCE_BUSY", "active skill was recreated")
+        } else {
+            map_resource_io(error)
+        }
+    })?;
+    sync_dir(&dir).map_err(map_resource_io)?;
+    Ok(recovery)
+}
+
+#[napi]
+pub fn rollback_resource_recovery(
+    home: String,
+    catalog: String,
+    token: String,
+    expected_installed_path: Option<String>,
+    expected_installed_missing: bool,
+    original_missing: bool,
+) -> Result<Option<ResourceRecovery>> {
+    let skill_name = parse_resource_recovery_name(&token).ok_or_else(|| {
+        resource_error("RESOURCE_INVALID_PATH", "invalid resource recovery token")
+    })?;
+    let dir = open_resource_catalog(&home, &catalog, false)?
+        .ok_or_else(|| resource_error("RESOURCE_RECONCILE_INCOMPLETE", "catalog disappeared"))?;
+    let expected = expected_installed_path
+        .as_deref()
+        .map(open_source_root)
+        .transpose()?;
+    let active = match dir.symlink_metadata(&skill_name) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(map_resource_io(error)),
+    };
+    if expected_installed_missing {
+        if active.is_some() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback refused to overwrite a recreated active skill",
+            ));
+        }
+    } else {
+        let metadata = active.as_ref().ok_or_else(|| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback installed tree disappeared",
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback installed tree became unsafe",
+            ));
+        }
+        let installed = open_child_dir(&dir, &skill_name, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| {
+                resource_error(
+                    "RESOURCE_RECONCILE_INCOMPLETE",
+                    "installed tree disappeared",
+                )
+            })?;
+        let expected = expected.as_ref().ok_or_else(|| {
+            resource_error(
+                "RESOURCE_INVALID_PATH",
+                "rollback requires an expected installed tree",
+            )
+        })?;
+        validate_exact_tree(expected, &installed).map_err(|_| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback refused because the installed tree drifted",
+            )
+        })?;
+    }
+
+    if original_missing {
+        match dir.symlink_metadata(&token) {
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(resource_error(
+                    "RESOURCE_RECONCILE_INCOMPLETE",
+                    "rollback token was unexpectedly occupied",
+                ));
+            }
+            Err(error) => return Err(map_resource_io(error)),
+        }
+        if expected_installed_missing {
+            return Ok(None);
+        }
+        rename_noreplace(&dir, &skill_name, &dir, &token).map_err(|_| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback could not retain the newly installed tree",
+            )
+        })?;
+        sync_dir(&dir).map_err(map_resource_io)?;
+        return Ok(Some(ResourceRecovery { token, skill_name }));
+    }
+
+    validated_resource_recovery(&dir, &token).map_err(|_| {
+        resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "rollback recovery is unavailable or unsafe",
+        )
+    })?;
+    if expected_installed_missing {
+        rename_noreplace(&dir, &token, &dir, &skill_name).map_err(|_| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback could not restore the deleted skill without overwrite",
+            )
+        })?;
+        sync_dir(&dir).map_err(map_resource_io)?;
+        return Ok(None);
+    }
+
+    #[cfg(unix)]
+    exchange_entries(&dir, &token, &dir, &skill_name).map_err(|_| {
+        resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "rollback exchange failed; both trees were retained",
+        )
+    })?;
+
+    #[cfg(windows)]
+    {
+        let displaced =
+            resource_recovery_name(&skill_name, &private_nonce().map_err(map_resource_io)?);
+        rename_noreplace(&dir, &skill_name, &dir, &displaced).map_err(|_| {
+            resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback could not quarantine the installed tree",
+            )
+        })?;
+        if rename_noreplace(&dir, &token, &dir, &skill_name).is_err() {
+            let _ = rename_noreplace(&dir, &displaced, &dir, &skill_name);
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback restore failed; all trees were retained",
+            ));
+        }
+        if rename_noreplace(&dir, &displaced, &dir, &token).is_err() {
+            return Err(resource_error(
+                "RESOURCE_RECONCILE_INCOMPLETE",
+                "rollback completed with displaced tree under a secondary recovery token",
+            ));
+        }
+    }
+    sync_dir(&dir).map_err(map_resource_io)?;
+    Ok(Some(ResourceRecovery { token, skill_name }))
+}
+
+#[napi]
+pub fn acknowledge_resource_recovery(home: String, catalog: String, token: String) -> Result<()> {
+    parse_resource_recovery_name(&token).ok_or_else(|| {
+        resource_error("RESOURCE_INVALID_PATH", "invalid resource recovery token")
+    })?;
+    let Some(dir) = open_resource_catalog(&home, &catalog, false)? else {
+        return Ok(());
+    };
+    match dir.symlink_metadata(&token) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(resource_error(
+            "RESOURCE_BUSY",
+            "resource recovery has not moved to Trash",
+        )),
+        Err(error) => Err(map_resource_io(error)),
+    }
 }
 
 #[cfg(test)]
@@ -4610,6 +4733,10 @@ mod tests {
             vec!["safe-skill".into()],
             source.to_string_lossy().into_owned(),
             false,
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -4630,6 +4757,10 @@ mod tests {
             vec!["safe-skill".into()],
             source.to_string_lossy().into_owned(),
             true,
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -4762,6 +4893,185 @@ mod tests {
         parent.remove_dir("stage").unwrap();
     }
 
+    fn deletion_fixture() -> (TempDir, Dir, Dir) {
+        let root = home();
+        fs::create_dir(root.path().join("target")).unwrap();
+        fs::write(root.path().join("target/original"), "expected").unwrap();
+        fs::create_dir(root.path().join("expected")).unwrap();
+        fs::write(root.path().join("expected/original"), "expected").unwrap();
+        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let expected =
+            Dir::open_ambient_dir(root.path().join("expected"), ambient_authority()).unwrap();
+        (root, parent, expected)
+    }
+
+    #[test]
+    fn conditional_deletion_retains_validated_private_quarantine() {
+        let (root, parent, expected) = deletion_fixture();
+        conditional_quarantine_delete_with_hooks(
+            &parent,
+            "target",
+            Some(&expected),
+            false,
+            ".agent-deck-resource-tmp-delete-test",
+            |_| {},
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(!root.path().join("target").exists());
+        assert_eq!(
+            fs::read_to_string(
+                root.path()
+                    .join(".agent-deck-resource-tmp-delete-test/original")
+            )
+            .unwrap(),
+            "expected"
+        );
+    }
+
+    #[test]
+    fn conditional_deletion_preserves_content_added_through_renamed_handle() {
+        let (root, parent, expected) = deletion_fixture();
+        let error = conditional_quarantine_delete_with_hooks(
+            &parent,
+            "target",
+            Some(&expected),
+            false,
+            ".agent-deck-resource-tmp-delete-test",
+            |quarantine| {
+                fs::write(root.path().join(quarantine).join("concurrent"), "local").unwrap();
+            },
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(error.reason.starts_with("RESOURCE_BUSY:"), "{error:?}");
+        assert_eq!(
+            fs::read_to_string(root.path().join("target/concurrent")).unwrap(),
+            "local"
+        );
+    }
+
+    #[test]
+    fn conditional_deletion_never_overwrites_a_recreated_visible_leaf() {
+        let (root, parent, expected) = deletion_fixture();
+        let quarantine = ".agent-deck-resource-tmp-delete-test";
+        let error = conditional_quarantine_delete_with_hooks(
+            &parent,
+            "target",
+            Some(&expected),
+            false,
+            quarantine,
+            |name| {
+                fs::write(root.path().join(name).join("concurrent"), "preserved").unwrap();
+            },
+            |_| {
+                fs::create_dir(root.path().join("target")).unwrap();
+                fs::write(root.path().join("target/recreated"), "untouched").unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error.reason.starts_with("RESOURCE_RECONCILE_INCOMPLETE:"),
+            "{error:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("target/recreated")).unwrap(),
+            "untouched"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(quarantine).join("concurrent")).unwrap(),
+            "preserved"
+        );
+    }
+
+    #[test]
+    fn conditional_deletion_quarantine_rename_never_replaces_a_collision() {
+        let (root, parent, expected) = deletion_fixture();
+        let quarantine = ".agent-deck-resource-tmp-delete-test";
+        fs::create_dir(root.path().join(quarantine)).unwrap();
+        fs::write(root.path().join(quarantine).join("sentinel"), "untouched").unwrap();
+
+        let error = conditional_quarantine_delete_with_hooks(
+            &parent,
+            "target",
+            Some(&expected),
+            false,
+            quarantine,
+            |_| {},
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(error.reason.starts_with("RESOURCE_BUSY:"), "{error:?}");
+        assert_eq!(
+            fs::read_to_string(root.path().join("target/original")).unwrap(),
+            "expected"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(quarantine).join("sentinel")).unwrap(),
+            "untouched"
+        );
+    }
+
+    #[test]
+    fn recovery_enumeration_restore_and_trash_ack_are_identity_scoped() {
+        let root = home();
+        let home_path = root.path().to_string_lossy().into_owned();
+        let catalog = root.path().join(".pi/agent/skills");
+        fs::create_dir_all(&catalog).unwrap();
+        let token = resource_recovery_name("skill", "0123456789abcdef0123456789abcdef");
+        fs::create_dir(catalog.join(&token)).unwrap();
+        fs::write(catalog.join(&token).join("SKILL.md"), "safe").unwrap();
+
+        let listed = list_resource_recoveries(home_path.clone(), "global-skills".into()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].token, token);
+        assert_eq!(listed[0].skill_name, "skill");
+        assert!(
+            resource_recovery_path(home_path.clone(), "global-skills".into(), token.clone())
+                .unwrap()
+                .ends_with(&token)
+        );
+
+        fs::create_dir(catalog.join("skill")).unwrap();
+        fs::write(catalog.join("skill/recreated"), "untouched").unwrap();
+        let blocked =
+            restore_resource_recovery(home_path.clone(), "global-skills".into(), token.clone())
+                .unwrap_err();
+        assert!(blocked.reason.starts_with("RESOURCE_BUSY:"));
+        assert_eq!(
+            fs::read_to_string(catalog.join("skill/recreated")).unwrap(),
+            "untouched"
+        );
+        fs::remove_dir_all(catalog.join("skill")).unwrap();
+        restore_resource_recovery(home_path.clone(), "global-skills".into(), token.clone())
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(catalog.join("skill/SKILL.md")).unwrap(),
+            "safe"
+        );
+
+        let trash_token = resource_recovery_name("other", "fedcba9876543210fedcba9876543210");
+        fs::create_dir(catalog.join(&trash_token)).unwrap();
+        assert!(
+            acknowledge_resource_recovery(
+                home_path.clone(),
+                "global-skills".into(),
+                trash_token.clone()
+            )
+            .is_err()
+        );
+        fs::rename(
+            catalog.join(&trash_token),
+            root.path().join("os-trash-simulation"),
+        )
+        .unwrap();
+        acknowledge_resource_recovery(home_path, "global-skills".into(), trash_token).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_publication_reports_interrupted_private_stage_cleanup() {
@@ -4886,6 +5196,10 @@ mod tests {
                 vec!["root-linked".into()],
                 source_root_link.to_string_lossy().into_owned(),
                 false,
+                None,
+                None,
+                None,
+                None,
             )
             .is_err()
         );
@@ -4901,6 +5215,10 @@ mod tests {
                 vec!["copied".into()],
                 source.to_string_lossy().into_owned(),
                 false,
+                None,
+                None,
+                None,
+                None,
             )
             .is_err()
         );
@@ -4985,6 +5303,10 @@ mod tests {
                 vec![format!("copied-{index}")],
                 source.to_string_lossy().into_owned(),
                 false,
+                None,
+                None,
+                None,
+                None,
             );
         }
         stop.store(true, Ordering::Relaxed);
@@ -5018,6 +5340,10 @@ mod tests {
             vec!["special".into()],
             source.to_string_lossy().into_owned(),
             false,
+            None,
+            None,
+            None,
+            None,
         );
         assert!(result.is_err());
         assert!(!root.path().join(".pi/agent/skills/special").exists());
@@ -5236,141 +5562,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn windows_reconciler_converges_exactly_with_stale_and_type_changes() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        let stage_path = root.path().join("stage");
-        let target_path = root.path().join("target");
-        fs::create_dir(stage_path.join("nested")).unwrap();
-        fs::write(stage_path.join("nested/asset"), "new asset").unwrap();
-        fs::write(stage_path.join("was-dir"), "now file").unwrap();
-        fs::create_dir(stage_path.join("was-file")).unwrap();
-        fs::write(stage_path.join("was-file/child"), "child").unwrap();
-        fs::write(stage_path.join("SKILL.md"), "new manifest").unwrap();
-        fs::create_dir(target_path.join("was-dir")).unwrap();
-        fs::write(target_path.join("was-dir/old"), "old").unwrap();
-        fs::write(target_path.join("was-file"), "old file").unwrap();
-        fs::write(target_path.join("stale"), "stale").unwrap();
-        fs::write(target_path.join("SKILL.md"), "old manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-
-        validate_reconcile_tree(&staged).unwrap();
-        validate_reconcile_tree(&destination).unwrap();
-        let mut mutated = false;
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        assert!(mutated);
-        validate_exact_tree(&staged, &destination).unwrap();
-        assert_eq!(
-            fs::read_to_string(target_path.join("SKILL.md")).unwrap(),
-            "new manifest"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("nested/asset")).unwrap(),
-            "new asset"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("was-dir")).unwrap(),
-            "now file"
-        );
-        assert_eq!(
-            fs::read_to_string(target_path.join("was-file/child")).unwrap(),
-            "child"
-        );
-        assert!(!target_path.join("stale").exists());
-        assert!(fs::read_dir(&target_path).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(RESOURCE_TEMP_PREFIX)
-        }));
-    }
-
-    #[test]
-    fn windows_reconciler_processes_manifest_last() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        fs::write(root.path().join("stage/asset"), "asset").unwrap();
-        fs::write(root.path().join("stage/SKILL.md"), "manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-        RECONCILE_TEST_ORDER.with(|order| order.borrow_mut().clear());
-        let mut mutated = false;
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        let order = RECONCILE_TEST_ORDER.with(|order| order.borrow().clone());
-        assert_eq!(order.last().map(String::as_str), Some("SKILL.md"));
-    }
-
-    #[test]
-    fn windows_reconciler_partial_failure_then_retry_converges_exactly() {
-        let root = home();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        parent.create_dir("stage").unwrap();
-        parent.create_dir("target").unwrap();
-        fs::write(root.path().join("stage/a"), "new-a").unwrap();
-        fs::write(root.path().join("stage/z"), "new-z").unwrap();
-        fs::write(root.path().join("stage/SKILL.md"), "new-manifest").unwrap();
-        fs::write(root.path().join("target/a"), "old-a").unwrap();
-        fs::write(root.path().join("target/z"), "old-z").unwrap();
-        fs::write(root.path().join("target/SKILL.md"), "old-manifest").unwrap();
-        let staged = open_child_dir(&parent, "stage", false).unwrap().unwrap();
-        let destination = open_child_dir(&parent, "target", false).unwrap().unwrap();
-        RECONCILE_TEST_FAIL_AT.with(|failure| *failure.borrow_mut() = Some("z".into()));
-        let mut mutated = false;
-        let error = reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap_err();
-        assert!(error.reason.starts_with("RESOURCE_RECONCILE_INCOMPLETE:"));
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/a")).unwrap(),
-            "new-a"
-        );
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/z")).unwrap(),
-            "old-z"
-        );
-        assert_eq!(
-            fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
-            "old-manifest"
-        );
-        RECONCILE_TEST_FAIL_AT.with(|failure| *failure.borrow_mut() = None);
-        reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap();
-        validate_exact_tree(&staged, &destination).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn windows_reconciler_rejects_swapped_child_link_without_touching_outside() {
-        use std::os::unix::fs::symlink;
-        let root = home();
-        let victim = root.path().join("victim-reconcile");
-        fs::create_dir(&victim).unwrap();
-        fs::write(victim.join("sentinel"), "outside-safe").unwrap();
-        fs::create_dir(root.path().join("stage-reconcile")).unwrap();
-        fs::create_dir(root.path().join("stage-reconcile/child")).unwrap();
-        fs::write(root.path().join("stage-reconcile/child/file"), "new").unwrap();
-        fs::create_dir(root.path().join("target-reconcile")).unwrap();
-        symlink(&victim, root.path().join("target-reconcile/child")).unwrap();
-        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        let staged = open_child_dir(&parent, "stage-reconcile", false)
-            .unwrap()
-            .unwrap();
-        let destination = open_child_dir(&parent, "target-reconcile", false)
-            .unwrap()
-            .unwrap();
-        let mut mutated = false;
-        let error = reconcile_staged_dir(&staged, &destination, &mut mutated).unwrap_err();
-        assert!(error.reason.starts_with("RESOURCE_UNSAFE_COMPONENT:"));
-        assert_eq!(
-            fs::read_to_string(victim.join("sentinel")).unwrap(),
-            "outside-safe"
-        );
-    }
-
     #[cfg(windows)]
     #[test]
     fn windows_exact_child_dir_capability_pins_identity_until_drop() {
@@ -5438,6 +5629,10 @@ mod tests {
                 vec!["copied-link".into()],
                 source_link.to_string_lossy().into_owned(),
                 false,
+                None,
+                None,
+                None,
+                None,
             )
             .is_err()
         );
@@ -5689,7 +5884,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_locked_reconcile_is_busy_then_retry_succeeds() {
+    fn windows_locked_replacement_is_busy_then_retry_returns_recovery() {
         use std::os::windows::fs::OpenOptionsExt as _;
         let root = home();
         let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
@@ -5703,16 +5898,54 @@ mod tests {
             .unwrap();
         parent.create_dir("stage-locked").unwrap();
         fs::write(root.path().join("stage-locked/SKILL.md"), "new").unwrap();
-        let error = publish_staged_tree(&parent, "stage-locked", "target", true).unwrap_err();
+        let locked_recovery = resource_recovery_name("target", "0123456789abcdef0123456789abcdef");
+        let error = publish_staged_tree_with_identity(
+            &parent,
+            "stage-locked",
+            "target",
+            true,
+            None,
+            None,
+            false,
+            &locked_recovery,
+        )
+        .unwrap_err();
         assert!(error.reason.starts_with("RESOURCE_BUSY:"), "{error:?}");
         assert!(!root.path().join("stage-locked").exists());
+        assert!(!root.path().join(&locked_recovery).exists());
+        assert!(root.path().join("target/SKILL.md").exists());
+
+        // An exclusive Windows handle intentionally denies even test reads.
+        // Release it before verifying bytes or attempting the required retry.
         drop(held);
+        assert_eq!(
+            fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
+            "old"
+        );
         parent.create_dir("stage-retry").unwrap();
         fs::write(root.path().join("stage-retry/SKILL.md"), "new").unwrap();
-        publish_staged_tree(&parent, "stage-retry", "target", true).unwrap();
+        let retry_recovery = resource_recovery_name("target", "fedcba9876543210fedcba9876543210");
+        let recovery = publish_staged_tree_with_identity(
+            &parent,
+            "stage-retry",
+            "target",
+            true,
+            None,
+            None,
+            false,
+            &retry_recovery,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(recovery.token, retry_recovery);
+        assert_eq!(recovery.skill_name, "target");
         assert_eq!(
             fs::read_to_string(root.path().join("target/SKILL.md")).unwrap(),
             "new"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(&recovery.token).join("SKILL.md")).unwrap(),
+            "old"
         );
     }
 

@@ -38,6 +38,7 @@ const projectDir = mkdtempSync(path.join(tmpdir(), "electron-e2e-project-"));
 const projectName = path.basename(projectDir);
 let validPromptPath: string;
 let symlinkPromptPath: string;
+let resourceHome: string;
 
 test.beforeAll(async () => {
   if (!existsSync(path.join(WEB_DIST, "index.html"))) {
@@ -46,7 +47,7 @@ test.beforeAll(async () => {
   // Isolate both app persistence and the Pi resource catalog. The desktop package
   // invokes the workspace's installed pnpm directly, so it does not need the real HOME.
   const dataDir = mkdtempSync(path.join(tmpdir(), "electron-e2e-data-"));
-  const resourceHome = mkdtempSync(path.join(tmpdir(), "electron-e2e-home-"));
+  resourceHome = mkdtempSync(path.join(tmpdir(), "electron-e2e-home-"));
   const agentsDir = path.join(resourceHome, ".pi", "agent", "agents");
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
@@ -402,6 +403,80 @@ test("Loop reveal bridges accept only backend-owned opaque run ids", async () =>
     expect.stringContaining("Loop run is unavailable"),
     expect.stringContaining("Loop run is unavailable"),
   ]);
+});
+
+test("skill Trash bridge rejects arbitrary renderer paths", async () => {
+  const window = await app.firstWindow();
+  const message = await window.evaluate(async () => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: {
+          trashSkillRecovery?(
+            token: string,
+          ): Promise<{ moved: boolean; acknowledgementPending: boolean }>;
+        };
+      }
+    ).agentDeck;
+    if (!bridge?.trashSkillRecovery) return "bridge unavailable";
+    try {
+      await bridge.trashSkillRecovery("../../arbitrary-path");
+      return "unexpected success";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+  expect(message).toContain("Skill recovery is unavailable");
+});
+
+test("moves a validated skill recovery through Electron OS Trash", async () => {
+  const token = ".agent-deck-resource-recovery-v1-10-trash-test-0123456789abcdef0123456789abcdef";
+  const recovery = path.join(resourceHome, ".pi", "agent", "skills", token);
+  mkdirSync(recovery, { recursive: true });
+  writeFileSync(
+    path.join(recovery, "SKILL.md"),
+    "---\nname: trash-test\ndescription: Trash lifecycle\n---\n\nBody.\n",
+  );
+  const window = await app.firstWindow();
+  await window.reload();
+  await window.getByTestId("nav-skills").click();
+  await expect(window.getByTestId("skill-recovery-trash-test")).toBeVisible();
+  await window.getByTestId("skill-recovery-trash-trash-test").click();
+  await expect.poll(() => existsSync(recovery)).toBe(false);
+  await expect(window.getByTestId("skill-recovery-trash-test")).toHaveCount(0);
+});
+
+test("treats OS Trash as successful when backend acknowledgement transport fails", async () => {
+  const token = ".agent-deck-resource-recovery-v1-9-ack-fails-fedcba9876543210fedcba9876543210";
+  const recovery = path.join(resourceHome, ".pi", "agent", "skills", token);
+  mkdirSync(recovery, { recursive: true });
+  writeFileSync(
+    path.join(recovery, "SKILL.md"),
+    "---\nname: ack-fails\ndescription: Ack lifecycle\n---\n\nBody.\n",
+  );
+  await app.evaluate(() => {
+    const runtime = globalThis as typeof globalThis & { __originalRecoveryFetch?: typeof fetch };
+    runtime.__originalRecoveryFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      if (String(input).includes("/acknowledge")) throw new Error("injected ack transport failure");
+      return runtime.__originalRecoveryFetch!(input, init);
+    };
+  });
+  try {
+    const window = await app.firstWindow();
+    await window.reload();
+    await window.getByTestId("nav-skills").click();
+    await expect(window.getByTestId("skill-recovery-ack-fails")).toBeVisible();
+    await window.getByTestId("skill-recovery-trash-ack-fails").click();
+    await expect.poll(() => existsSync(recovery)).toBe(false);
+    await expect(window.getByTestId("skill-recovery-ack-fails")).toHaveCount(0);
+    await expect(window.getByTestId("error-banner")).not.toBeVisible();
+  } finally {
+    await app.evaluate(() => {
+      const runtime = globalThis as typeof globalThis & { __originalRecoveryFetch?: typeof fetch };
+      if (runtime.__originalRecoveryFetch) globalThis.fetch = runtime.__originalRecoveryFetch;
+      delete runtime.__originalRecoveryFetch;
+    });
+  }
 });
 
 test("adding a project via the native folder picker registers it", async () => {

@@ -4,6 +4,24 @@ import { watch, type FSWatcher } from "chokidar";
 import { watchDirs, type ResourceRoots } from "./paths.ts";
 
 const watcherTargets = new WeakMap<FSWatcher, string[]>();
+const RESOURCE_RECOVERY_PREFIX = ".agent-deck-resource-recovery-v1-";
+
+function isRecoveryWrapperName(name: string): boolean {
+  if (!name.startsWith(RESOURCE_RECOVERY_PREFIX)) return false;
+  const suffix = name.slice(RESOURCE_RECOVERY_PREFIX.length);
+  const separator = suffix.indexOf("-");
+  if (separator < 1) return false;
+  const length = Number(suffix.slice(0, separator));
+  const remainder = suffix.slice(separator + 1);
+  const skillName = remainder.slice(0, length);
+  return (
+    Number.isSafeInteger(length) &&
+    length > 0 &&
+    remainder[length] === "-" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(skillName) &&
+    /^[0-9a-f]{32}$/i.test(remainder.slice(length + 1))
+  );
+}
 
 /** Compatibility helper retained for callers. Catalog setup never creates paths. */
 export function ensureDirs(dirs: string[]): string[] {
@@ -47,12 +65,22 @@ function minimalRoots(targets: string[]): string[] {
 
 function isRelevant(candidate: string, targets: string[]): boolean {
   const resolved = path.resolve(candidate);
-  return targets.some(
-    (target) =>
+  return targets.some((target) => {
+    const relative = path.relative(target, resolved);
+    if (
+      relative !== "" &&
+      !relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      isRecoveryWrapperName(relative.split(path.sep)[0]!)
+    ) {
+      return false;
+    }
+    return (
       resolved === target ||
       target.startsWith(`${resolved}${path.sep}`) ||
-      resolved.startsWith(`${target}${path.sep}`),
-  );
+      resolved.startsWith(`${target}${path.sep}`)
+    );
+  });
 }
 
 /**
@@ -72,10 +100,22 @@ export function watchResources(
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
   });
   watcherTargets.set(watcher, targets);
-  watcher.on("all", () => {
+  const scheduleRescan = (): void => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(onChange, debounceMs);
-  });
+  };
+  watcher.on("all", scheduleRescan);
+  // Watch errors—including transient file↔directory races—may mean an event
+  // was missed. Always schedule the same debounced authoritative rescan.
+  watcher.on("error", scheduleRescan);
+  const close = watcher.close.bind(watcher);
+  watcher.close = async (): Promise<void> => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    await close();
+  };
   return watcher;
 }
 

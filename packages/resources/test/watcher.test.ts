@@ -45,6 +45,61 @@ describe("resource watcher", () => {
     }
   });
 
+  it("debounces every watcher error into an authoritative rescan", async () => {
+    const root = home();
+    let changes = 0;
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      for (const code of ["ENOENT", "ENOTDIR", "EISDIR", "EACCES"]) {
+        watcher.emit("error", Object.assign(new Error("deterministic watcher error"), { code }));
+      }
+      await changed;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(changes).toBe(1);
+    } finally {
+      await watcher.close();
+    }
+  });
+
+  it("excludes retained private deletion quarantines from watching", async () => {
+    const root = home();
+    const catalog = path.join(root, ".pi", "agent", "skills");
+    mkdirSync(catalog, { recursive: true });
+    let changes = 0;
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      const quarantine = path.join(
+        catalog,
+        ".agent-deck-resource-recovery-v1-5-skill-0123456789abcdef0123456789abcdef",
+      );
+      mkdirSync(quarantine);
+      writeFileSync(path.join(quarantine, "SKILL.md"), "private");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
+  });
+
   it("observes a catalog created after watching starts", async () => {
     const root = home();
     let resolveChange!: () => void;

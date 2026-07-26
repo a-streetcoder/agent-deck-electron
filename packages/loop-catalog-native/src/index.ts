@@ -121,6 +121,11 @@ interface NativeSessionWorktreeStore {
   deleteWorktree(targetPath: string, identityToken: string): Promise<void>;
 }
 
+export interface ResourceRecovery {
+  token: string;
+  skillName: string;
+}
+
 interface NativeBinding {
   readResourceCatalogFile(home: string, catalog: ResourceCatalog, components: string[]): string;
   writeResourceCatalogFile(
@@ -144,7 +149,23 @@ interface NativeBinding {
     destinationComponents: string[],
     sourcePath: string,
     replace: boolean,
-  ): void;
+    expectedDestinationPath?: string,
+    expectedDestinationMissing?: boolean,
+    removeAfterReplace?: boolean,
+    recoveryToken?: string,
+  ): ResourceRecovery | undefined;
+  listResourceRecoveries(home: string, catalog: ResourceCatalog): ResourceRecovery[];
+  resourceRecoveryPath(home: string, catalog: ResourceCatalog, token: string): string;
+  restoreResourceRecovery(home: string, catalog: ResourceCatalog, token: string): ResourceRecovery;
+  rollbackResourceRecovery(
+    home: string,
+    catalog: ResourceCatalog,
+    token: string,
+    expectedInstalledPath: string | undefined,
+    expectedInstalledMissing: boolean,
+    originalMissing: boolean,
+  ): ResourceRecovery | undefined;
+  acknowledgeResourceRecovery(home: string, catalog: ResourceCatalog, token: string): void;
   SessionWorktreeStore: new (dataDir: string) => NativeSessionWorktreeStore;
   ManagedSkillRepositoryStore: new (
     dataDir: string,
@@ -344,7 +365,11 @@ export const copyResourceTree = (
   destinationComponents: string[],
   sourcePath: string,
   replace = false,
-): void =>
+  expectedDestinationPath?: string,
+  expectedDestinationMissing?: boolean,
+  removeAfterReplace?: boolean,
+  recoveryToken?: string,
+): ResourceRecovery | undefined =>
   invokeResource(() =>
     loadBinding("resource").copyResourceTree(
       home,
@@ -352,8 +377,58 @@ export const copyResourceTree = (
       destinationComponents,
       sourcePath,
       replace,
+      expectedDestinationPath,
+      expectedDestinationMissing,
+      removeAfterReplace,
+      recoveryToken,
     ),
   );
+
+export const listResourceRecoveries = (
+  home: string,
+  catalog: ResourceCatalog,
+): ResourceRecovery[] =>
+  invokeResource(() => loadBinding("resource").listResourceRecoveries(home, catalog));
+
+export const resourceRecoveryPath = (
+  home: string,
+  catalog: ResourceCatalog,
+  token: string,
+): string =>
+  invokeResource(() => loadBinding("resource").resourceRecoveryPath(home, catalog, token));
+
+export const restoreResourceRecovery = (
+  home: string,
+  catalog: ResourceCatalog,
+  token: string,
+): ResourceRecovery =>
+  invokeResource(() => loadBinding("resource").restoreResourceRecovery(home, catalog, token));
+
+export const rollbackResourceRecovery = (
+  home: string,
+  catalog: ResourceCatalog,
+  token: string,
+  expectedInstalledPath: string | undefined,
+  expectedInstalledMissing: boolean,
+  originalMissing: boolean,
+): ResourceRecovery | undefined =>
+  invokeResource(() =>
+    loadBinding("resource").rollbackResourceRecovery(
+      home,
+      catalog,
+      token,
+      expectedInstalledPath,
+      expectedInstalledMissing,
+      originalMissing,
+    ),
+  );
+
+export const acknowledgeResourceRecovery = (
+  home: string,
+  catalog: ResourceCatalog,
+  token: string,
+): void =>
+  invokeResource(() => loadBinding("resource").acknowledgeResourceRecovery(home, catalog, token));
 
 export class SessionWorktreeStore {
   private readonly native: NativeSessionWorktreeStore;

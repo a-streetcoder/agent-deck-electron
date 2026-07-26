@@ -54,6 +54,23 @@ describe("native Loop catalog binding", () => {
     );
   });
 
+  it("rejects replacement when the destination changed after preparation", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "resource-precondition-ts-"));
+    const source = path.join(home, "source");
+    const expected = path.join(home, "expected");
+    mkdirSync(source);
+    mkdirSync(expected);
+    writeFileSync(path.join(source, "SKILL.md"), "remote");
+    writeFileSync(path.join(expected, "SKILL.md"), "baseline");
+    copyResourceTree(home, "global-skills", ["raced"], expected);
+    writeFileSync(path.join(home, ".pi", "agent", "skills", "raced", "SKILL.md"), "late edit");
+
+    expect(() =>
+      copyResourceTree(home, "global-skills", ["raced"], source, true, expected, false),
+    ).toThrow(expect.objectContaining({ code: "RESOURCE_BUSY" }));
+    expect(readResourceCatalogFile(home, "global-skills", ["raced", "SKILL.md"])).toBe("late edit");
+  });
+
   it("replaces an existing resource directory exactly", () => {
     const home = mkdtempSync(path.join(tmpdir(), "resource-replace-ts-"));
     const source = path.join(home, "source");

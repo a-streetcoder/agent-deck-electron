@@ -342,13 +342,40 @@ test("tracks concurrent repository operations with independent accessible busy l
   await expect(page.getByTestId(`skill-repo-${forgetId}`)).toHaveCount(0);
 });
 
-test("tracks concurrent conflict resolutions independently with action-specific labels", async ({
+test("supports accessible mixed path choices, busy guards, failure focus, and persisted reload", async ({
   page,
 }) => {
-  const id = "concurrent-conflicts";
-  const pending = new Map<string, () => void>();
-  const requestCounts = new Map<string, number>();
-
+  await page.setViewportSize({ width: 900, height: 600 });
+  const id = "path-conflicts";
+  const longPath = `nested/${"very-long-segment-".repeat(12)}asset.txt`;
+  let persisted = false;
+  let attempts = 0;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let releaseMovedFailure!: () => void;
+  const movedFailure = new Promise<void>((resolve) => {
+    releaseMovedFailure = resolve;
+  });
+  const merge = {
+    name: "conflicted-skill",
+    mergeId: "merge-generation-one",
+    paths: [
+      { path: "alpha.txt", local: "file", remote: "file" },
+      { path: longPath, local: "file", remote: "missing" },
+    ],
+  };
+  let activeMerge = merge;
+  const nextMerge = {
+    name: "next-conflicted-skill",
+    mergeId: "merge-generation-two",
+    paths: Array.from({ length: 12 }, (_, index) => ({
+      path: `next-${index}.txt`,
+      local: "file" as const,
+      remote: "file" as const,
+    })),
+  };
   await page.route(/\/resources\/skill-repos$/, async (route) => {
     await route.fulfill({
       status: 200,
@@ -356,118 +383,134 @@ test("tracks concurrent conflict resolutions independently with action-specific 
         repos: [
           {
             id,
-            remoteUrl: "https://example.invalid/concurrent.git",
-            skillNames: ["conflict-a", "conflict-b"],
+            remoteUrl: "https://example.invalid/path.git",
+            skillNames: [merge.name],
             lastSyncedCommit: "abc123",
             importedAt: new Date(0).toISOString(),
+            pendingMerges: persisted ? [activeMerge, nextMerge] : [],
           },
         ],
       },
     });
   });
-  await page.route(`**/resources/skill-repos/${id}/check`, async (route) => {
-    await route.fulfill({ status: 200, json: { updateAvailable: true } });
-  });
+  await page.route(`**/resources/skill-repos/${id}/check`, (route) =>
+    route.fulfill({ status: 200, json: { updateAvailable: true } }),
+  );
   await page.route(`**/resources/skill-repos/${id}/update`, async (route) => {
-    await route.fulfill({ status: 200, json: { conflicts: ["conflict-a", "conflict-b"] } });
+    persisted = true;
+    await route.fulfill({
+      status: 200,
+      json: {
+        conflicts: [merge.name, nextMerge.name],
+        mergeConflicts: [activeMerge, nextMerge],
+      },
+    });
+  });
+  await page.route(`**/resources/skill-repos/${id}/refresh-merge`, async (route) => {
+    activeMerge = { ...merge, mergeId: "merge-generation-refreshed" };
+    await route.fulfill({ status: 200, json: { mergeConflict: activeMerge } });
   });
   await page.route(`**/resources/skill-repos/${id}/resolve`, async (route) => {
-    const { name } = route.request().postDataJSON() as { name: string };
-    requestCounts.set(name, (requestCounts.get(name) ?? 0) + 1);
-    await new Promise<void>((resolve) => pending.set(name, resolve));
-    await route.fulfill({ status: 200, json: { ok: true } });
+    attempts += 1;
+    if (attempts === 1) {
+      await route.fulfill({
+        status: 409,
+        json: { code: "LEGACY_MERGE_STALE", error: "Prepared state is stale." },
+      });
+      return;
+    }
+    if (attempts === 2) {
+      await movedFailure;
+      await route.fulfill({ status: 409, json: { error: "Second stale response." } });
+      return;
+    }
+    await pending;
+    persisted = false;
+    await route.fulfill({ status: 200, json: { ok: true, conflicts: [] } });
   });
 
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-skills").click();
   await page.getByTestId(`skill-repo-update-${id}`).click();
+  const group = page.getByRole("group", { name: `Conflicting paths for ${merge.name}` });
+  const mine = group.getByLabel("Keep Mine for alpha.txt");
+  const remote = group.getByLabel("Take Remote for alpha.txt");
+  await expect(mine).toBeChecked();
+  await remote.focus();
+  await page.keyboard.press("Space");
+  await expect(remote).toBeChecked();
+  const longRow = group.getByTitle(longPath);
+  await expect(longRow).toBeVisible();
+  await expect(longRow).toHaveClass(/truncate/);
 
-  const mineA = page.getByTestId(`skill-conflict-mine-${id}-conflict-a`);
-  const remoteB = page.getByTestId(`skill-conflict-remote-${id}-conflict-b`);
-  await mineA.click();
-  await remoteB.click();
-  await expect.poll(() => requestCounts.get("conflict-a")).toBe(1);
-  await expect.poll(() => requestCounts.get("conflict-b")).toBe(1);
-  await expect(mineA).toBeDisabled();
-  await expect(mineA).toHaveAccessibleName("Keeping mine for conflict-a…");
-  await expect(remoteB).toBeDisabled();
-  await expect(remoteB).toHaveAccessibleName("Taking remote folder for conflict-b…");
+  const apply = page.getByTestId(`skill-conflict-apply-${id}-${merge.name}`);
+  await apply.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("error-banner")).toContainText("Prepared state is stale");
+  await expect(apply).toBeFocused();
+  const refresh = page.getByTestId(`skill-conflict-refresh-${id}-${merge.name}`);
+  await refresh.click();
+  await expect(page.getByTestId("skill-merge-status")).toContainText("Choices reset to Keep Mine");
+  await expect(group.getByLabel("Keep Mine for alpha.txt")).toBeChecked();
+  await expect(apply).toBeFocused();
+  const panels = page.getByTestId("skill-management-panels");
+  await expect
+    .poll(() => panels.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true);
+  await expect(page.getByRole("listbox", { name: "Skills" })).toBeVisible();
 
-  pending.get("conflict-b")!();
-  await expect(remoteB).toHaveCount(0);
-  await expect(mineA).toBeDisabled();
-  const update = page.getByTestId(`skill-repo-update-${id}`);
-  await expect(update).toBeFocused();
-  await mineA.evaluate((button: { click(): void }) => button.click());
-  expect(requestCounts.get("conflict-a")).toBe(1);
+  await page.reload();
+  await page.getByTestId("nav-skills").click();
+  const restoredApply = page.getByTestId(`skill-conflict-apply-${id}-${merge.name}`);
+  await expect(restoredApply).toBeVisible();
+  await restoredApply.click();
+  await expect.poll(() => attempts).toBe(2);
+  const updateButton = page.getByTestId(`skill-repo-update-${id}`);
+  await updateButton.focus();
+  releaseMovedFailure();
+  await expect(page.getByTestId("error-banner")).toContainText("Second stale response");
+  await expect(updateButton).toBeFocused();
 
-  pending.get("conflict-a")!();
-  await expect(mineA).toHaveCount(0);
-  await expect(update).toBeFocused();
+  await restoredApply.click();
+  await expect(restoredApply).toBeDisabled();
+  await restoredApply.evaluate((button: { click(): void }) => button.click());
+  expect(attempts).toBe(3);
+  release();
+  await expect(restoredApply).toHaveCount(0);
+  const nextApply = page.getByTestId(`skill-conflict-apply-${id}-${nextMerge.name}`);
+  await expect(nextApply).toBeFocused();
+  await expect(page.getByTestId("skill-merge-status")).toHaveText(
+    `Conflict choices applied for ${merge.name}.`,
+  );
+  await nextApply.click();
+  await expect(page.getByTestId(`skill-repo-conflicts-${id}`)).toHaveCount(0);
+  await expect(page.getByTestId(`skill-repo-update-${id}`)).toBeFocused();
 });
 
-test("restores keyboard focus after conflict success and rejected retry", async ({ page }) => {
-  const id = "conflict-focus";
-  let alphaAttempts = 0;
-  await page.route(/\/resources\/skill-repos$/, async (route) => {
-    await route.fulfill({
-      status: 200,
-      json: {
-        repos: [
-          {
-            id,
-            remoteUrl: "https://example.invalid/focus.git",
-            skillNames: ["alpha", "beta", "gamma"],
-            lastSyncedCommit: "focus123",
-            importedAt: new Date(0).toISOString(),
-          },
-        ],
-      },
-    });
-  });
-  await page.route(`**/resources/skill-repos/${id}/check`, async (route) => {
-    await route.fulfill({ status: 200, json: { updateAvailable: true } });
-  });
-  await page.route(`**/resources/skill-repos/${id}/update`, async (route) => {
-    await route.fulfill({ status: 200, json: { conflicts: ["alpha", "beta", "gamma"] } });
-  });
-  await page.route(`**/resources/skill-repos/${id}/resolve`, async (route) => {
-    const { name } = route.request().postDataJSON() as { name: string };
-    if (name === "alpha" && alphaAttempts++ === 0) {
-      await route.fulfill({ status: 409, json: { error: "Temporary resolution failure." } });
-      return;
-    }
-    await route.fulfill({ status: 200, json: { ok: true } });
-  });
-
+test("keeps browser recovery visible when OS Trash is unavailable and allows restore", async ({
+  page,
+}) => {
+  const recovery = {
+    token: ".agent-deck-resource-recovery-v1-8-recovery-0123456789abcdef0123456789abcdef",
+    skillName: "recovery",
+  };
+  await page.route(/\/resources\/skill-recoveries$/, (route) =>
+    route.fulfill({ status: 200, json: { recoveries: [recovery] } }),
+  );
+  await page.route(`**/resources/skill-recoveries/${recovery.token}/restore`, (route) =>
+    route.fulfill({ status: 200, json: { ok: true } }),
+  );
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-skills").click();
-  const update = page.getByTestId(`skill-repo-update-${id}`);
-  await update.click();
-
-  const betaMine = page.getByTestId(`skill-conflict-mine-${id}-beta`);
-  await betaMine.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId(`skill-conflict-mine-${id}-gamma`)).toBeFocused();
-
-  const gammaRemote = page.getByTestId(`skill-conflict-remote-${id}-gamma`);
-  await gammaRemote.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId(`skill-conflict-mine-${id}-alpha`)).toBeFocused();
-
-  const alphaRemote = page.getByTestId(`skill-conflict-remote-${id}-alpha`);
-  await alphaRemote.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId(`skill-conflict-mine-${id}-alpha`)).toBeEnabled();
-  await expect(alphaRemote).toBeEnabled();
-  await expect(alphaRemote).toBeFocused();
+  const card = page.getByTestId("skill-recovery-recovery");
+  await expect(card).toContainText("Removed from the active catalog but retained safely");
+  await page.getByTestId("skill-recovery-trash-recovery").click();
   await expect(page.getByTestId("error-banner")).toContainText(
-    "Couldn't resolve alpha. Temporary resolution failure. Try again.",
+    "Move to Trash is available in the desktop app",
   );
-
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId(`skill-repo-conflicts-${id}`)).toHaveCount(0);
-  await expect(update).toBeFocused();
+  await expect(card).toBeVisible();
+  await page.getByTestId("skill-recovery-restore-recovery").click();
+  await expect(card).toHaveCount(0);
 });
 
 // Obsolete collection-v1 behavior: managed skills are discovered from native,

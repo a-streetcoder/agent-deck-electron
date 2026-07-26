@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("agentDeck", {
   revealLoopArtifacts: (runId) => ipcRenderer.invoke("loops:revealArtifacts", runId),
   /** Reveal a backend-validated retained Loop worktree by opaque run id. */
   revealLoopWorktree: (runId) => ipcRenderer.invoke("loops:revealWorktree", runId),
+  /** Move a backend-revalidated skill recovery to OS Trash by opaque token. */
+  trashSkillRecovery: (token) => ipcRenderer.invoke("skills:trashRecovery", token),
   /** Open/reveal a backend-catalog-validated agent or prompt file. */
   openResourceFile: (request) => ipcRenderer.invoke("resources:openFile", request),
   revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),

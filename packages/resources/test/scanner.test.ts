@@ -119,6 +119,24 @@ describe("scanSkills", () => {
     expect(skills.some((s) => s.name === "project-skill")).toBe(false);
   });
 
+  it("excludes retained private deletion quarantines", () => {
+    const home = makeHome();
+    const quarantine = path.join(
+      home,
+      ".pi",
+      "agent",
+      "skills",
+      ".agent-deck-resource-recovery-v1-11-quarantined-0123456789abcdef0123456789abcdef",
+    );
+    mkdirSync(quarantine, { recursive: true });
+    writeFileSync(
+      path.join(quarantine, "SKILL.md"),
+      "---\nname: quarantined\ndescription: Private recovery evidence\n---\n\nBody.\n",
+    );
+
+    expect(scanSkills({ home }).some((skill) => skill.name === "quarantined")).toBe(false);
+  });
+
   it("discovers in-place collection roots with standard same-name precedence", () => {
     const home = makeHome();
     const standard = path.join(home, ".pi", "agent", "skills", "shared");

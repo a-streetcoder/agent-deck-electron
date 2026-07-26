@@ -6,6 +6,7 @@
 // serve the renderer same-origin.
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import http from "node:http";
@@ -27,6 +28,9 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
 const repoRoot = path.resolve(__dirname, "..", "..");
+const desktopRecoveryToken = randomUUID();
+const skillRecoveryTokenPattern =
+  /^\.agent-deck-resource-recovery-v1-[1-9][0-9]{0,2}-[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$/;
 
 // Present as "Agent Deck" everywhere the OS shows the app name (menu bar,
 // About panel) instead of the package/Electron default.
@@ -111,7 +115,11 @@ function ownedServerLaunch() {
       command: pnpmCommand(),
       args: ["--filter", "@agent-deck/server", "dev"],
       cwd: repoRoot,
-      env: { ...process.env, PORT: "0" },
+      env: {
+        ...process.env,
+        PORT: "0",
+        AGENT_DECK_DESKTOP_RECOVERY_TOKEN: desktopRecoveryToken,
+      },
       shell: process.platform === "win32",
     };
   }
@@ -125,6 +133,7 @@ function ownedServerLaunch() {
       ELECTRON_RUN_AS_NODE: "1",
       PORT: "0",
       AGENT_DECK_DATA_DIR: app.getPath("userData"),
+      AGENT_DECK_DESKTOP_RECOVERY_TOKEN: desktopRecoveryToken,
       AGENT_DECK_PI_PATH: bundledPiLauncher(),
       AGENT_DECK_WEB_DIST: path.join(app.getAppPath(), "apps", "web", "dist"),
       AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(process.resourcesPath, "builtin-agents"),
@@ -628,6 +637,45 @@ ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
   }
   shell.showItemInFolder(body.directory);
   return true;
+});
+
+ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
+  const token = typeof rawToken === "string" ? rawToken : "";
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    !serverPort ||
+    token.length < 1 ||
+    token.length > 512 ||
+    !skillRecoveryTokenPattern.test(token)
+  ) {
+    throw new Error("Skill recovery is unavailable");
+  }
+  const headers = { "x-agent-deck-desktop-recovery-token": desktopRecoveryToken };
+  const lookup = await fetch(
+    `http://127.0.0.1:${serverPort}/resources/skill-recoveries/${encodeURIComponent(token)}/trash-path`,
+    { headers },
+  );
+  if (!lookup.ok) throw new Error("Skill recovery could not be revalidated");
+  const body = await lookup.json();
+  if (!body || typeof body.path !== "string" || !path.isAbsolute(body.path)) {
+    throw new Error("The backend returned an invalid skill recovery");
+  }
+  await shell.trashItem(body.path);
+  let acknowledgementPending = false;
+  try {
+    const acknowledged = await fetch(
+      `http://127.0.0.1:${serverPort}/resources/skill-recoveries/${encodeURIComponent(token)}/acknowledge`,
+      { method: "POST", headers },
+    );
+    acknowledgementPending = !acknowledged.ok;
+  } catch {
+    // Trash success is authoritative. The backend list already omits the absent
+    // wrapper and acknowledgement is intentionally idempotent/best-effort.
+    acknowledgementPending = true;
+  }
+  return { moved: true, acknowledgementPending };
 });
 
 ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {

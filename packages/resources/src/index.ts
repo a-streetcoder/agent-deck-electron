@@ -65,6 +65,9 @@ export {
   renameSkillDir,
   importSkillFile,
   importSkillsFromClone,
+  replaceSkillTreeFromEntries,
+  materializeSkillTreeEntries,
+  durableMaterializeSkillTreeEntries,
   discoverImportSkillRoots,
   discoverSkillRoots,
   catalogSkillTreeFingerprint,
@@ -76,11 +79,22 @@ export {
   type WritableScope,
 } from "./writer.ts";
 export {
+  acknowledgeResourceRecovery,
+  listResourceRecoveries,
+  resourceRecoveryPath,
+  restoreResourceRecovery,
+  rollbackResourceRecovery,
+  type ResourceRecovery,
+} from "@agent-deck/loop-catalog-native";
+export {
   isSkillTreeFingerprint,
   MISSING_SKILL_TREE_FINGERPRINT,
   SKILL_TREE_FINGERPRINT_PREFIX,
   skillTreeFingerprint,
+  skillTreeSnapshot,
   SkillTreeFingerprintError,
+  type SkillTreeEntry,
+  type SkillTreeSnapshot,
 } from "./skillTreeFingerprint.ts";
 export { scanEnv, writeEnvVar, type EnvEntry, type EnvScope } from "./env.ts";
 export { resolveSkillSource, type RemoteSkillSource } from "./skillSource.ts";
