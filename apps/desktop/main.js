@@ -7,6 +7,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { lstat, realpath, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
@@ -420,6 +421,40 @@ function buildAppMenu() {
     // semantic question navigation (no fixed accelerators; bindings stay user-owned).
     { id: "menu-view", label: "View", submenu: viewSubmenu },
     {
+      id: "menu-resources",
+      label: "Resources",
+      submenu: [
+        {
+          label: "Agents",
+          submenu: [
+            { label: "New Agent", click: () => sendMenu("agent.new") },
+            { label: "Open Selected Agent File", click: () => sendMenu("agent.openFile") },
+            { label: "Reveal Selected Agent", click: () => sendMenu("agent.reveal") },
+            {
+              label: "Enable/Disable Selected Agent",
+              click: () => sendMenu("agent.toggleDisabled"),
+            },
+          ],
+        },
+        {
+          label: "Skills",
+          submenu: [{ label: "Import Skills", click: () => sendMenu("skills.import") }],
+        },
+        {
+          label: "Prompts",
+          submenu: [
+            { label: "New Prompt", click: () => sendMenu("prompt.new") },
+            {
+              label: "Copy Selected Prompt Invocation",
+              click: () => sendMenu("prompt.copyInvocation"),
+            },
+            { label: "Open Selected Prompt File", click: () => sendMenu("prompt.openFile") },
+            { label: "Reveal Selected Prompt", click: () => sendMenu("prompt.reveal") },
+          ],
+        },
+      ],
+    },
+    {
       id: "menu-git",
       label: "Git",
       submenu: [
@@ -453,6 +488,99 @@ function buildAppMenu() {
   ];
   return Menu.buildFromTemplate(template);
 }
+
+/**
+ * Resolve a renderer resource identity against the backend's current catalog.
+ * No path supplied by the renderer reaches shell APIs unless the exact path is
+ * present in the requested project-scoped agent/prompt catalog.
+ */
+async function validatedResourceFile(event, request) {
+  const expectedRendererOrigin = serverPort
+    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
+    : null;
+  let senderOrigin = null;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
+  } catch {
+    // Rejected by the shared guard below.
+  }
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    senderOrigin !== expectedRendererOrigin ||
+    !serverPort ||
+    !request ||
+    typeof request !== "object"
+  ) {
+    throw new Error("Resource file is unavailable");
+  }
+  const requestKeys = Object.keys(request);
+  const { kind, projectId, filePath } = request;
+  if (
+    requestKeys.length !== 3 ||
+    !requestKeys.every((key) => key === "kind" || key === "projectId" || key === "filePath") ||
+    (kind !== "agent" && kind !== "prompt") ||
+    (projectId !== null &&
+      (typeof projectId !== "string" || projectId.length === 0 || projectId.length > 256)) ||
+    typeof filePath !== "string" ||
+    filePath.length === 0 ||
+    filePath.length > 4096 ||
+    filePath.includes("\0") ||
+    !path.isAbsolute(filePath)
+  ) {
+    throw new Error("Resource file is unavailable");
+  }
+
+  if (projectId !== null) {
+    const projectsResponse = await fetch(`http://127.0.0.1:${serverPort}/projects`);
+    const projectsBody = await projectsResponse.json().catch(() => null);
+    if (
+      !projectsResponse.ok ||
+      !Array.isArray(projectsBody?.projects) ||
+      !projectsBody.projects.some((project) => project?.id === projectId)
+    ) {
+      throw new Error("Resource file is unavailable");
+    }
+  }
+
+  const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
+  const response = await fetch(
+    `http://127.0.0.1:${serverPort}/resources/${kind === "agent" ? "agents" : "prompts"}${query}`,
+  );
+  if (!response.ok) throw new Error("Resource file is unavailable");
+  const body = await response.json().catch(() => null);
+  const entries = body?.[kind === "agent" ? "agents" : "prompts"];
+  if (!Array.isArray(entries) || !entries.some((entry) => entry?.filePath === filePath)) {
+    throw new Error("Resource file is unavailable");
+  }
+
+  try {
+    // Check the exact catalog path before resolving it. A catalog scanner may
+    // have followed a symlink while reading metadata; shell APIs must never do so.
+    const requestedInfo = await lstat(filePath);
+    if (requestedInfo.isSymbolicLink() || !requestedInfo.isFile()) throw new Error("not a file");
+    const resolved = await realpath(filePath);
+    const info = await stat(resolved);
+    if (!info.isFile()) throw new Error("not a file");
+    return resolved;
+  } catch {
+    throw new Error("Resource file is unavailable");
+  }
+}
+
+ipcMain.handle("resources:openFile", async (event, request) => {
+  const file = await validatedResourceFile(event, request);
+  const error = await shell.openPath(file);
+  if (error) throw new Error("Resource file could not be opened");
+  return true;
+});
+
+ipcMain.handle("resources:revealFile", async (event, request) => {
+  const file = await validatedResourceFile(event, request);
+  shell.showItemInFolder(file);
+  return true;
+});
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
 ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
@@ -526,7 +654,7 @@ ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
 /** Open a renderer titlebar button's native menu directly below the top bar. */
 ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
   const name = String(menuName ?? "").toLowerCase();
-  if (!new Set(["file", "edit", "view", "git", "help"]).has(name)) {
+  if (!new Set(["file", "edit", "view", "resources", "git", "help"]).has(name)) {
     throw new Error("Unknown application menu");
   }
   const item = Menu.getApplicationMenu()?.getMenuItemById(`menu-${name}`);

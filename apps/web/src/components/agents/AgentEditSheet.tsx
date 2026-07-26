@@ -56,6 +56,7 @@ export function AgentEditSheet({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Snapshot of the managed fields at open time — used both for dirty
   // detection (backdrop/Escape only dismiss when clean) and for the
@@ -96,7 +97,10 @@ export function AgentEditSheet({
       [...dialog.querySelectorAll<HTMLElement>("button, input, select, textarea")].filter(
         (el) => !el.hasAttribute("disabled"),
       );
-    focusables()[1]?.focus(); // first field after the close button
+    // New agents need a name before they can be saved. The tab strip appears
+    // before the form fields in DOM order, so selecting the second generic
+    // focusable would incorrectly land on Config instead.
+    (nameInputRef.current ?? focusables()[1])?.focus();
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape" && !dirtyRef.current) {
         event.stopPropagation();
@@ -258,6 +262,7 @@ export function AgentEditSheet({
                   <label className="text-xs text-text-muted">
                     Name
                     <ControlInput
+                      ref={nameInputRef}
                       data-testid="editor-name"
                       className={inputClass}
                       value={name}

@@ -11,7 +11,13 @@ export interface AttentionPayload {
   sessionId?: string;
 }
 
-export type AppMenuName = "file" | "edit" | "view" | "git" | "help";
+export type AppMenuName = "file" | "edit" | "view" | "resources" | "git" | "help";
+export type NativeResourceKind = "agent" | "prompt";
+export interface NativeResourceFileRequest {
+  kind: NativeResourceKind;
+  projectId: string | null;
+  filePath: string;
+}
 export type NativeMenuAction =
   | "new-chat"
   | "add-project"
@@ -21,7 +27,16 @@ export type NativeMenuAction =
   | "git.commit"
   | "git.push"
   | "git.mergeWorktree"
-  | "git.release";
+  | "git.release"
+  | "agent.new"
+  | "agent.openFile"
+  | "agent.reveal"
+  | "agent.toggleDisabled"
+  | "skills.import"
+  | "prompt.new"
+  | "prompt.copyInvocation"
+  | "prompt.openFile"
+  | "prompt.reveal";
 
 export interface AgentDeckBridge {
   isElectron?: boolean;
@@ -34,6 +49,8 @@ export interface AgentDeckBridge {
   }): Promise<string[]>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
+  openResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
+  revealResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
   openAppMenu?(name: AppMenuName, anchor: { x: number; y: number }): Promise<boolean>;
   /** Subscribe to native-menu commands; returns an unsubscribe function. */
@@ -76,6 +93,24 @@ export async function revealLoopWorktree(runId: string): Promise<boolean> {
   const bridge = nativeBridge();
   if (!bridge?.revealLoopWorktree) return false;
   return (await bridge.revealLoopWorktree(runId)) === true;
+}
+
+/** Open a catalog-validated agent or prompt file in its default editor. */
+export async function openResourceFile(request: NativeResourceFileRequest): Promise<boolean> {
+  try {
+    return (await nativeBridge()?.openResourceFile?.(request)) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Reveal a catalog-validated agent or prompt file in the OS file manager. */
+export async function revealResourceFile(request: NativeResourceFileRequest): Promise<boolean> {
+  try {
+    return (await nativeBridge()?.revealResourceFile?.(request)) === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Open an http(s) URL in the user's default browser through Electron. */

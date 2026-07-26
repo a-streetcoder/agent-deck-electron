@@ -84,6 +84,29 @@ function requestQuestionNavigation(direction: "previous" | "next"): void {
   store.requestQuestionNavigation(direction, sessionId);
 }
 
+function requestResourceAction(
+  action:
+    | "agent.new"
+    | "agent.openFile"
+    | "agent.reveal"
+    | "agent.toggleDisabled"
+    | "skills.import"
+    | "prompt.new"
+    | "prompt.copyInvocation"
+    | "prompt.openFile"
+    | "prompt.reveal",
+  view: "agents" | "skills" | "prompts",
+): void {
+  const store = useAppStore.getState();
+  const filePath = action.startsWith("agent.")
+    ? store.selectedAgentFilePath
+    : action.startsWith("prompt.")
+      ? store.selectedPromptFilePath
+      : null;
+  store.requestResourceCommand({ action, projectId: store.currentProjectId, filePath });
+  store.setView(view);
+}
+
 function requestGitAction(action: GitAction): void {
   const store = useAppStore.getState();
   store.requestGitAction({
@@ -247,6 +270,69 @@ const ACTION_COMMANDS: readonly CommandDefinition[] = [
     group: "actions",
     keywords: ["git", "release", "tag", "version"],
     run: () => requestGitAction("release"),
+  },
+  {
+    command: "agent.new",
+    label: "New Agent",
+    group: "actions",
+    keywords: ["resources", "agents", "create"],
+    run: () => requestResourceAction("agent.new", "agents"),
+  },
+  {
+    command: "agent.openFile",
+    label: "Open Selected Agent File",
+    group: "actions",
+    keywords: ["resources", "agents", "editor", "file"],
+    run: () => requestResourceAction("agent.openFile", "agents"),
+  },
+  {
+    command: "agent.reveal",
+    label: "Reveal Selected Agent",
+    group: "actions",
+    keywords: ["resources", "agents", "finder", "explorer"],
+    run: () => requestResourceAction("agent.reveal", "agents"),
+  },
+  {
+    command: "agent.toggleDisabled",
+    label: "Enable/Disable Selected Agent",
+    group: "actions",
+    keywords: ["resources", "agents", "toggle", "power"],
+    run: () => requestResourceAction("agent.toggleDisabled", "agents"),
+  },
+  {
+    command: "skills.import",
+    label: "Import Skills",
+    group: "actions",
+    keywords: ["resources", "skills", "git", "local"],
+    run: () => requestResourceAction("skills.import", "skills"),
+  },
+  {
+    command: "prompt.new",
+    label: "New Prompt",
+    group: "actions",
+    keywords: ["resources", "prompts", "create"],
+    run: () => requestResourceAction("prompt.new", "prompts"),
+  },
+  {
+    command: "prompt.copyInvocation",
+    label: "Copy Selected Prompt Invocation",
+    group: "actions",
+    keywords: ["resources", "prompts", "clipboard", "slash command"],
+    run: () => requestResourceAction("prompt.copyInvocation", "prompts"),
+  },
+  {
+    command: "prompt.openFile",
+    label: "Open Selected Prompt File",
+    group: "actions",
+    keywords: ["resources", "prompts", "editor", "file"],
+    run: () => requestResourceAction("prompt.openFile", "prompts"),
+  },
+  {
+    command: "prompt.reveal",
+    label: "Reveal Selected Prompt",
+    group: "actions",
+    keywords: ["resources", "prompts", "finder", "explorer"],
+    run: () => requestResourceAction("prompt.reveal", "prompts"),
   },
   {
     command: "keybindings.open",

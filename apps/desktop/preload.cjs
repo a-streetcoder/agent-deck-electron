@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("agentDeck", {
   revealLoopArtifacts: (runId) => ipcRenderer.invoke("loops:revealArtifacts", runId),
   /** Reveal a backend-validated retained Loop worktree by opaque run id. */
   revealLoopWorktree: (runId) => ipcRenderer.invoke("loops:revealWorktree", runId),
+  /** Open/reveal a backend-catalog-validated agent or prompt file. */
+  openResourceFile: (request) => ipcRenderer.invoke("resources:openFile", request),
+  revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /**
@@ -53,6 +56,15 @@ contextBridge.exposeInMainWorld("agentDeck", {
       "git.push",
       "git.mergeWorktree",
       "git.release",
+      "agent.new",
+      "agent.openFile",
+      "agent.reveal",
+      "agent.toggleDisabled",
+      "skills.import",
+      "prompt.new",
+      "prompt.copyInvocation",
+      "prompt.openFile",
+      "prompt.reveal",
     ]);
     const listener = (_event, action) => {
       if (typeof action === "string" && allowed.has(action)) handler(action);

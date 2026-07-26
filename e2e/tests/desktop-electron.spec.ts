@@ -1,6 +1,13 @@
 import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +36,8 @@ let electronPid: number | undefined;
 // A throwaway directory to "pick" as a project, and an isolated persistence dir.
 const projectDir = mkdtempSync(path.join(tmpdir(), "electron-e2e-project-"));
 const projectName = path.basename(projectDir);
+let validPromptPath: string;
+let symlinkPromptPath: string;
 
 test.beforeAll(async () => {
   if (!existsSync(path.join(WEB_DIST, "index.html"))) {
@@ -44,6 +53,14 @@ test.beforeAll(async () => {
     path.join(agentsDir, "Desktop Loop Agent.md"),
     "---\nname: Desktop Loop Agent\ntools: read, bash, edit\n---\nCreate review evidence.\n",
   );
+  const promptsDir = path.join(resourceHome, ".pi", "agent", "prompts");
+  mkdirSync(promptsDir, { recursive: true });
+  validPromptPath = path.join(promptsDir, "desktop-valid-prompt.md");
+  writeFileSync(validPromptPath, "---\ndescription: Desktop valid prompt\n---\nReview this.\n");
+  const symlinkTarget = path.join(resourceHome, "prompt-symlink-target.md");
+  writeFileSync(symlinkTarget, "---\ndescription: Symlink prompt\n---\nDo not open.\n");
+  symlinkPromptPath = path.join(promptsDir, "desktop-symlink-prompt.md");
+  symlinkSync(symlinkTarget, symlinkPromptPath, "file");
   execSync("git init -b main", { cwd: projectDir });
   execSync("git config user.email desktop-e2e@example.com", { cwd: projectDir });
   execSync('git config user.name "Desktop E2E"', { cwd: projectDir });
@@ -60,6 +77,14 @@ test.beforeAll(async () => {
       HOME: resourceHome,
       USERPROFILE: resourceHome,
       PI_SKIP_VERSION_CHECK: "1",
+      // Other specs set this process-level override for their own harnesses.
+      // Pin the Electron-owned backend to this app's fixture HOME as well so
+      // resource discovery cannot inherit another spec's now-stale catalog.
+      AGENT_DECK_PI_ENV: JSON.stringify({
+        HOME: resourceHome,
+        USERPROFILE: resourceHome,
+        PI_SKIP_VERSION_CHECK: "1",
+      }),
       AGENT_DECK_DATA_DIR: dataDir,
     },
   });
@@ -138,6 +163,7 @@ test("the desktop shell boots the server and mounts the UI", async () => {
     await expect(window.getByTestId("desktop-menu-file")).toHaveText("File");
     await expect(window.getByTestId("desktop-menu-edit")).toHaveText("Edit");
     await expect(window.getByTestId("desktop-menu-view")).toHaveText("View");
+    await expect(window.getByTestId("desktop-menu-resources")).toHaveText("Resources");
     await expect(window.getByTestId("desktop-menu-git")).toHaveText("Git");
     await expect(window.getByTestId("desktop-menu-help")).toHaveText("Help");
 
@@ -154,10 +180,13 @@ test("the desktop shell boots the server and mounts the UI", async () => {
           backgroundColor: string;
           width: string;
           marginLeft: string;
+          minWidth: string;
+          overflowX: string;
         };
         agentDeck?: { openAppMenu?: unknown };
       };
       const titlebar = browser.document.querySelector('[data-testid="desktop-titlebar"]');
+      const menu = browser.document.querySelector(".desktop-titlebar-menu");
       const workspaceRow = browser.document.querySelector('[data-testid="workspace-row"]');
       const workspace = browser.document.querySelector('[data-testid="workspace-shell"]');
       const sidebar = browser.document.querySelector('[data-testid="sidebar"]');
@@ -180,6 +209,8 @@ test("the desktop shell boots the server and mounts the UI", async () => {
           ? browser.getComputedStyle(transcript, "::-webkit-scrollbar").width
           : "",
         menuBridge: typeof browser.agentDeck?.openAppMenu === "function",
+        menuMinWidth: menu ? browser.getComputedStyle(menu).minWidth : "",
+        menuOverflowX: menu ? browser.getComputedStyle(menu).overflowX : "",
       };
     });
     expect(chrome).toEqual({
@@ -190,6 +221,8 @@ test("the desktop shell boots the server and mounts the UI", async () => {
       cornerBackgroundMatchesSidebar: true,
       scrollbarWidth: "8px",
       menuBridge: true,
+      menuMinWidth: "0px",
+      menuOverflowX: "auto",
     });
 
     // Native menus open at the clicked item's left edge and the titlebar's
@@ -239,6 +272,107 @@ test("the desktop shell boots the server and mounts the UI", async () => {
     return res.ok;
   });
   expect(health).toBe(true);
+});
+
+test("resource file bridges validate agent/prompt catalogs and reject unsafe identities", async () => {
+  const window = await app.firstWindow();
+  const catalog = await window.evaluate(async () => {
+    const [agentsResponse, promptsResponse] = await Promise.all([
+      fetch("/resources/agents"),
+      fetch("/resources/prompts"),
+    ]);
+    return {
+      agents: (
+        (await agentsResponse.json()) as { agents: Array<{ name: string; filePath: string }> }
+      ).agents,
+      prompts: (
+        (await promptsResponse.json()) as {
+          prompts: Array<{ name: string; filePath: string }>;
+        }
+      ).prompts,
+    };
+  });
+  const agentPath = catalog.agents.find((agent) => agent.name === "Desktop Loop Agent")?.filePath;
+  const promptPath = catalog.prompts.find(
+    (prompt) => prompt.name === "desktop-valid-prompt",
+  )?.filePath;
+  const catalogedSymlinkPath = catalog.prompts.find(
+    (prompt) => prompt.name === "desktop-symlink-prompt",
+  )?.filePath;
+  expect(agentPath).toBeTruthy();
+  expect(promptPath).toBe(validPromptPath);
+  expect(catalogedSymlinkPath).toBe(symlinkPromptPath);
+
+  await app.evaluate(({ shell }) => {
+    const state = globalThis as typeof globalThis & {
+      openedResourceFiles?: string[];
+      revealedResourceFiles?: string[];
+    };
+    state.openedResourceFiles = [];
+    state.revealedResourceFiles = [];
+    shell.openPath = async (filePath) => {
+      state.openedResourceFiles?.push(filePath);
+      return "";
+    };
+    shell.showItemInFolder = (filePath) => {
+      state.revealedResourceFiles?.push(filePath);
+    };
+  });
+
+  const result = await window.evaluate(
+    async ({ agentPath, promptPath, symlinkPath, directoryPath }) => {
+      const bridge = (
+        globalThis as typeof globalThis & {
+          agentDeck?: {
+            openResourceFile?(request: unknown): Promise<boolean>;
+            revealResourceFile?(request: unknown): Promise<boolean>;
+          };
+        }
+      ).agentDeck;
+      if (!bridge?.openResourceFile || !bridge.revealResourceFile || !agentPath || !promptPath) {
+        return null;
+      }
+      const valid: boolean[] = [];
+      for (const request of [
+        { kind: "agent", projectId: null, filePath: agentPath },
+        { kind: "prompt", projectId: null, filePath: promptPath },
+      ]) {
+        valid.push(await bridge.openResourceFile(request));
+        valid.push(await bridge.revealResourceFile(request));
+      }
+      const rejected: boolean[] = [];
+      for (const request of [
+        { kind: "prompt", projectId: null, filePath: symlinkPath },
+        { kind: "prompt", projectId: null, filePath: `${promptPath}.not-in-catalog` },
+        { kind: "prompt", projectId: null, filePath: directoryPath },
+        { kind: "prompt", projectId: "not-a-real-project", filePath: promptPath },
+        { kind: "prompt", projectId: null },
+        { kind: "unknown", projectId: null, filePath: promptPath },
+      ]) {
+        try {
+          await bridge.openResourceFile(request);
+          rejected.push(false);
+        } catch {
+          rejected.push(true);
+        }
+      }
+      return { valid, rejected };
+    },
+    { agentPath, promptPath, symlinkPath: catalogedSymlinkPath, directoryPath: projectDir },
+  );
+  expect(result).toEqual({ valid: [true, true, true, true], rejected: Array(6).fill(true) });
+  const openedAndRevealed = await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      openedResourceFiles?: string[];
+      revealedResourceFiles?: string[];
+    };
+    return { opened: state.openedResourceFiles, revealed: state.revealedResourceFiles };
+  });
+  const resolvedValidPaths = [agentPath, promptPath].map((filePath) => realpathSync(filePath!));
+  expect(openedAndRevealed).toEqual({
+    opened: resolvedValidPaths,
+    revealed: resolvedValidPaths,
+  });
 });
 
 test("Loop reveal bridges accept only backend-owned opaque run ids", async () => {
@@ -484,6 +618,52 @@ test("the View menu exposes question navigation without replacing built-in contr
   await expect(window.getByTestId("transcript").getByRole("status")).toHaveText(
     "No previous question.",
   );
+});
+
+test("the native Resources menu groups all resource commands without accelerators", async () => {
+  const items = await app.evaluate(({ Menu }) => {
+    const resources = Menu.getApplicationMenu()?.items.find((item) => item.label === "Resources");
+    return (
+      resources?.submenu?.items.map((group) => ({
+        label: group.label,
+        items:
+          group.submenu?.items.map((item) => ({
+            label: item.label,
+            accelerator: item.accelerator ?? null,
+          })) ?? [],
+      })) ?? []
+    );
+  });
+  expect(items).toEqual([
+    {
+      label: "Agents",
+      items: [
+        { label: "New Agent", accelerator: null },
+        { label: "Open Selected Agent File", accelerator: null },
+        { label: "Reveal Selected Agent", accelerator: null },
+        { label: "Enable/Disable Selected Agent", accelerator: null },
+      ],
+    },
+    { label: "Skills", items: [{ label: "Import Skills", accelerator: null }] },
+    {
+      label: "Prompts",
+      items: [
+        { label: "New Prompt", accelerator: null },
+        { label: "Copy Selected Prompt Invocation", accelerator: null },
+        { label: "Open Selected Prompt File", accelerator: null },
+        { label: "Reveal Selected Prompt", accelerator: null },
+      ],
+    },
+  ]);
+
+  await app.evaluate(({ Menu }) => {
+    const resources = Menu.getApplicationMenu()?.items.find((item) => item.label === "Resources");
+    const agents = resources?.submenu?.items.find((item) => item.label === "Agents");
+    agents?.submenu?.items.find((item) => item.label === "New Agent")?.click();
+  });
+  const window = await app.firstWindow();
+  await expect(window.getByTestId("agent-editor")).toBeVisible();
+  await window.getByTestId("agent-editor").getByRole("button", { name: "Close" }).click();
 });
 
 test("the native Git menu routes commands without bypassing disabled actions", async () => {

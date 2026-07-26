@@ -37,6 +37,16 @@ export const KEYBINDING_COMMANDS = [
   "git.push",
   "git.mergeWorktree",
   "git.release",
+  // Resource workflows — palette-only until the user assigns a chord.
+  "agent.new",
+  "agent.openFile",
+  "agent.reveal",
+  "agent.toggleDisabled",
+  "skills.import",
+  "prompt.new",
+  "prompt.copyInvocation",
+  "prompt.openFile",
+  "prompt.reveal",
   // Navigation — one per AppView reachable from the sidebar / chat surface.
   "view.chat",
   "view.projects",

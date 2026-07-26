@@ -393,6 +393,7 @@ export function SkillsScreen() {
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const projects = useAppStore((state) => state.projects);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const resourceRequest = useAppStore((state) => state.resourceCommandRequest);
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // After a rename the skill's filePath changes (its directory moves), so a
@@ -435,6 +436,7 @@ export function SkillsScreen() {
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+    setSkills([]);
     let cancelled = false;
     void (async () => {
       try {
@@ -457,6 +459,13 @@ export function SkillsScreen() {
       cancelled = true;
     };
   }, [currentProjectId, resourcesVersion, setGlobalError]);
+
+  useEffect(() => {
+    if (resourceRequest?.action !== "skills.import") return;
+    const store = useAppStore.getState();
+    store.clearResourceCommandRequest(resourceRequest.token);
+    if (currentProjectId === resourceRequest.projectId) setImportPath("");
+  }, [currentProjectId, resourceRequest]);
 
   const assignedNames = useMemo(() => {
     const names = new Set<string>();

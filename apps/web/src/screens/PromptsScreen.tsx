@@ -8,6 +8,7 @@ import { Check, Globe, MessageSquareText, Pencil, Plus, Trash2, X } from "lucide
 import type { PromptInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
+import { openResourceFile, revealResourceFile } from "../lib/native.ts";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
 
@@ -17,6 +18,32 @@ import { updateProject } from "../state/wsBridge.ts";
  * pi matches the file's basename). Single markdown files with a name +
  * description + optional argument-hint; project scope wins over global.
  */
+
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the transient textarea path for insecure/denied contexts.
+  }
+  let textarea: HTMLTextAreaElement | null = null;
+  try {
+    textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea?.remove();
+  }
+}
 
 interface Draft {
   name: string;
@@ -36,6 +63,12 @@ export function PromptsScreen() {
   const setError = useAppStore((state) => state.setError);
   const projects = useAppStore((state) => state.projects);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
+  const [promptsLoaded, setPromptsLoaded] = useState(false);
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
+  const resourceRequest = useAppStore((state) => state.resourceCommandRequest);
+  const selectedPromptFilePath = useAppStore((state) => state.selectedPromptFilePath);
+  const loadSeq = useRef(0);
+  const promptNameInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   // "All Projects" default prompt templates (native defaultPromptTemplateNames):
   // enabled ones are injected into every project's parent sessions as
@@ -49,14 +82,22 @@ export function PromptsScreen() {
   } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
-    const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+    const projectId = currentProjectId;
+    const seq = ++loadSeq.current;
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    setPrompts([]);
+    setPromptsLoaded(false);
+    setLoadedProjectId(projectId);
     try {
       const response = await fetch(`/resources/prompts${query}`);
       if (!response.ok) throw new Error(await responseErrorMessage(response));
       const data = (await response.json()) as { prompts: PromptInfo[] };
-      setPrompts(data.prompts);
+      if (seq === loadSeq.current) {
+        setPrompts(data.prompts);
+        setPromptsLoaded(true);
+      }
     } catch (err) {
-      setError(String(err));
+      if (seq === loadSeq.current) setError(String(err));
     }
   }, [currentProjectId, setError]);
 
@@ -130,7 +171,13 @@ export function PromptsScreen() {
       projectId: currentProjectId,
     });
 
-  const startEdit = (prompt: PromptInfo): void =>
+  const newDraftOpen = draft !== null && draft.original === undefined;
+  useEffect(() => {
+    if (newDraftOpen) promptNameInputRef.current?.focus();
+  }, [newDraftOpen]);
+
+  const startEdit = (prompt: PromptInfo): void => {
+    useAppStore.getState().setSelectedPromptFilePath(prompt.filePath);
     setDraft({
       name: prompt.name,
       description: prompt.description ?? "",
@@ -140,6 +187,58 @@ export function PromptsScreen() {
       original: prompt.name,
       filePath: prompt.filePath,
     });
+  };
+
+  useEffect(() => {
+    if (!resourceRequest?.action.startsWith("prompt.")) return;
+    if (currentProjectId !== resourceRequest.projectId) {
+      useAppStore.getState().clearResourceCommandRequest(resourceRequest.token);
+      return;
+    }
+    const store = useAppStore.getState();
+    if (resourceRequest.action === "prompt.new") {
+      store.clearResourceCommandRequest(resourceRequest.token);
+      startNew();
+      return;
+    }
+    if (!promptsLoaded || loadedProjectId !== resourceRequest.projectId) return;
+    store.clearResourceCommandRequest(resourceRequest.token);
+    const target = resourceRequest.filePath
+      ? prompts.find((prompt) => prompt.filePath === resourceRequest.filePath)
+      : undefined;
+    if (!target) {
+      store.pushToast({ kind: "info", message: "Select a prompt first." });
+      return;
+    }
+    if (resourceRequest.action === "prompt.copyInvocation") {
+      void copyText(target.invocation).then((copied) => {
+        useAppStore.getState().pushToast({
+          kind: copied ? "success" : "error",
+          message: copied
+            ? `Copied ${target.invocation} to the clipboard.`
+            : "Couldn't copy the prompt invocation.",
+        });
+      });
+      return;
+    }
+    const request = {
+      kind: "prompt" as const,
+      projectId: resourceRequest.projectId,
+      filePath: target.filePath,
+    };
+    void (
+      resourceRequest.action === "prompt.openFile"
+        ? openResourceFile(request)
+        : revealResourceFile(request)
+    ).then((available) => {
+      if (!available) {
+        useAppStore.getState().pushToast({
+          kind: "info",
+          message: "Opening resource files is unavailable in this browser.",
+        });
+      }
+    });
+  }, [currentProjectId, loadedProjectId, prompts, promptsLoaded, resourceRequest]);
 
   const save = async (): Promise<void> => {
     if (!draft || !draft.name.trim()) return;
@@ -245,6 +344,7 @@ export function PromptsScreen() {
             data-testid="prompt-editor"
           >
             <ControlInput
+              ref={promptNameInputRef}
               data-testid="prompt-name"
               className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent disabled:opacity-50"
               placeholder="name (e.g. review)"
@@ -347,12 +447,37 @@ export function PromptsScreen() {
           </div>
         ) : null}
 
-        <div className="space-y-1.5" data-testid="prompt-list">
+        <div
+          className="space-y-1.5"
+          data-testid="prompt-list"
+          role="list"
+          aria-label="Prompt templates"
+        >
           {prompts.map((prompt) => (
             <div
-              key={`${prompt.scope}:${prompt.name}`}
+              key={prompt.filePath}
               data-prompt-name={prompt.name}
-              className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+              data-selected={selectedPromptFilePath === prompt.filePath}
+              className={cn(
+                "group flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-2.5",
+                selectedPromptFilePath === prompt.filePath
+                  ? "border-selection-stroke bg-selection"
+                  : "border-border-subtle",
+              )}
+              role="listitem"
+              aria-current={selectedPromptFilePath === prompt.filePath ? "true" : undefined}
+              aria-label={`${prompt.invocation}${
+                selectedPromptFilePath === prompt.filePath ? ", selected" : ""
+              }`}
+              tabIndex={0}
+              onClick={() => useAppStore.getState().setSelectedPromptFilePath(prompt.filePath)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  useAppStore.getState().setSelectedPromptFilePath(prompt.filePath);
+                }
+              }}
             >
               {renaming?.name === prompt.name && renaming.scope === prompt.scope ? (
                 <>

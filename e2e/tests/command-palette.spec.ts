@@ -34,6 +34,148 @@ test("opens on ⌘K, filters to a nav command, and runs it", async ({ page }) =>
   await expect(page.getByTestId("app-view-title")).toHaveText("Skills");
 });
 
+test("discovers all resource workflow commands without fixed shortcuts", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+
+  for (const label of [
+    "New Agent",
+    "Open Selected Agent File",
+    "Reveal Selected Agent",
+    "Enable/Disable Selected Agent",
+    "Import Skills",
+    "New Prompt",
+    "Copy Selected Prompt Invocation",
+    "Open Selected Prompt File",
+    "Reveal Selected Prompt",
+  ]) {
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.getByTestId("command-palette-input");
+    await input.fill(label);
+    const item = page.getByTestId("command-palette-item").first();
+    await expect(item).toContainText(label);
+    await expect(item).not.toContainText(/Ctrl|⌘/);
+    await page.keyboard.press("Escape");
+  }
+});
+
+test("resource creation and import commands open their existing screen-owned UI", async ({
+  page,
+}) => {
+  for (const [label, testId] of [
+    ["New Agent", "agent-editor"],
+    ["Import Skills", "skill-import-path"],
+    ["New Prompt", "prompt-editor"],
+  ] as const) {
+    await page.goto(harness.baseUrl);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByTestId("command-palette-input").fill(label);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId(testId)).toBeVisible();
+    if (label === "New Agent") await expect(page.getByTestId("editor-name")).toBeFocused();
+    if (label === "New Prompt") await expect(page.getByTestId("prompt-name")).toBeFocused();
+  }
+});
+
+test("a selected-resource command never infers the screen's fallback row", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByTestId("command-palette-input").fill("Enable/Disable Selected Agent");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("toast")).toContainText("Select an agent first.");
+});
+
+test("prompt rows support explicit keyboard selection without firing row actions", async ({
+  page,
+}) => {
+  await fetch(`${harness.baseUrl}/resources/prompts`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      scope: "global",
+      name: "keyboard-select-check",
+      edit: { description: "keyboard selection test", body: "Review this." },
+    }),
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-prompts").click();
+  const row = page.locator('[data-prompt-name="keyboard-select-check"]');
+  await expect(row).toBeVisible();
+
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await expect(row).toHaveAttribute("data-selected", "true");
+  await expect(page.getByTestId("prompt-editor")).toHaveCount(0);
+  await page.keyboard.press("Space");
+  await expect(row).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("prompt-editor")).toHaveCount(0);
+});
+
+test("copies the explicitly selected prompt invocation with clipboard feedback", async ({
+  page,
+}) => {
+  await fetch(`${harness.baseUrl}/resources/prompts`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      scope: "global",
+      name: "command-copy-check",
+      edit: { description: "copy command test", body: "Review this." },
+    }),
+  });
+  await page.addInitScript(() => {
+    const browser = globalThis as typeof globalThis & {
+      navigator: object;
+      commandCopiedText?: string;
+    };
+    Object.defineProperty(browser.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          browser.commandCopiedText = text;
+        },
+      },
+    });
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-prompts").click();
+  const row = page.locator('[data-prompt-name="command-copy-check"]');
+  await expect(row).toBeVisible();
+  await row.getByRole("button").first().click();
+  await page.getByTestId("prompt-editor").getByRole("button", { name: "Cancel" }).click();
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByTestId("command-palette-input").fill("Copy Selected Prompt Invocation");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("toast")).toContainText("Copied /command-copy-check");
+  expect(
+    await page.evaluate(
+      () => (globalThis as typeof globalThis & { commandCopiedText?: string }).commandCopiedText,
+    ),
+  ).toBe("/command-copy-check");
+});
+
+test("enable/disable command reuses the selected agent toggle workflow", async ({ page }) => {
+  await fetch(`${harness.baseUrl}/resources/agents`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      scope: "global",
+      name: "command-toggle-check",
+      edit: { description: "toggle command test", body: "Help." },
+    }),
+  });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-agents").click();
+  const row = page.locator('[data-agent-name="command-toggle-check"]');
+  await expect(row).toBeVisible();
+  await row.click();
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByTestId("command-palette-input").fill("Enable/Disable Selected Agent");
+  await page.keyboard.press("Enter");
+  await expect(row.getByTestId("disabled-badge")).toBeVisible();
+});
+
 test("discovers all Git workflow commands without fixed shortcuts", async ({ page }) => {
   await page.goto(harness.baseUrl);
 
@@ -103,5 +245,12 @@ test("rebinds a command live through the editor", async ({ page }) => {
   const data = (await response.json()) as {
     settings: { keybindings: Array<{ command: string; key: string }> };
   };
-  expect(data.settings.keybindings).toContainEqual({ command: "view.git", key: "mod+alt+g" });
+  const browserPlatform = await page.evaluate(
+    () =>
+      (globalThis as typeof globalThis & { navigator: { platform: string } }).navigator.platform,
+  );
+  expect(data.settings.keybindings).toContainEqual({
+    command: "view.git",
+    key: /mac/i.test(browserPlatform) ? "ctrl+alt+g" : "mod+alt+g",
+  });
 });

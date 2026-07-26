@@ -1,5 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Pencil, Power, PowerOff, Plus, Star, Tag, Trash2, X } from "lucide-react";
 import {
   agentMatchesFilter,
@@ -9,7 +9,8 @@ import {
 } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
-import { useAgents } from "../state/useAgents.ts";
+import { openResourceFile, revealResourceFile } from "../lib/native.ts";
+import { useAgentsCatalog } from "../state/useAgents.ts";
 import { useAppStore } from "../state/store.ts";
 import { deleteAgent, renameAgent, setAgentDisabled, updateProject } from "../state/wsBridge.ts";
 import { AgentAvatar, agentSourceColor } from "../components/agents/AgentAvatar.tsx";
@@ -382,10 +383,13 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
 }
 
 export function AgentsScreen() {
-  const agents = useAgents();
+  const { agents, loaded, projectId: loadedProjectId } = useAgentsCatalog();
+  const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const resourceRequest = useAppStore((state) => state.resourceCommandRequest);
+  const selectedAgentFilePath = useAppStore((state) => state.selectedAgentFilePath);
   const [filter, setFilter] = useState<AgentFilter>("all");
   const [search, setSearch] = useState("");
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(selectedAgentFilePath);
   const [editing, setEditing] = useState<AgentInfo | null | "new">(null);
 
   const visible = useMemo(() => {
@@ -399,11 +403,64 @@ export function AgentsScreen() {
     );
   }, [agents, filter, search]);
 
+  useEffect(() => {
+    setSelectedKey(selectedAgentFilePath);
+  }, [selectedAgentFilePath]);
+
   const selected =
     visible.find((a) => a.filePath === selectedKey) ??
     visible.find((a) => !a.shadowed) ??
     visible[0] ??
     null;
+
+  useEffect(() => {
+    if (!resourceRequest?.action.startsWith("agent.")) return;
+    if (currentProjectId !== resourceRequest.projectId) {
+      useAppStore.getState().clearResourceCommandRequest(resourceRequest.token);
+      return;
+    }
+    const store = useAppStore.getState();
+    if (resourceRequest.action === "agent.new") {
+      store.clearResourceCommandRequest(resourceRequest.token);
+      setEditing("new");
+      return;
+    }
+    if (!loaded || loadedProjectId !== resourceRequest.projectId) return;
+    store.clearResourceCommandRequest(resourceRequest.token);
+    const target = resourceRequest.filePath
+      ? agents.find((agent) => agent.filePath === resourceRequest.filePath)
+      : undefined;
+    if (!target) {
+      store.pushToast({ kind: "info", message: "Select an agent first." });
+      return;
+    }
+    if (resourceRequest.action === "agent.toggleDisabled") {
+      void setAgentDisabled(target.scope, target.name, !target.disabled);
+      return;
+    }
+    const request = {
+      kind: "agent" as const,
+      projectId: resourceRequest.projectId,
+      filePath: target.filePath,
+    };
+    void (
+      resourceRequest.action === "agent.openFile"
+        ? openResourceFile(request)
+        : revealResourceFile(request)
+    ).then((available) => {
+      if (!available) {
+        useAppStore.getState().pushToast({
+          kind: "info",
+          message: "Opening resource files is unavailable in this browser.",
+        });
+      }
+    });
+  }, [agents, currentProjectId, loaded, loadedProjectId, resourceRequest]);
+
+  const selectAgent = (filePath: string): void => {
+    setSelectedKey(filePath);
+    useAppStore.getState().setSelectedAgentFilePath(filePath);
+  };
 
   return (
     <div className="flex min-h-0 flex-1" data-testid="agents-screen">
@@ -474,10 +531,10 @@ export function AgentsScreen() {
                     <AgentRow
                       key={agent.filePath}
                       agent={agent}
-                      selected={selected?.filePath === agent.filePath}
-                      onSelect={() => setSelectedKey(agent.filePath)}
+                      selected={selectedKey === agent.filePath}
+                      onSelect={() => selectAgent(agent.filePath)}
                       onEdit={() => {
-                        setSelectedKey(agent.filePath);
+                        selectAgent(agent.filePath);
                         setEditing(agent);
                       }}
                     />

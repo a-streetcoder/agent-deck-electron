@@ -70,13 +70,18 @@ body {
 
 .desktop-titlebar-menu {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: 1px;
   margin-left: 3px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   -webkit-app-region: no-drag;
 }
 
 .desktop-titlebar-menu button {
+  flex: 0 0 auto;
   border: 0;
   border-radius: 5px;
   background: transparent;

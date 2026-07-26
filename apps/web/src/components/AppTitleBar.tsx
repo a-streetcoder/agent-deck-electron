@@ -3,7 +3,7 @@ import { hasIntegratedDesktopChrome, openAppMenu } from "@/lib/native";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { MouseEvent } from "react";
 
-const MENUS = ["file", "edit", "view", "git", "help"] as const;
+const MENUS = ["file", "edit", "view", "resources", "git", "help"] as const;
 
 function openAnchoredMenu(
   event: MouseEvent<HTMLButtonElement>,

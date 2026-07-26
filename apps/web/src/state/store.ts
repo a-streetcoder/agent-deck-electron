@@ -32,6 +32,26 @@ export interface GitActionRequest {
 
 export type QuestionNavigationDirection = "previous" | "next";
 
+export type ResourceCommandAction =
+  | "agent.new"
+  | "agent.openFile"
+  | "agent.reveal"
+  | "agent.toggleDisabled"
+  | "skills.import"
+  | "prompt.new"
+  | "prompt.copyInvocation"
+  | "prompt.openFile"
+  | "prompt.reveal";
+
+/** One-shot request consumed by the screen that owns the existing resource workflow. */
+export interface ResourceCommandRequest {
+  action: ResourceCommandAction;
+  projectId: string | null;
+  /** Exact catalog identity captured when the command ran; null means no explicit selection. */
+  filePath: string | null;
+  token: number;
+}
+
 /** One-shot request owned by the session that was active when the command ran. */
 export interface QuestionNavigationRequest {
   direction: QuestionNavigationDirection;
@@ -265,6 +285,11 @@ export interface AppState {
   commandPaletteOpen: boolean;
   /** Whether the keybindings editor sheet is open (from the palette). */
   keybindingsEditorOpen: boolean;
+  /** Explicit, path-based selections; never inferred from a screen's visual fallback row. */
+  selectedAgentFilePath: string | null;
+  selectedPromptFilePath: string | null;
+  /** One-shot request consumed only by the resource screen that owns the action. */
+  resourceCommandRequest: ResourceCommandRequest | null;
   /** One-shot, identity-bound Git workflow request consumed only by GitScreen. */
   gitActionRequest: GitActionRequest | null;
   /** One-shot, session-bound request consumed only by the matching Transcript. */
@@ -291,6 +316,11 @@ export interface AppState {
   setKeybindings(keybindings: KeybindingBinding[]): void;
   setCommandPaletteOpen(open: boolean): void;
   setKeybindingsEditorOpen(open: boolean): void;
+  setSelectedAgentFilePath(filePath: string | null): void;
+  setSelectedPromptFilePath(filePath: string | null): void;
+  requestResourceCommand(request: Omit<ResourceCommandRequest, "token">): void;
+  /** Token-scoped so an older screen effect cannot clear a newer command. */
+  clearResourceCommandRequest(token: number): void;
   requestGitAction(request: Omit<GitActionRequest, "token">): void;
   /** Token-scoped so an older consumer cannot clear a newer request. */
   clearGitActionRequest(token: number): void;
@@ -366,6 +396,7 @@ function initialPanelExpanded(): boolean {
 
 let nextGitActionToken = 0;
 let nextQuestionNavigationToken = 0;
+let nextResourceCommandToken = 0;
 
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
@@ -394,6 +425,9 @@ export const useAppStore = create<AppState>((set) => ({
   keybindings: [],
   commandPaletteOpen: false,
   keybindingsEditorOpen: false,
+  selectedAgentFilePath: null,
+  selectedPromptFilePath: null,
+  resourceCommandRequest: null,
   gitActionRequest: null,
   questionNavigationRequest: null,
   questionNavigationAnchorId: null,
@@ -421,7 +455,8 @@ export const useAppStore = create<AppState>((set) => ({
   },
   bumpResourcesVersion: () => set((state) => ({ resourcesVersion: state.resourcesVersion + 1 })),
   setProjects: (projects) => set({ projects, projectsLoaded: true }),
-  setCurrentProject: (currentProjectId) => set({ currentProjectId }),
+  setCurrentProject: (currentProjectId) =>
+    set({ currentProjectId, selectedAgentFilePath: null, selectedPromptFilePath: null }),
   setCurrentAgent: (currentAgentName) => set({ currentAgentName }),
   setSession: (session) =>
     set((state) =>
@@ -438,6 +473,14 @@ export const useAppStore = create<AppState>((set) => ({
   setKeybindings: (keybindings) => set({ keybindings }),
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   setKeybindingsEditorOpen: (keybindingsEditorOpen) => set({ keybindingsEditorOpen }),
+  setSelectedAgentFilePath: (selectedAgentFilePath) => set({ selectedAgentFilePath }),
+  setSelectedPromptFilePath: (selectedPromptFilePath) => set({ selectedPromptFilePath }),
+  requestResourceCommand: (request) =>
+    set({ resourceCommandRequest: { ...request, token: ++nextResourceCommandToken } }),
+  clearResourceCommandRequest: (token) =>
+    set((state) =>
+      state.resourceCommandRequest?.token === token ? { resourceCommandRequest: null } : {},
+    ),
   requestGitAction: (request) =>
     set({
       gitActionRequest: {
