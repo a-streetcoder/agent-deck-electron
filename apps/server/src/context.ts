@@ -21,6 +21,7 @@ import type {
   SettingsStore,
 } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
+import type { SessionImageStore } from "./sessionImages.ts";
 import type { ManagedSkillRepositories } from "./skillRepositories.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
@@ -95,6 +96,7 @@ export interface NamedAgentLaunch {
 export interface ServerContext {
   fastify: FastifyInstance;
   sessions: SessionManager;
+  sessionImages: SessionImageStore;
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;

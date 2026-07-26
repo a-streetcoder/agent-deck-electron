@@ -83,6 +83,8 @@ export interface TransportOptions {
   /** Fired once per (re)connection, after the socket opens — the consumer
    * (re)subscribes here. */
   readonly onConnected?: () => void;
+  /** Secure bootstrap capability delivered only over the same-origin socket. */
+  readonly onImageReadToken?: (token: string) => void;
   /** A decoded, schema-valid server push (event/snapshot/meta/exit/…). */
   readonly onPush?: (message: ServerMessage) => void;
   /** A decoded terminal push (Slice 8b): output chunks + the exit notification. */
@@ -322,6 +324,7 @@ export class RpcTransport {
     const frame = decoded.right;
     switch (frame.kind) {
       case "hello_ok": {
+        this.options.onImageReadToken?.(frame.imageReadToken);
         this.pending.get(frame.id)?.resolve({ kind: "sessions", sessions: frame.sessions });
         this.pending.delete(frame.id);
         return;

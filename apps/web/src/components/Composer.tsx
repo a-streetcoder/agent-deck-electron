@@ -60,8 +60,17 @@ const EMPTY_COMMENTS: readonly PendingReviewComment[] = [];
 /** Stable empty reference for the pending element-context selector (Slice 16). */
 const EMPTY_ELEMENT_CONTEXTS: readonly PendingElementContext[] = [];
 
+const PROMPT_IMAGE_MIMES = new Set<PendingImage["mimeType"]>([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+function isPromptImageMime(value: string): value is PendingImage["mimeType"] {
+  return PROMPT_IMAGE_MIMES.has(value as PendingImage["mimeType"]);
+}
 async function fileToImage(file: File): Promise<PendingImage | null> {
-  if (!file.type.startsWith("image/")) return null;
+  if (!isPromptImageMime(file.type) || file.size > 15_000_000) return null;
   const buffer = await file.arrayBuffer();
   let binary = "";
   const bytes = new Uint8Array(buffer);
@@ -350,7 +359,7 @@ export function Composer() {
 
   const addFiles = useCallback(
     async (files: FileList | File[]): Promise<void> => {
-      const imageFiles = [...files].filter((file) => file.type.startsWith("image/"));
+      const imageFiles = [...files].filter((file) => isPromptImageMime(file.type));
       if (imageFiles.length === 0 || !sessionId) return;
       const originatingSessionId = sessionId;
       const generation = imageLoadGenerationRef.current;

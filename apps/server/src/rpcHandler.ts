@@ -11,6 +11,7 @@ import { sessionDiffBase, type DiffGateway } from "./diffGateway.ts";
 import type { EditorLauncher } from "./editorLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
+import type { SessionImageStore } from "./sessionImages.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { ScriptEvent } from "./services/scriptRunner.ts";
@@ -71,11 +72,23 @@ export function createRpcConnection(deps: {
   scripts: ScriptRunnerGateway;
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
+  sessionImages?: SessionImageStore;
   send: (frame: RpcServerFrame) => void;
   /** Socket send-buffer depth in bytes (`ws` bufferedAmount); 0 when absent. */
   bufferedAmount?: () => number;
 }): RpcConnection {
-  const { sessions, terminals, diffs, editors, files, scripts, checkpoints, rollback, send } = deps;
+  const {
+    sessions,
+    terminals,
+    diffs,
+    editors,
+    files,
+    scripts,
+    checkpoints,
+    rollback,
+    sessionImages,
+    send,
+  } = deps;
   const bufferedAmount = deps.bufferedAmount ?? ((): number => 0);
   const push = (message: ServerMessage): void => send({ kind: "push", message });
 
@@ -307,7 +320,12 @@ export function createRpcConnection(deps: {
       send({ kind: "reply", id, ok: false, error: message });
 
     if (request.type === "hello") {
-      send({ kind: "hello_ok", id, sessions: sessions.list() });
+      send({
+        kind: "hello_ok",
+        id,
+        sessions: sessions.list(),
+        imageReadToken: sessionImages?.token ?? "",
+      });
       return;
     }
 
@@ -690,9 +708,18 @@ export function createRpcConnection(deps: {
         case "subscribe_session":
           subscribe(session, request.lastSeq);
           break;
-        case "prompt":
-          await session.prompt(request.message, request.images, request.streamingBehavior);
+        case "prompt": {
+          const staged = request.images?.length
+            ? sessionImages?.stage(session.meta.id, request.message, request.images)
+            : undefined;
+          try {
+            await session.prompt(request.message, request.images, request.streamingBehavior);
+          } catch (error) {
+            staged?.rollback();
+            throw error;
+          }
           break;
+        }
         case "steer":
           await session.steer(request.message);
           break;
@@ -777,8 +804,19 @@ export function setupRpcEndpoint(deps: {
   scripts: ScriptRunnerGateway;
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
+  sessionImages: SessionImageStore;
 }): RpcEndpoint {
-  const { sessions, terminals, diffs, editors, files, scripts, checkpoints, rollback } = deps;
+  const {
+    sessions,
+    terminals,
+    diffs,
+    editors,
+    files,
+    scripts,
+    checkpoints,
+    rollback,
+    sessionImages,
+  } = deps;
 
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<WebSocket>();
@@ -804,6 +842,7 @@ export function setupRpcEndpoint(deps: {
       scripts,
       checkpoints,
       rollback,
+      sessionImages,
       send: (frame) => sendTo(socket, frame),
       // Terminal push backpressure reads the real socket send-buffer depth.
       bufferedAmount: () => socket.bufferedAmount,

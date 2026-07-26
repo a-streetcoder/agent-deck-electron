@@ -232,10 +232,17 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
         return [{ type: "cell_final", cell: assistantCellFromMessage(cellId, message) }];
       }
       if (message.role === "user") {
+        const entryId = (event as unknown as { entryId?: unknown }).entryId;
+        const stableEntryId = typeof entryId === "string" && entryId ? entryId : undefined;
         return [
           {
             type: "cell_final",
-            cell: { kind: "user", id: coinId(state, "user"), text: userText(message.content) },
+            cell: {
+              kind: "user",
+              id: stableEntryId ? `user-${stableEntryId}` : coinId(state, "user"),
+              ...(stableEntryId ? { entryId: stableEntryId } : {}),
+              text: userText(message.content),
+            },
           },
         ];
       }

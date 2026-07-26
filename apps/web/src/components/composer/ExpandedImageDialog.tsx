@@ -18,6 +18,7 @@ export function ExpandedImageDialog({
   onClose: () => void;
 }) {
   const [offset, setOffset] = useState(0);
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">("loading");
   const count = preview.images.length;
   const index = (((preview.index + offset) % count) + count) % count;
   // Trap focus inside the overlay (Tab wrap + restore on close); Escape / ←→
@@ -54,6 +55,7 @@ export function ExpandedImageDialog({
   }, [count, navigate, onClose]);
 
   const item = preview.images[index];
+  useEffect(() => setLoadState("loading"), [index, item?.src]);
   if (!item) return null;
 
   return (
@@ -97,11 +99,29 @@ export function ExpandedImageDialog({
         >
           <X size={15} />
         </ControlButton>
+        {loadState === "loading" ? (
+          <p className="p-8 text-sm text-white/80" role="status">
+            Loading image…
+          </p>
+        ) : null}
+        {loadState === "error" ? (
+          <div
+            className="flex h-64 w-64 items-center justify-center rounded-lg border border-border-strong bg-surface text-sm text-text-muted"
+            role="img"
+            aria-label={`${item.name} unavailable`}
+          >
+            Image unavailable
+          </div>
+        ) : null}
         <img
           src={item.src}
           alt={item.name}
-          className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border-strong bg-surface object-contain shadow-card"
+          loading="lazy"
+          decoding="async"
+          className={`${loadState === "error" ? "hidden" : ""} max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border-strong bg-surface object-contain shadow-card`}
           draggable={false}
+          onLoad={() => setLoadState("loaded")}
+          onError={() => setLoadState("error")}
         />
         <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-white/80">
           {item.name}

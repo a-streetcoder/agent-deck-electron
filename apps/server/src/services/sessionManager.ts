@@ -80,8 +80,8 @@ import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
  *
  * PiHost buffers stdout from spawn time in an unbounded queue, so a resumed
  * session doesn't need the legacy `seedGate`: the facade seeds the transcript
- * from `getMessages()` (an RPC, correlated independently of the event queue)
- * FIRST, then forks `ingest`, which drains the buffered live events strictly
+ * from the active ancestry returned by `get_entries` (an RPC, correlated
+ * independently of the event queue) FIRST, then forks `ingest`, which drains the buffered live events strictly
  * after the seed. Order preserved, no queue plumbing.
  *
  * ## Helper / subagent launches
@@ -167,6 +167,15 @@ export interface SpawnSessionParams {
    * catch); it is fire-and-forget so it never perturbs the idle receipt timing.
    */
   readonly captureCheckpoint?: (label: string) => Effect.Effect<void>;
+  /** Replace a Pi user message's image bytes with session-scoped opaque refs. */
+  readonly decorateUserCell?: (
+    cell: Extract<TranscriptState["cells"][number], { kind: "user" }>,
+    rawMessage: unknown,
+  ) => Extract<TranscriptState["cells"][number], { kind: "user" }>;
+  readonly reconcileImages?: (
+    users: readonly { entryId: string; cellId: string; text: string; rawMessage: unknown }[],
+  ) => void;
+  readonly expirePendingImages?: () => void;
 }
 
 /** Inputs for a one-shot pi helper launch (native commit-message / release notes). */
@@ -194,8 +203,8 @@ export interface ManagedSessionRuntime {
 
   /** The ingestion loop; the facade forks it (immediately, or after seeding). */
   readonly ingest: Effect.Effect<void>;
-  /** Rebuild the transcript from pi's canonical history (resume/fork path). A
-   * getMessages failure surfaces as a defect (the resume/fork route reports it). */
+  /** Rebuild the transcript from Pi's stable, active session-entry ancestry
+   * (resume/fork path). A get_entries failure surfaces as a defect. */
   readonly seedFromHistory: Effect.Effect<void>;
   readonly seedSyntheticCells: (cells: readonly SubagentCell[]) => Effect.Effect<void>;
 
@@ -267,7 +276,27 @@ type StateData = Effect.Effect.Success<PiHostHandle["getState"]>;
 type StatsData = Effect.Effect.Success<PiHostHandle["getSessionStats"]>;
 type AvailableModels = Effect.Effect.Success<PiHostHandle["getAvailableModels"]>;
 type SlashCommands = Effect.Effect.Success<PiHostHandle["getCommands"]>;
+type EntriesData = Effect.Effect.Success<PiHostHandle["getEntries"]>;
 type ThinkingLevelArg = Parameters<PiHostHandle["setThinkingLevel"]>[0];
+
+/** `get_entries` returns the append-only tree; transcript history is only the
+ * current leaf's ancestry, in root-to-leaf order. */
+function activeEntryChain(data: EntriesData): EntriesData["entries"] {
+  if (!data.leafId) return [];
+  const byId = new Map(data.entries.map((entry) => [entry.id, entry]));
+  const reversed: EntriesData["entries"] = [];
+  const seen = new Set<string>();
+  let id: string | null = data.leafId;
+  while (id) {
+    if (seen.has(id)) throw new Error("cyclic Pi session entry ancestry");
+    seen.add(id);
+    const entry = byId.get(id);
+    if (!entry) throw new Error(`missing Pi session entry ancestor: ${id}`);
+    reversed.push(entry);
+    id = entry.parentId;
+  }
+  return reversed.reverse();
+}
 
 const TITLE_SYSTEM_PROMPT =
   "You generate a session title. Reply with ONLY a short title (max 8 words) " +
@@ -414,6 +443,11 @@ export const makeManagedSessionRuntime = (
 
     const runExitHandling = (exit: PiProcessExit): void => {
       if (exitHandled) return;
+      try {
+        params.expirePendingImages?.();
+      } catch {
+        // Image cleanup must not hide the process failure or session stop.
+      }
       exitHandled = true;
       currentExit = exit;
       meta.endedAt = new Date().toISOString();
@@ -487,6 +521,16 @@ export const makeManagedSessionRuntime = (
         pendingUiRequests.set(e.id, e.method);
       }
       for (const domainEvent of ingestPiEvent(ingest, piEvent)) {
+        if (
+          domainEvent.type === "cell_final" &&
+          domainEvent.cell.kind === "user" &&
+          params.decorateUserCell
+        ) {
+          domainEvent.cell = params.decorateUserCell(
+            domainEvent.cell,
+            (piEvent as { message?: unknown }).message,
+          );
+        }
         emit(domainEvent);
         if (domainEvent.type === "cell_delta" && !sawFirstDelta) {
           sawFirstDelta = true;
@@ -497,6 +541,35 @@ export const makeManagedSessionRuntime = (
         }
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
           receipts.emit("idle", meta.id);
+          const reconcileImages = Effect.gen(function* () {
+            if (!params.reconcileImages) {
+              params.expirePendingImages?.();
+              return;
+            }
+            const entryData = yield* handle.getEntries;
+            const users = activeEntryChain(entryData).flatMap((entry) => {
+              if (entry.type !== "message" || entry.message.role !== "user") return [];
+              const textEvent = ingestPiEvent(createIngestState(), {
+                type: "message_end",
+                entryId: entry.id,
+                message: entry.message,
+              } as unknown as PiInboundEvent).find(
+                (event) => event.type === "cell_final" && event.cell.kind === "user",
+              );
+              if (!textEvent || textEvent.type !== "cell_final" || textEvent.cell.kind !== "user")
+                return [];
+              return [
+                {
+                  entryId: entry.id,
+                  cellId: textEvent.cell.id,
+                  text: textEvent.cell.text,
+                  rawMessage: entry.message,
+                },
+              ];
+            });
+            params.reconcileImages(users);
+          }).pipe(Effect.catchAll(() => Effect.sync(() => params.expirePendingImages?.())));
+          Effect.runFork(Effect.forkIn(reconcileImages, sessionScope));
           // Fire-and-forget, but forked INTO the session Scope (not the global
           // daemon scope): they outlive the triggering item, yet closing the
           // session — Scope.close, which also kills the main pi — interrupts any
@@ -556,16 +629,39 @@ export const makeManagedSessionRuntime = (
     );
 
     const seedFromHistory = Effect.gen(function* () {
-      const { messages } = yield* handle.getMessages.pipe(Effect.orDie);
+      const entryData = yield* handle.getEntries.pipe(Effect.orDie);
       yield* Effect.sync(() => {
-        for (const message of messages) {
+        const entries = activeEntryChain(entryData);
+        const historyUsers: Array<{
+          entryId: string;
+          cellId: string;
+          text: string;
+          rawMessage: unknown;
+        }> = [];
+        for (const entry of entries) {
+          if (entry.type !== "message") continue;
           for (const domainEvent of ingestPiEvent(ingest, {
             type: "message_end",
-            message,
+            entryId: entry.id,
+            message: entry.message,
           } as unknown as PiInboundEvent)) {
+            if (
+              domainEvent.type === "cell_final" &&
+              domainEvent.cell.kind === "user" &&
+              params.decorateUserCell
+            ) {
+              domainEvent.cell = params.decorateUserCell(domainEvent.cell, entry.message);
+              historyUsers.push({
+                entryId: entry.id,
+                cellId: domainEvent.cell.id,
+                text: domainEvent.cell.text,
+                rawMessage: entry.message,
+              });
+            }
             emit(domainEvent);
           }
         }
+        params.reconcileImages?.(historyUsers);
       });
     });
 

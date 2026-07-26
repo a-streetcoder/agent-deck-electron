@@ -8,6 +8,7 @@ import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
 import { setupRpcEndpoint } from "./rpcHandler.ts";
 import type { ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { SessionManager } from "./SessionManager.ts";
+import type { SessionImageStore } from "./sessionImages.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { TerminalGateway } from "./terminalGateway.ts";
@@ -37,6 +38,7 @@ export function setupWebSocket(deps: {
   scripts: ScriptRunnerGateway;
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
+  sessionImages: SessionImageStore;
 }): WebSocketLayer {
   const { fastify, sessions, terminals, diffs, editors, files, scripts, checkpoints, rollback } =
     deps;
@@ -52,23 +54,31 @@ export function setupWebSocket(deps: {
     scripts,
     checkpoints,
     rollback,
+    sessionImages: deps.sessionImages,
   });
 
   // Browsers may open cross-origin WebSockets to localhost services; only
   // accept upgrades from local origins (or non-browser clients, which send
   // no Origin header) so a hostile web page can't drive sessions.
-  const isTrustedOrigin = (origin: string | undefined): boolean => {
+  const isTrustedOrigin = (origin: string | undefined, host: string | undefined): boolean => {
     if (origin === undefined) return true; // ws library clients, curl, tests
+    if (!host) return false;
     try {
-      const { hostname } = new URL(origin);
-      return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+      const url = new URL(origin);
+      const loopback =
+        url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+      // A random localhost web page must not bootstrap the control-plane token.
+      // Vite's proxy preserves its Host, so development remains same-origin too.
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") && loopback && url.host === host
+      );
     } catch {
       return false;
     }
   };
 
   fastify.server.on("upgrade", (request: IncomingMessage, socket, head) => {
-    if (!isTrustedOrigin(request.headers.origin)) {
+    if (!isTrustedOrigin(request.headers.origin, request.headers.host)) {
       socket.destroy();
       return;
     }

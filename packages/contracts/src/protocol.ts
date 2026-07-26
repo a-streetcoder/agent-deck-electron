@@ -21,10 +21,37 @@ import type { DomainEvent, TranscriptState } from "@agent-deck/domain";
 // ---------------------------------------------------------------------------
 
 /** Base64 image attachment sent with a prompt (pi ImageContent). */
+function isCanonicalBase64(value: string): boolean {
+  if (!value || value.length % 4 !== 0) return false;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  for (let index = 0; index < value.length - padding; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      !(
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122) ||
+        (code >= 48 && code <= 57) ||
+        code === 43 ||
+        code === 47
+      )
+    )
+      return false;
+  }
+  if (padding && !/^={1,2}$/.test(value.slice(-padding))) return false;
+  // Canonical pad bits: xx== has four zero low bits; xxx= has two.
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  if (padding === 2 && (alphabet.indexOf(value.at(-3)!) & 15) !== 0) return false;
+  if (padding === 1 && (alphabet.indexOf(value.at(-2)!) & 3) !== 0) return false;
+  return true;
+}
+const CanonicalImageBase64 = Schema.String.pipe(
+  Schema.maxLength(20_000_000),
+  Schema.filter((value) => isCanonicalBase64(value) || "must be canonical padded base64"),
+);
 export const ImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
-  data: Schema.String.pipe(Schema.maxLength(20_000_000)),
-  mimeType: Schema.String.pipe(Schema.maxLength(100)),
+  data: CanonicalImageBase64,
+  mimeType: Schema.Literal("image/png", "image/jpeg", "image/gif", "image/webp"),
 });
 export type ImageAttachment = typeof ImageAttachment.Type;
 
@@ -88,7 +115,16 @@ export const ClientMessage = Schema.Union(
     sessionId: Schema.String,
     message: Schema.String,
     /** Base64 image attachments sent with the prompt (pi ImageContent). */
-    images: Schema.optional(Schema.mutable(Schema.Array(ImageAttachment)).pipe(Schema.maxItems(8))),
+    images: Schema.optional(
+      Schema.mutable(Schema.Array(ImageAttachment)).pipe(
+        Schema.maxItems(8),
+        Schema.filter(
+          (images) =>
+            images.reduce((sum, image) => sum + image.data.length, 0) <= 20_000_000 ||
+            "aggregate image payload is too large",
+        ),
+      ),
+    ),
     /** Preserve Pi's prompt expansion path while choosing its live queue. */
     streamingBehavior: Schema.optional(StreamingBehavior),
   }),

@@ -1,5 +1,5 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Send } from "lucide-react";
 import {
   memoryToolCardLabel,
@@ -17,6 +17,13 @@ import { AskUserDecisionCard } from "./AskUserDecisionCard.tsx";
 import { RunMeta } from "./RunMeta.tsx";
 import { QuestionAnswerControls } from "./QuestionAnswerControls.tsx";
 import { sendSupervisorAnswer } from "../state/wsBridge.ts";
+import { useAppStore } from "../state/store.ts";
+import {
+  getImageReadToken,
+  sessionImageUrl,
+  subscribeImageReadToken,
+} from "../lib/sessionImageUrl.ts";
+import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -255,14 +262,75 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
   );
 }
 
+function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }> }) {
+  const sessionId = useAppStore((state) => state.session?.id ?? "");
+  const imageReadToken = useSyncExternalStore(
+    subscribeImageReadToken,
+    getImageReadToken,
+    getImageReadToken,
+  );
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [failed, setFailed] = useState<Set<string>>(() => new Set());
+  useEffect(() => setFailed(new Set()), [imageReadToken, sessionId]);
+  const items = (cell.images ?? []).map((image, index) => ({
+    src: sessionImageUrl(sessionId, image.id),
+    name: `Sent image ${index + 1}`,
+  }));
+  return (
+    <div className="flex justify-end" data-testid="user-cell">
+      <div className="max-w-[80%] space-y-2">
+        {cell.text ? <MessageBubble role="user" text={cell.text} /> : null}
+        {items.length ? (
+          <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
+            {items.map((item, index) => {
+              const ref = cell.images![index]!;
+              return failed.has(ref.id) || !item.src ? (
+                <div
+                  key={ref.id}
+                  className="flex h-24 w-24 items-center justify-center rounded-lg border border-border-strong bg-surface text-center text-xs text-text-muted"
+                  role="img"
+                  aria-label={`${item.name} unavailable`}
+                >
+                  Image unavailable
+                </div>
+              ) : (
+                <ControlButton
+                  key={ref.id}
+                  type="button"
+                  className="rounded-lg focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label={`Expand ${item.name}`}
+                  onClick={() => setExpanded(index)}
+                >
+                  <img
+                    src={item.src}
+                    alt={item.name}
+                    width={ref.width}
+                    height={ref.height}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-24 w-24 cursor-zoom-in rounded-lg border border-border-strong bg-surface object-cover"
+                    onError={() => setFailed((old) => new Set(old).add(ref.id))}
+                  />
+                </ControlButton>
+              );
+            })}
+          </div>
+        ) : null}
+        {expanded !== null ? (
+          <ExpandedImageDialog
+            preview={{ images: items, index: expanded }}
+            onClose={() => setExpanded(null)}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function CellView({ cell }: { cell: TranscriptCell }) {
   switch (cell.kind) {
     case "user":
-      return (
-        <div className="flex justify-end" data-testid="user-cell">
-          <MessageBubble role="user" text={cell.text} className="max-w-[80%]" />
-        </div>
-      );
+      return <UserCellView cell={cell} />;
     case "assistant":
       return (
         <div

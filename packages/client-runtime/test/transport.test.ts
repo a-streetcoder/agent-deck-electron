@@ -197,7 +197,9 @@ describe("RpcTransport state machine", () => {
     const promise = h.transport.hello();
     const id = (JSON.parse(h.sockets[0]!.sent[0]!) as { id: number }).id;
     const sessions = [{ id: "s1", cwd: "/tmp", createdAt: "2026-01-01T00:00:00.000Z" }];
-    h.sockets[0]!.message(JSON.stringify({ kind: "hello_ok", id, sessions }));
+    h.sockets[0]!.message(
+      JSON.stringify({ kind: "hello_ok", id, sessions, imageReadToken: "token" }),
+    );
 
     await expect(promise).resolves.toEqual(sessions);
   });

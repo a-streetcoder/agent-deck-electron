@@ -116,6 +116,8 @@ export const RpcHelloOkFrame = Schema.Struct({
   kind: Schema.Literal("hello_ok"),
   id: RequestId,
   sessions: Schema.mutable(Schema.Array(SessionMeta)),
+  /** Per-app-start read capability for lazy, session-scoped transcript images. */
+  imageReadToken: Schema.String,
 });
 export type RpcHelloOkFrame = typeof RpcHelloOkFrame.Type;
 

@@ -13,10 +13,20 @@ export interface AssistantBlock {
   done: boolean;
 }
 
+export interface UserImageRef {
+  /** Opaque, session-scoped identifier. Never a path, hash, MIME, or image bytes. */
+  id: string;
+  width: number;
+  height: number;
+}
+
 export interface UserCell {
   kind: "user";
+  /** Stable Pi session-entry identity when available (resume/fork history). */
+  entryId?: string;
   id: string;
   text: string;
+  images?: UserImageRef[];
 }
 
 export interface AssistantCell {

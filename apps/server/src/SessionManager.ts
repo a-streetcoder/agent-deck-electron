@@ -6,6 +6,7 @@ import type { SessionMeta } from "@agent-deck/contracts";
 import type {
   AskUserAnswer,
   AskUserCell,
+  UserCell,
   SessionPlanItem,
   SessionPlanUpdate,
   SubagentCell,
@@ -357,6 +358,20 @@ export class SessionManager {
      */
     private readonly onCheckpointCapture?: (meta: SessionMeta, label: string) => Promise<void>,
     private readonly loopSnapshots?: LoopSessionSnapshotStore,
+    private readonly decorateUserCell?: (
+      sessionId: string,
+      cell: UserCell,
+      rawMessage: unknown,
+    ) => UserCell,
+    private readonly forkSessionImages?: (
+      sourceSessionId: string,
+      targetSessionId: string,
+    ) => () => void,
+    private readonly reconcileSessionImages?: (
+      sessionId: string,
+      users: readonly { entryId: string; cellId: string; text: string; rawMessage: unknown }[],
+    ) => void,
+    private readonly expirePendingSessionImages?: (sessionId: string) => void,
   ) {}
 
   create(options: CreateSessionOptions): ManagedSession {
@@ -619,6 +634,27 @@ export class SessionManager {
       childBridgeFactory: this.childBridgeFactory,
       resolveAgent: this.resolveAgent,
       autoTitle: this.autoTitle,
+      ...(this.decorateUserCell
+        ? {
+            decorateUserCell: (cell: UserCell, rawMessage: unknown) =>
+              this.decorateUserCell!(meta.id, cell, rawMessage),
+          }
+        : {}),
+      ...(this.reconcileSessionImages
+        ? {
+            reconcileImages: (
+              users: readonly {
+                entryId: string;
+                cellId: string;
+                text: string;
+                rawMessage: unknown;
+              }[],
+            ) => this.reconcileSessionImages!(meta.id, users),
+          }
+        : {}),
+      ...(this.expirePendingSessionImages
+        ? { expirePendingImages: () => this.expirePendingSessionImages!(meta.id) }
+        : {}),
       // The turn-boundary hook as a never-failing Effect (it is forked
       // fire-and-forget into the session Scope at each idle).
       ...(this.onTurnIdle !== undefined
@@ -766,22 +802,31 @@ export class SessionManager {
     } else {
       plan = original;
     }
-    const session = this.launch(meta, plan, env);
+    let session: ManagedSession | undefined;
+    let rollbackImages: (() => void) | undefined;
     try {
+      // Establish image ownership before history seeding, so reconstructed cells
+      // resolve to the source's stable opaque refs instead of importing new ids.
+      rollbackImages = this.forkSessionImages?.(source.id, meta.id);
+      session = this.launch(meta, plan, env);
       await session.seedFromHistory();
       // plan_set before startIngestion — safe for the same reason as resume()
       // (plans arrive only via bridge tools, never pi stdout).
       if (meta.plan && meta.plan.length > 0) session.restorePlan(meta.plan);
       session.startIngestion();
+      this.onMetaChange(meta);
+      return session;
     } catch (error) {
-      // Seeding failed before ingestion was forked — destroy the half-built
-      // session so its Scope closes (killing pi) and exit handling runs, rather
-      // than leaking a dead session with an orphaned pi (see resume()).
-      await this.destroy(meta.id).catch(() => {});
+      // Launch/seeding failure removes both the half-built Pi owner and the
+      // target manifest. Shared content-addressed blobs remain GC-safe.
+      if (session) await this.destroy(meta.id).catch(() => {});
+      try {
+        rollbackImages?.();
+      } catch {
+        // Best-effort rollback must not mask the launch failure.
+      }
       throw error;
     }
-    this.onMetaChange(meta);
-    return session;
   }
 
   async stopAll(): Promise<void> {

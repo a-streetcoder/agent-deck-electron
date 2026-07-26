@@ -102,9 +102,29 @@ rl.on("line", (line) => {
     case "compact":
       // Never respond — exercises the timeout path.
       break;
+    case "get_entries":
+      // Canonical entry history for SessionManager seed tests: one stable user
+      // entry so rebuilt transcripts use Pi's durable identity.
+      send({
+        id: cmd.id,
+        type: "response",
+        command: "get_entries",
+        success: true,
+        data: {
+          leafId: "entry-user-1",
+          entries: [
+            {
+              type: "message",
+              id: "entry-user-1",
+              parentId: null,
+              timestamp: "2026-01-01T00:00:00.000Z",
+              message: { role: "user", content: "hello world", timestamp: 1 },
+            },
+          ],
+        },
+      });
+      break;
     case "get_messages":
-      // Minimal history for SessionManager seed tests: one user message so the
-      // rebuilt transcript has a first user cell (which drives title generation).
       send({
         id: cmd.id,
         type: "response",
