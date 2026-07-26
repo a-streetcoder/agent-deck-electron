@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { PromptInfo } from "@agent-deck/domain";
@@ -72,6 +72,16 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     dropDiffCache,
   } = ctx;
 
+  let fileSearchSequence = 0;
+  const activeFileSearches = new Map<
+    string,
+    { controller: AbortController; sequence: number; token: symbol }
+  >();
+  fastify.addHook("onClose", async () => {
+    for (const search of activeFileSearches.values()) search.controller.abort();
+    activeFileSearches.clear();
+  });
+
   // Live pi session state (model, thinking level, streaming flags) and the
   // available-model catalog — the composer's picker data.
   fastify.get("/sessions/:id/state", async (request, reply) => {
@@ -132,13 +142,59 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   });
 
   // Project-relative file list for `@`-file autocomplete, scoped to the
-  // session's cwd. Bounded + symlink-safe (see listProjectFiles).
+  // selected session's authoritative cwd. The exhaustive async walk remains
+  // bounded in memory and is cancelled when its requester disconnects.
   fastify.get("/sessions/:id/files", async (request, reply) => {
     const { id } = request.params as { id: string };
     const { q } = request.query as { q?: string };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
-    return { files: listProjectFiles(session.meta.cwd, q ?? "").slice(0, 50) };
+    const query = typeof q === "string" ? q.trim() : "";
+    if (!query) return { files: [] as string[] };
+
+    // Serialize scans for the same canonical cwd. A newer query supersedes the
+    // older search, while token-checked cleanup cannot remove the replacement.
+    // Sequence assignment precedes canonicalization so out-of-order realpath
+    // completion cannot let an older request cancel a newer one.
+    const sequence = ++fileSearchSequence;
+    const token = Symbol("file-search");
+    const controller = new AbortController();
+    const onRequestAborted = (): void => controller.abort();
+    const onReplyClose = (): void => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    request.raw.once("aborted", onRequestAborted);
+    reply.raw.once("close", onReplyClose);
+    if (request.raw.aborted) controller.abort();
+
+    const rootKey = await realpath(session.meta.cwd).catch(() =>
+      nodePath.resolve(session.meta.cwd),
+    );
+    const activeSearch = activeFileSearches.get(rootKey);
+    if (activeSearch && activeSearch.sequence > sequence) {
+      controller.abort();
+    } else if (!controller.signal.aborted) {
+      activeSearch?.controller.abort();
+      activeFileSearches.set(rootKey, { controller, sequence, token });
+    }
+
+    try {
+      return {
+        files: await listProjectFiles(session.meta.cwd, query, {
+          limit: 50,
+          signal: controller.signal,
+        }),
+      };
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return reply.status(499).send({ error: "file search cancelled" });
+      }
+      throw error;
+    } finally {
+      request.raw.off("aborted", onRequestAborted);
+      reply.raw.off("close", onReplyClose);
+      if (activeFileSearches.get(rootKey)?.token === token) activeFileSearches.delete(rootKey);
+    }
   });
 
   fastify.get("/sessions", async (request) => {

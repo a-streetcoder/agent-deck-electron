@@ -90,7 +90,7 @@ export {
   discoverProjectsInRoot,
   type DiscoveryCandidate,
 } from "./discovery.ts";
-export { listProjectFiles } from "./files.ts";
+export { listProjectFiles, type ListProjectFilesOptions } from "./files.ts";
 export { listProviders, logoutProvider, type ProviderAuthInfo } from "./providers.ts";
 export {
   ProviderLoginManager,

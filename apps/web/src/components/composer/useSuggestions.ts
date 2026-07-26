@@ -54,6 +54,8 @@ export interface UseSuggestions {
   close: () => void;
 }
 
+const FILE_DEBOUNCE_MS = 120;
+
 export function useSuggestions(sessionId: string | null): UseSuggestions {
   const [mode, setMode] = useState<SuggestionMode>(null);
   const [items, setItems] = useState<SuggestionItem[]>([]);
@@ -61,25 +63,37 @@ export function useSuggestions(sessionId: string | null): UseSuggestions {
   const triggerRef = useRef<Trigger | null>(null);
   const textRef = useRef<{ text: string; caret: number }>({ text: "", caret: 0 });
   const reqIdRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  const cancelPending = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+  }, []);
 
   const close = useCallback(() => {
     triggerRef.current = null;
-    // Invalidate any in-flight fetch so a late response can't reopen the panel
-    // (e.g. after a session switch) with stale commands/paths.
+    cancelPending();
+    // Also retain the request-id guard for responses that race with abort.
     reqIdRef.current += 1;
     setMode(null);
     setItems([]);
     setSelectedIndex(0);
-  }, []);
+  }, [cancelPending]);
 
   const fetchItems = useCallback(
-    async (trigger: Trigger): Promise<void> => {
+    async (trigger: Trigger, reqId: number, controller: AbortController): Promise<void> => {
       if (!sessionId) return;
-      const reqId = ++reqIdRef.current;
       try {
         let next: SuggestionItem[] = [];
         if (trigger.mode === "slash") {
-          const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/commands`);
+          const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/commands`, {
+            signal: controller.signal,
+          });
           if (!response.ok) return;
           const { commands } = (await response.json()) as {
             commands: Array<{ name: string; description?: string; source: string }>;
@@ -92,6 +106,7 @@ export function useSuggestions(sessionId: string | null): UseSuggestions {
         } else {
           const response = await fetch(
             `/sessions/${encodeURIComponent(sessionId)}/files?q=${encodeURIComponent(trigger.query)}`,
+            { signal: controller.signal },
           );
           if (!response.ok) return;
           const { files } = (await response.json()) as { files: string[] };
@@ -101,8 +116,11 @@ export function useSuggestions(sessionId: string | null): UseSuggestions {
         setItems(next);
         setSelectedIndex(0);
         setMode(next.length > 0 ? trigger.mode : null);
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
         // Transient; the next keystroke re-queries.
+      } finally {
+        if (controllerRef.current === controller) controllerRef.current = null;
       }
     },
     [sessionId],
@@ -113,13 +131,37 @@ export function useSuggestions(sessionId: string | null): UseSuggestions {
       textRef.current = { text, caret };
       const trigger = detectTrigger(text, caret);
       triggerRef.current = trigger;
-      if (!trigger) {
+      if (!trigger || !sessionId) {
         close();
         return;
       }
-      void fetchItems(trigger);
+
+      cancelPending();
+      // Never leave an old file selection actionable while its replacement is
+      // debounced or loading, and do not exhaustively query a bare `@` token.
+      if (trigger.mode === "file") {
+        setMode(null);
+        setItems([]);
+        setSelectedIndex(0);
+        if (!trigger.query.trim()) {
+          reqIdRef.current += 1;
+          return;
+        }
+      }
+
+      const reqId = ++reqIdRef.current;
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      if (trigger.mode === "file") {
+        timerRef.current = setTimeout(() => {
+          timerRef.current = null;
+          void fetchItems(trigger, reqId, controller);
+        }, FILE_DEBOUNCE_MS);
+      } else {
+        void fetchItems(trigger, reqId, controller);
+      }
     },
-    [close, fetchItems],
+    [cancelPending, close, fetchItems, sessionId],
   );
 
   const accept = useCallback(
@@ -160,8 +202,15 @@ export function useSuggestions(sessionId: string | null): UseSuggestions {
     [mode, items.length, close],
   );
 
-  // Close if the session changes.
+  // Close if the session changes; cancellation-only cleanup avoids setState on unmount.
   useEffect(() => close(), [sessionId, close]);
+  useEffect(
+    () => () => {
+      cancelPending();
+      reqIdRef.current += 1;
+    },
+    [cancelPending],
+  );
 
   return {
     mode,

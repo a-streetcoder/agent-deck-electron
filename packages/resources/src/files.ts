@@ -1,12 +1,7 @@
-import { readdirSync, type Dirent } from "node:fs";
+import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
-/**
- * Bounded, breadth-first project file listing for `@`-file autocomplete.
- * Skips VCS/build/hidden noise and caps total results so a large repo can't
- * stall the sync walk.
- */
-
+/** Directories that are never useful in composer file suggestions. */
 const SKIP_DIRS = new Set([
   ".git",
   "node_modules",
@@ -23,44 +18,141 @@ const SKIP_DIRS = new Set([
   ".pnpm",
 ]);
 
-const MAX_RESULTS = 500;
-const MAX_VISITED_DIRS = 2000;
+const DEFAULT_LIMIT = 500;
+
+export interface ListProjectFilesOptions {
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+interface RankedPath {
+  path: string;
+  category: number;
+  position: number;
+}
+
+function compareRanked(left: RankedPath, right: RankedPath): number {
+  if (left.category !== right.category) return left.category - right.category;
+  if (left.position !== right.position) return left.position - right.position;
+  if (left.path.length !== right.path.length) return left.path.length - right.path.length;
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+}
+
+function rankPath(relativePath: string, needle: string): RankedPath | null {
+  const normalizedPath = relativePath.toLowerCase();
+  const basename = path.posix.basename(normalizedPath);
+
+  if (needle === "") return { path: relativePath, category: 3, position: 0 };
+  if (basename === needle) return { path: relativePath, category: 0, position: 0 };
+  if (basename.startsWith(needle)) return { path: relativePath, category: 1, position: 0 };
+
+  const basenamePosition = basename.indexOf(needle);
+  if (basenamePosition >= 0) {
+    return { path: relativePath, category: 2, position: basenamePosition };
+  }
+
+  const pathPosition = normalizedPath.indexOf(needle);
+  if (pathPosition >= 0) {
+    return { path: relativePath, category: 3, position: pathPosition };
+  }
+  return null;
+}
+
+function retainBest(results: RankedPath[], candidate: RankedPath, limit: number): void {
+  let low = 0;
+  let high = results.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (compareRanked(results[middle]!, candidate) <= 0) low = middle + 1;
+    else high = middle;
+  }
+  if (low >= limit) return;
+  results.splice(low, 0, candidate);
+  if (results.length > limit) results.pop();
+}
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
 
 /**
- * Return project-relative file paths under `root`, filtered by a case-
- * insensitive substring `query` (empty = all, up to the cap). Symlinked
- * entries are skipped via withFileTypes (no follow).
+ * Return the best project-relative file paths under `root` after exhaustively
+ * walking the eligible tree. The sequential depth-first walk retains traversal
+ * depth rather than every visited directory, never follows symlink entries, and
+ * keeps only the bounded top-K matches.
  */
-export function listProjectFiles(root: string, query = ""): string[] {
-  const needle = query.trim().toLowerCase();
-  const results: string[] = [];
-  const queue: string[] = [root];
-  let visited = 0;
+export async function listProjectFiles(
+  root: string,
+  query = "",
+  { limit = DEFAULT_LIMIT, signal }: ListProjectFilesOptions = {},
+): Promise<string[]> {
+  signal?.throwIfAborted();
+  const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : DEFAULT_LIMIT;
+  if (boundedLimit === 0) return [];
 
-  while (queue.length > 0 && results.length < MAX_RESULTS && visited < MAX_VISITED_DIRS) {
-    const dir = queue.shift()!;
-    visited += 1;
-    let entries: Dirent[];
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await realpath(path.resolve(root));
+  } catch {
+    if (signal?.aborted) signal.throwIfAborted();
+    return [];
+  }
+  signal?.throwIfAborted();
+
+  const needle = query.trim().toLowerCase();
+  const results: RankedPath[] = [];
+
+  const walk = async (directory: string): Promise<void> => {
+    signal?.throwIfAborted();
+    let canonicalDirectory: string;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      // Re-resolve immediately before traversal. This closes ordinary root-link
+      // and directory-swap escapes, though Node cannot provide an openat-style
+      // kernel guarantee against a swap after this check.
+      canonicalDirectory = await realpath(directory);
     } catch {
-      continue;
+      if (signal?.aborted) signal.throwIfAborted();
+      return;
     }
+    signal?.throwIfAborted();
+    if (!isWithinRoot(canonicalRoot, canonicalDirectory)) return;
+
+    let entries;
+    try {
+      entries = await readdir(canonicalDirectory, { withFileTypes: true });
+    } catch {
+      if (signal?.aborted) signal.throwIfAborted();
+      // Unreadable or raced directories do not invalidate the rest of a search.
+      return;
+    }
+    signal?.throwIfAborted();
+
     for (const entry of entries) {
-      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) continue; // never follow links out of the project
+      signal?.throwIfAborted();
+      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name) || entry.isSymbolicLink())
+        continue;
+
+      const fullPath = path.resolve(canonicalDirectory, entry.name);
+      if (!isWithinRoot(canonicalRoot, fullPath)) continue;
+
       if (entry.isDirectory()) {
-        queue.push(full);
+        // Awaiting each child makes this depth-first without a retaining BFS queue.
+        await walk(fullPath);
       } else if (entry.isFile()) {
-        const rel = path.relative(root, full);
-        if (needle === "" || rel.toLowerCase().includes(needle)) {
-          results.push(rel);
-          if (results.length >= MAX_RESULTS) break;
-        }
+        const relativeNative = path.relative(canonicalRoot, fullPath);
+        if (!isWithinRoot(canonicalRoot, fullPath) || relativeNative === "") continue;
+        const relativePath = relativeNative.split(path.sep).join("/");
+        const ranked = rankPath(relativePath, needle);
+        if (ranked) retainBest(results, ranked, boundedLimit);
       }
     }
-  }
-  // Shorter paths (usually more relevant) first, then alphabetical.
-  return results.sort((a, b) => a.length - b.length || a.localeCompare(b));
+  };
+
+  await walk(canonicalRoot);
+  signal?.throwIfAborted();
+  return results.map((result) => result.path);
 }

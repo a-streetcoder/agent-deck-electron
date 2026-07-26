@@ -1,10 +1,21 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ServerResponse } from "node:http";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import type * as GitModule from "../src/git.ts";
+
+const resourceMocks = vi.hoisted(() => ({
+  listProjectFiles: vi.fn<
+    (
+      root: string,
+      query: string,
+      options: { limit?: number; signal?: AbortSignal },
+    ) => Promise<string[]>
+  >(async () => []),
+}));
 
 const gitMocks = vi.hoisted(() => ({
   canonicalWorktreePath: vi.fn(),
@@ -28,7 +39,7 @@ const gitMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agent-deck/resources", () => ({
-  listProjectFiles: vi.fn(() => []),
+  listProjectFiles: resourceMocks.listProjectFiles,
   scanPrompts: vi.fn(() => []),
 }));
 
@@ -188,6 +199,7 @@ function makeState() {
 }
 
 beforeEach(() => {
+  resourceMocks.listProjectFiles.mockReset().mockResolvedValue([]);
   gitMocks.canonicalWorktreePath
     .mockReset()
     .mockImplementation(async (candidate: string) => path.resolve(candidate));
@@ -224,6 +236,106 @@ beforeEach(() => {
     sourceBranch: "main",
     identityToken: "v1:0000000000000001:0000000000000002",
     branchOwned: true,
+  });
+});
+
+describe("GET /sessions/:id/files", () => {
+  it("awaits the bounded async search using the selected session cwd", async () => {
+    const { fastify, state } = makeRoute();
+    const cwd = path.join(PROJECT_PATH, "selected-worktree");
+    state.live.set("selected", { id: "selected", cwd });
+    let release!: () => void;
+    resourceMocks.listProjectFiles.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((resolve) => {
+          release = () => resolve(["src/deep-target.ts"]);
+        }),
+    );
+
+    const pending = fastify.inject({ method: "GET", url: "/sessions/selected/files?q=target" });
+    await vi.waitFor(() => expect(resourceMocks.listProjectFiles).toHaveBeenCalledOnce());
+    expect(resourceMocks.listProjectFiles).toHaveBeenCalledWith(cwd, "target", {
+      limit: 50,
+      signal: expect.any(AbortSignal),
+    });
+    release();
+
+    const response = await pending;
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ files: ["src/deep-target.ts"] });
+    await fastify.close();
+  });
+
+  it("returns no files without starting an empty query scan", async () => {
+    const { fastify, state } = makeRoute();
+    state.live.set("selected", { id: "selected", cwd: PROJECT_PATH });
+
+    const response = await fastify.inject({ method: "GET", url: "/sessions/selected/files?q=%20" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ files: [] });
+    expect(resourceMocks.listProjectFiles).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("aborts the search on a premature response close and handles cancellation", async () => {
+    const { fastify, state } = makeRoute();
+    state.live.set("selected", { id: "selected", cwd: PROJECT_PATH });
+    let rawReply: ServerResponse | undefined;
+    fastify.addHook("preHandler", (_request, reply, done) => {
+      rawReply = reply.raw;
+      done();
+    });
+    let receivedSignal: AbortSignal | undefined;
+    resourceMocks.listProjectFiles.mockImplementationOnce((_root, _query, options) => {
+      receivedSignal = options.signal;
+      return new Promise<string[]>((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+          once: true,
+        });
+      });
+    });
+
+    const pending = fastify.inject({ method: "GET", url: "/sessions/selected/files?q=target" });
+    await vi.waitFor(() => expect(receivedSignal).toBeDefined());
+    rawReply!.emit("close");
+
+    await expect(pending).rejects.toThrow("response destroyed before completion");
+    expect(receivedSignal!.aborted).toBe(true);
+    await vi.waitFor(() => expect(rawReply!.listenerCount("close")).toBe(0));
+    await fastify.close();
+  });
+
+  it("coalesces same-root scans without stale cleanup losing the replacement", async () => {
+    const { fastify, state } = makeRoute();
+    state.live.set("selected", { id: "selected", cwd: PROJECT_PATH });
+    const signals: AbortSignal[] = [];
+    resourceMocks.listProjectFiles.mockImplementation((_root, _query, options) => {
+      const signal = options.signal!;
+      signals.push(signal);
+      if (signals.length === 3) return Promise.resolve(["third.ts"]);
+      return new Promise<string[]>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+
+    const first = fastify.inject({ method: "GET", url: "/sessions/selected/files?q=first" });
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    const second = fastify.inject({ method: "GET", url: "/sessions/selected/files?q=second" });
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    expect((await first).statusCode).toBe(499);
+
+    // The first request's finally has now run. Token-safe cleanup must have left
+    // the second request registered so this third request can still abort it.
+    const third = fastify.inject({ method: "GET", url: "/sessions/selected/files?q=third" });
+    await vi.waitFor(() => expect(signals).toHaveLength(3));
+
+    expect((await second).statusCode).toBe(499);
+    const thirdResponse = await third;
+    expect(thirdResponse.statusCode).toBe(200);
+    expect(thirdResponse.json()).toEqual({ files: ["third.ts"] });
+    expect(signals[1]!.aborted).toBe(true);
+    await fastify.close();
   });
 });
 
