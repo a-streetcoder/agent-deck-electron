@@ -725,11 +725,56 @@ impl Task for ManagedSnapshotTask {
     }
 }
 
-#[derive(Clone)]
-struct SnapshotIdentity {
-    dev: u64,
-    ino: u64,
+#[derive(Clone, PartialEq, Eq)]
+struct StableFileIdentity {
+    volume: u64,
+    file: u64,
 }
+
+#[cfg(unix)]
+fn cap_file_identity(metadata: &cap_std::fs::Metadata) -> Result<StableFileIdentity> {
+    Ok(StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn cap_file_identity(metadata: &cap_std::fs::Metadata) -> Result<StableFileIdentity> {
+    // cap-fs-ext obtains these from the opened handle. Catch its documented
+    // unavailable-handle panic and fail closed rather than inventing identity.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    }))
+    .map_err(|_| resource_error("RESOURCE_UNSAFE_COMPONENT", "file identity unavailable"))
+}
+
+#[cfg(unix)]
+fn ambient_file_identity(path: &std::path::Path) -> Result<StableFileIdentity> {
+    let metadata = std::fs::metadata(path).map_err(map_resource_io)?;
+    Ok(StableFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn ambient_file_identity(path: &std::path::Path) -> Result<StableFileIdentity> {
+    // Rust 1.88 does not yet expose stable std Metadata file-index methods.
+    // Open the directory as a cap-std handle, whose pinned cap-fs-ext identity
+    // obtains volume serial + file index by handle and supports directories.
+    let captured = Dir::open_ambient_dir(path, ambient_authority()).map_err(map_resource_io)?;
+    let metadata = captured.dir_metadata().map_err(map_resource_io)?;
+    cap_file_identity(&metadata)
+}
+
+fn same_cap_file(left: &cap_std::fs::Metadata, right: &cap_std::fs::Metadata) -> Result<bool> {
+    Ok(cap_file_identity(left)? == cap_file_identity(right)?)
+}
+
+#[derive(Clone)]
+struct SnapshotIdentity(StableFileIdentity);
 
 #[derive(Clone)]
 struct ManagedSnapshotIdentity {
@@ -767,12 +812,35 @@ impl ManagedSkillRepositoryStore {
         }
         let root = open_managed_repositories(&data_dir)?;
         let metadata = root.dir_metadata().map_err(map_resource_io)?;
+        #[cfg(unix)]
         if metadata.dev().to_string() != expected_dev || metadata.ino().to_string() != expected_ino
         {
             return Err(resource_error(
                 "RESOURCE_UNSAFE_COMPONENT",
                 "managed root identity changed",
             ));
+        }
+        #[cfg(windows)]
+        {
+            // Node's stat dev/ino representation is not a stable cross-runtime
+            // contract on Windows. Reconcile the held no-delete-share handle
+            // against the current canonical namespace using native identities.
+            let _node_identity = (expected_dev, expected_ino);
+            let current_canonical =
+                std::fs::canonicalize(std::path::Path::new(&data_dir).join("SkillRepositories"))
+                    .map_err(map_resource_io)?;
+            if current_canonical != std::path::Path::new(&expected_realpath) {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root namespace changed",
+                ));
+            }
+            if ambient_file_identity(&current_canonical)? != cap_file_identity(&metadata)? {
+                return Err(resource_error(
+                    "RESOURCE_UNSAFE_COMPONENT",
+                    "managed root identity changed",
+                ));
+            }
         }
         let data =
             Dir::open_ambient_dir(&data_dir, ambient_authority()).map_err(map_resource_io)?;
@@ -800,10 +868,7 @@ impl ManagedSkillRepositoryStore {
             root_path: expected_realpath,
             snapshots,
             snapshots_path,
-            snapshots_identity: SnapshotIdentity {
-                dev: snapshot_metadata.dev(),
-                ino: snapshot_metadata.ino(),
-            },
+            snapshots_identity: SnapshotIdentity(cap_file_identity(&snapshot_metadata)?),
             snapshot_identities: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -1108,8 +1173,7 @@ fn copy_snapshot_tree(
             let opened = input.metadata().map_err(map_resource_io)?;
             if !opened.is_file()
                 || opened.file_type().is_symlink()
-                || opened.dev() != metadata.dev()
-                || opened.ino() != metadata.ino()
+                || !same_cap_file(&opened, &metadata)?
                 || opened.nlink() > 1
             {
                 return Err(resource_error(
@@ -1178,10 +1242,8 @@ fn validate_snapshot_root_namespace(
     let held = snapshots.dir_metadata().map_err(map_resource_io)?;
     if ambient.file_type().is_symlink()
         || !ambient.is_dir()
-        || ambient.dev() != expected.dev
-        || ambient.ino() != expected.ino
-        || held.dev() != expected.dev
-        || held.ino() != expected.ino
+        || ambient_file_identity(std::path::Path::new(snapshots_path))? != expected.0
+        || cap_file_identity(&held)? != expected.0
     {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
@@ -1260,7 +1322,7 @@ fn validate_snapshot_tree(
                     resource_error("RESOURCE_NOT_FOUND", "snapshot entry disappeared")
                 })?;
             let opened = child.dir_metadata().map_err(map_resource_io)?;
-            if opened.dev() != expected.dev() || opened.ino() != expected.ino() {
+            if !same_cap_file(&opened, &expected)? {
                 return Err(resource_error(
                     "RESOURCE_UNSAFE_COMPONENT",
                     "snapshot directory changed during validation",
@@ -1270,8 +1332,7 @@ fn validate_snapshot_tree(
             let after = directory.symlink_metadata(&name).map_err(map_resource_io)?;
             if after.file_type().is_symlink()
                 || !after.is_dir()
-                || after.dev() != expected.dev()
-                || after.ino() != expected.ino()
+                || !same_cap_file(&after, &expected)?
             {
                 return Err(resource_error(
                     "RESOURCE_UNSAFE_COMPONENT",
@@ -1298,8 +1359,7 @@ fn validate_snapshot_tree(
             if opened.file_type().is_symlink()
                 || !opened.is_file()
                 || opened.nlink() > 1
-                || opened.dev() != expected.dev()
-                || opened.ino() != expected.ino()
+                || !same_cap_file(&opened, &expected)?
                 || opened.len() != expected.len()
             {
                 return Err(resource_error(
@@ -1325,14 +1385,12 @@ fn validate_snapshot_tree(
             let after_open = file.metadata().map_err(map_resource_io)?;
             let after_name = directory.symlink_metadata(&name).map_err(map_resource_io)?;
             if actual_len != opened.len()
-                || after_open.dev() != opened.dev()
-                || after_open.ino() != opened.ino()
+                || !same_cap_file(&after_open, &opened)?
                 || after_open.len() != opened.len()
                 || after_open.nlink() > 1
                 || after_name.file_type().is_symlink()
                 || !after_name.is_file()
-                || after_name.dev() != opened.dev()
-                || after_name.ino() != opened.ino()
+                || !same_cap_file(&after_name, &opened)?
                 || after_name.len() != opened.len()
                 || after_name.nlink() > 1
             {
@@ -1365,8 +1423,7 @@ fn validate_snapshot_manifest(root: &Dir) -> Result<()> {
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
         || metadata.nlink() > 1
-        || metadata.dev() != expected.dev()
-        || metadata.ino() != expected.ino()
+        || !same_cap_file(&metadata, &expected)?
     {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
@@ -1388,8 +1445,7 @@ fn validate_managed_snapshot(
     let metadata = snapshots.symlink_metadata(&leaf).map_err(map_resource_io)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_dir()
-        || metadata.dev() != identity.leaf.dev
-        || metadata.ino() != identity.leaf.ino
+        || cap_file_identity(&metadata)? != identity.leaf.0
     {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
@@ -1406,8 +1462,7 @@ fn validate_managed_snapshot(
         .map_err(map_resource_io)?
         .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot skills disappeared"))?;
     let opened_skills = skills.dir_metadata().map_err(map_resource_io)?;
-    if opened_skills.dev() != expected_skills.dev() || opened_skills.ino() != expected_skills.ino()
-    {
+    if !same_cap_file(&opened_skills, &expected_skills)? {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
             "snapshot skills identity changed",
@@ -1421,7 +1476,7 @@ fn validate_managed_snapshot(
             .map_err(map_resource_io)?
             .ok_or_else(|| resource_error("RESOURCE_NOT_FOUND", "snapshot skill disappeared"))?;
         let opened_root = root.dir_metadata().map_err(map_resource_io)?;
-        if opened_root.dev() != expected_root.dev() || opened_root.ino() != expected_root.ino() {
+        if !same_cap_file(&opened_root, &expected_root)? {
             return Err(resource_error(
                 "RESOURCE_UNSAFE_COMPONENT",
                 "snapshot skill identity changed",
@@ -1435,8 +1490,7 @@ fn validate_managed_snapshot(
         let after_root = skills.symlink_metadata(&name).map_err(map_resource_io)?;
         if after_root.file_type().is_symlink()
             || !after_root.is_dir()
-            || after_root.dev() != expected_root.dev()
-            || after_root.ino() != expected_root.ino()
+            || !same_cap_file(&after_root, &expected_root)?
         {
             return Err(resource_error(
                 "RESOURCE_UNSAFE_COMPONENT",
@@ -1449,8 +1503,7 @@ fn validate_managed_snapshot(
         .map_err(map_resource_io)?;
     if after_skills.file_type().is_symlink()
         || !after_skills.is_dir()
-        || after_skills.dev() != expected_skills.dev()
-        || after_skills.ino() != expected_skills.ino()
+        || !same_cap_file(&after_skills, &expected_skills)?
     {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
@@ -1531,7 +1584,7 @@ fn materialize_managed_snapshot(
         .get(repository_id)
         .cloned()
     {
-        if leaf_metadata.dev() != expected.leaf.dev || leaf_metadata.ino() != expected.leaf.ino {
+        if cap_file_identity(&leaf_metadata)? != expected.leaf.0 {
             return Err(cleanup_owned_managed_stage_error(
                 snapshots,
                 &stage_leaf,
@@ -1584,10 +1637,7 @@ fn materialize_managed_snapshot(
     sync_dir(snapshots).map_err(map_resource_io)?;
     validate_snapshot_root_namespace(snapshots, snapshots_path, snapshots_identity)?;
     let identity = ManagedSnapshotIdentity {
-        leaf: SnapshotIdentity {
-            dev: leaf_metadata.dev(),
-            ino: leaf_metadata.ino(),
-        },
+        leaf: SnapshotIdentity(cap_file_identity(&leaf_metadata)?),
         skill_count: selected_roots.len(),
     };
     snapshot_identities
@@ -1724,7 +1774,10 @@ fn run_managed_git(
         }
     }
     #[cfg(windows)]
-    command.current_dir(current_path);
+    {
+        let _ = dir;
+        command.current_dir(current_path);
+    }
     #[cfg(unix)]
     let _ = current_path;
 
@@ -3102,7 +3155,7 @@ fn publish_staged_tree_with_identity(
                 ));
             }
         }
-        return reconcile_staged_tree_windows(parent, stage, leaf, replace, target.is_some());
+        reconcile_staged_tree_windows(parent, stage, leaf, replace, target.is_some())
     }
 
     #[cfg(unix)]
