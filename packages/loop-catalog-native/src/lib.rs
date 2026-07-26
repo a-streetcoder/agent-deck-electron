@@ -22,6 +22,10 @@ use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::os::windows::fs::MetadataExt as _;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle as _;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 const LOOP_SUFFIX: &str = ".loop.md";
@@ -90,7 +94,8 @@ fn nofollow_open(
 
 #[cfg(windows)]
 fn metadata_is_link_or_reparse(metadata: &cap_std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 #[cfg(unix)]
@@ -1329,7 +1334,8 @@ fn validate_session_worktree_root(
 
 #[cfg(windows)]
 fn session_entry_is_link_from_std(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 #[cfg(unix)]
@@ -1337,25 +1343,51 @@ fn session_entry_is_link_from_std(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
+enum SessionWorktreeEntryKind {
+    Directory,
+    DirectoryLink,
+    FileOrLink,
+}
+
 fn remove_session_worktree_entry(parent: &Dir, name: &str) -> Result<()> {
-    let metadata = parent
-        .symlink_metadata(name)
-        .map_err(map_session_worktree_io)?;
-    if session_entry_is_link(&metadata) {
-        return if metadata.is_dir() {
-            parent.remove_dir(name).map_err(map_session_worktree_io)
+    // On Windows, no-follow metadata inspection opens a reparse point with no
+    // delete sharing. Finish classification and release every inspection value
+    // before unlinking it. Also use FILE_ATTRIBUTE_DIRECTORY: FileType::is_dir
+    // is false for directory links/junctions, which must use remove_dir rather
+    // than remove_file.
+    let kind = {
+        let metadata = parent
+            .symlink_metadata(name)
+            .map_err(map_session_worktree_io)?;
+        if session_entry_is_link(&metadata) {
+            #[cfg(windows)]
+            let is_directory = metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0;
+            #[cfg(unix)]
+            let is_directory = metadata.is_dir();
+            if is_directory {
+                SessionWorktreeEntryKind::DirectoryLink
+            } else {
+                SessionWorktreeEntryKind::FileOrLink
+            }
+        } else if metadata.is_file() {
+            SessionWorktreeEntryKind::FileOrLink
+        } else if metadata.is_dir() {
+            SessionWorktreeEntryKind::Directory
         } else {
-            parent.remove_file(name).map_err(map_session_worktree_io)
-        };
-    }
-    if metadata.is_file() {
-        return parent.remove_file(name).map_err(map_session_worktree_io);
-    }
-    if !metadata.is_dir() {
-        return Err(session_worktree_error(
-            "SESSION_WORKTREE_UNSAFE",
-            "session worktree contains a special entry",
-        ));
+            return Err(session_worktree_error(
+                "SESSION_WORKTREE_UNSAFE",
+                "session worktree contains a special entry",
+            ));
+        }
+    };
+    match kind {
+        SessionWorktreeEntryKind::DirectoryLink => {
+            return parent.remove_dir(name).map_err(map_session_worktree_io);
+        }
+        SessionWorktreeEntryKind::FileOrLink => {
+            return parent.remove_file(name).map_err(map_session_worktree_io);
+        }
+        SessionWorktreeEntryKind::Directory => {}
     }
     let child = open_child_dir(parent, name, false)
         .map_err(map_session_worktree_io)?
@@ -5477,6 +5509,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn session_worktree_deletion_unlinks_nested_links_and_rejects_external_paths() {
         let data = home();
@@ -5486,18 +5519,7 @@ mod tests {
         fs::create_dir_all(target.join("nested")).unwrap();
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("sentinel"), "safe").unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, target.join("nested/link")).unwrap();
-        #[cfg(windows)]
-        assert!(
-            Command::new("cmd")
-                .args(["/c", "mklink", "/J"])
-                .arg(target.join("nested/link"))
-                .arg(&outside)
-                .status()
-                .unwrap()
-                .success()
-        );
 
         let identity = capture_session_worktree_identity(
             &store.root,
@@ -5536,6 +5558,50 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.reason.starts_with("SESSION_WORKTREE_INVALID_PATH:"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_session_worktree_deletion_unlinks_nested_junction() {
+        let data = home();
+        let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("a1b2c3d4");
+        let outside = data.path().join("outside");
+        fs::create_dir_all(target.join("nested")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel"), "safe").unwrap();
+        assert!(
+            Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(target.join("nested/link"))
+                .arg(&outside)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let identity = capture_session_worktree_identity(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+        )
+        .unwrap();
+        delete_session_worktree(
+            &store.root,
+            &store.root_path,
+            &store.root_identity,
+            &target.to_string_lossy(),
+            &identity,
+        )
+        .unwrap();
+
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "safe"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
     }
 
     #[cfg(unix)]
