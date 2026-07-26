@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import spawn from "cross-spawn";
 import { PiNotFoundError, resolvePiBinary } from "./resolve.ts";
 
@@ -25,6 +26,44 @@ export interface DoctorReport {
   checks: HealthCheck[];
   /** Provider ids that have a credential entry (no secrets). */
   signedInProviders: string[];
+}
+
+/** The presence-only env fields Doctor needs; secret values and sources stay out. */
+export interface DoctorEnvEntry {
+  key: string;
+  masked: string;
+  overridden: boolean;
+}
+
+/**
+ * Whether the effective (non-shadowed) value is non-empty. This intentionally
+ * operates only on scanEnv's masked metadata, never on a credential value.
+ */
+export function hasEffectiveEnvValue(entries: readonly DoctorEnvEntry[], key: string): boolean {
+  return entries.some(
+    (entry) => entry.key === key && !entry.overridden && entry.masked.trim().length > 0,
+  );
+}
+
+/** Honest, platform-neutral web diagnostics. These checks never access a network. */
+export function webAccessChecks(exaConfigured: boolean): HealthCheck[] {
+  return [
+    {
+      id: "web-access-exa",
+      label: "Web Access — Exa search",
+      status: "warn",
+      detail: exaConfigured
+        ? "EXA_API_KEY is configured, but Exa web tools are unavailable in this Electron build. No network or credential validity test ran."
+        : "Optional: add EXA_API_KEY in Environment. Exa web tools are unavailable in this Electron build, and no network or credential validity test ran.",
+    },
+    {
+      id: "web-access-url-fetch",
+      label: "Web Access — URL fetch",
+      status: "warn",
+      detail:
+        "Optional known-URL fetching is unavailable in this Electron build. No network test ran.",
+    },
+  ];
 }
 
 /** pi's minimum supported Node (package.json engines: node >=22.19.0). */
@@ -71,6 +110,121 @@ export function summarizeSettings(parsed: unknown): string {
   const promptCount = Array.isArray(s.prompts) ? s.prompts.length : 0;
   if (promptCount > 0) parts.push(plural(promptCount, "extra prompt path"));
   return parts.join(", ");
+}
+
+interface SettingsFileCheckOptions {
+  id: string;
+  label: string;
+  filePath: string;
+  project: boolean;
+}
+
+const PROJECT_SETTINGS_CANDIDATE =
+  " This is the selected project's settings candidate. New trusted Pi sessions load a valid candidate; matching values then override global settings.";
+
+/**
+ * Resolve Pi's effective global agent directory without mutating process env.
+ * This mirrors pinned Pi's path behavior while expanding `~` against the HOME
+ * that the backend will give Pi, rather than the server process's own home.
+ */
+export function resolveDoctorAgentDir(home: string, cwd: string, override?: string): string {
+  if (!override) return path.join(home, ".pi", "agent");
+  let expanded = override;
+  if (override === "~") {
+    expanded = home;
+  } else if (
+    override.startsWith(`~${path.sep}`) ||
+    (process.platform === "win32" && override.startsWith("~/"))
+  ) {
+    expanded = path.join(home, override.slice(2));
+  }
+  if (/^file:\/\//.test(expanded)) {
+    try {
+      expanded = fileURLToPath(expanded);
+    } catch {
+      // Preserve Pi's refusal while keeping the user-supplied URL out of an
+      // HTTP error response if the launch-environment override is malformed.
+      throw new Error("PI_CODING_AGENT_DIR contains an invalid file URL");
+    }
+  }
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
+}
+
+/** Read-only, privacy-safe diagnosis for one Pi settings file. */
+function settingsFileCheck(options: SettingsFileCheckOptions): HealthCheck {
+  const { id, label, filePath, project } = options;
+  const candidate = project ? PROJECT_SETTINGS_CANDIDATE : "";
+  const missingDetail = project
+    ? `${filePath} — not present; pi uses global settings and built-in defaults.${candidate}`
+    : `${filePath} — not present; pi uses built-in defaults.`;
+
+  let contents: string;
+  try {
+    // Pi's exists/read path follows settings symlinks. statSync does likewise,
+    // while still letting Doctor distinguish a directory/non-regular target.
+    const stats = statSync(filePath);
+    if (!stats.isFile()) {
+      return {
+        id,
+        label,
+        status: "warn",
+        detail: `${filePath} — the settings candidate does not resolve to a regular file.${candidate}`,
+      };
+    }
+    contents = readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { id, label, status: "ok", detail: missingDetail };
+    }
+    return {
+      id,
+      label,
+      status: "warn",
+      detail: `${filePath} — the settings candidate cannot be read.${candidate}`,
+    };
+  }
+
+  // Pinned SettingsManager treats an exactly empty file as empty settings before
+  // calling JSON.parse. Whitespace-only content still reaches JSON.parse.
+  if (contents === "") {
+    return {
+      id,
+      label,
+      status: "ok",
+      detail: `${filePath} — empty file; pi loads empty settings.${candidate}`,
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    return {
+      id,
+      label,
+      status: "warn",
+      detail: `${filePath} — malformed JSON; pi ignores this file, so its custom settings won't apply; fix or remove it.${candidate}`,
+    };
+  }
+  // Pi's migration uses the `in` operator. null and JSON primitives therefore
+  // fail to load, while arrays pass that initial migration and must not be
+  // rejected here without stronger pinned behavior to support that claim.
+  if (parsed === null || typeof parsed !== "object") {
+    return {
+      id,
+      label,
+      status: "warn",
+      detail: `${filePath} — valid JSON, but not a settings object; pi cannot apply settings from it.${candidate}`,
+    };
+  }
+
+  const summary = summarizeSettings(parsed);
+  return {
+    id,
+    label,
+    status: "ok",
+    detail: `${filePath} — valid JSON${summary ? `; ${summary}` : ""}.${candidate}`,
+  };
 }
 
 /** True iff the given version is >= MIN_NODE_VERSION (lexicographic by part). */
@@ -172,7 +326,11 @@ function readSignedInProviders(home: string): string[] {
   return [];
 }
 
-export async function runDoctor(home: string = homedir()): Promise<DoctorReport> {
+export async function runDoctor(
+  home: string = homedir(),
+  projectPath?: string,
+  agentDir: string = path.join(home, ".pi", "agent"),
+): Promise<DoctorReport> {
   const checks: HealthCheck[] = [];
 
   let binPath: string | null = null;
@@ -297,45 +455,26 @@ export async function runDoctor(home: string = homedir()): Promise<DoctorReport>
     fixCommand: signedInProviders.length > 0 ? undefined : "export ANTHROPIC_API_KEY=YOUR_KEY_HERE",
   });
 
-  // pi's settings.json (native Doctor "Settings Files"): pi's SettingsManager
-  // reads ~/.pi/agent/settings.json on startup with strict JSON.parse. Absent is
-  // fine (pi uses defaults). A malformed file does NOT crash pi — it catches the
-  // parse error, falls back to {}, and emits a warning-level diagnostic — but the
-  // user's custom settings are then silently dropped, so it's a "warn" (matching
-  // pi's own severity), not an "error". Never writes/exposes the contents.
-  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
-  if (!existsSync(settingsPath)) {
-    checks.push({
+  // Pi loads global settings first, then a selected project's settings on top.
+  // Diagnose each source independently and expose only its path plus a numeric /
+  // boolean summary — never JSON keys, values, names, secrets, or raw OS errors.
+  checks.push(
+    settingsFileCheck({
       id: "settings",
-      label: "Pi settings.json",
-      status: "ok",
-      detail: "not present — pi uses built-in defaults",
-    });
-  } else {
-    let parsed: unknown;
-    let valid = true;
-    try {
-      parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
-    } catch {
-      valid = false;
-    }
-    if (valid) {
-      // Surface a read-only summary of the notable bits (native "Settings Files").
-      const summary = summarizeSettings(parsed);
-      checks.push({
-        id: "settings",
-        label: "Pi settings.json",
-        status: "ok",
-        detail: summary ? `valid JSON — ${summary}` : "valid JSON",
-      });
-    } else {
-      checks.push({
-        id: "settings",
-        label: "Pi settings.json",
-        status: "warn",
-        detail: `malformed JSON at ${settingsPath} — pi ignores it and falls back to built-in defaults, so your custom settings won't apply; fix or remove it`,
-      });
-    }
+      label: "Global Pi settings (active candidate)",
+      filePath: path.join(agentDir, "settings.json"),
+      project: false,
+    }),
+  );
+  if (projectPath) {
+    checks.push(
+      settingsFileCheck({
+        id: "settings-project",
+        label: "Project Pi settings",
+        filePath: path.join(projectPath, ".pi", "settings.json"),
+        project: true,
+      }),
+    );
   }
 
   return { checks, signedInProviders };

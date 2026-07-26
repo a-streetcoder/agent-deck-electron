@@ -290,7 +290,7 @@ function CopyFixButton({ command }: { command: string }) {
       data-testid="doctor-fix-copy"
       data-fix-command={command}
       title={`Copy: ${command}`}
-      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary"
+      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
       onClick={copy}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -300,31 +300,96 @@ function CopyFixButton({ command }: { command: string }) {
 }
 
 const STATUS_ICON = {
-  ok: { Icon: CheckCircle2, color: "var(--color-success)" },
-  warn: { Icon: TriangleAlert, color: "var(--color-warning)" },
-  error: { Icon: XCircle, color: "var(--color-role-error)" },
+  ok: { Icon: CheckCircle2, color: "var(--color-success)", label: "OK" },
+  warn: { Icon: TriangleAlert, color: "var(--color-warning)", label: "Warning" },
+  error: { Icon: XCircle, color: "var(--color-role-error)", label: "Error" },
 } as const;
 
 export function DoctorScreen() {
+  const currentProjectId = useAppStore((state) => state.currentProjectId);
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const activeRequest = useRef<{ id: number; controller: AbortController } | null>(null);
+  const nextRequestId = useRef(0);
+  const refreshButton = useRef<HTMLButtonElement | null>(null);
 
-  const refresh = (): void => {
-    setLoading(true);
-    void fetch("/runtime/doctor")
-      .then((response) => response.json())
-      .then((data: { report: { checks: HealthCheck[] } }) => setChecks(data.report.checks))
-      .finally(() => setLoading(false));
-  };
+  const cancelActiveRequest = useCallback((): void => {
+    const active = activeRequest.current;
+    if (!active) return;
+    // Clear first so refresh/unmount can never abort this controller twice.
+    activeRequest.current = null;
+    active.controller.abort();
+  }, []);
 
-  useEffect(refresh, []);
+  const refresh = useCallback(
+    (restoreFocus = false): void => {
+      cancelActiveRequest();
+      const controller = new AbortController();
+      const id = ++nextRequestId.current;
+      let succeeded = false;
+      activeRequest.current = { id, controller };
+      setLoading(true);
+      setLoadError(null);
+      const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+
+      void fetch(`/runtime/doctor${query}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Doctor diagnostics could not be loaded (HTTP ${response.status}).`);
+          }
+          const data: unknown = await response.json();
+          const report =
+            typeof data === "object" && data !== null
+              ? (data as { report?: { checks?: unknown } }).report
+              : undefined;
+          if (!report || !Array.isArray(report.checks)) {
+            throw new Error("Doctor diagnostics returned an unexpected response.");
+          }
+          if (activeRequest.current?.id === id) {
+            succeeded = true;
+            setChecks(report.checks as HealthCheck[]);
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || activeRequest.current?.id !== id) return;
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "Doctor diagnostics could not be loaded. Please try again.",
+          );
+        })
+        .finally(() => {
+          if (activeRequest.current?.id !== id) return;
+          activeRequest.current = null;
+          setLoading(false);
+          if (restoreFocus && succeeded) {
+            requestAnimationFrame(() => {
+              // A newer request or unmount must not let this settled retry steal focus.
+              if (nextRequestId.current === id && activeRequest.current === null) {
+                refreshButton.current?.focus();
+              }
+            });
+          }
+        });
+    },
+    [cancelActiveRequest, currentProjectId],
+  );
+
+  useEffect(() => {
+    refresh();
+    return cancelActiveRequest;
+  }, [cancelActiveRequest, refresh]);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="doctor-screen">
-      <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
+      <div
+        className="rounded-2xl border border-border-subtle bg-surface-elevated p-4"
+        aria-busy={loading}
+      >
         <div className="flex items-center justify-between pb-1">
           <div className="flex items-center gap-2">
-            <Stethoscope size={16} className="text-text-secondary" />
+            <Stethoscope aria-hidden="true" size={16} className="text-text-secondary" />
             <h2
               className="text-base font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
@@ -333,10 +398,12 @@ export function DoctorScreen() {
             </h2>
           </div>
           <ControlButton
+            ref={refreshButton}
+            type="button"
             data-testid="doctor-refresh"
-            className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+            className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:opacity-40"
             disabled={loading}
-            onClick={refresh}
+            onClick={() => refresh()}
           >
             {loading ? "Checking…" : "Re-check"}
           </ControlButton>
@@ -344,9 +411,32 @@ export function DoctorScreen() {
         <p className="pb-3 text-xs text-text-muted">
           Environment health for the pi runtime this app drives.
         </p>
+        <div className="sr-only" role="status" aria-live="polite" data-testid="doctor-status">
+          {loading
+            ? "Checking diagnostics…"
+            : loadError
+              ? "Diagnostics refresh failed."
+              : "Diagnostics up to date."}
+        </div>
+        {loadError ? (
+          <div
+            className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-sm text-text-primary"
+            role="alert"
+            data-testid="doctor-error"
+          >
+            <span>{loadError}</span>
+            <ControlButton
+              type="button"
+              className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+              onClick={() => refresh(true)}
+            >
+              Retry
+            </ControlButton>
+          </div>
+        ) : null}
         <div className="space-y-2">
           {checks.map((check) => {
-            const { Icon, color } = STATUS_ICON[check.status];
+            const { Icon, color, label } = STATUS_ICON[check.status];
             return (
               <div
                 key={check.id}
@@ -355,9 +445,14 @@ export function DoctorScreen() {
                 data-check-id={check.id}
                 data-check-status={check.status}
               >
-                <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
+                <Icon aria-hidden="true" size={16} style={{ color }} className="mt-0.5 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-text-primary">{check.label}</div>
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <div className="text-sm font-medium text-text-primary">{check.label}</div>
+                    <span className="text-micro font-medium uppercase text-text-secondary">
+                      {label}
+                    </span>
+                  </div>
                   <div className="break-words font-mono text-xs text-text-muted">
                     {check.detail}
                   </div>

@@ -20,8 +20,19 @@ test.beforeAll(async () => {
     path.join(harness.piHome, ".pi", "agent", ".env"),
     "OPENAI_API_KEY=sk-secret-value-1234\nSHARED_KEY=global-value\n",
   );
+  writeFileSync(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+    JSON.stringify({ packages: ["runtime-global-package"] }),
+  );
   mkdirSync(path.join(project, ".pi"), { recursive: true });
-  writeFileSync(path.join(project, ".pi", ".env"), "SHARED_KEY=project-value\n");
+  writeFileSync(
+    path.join(project, ".pi", "settings.json"),
+    JSON.stringify({ prompts: ["runtime-project-prompt"] }),
+  );
+  writeFileSync(
+    path.join(project, ".pi", ".env"),
+    "SHARED_KEY=project-value\nEXA_API_KEY=exa-project-super-secret-7890\n",
+  );
 
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
@@ -74,12 +85,14 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   await expect(nodeCheck).toHaveAttribute("data-check-status", "ok");
   await expect(nodeCheck).toContainText("Node.js");
 
-  // pi settings.json validity check (native Doctor Settings Files): the hermetic
-  // home has no settings.json, so it reports ok ("uses defaults").
+  // Global settings provenance is always visible, including its exact source.
   const settingsCheck = page.locator('[data-check-id="settings"]');
   await expect(settingsCheck).toBeVisible();
   await expect(settingsCheck).toHaveAttribute("data-check-status", "ok");
-  await expect(settingsCheck).toContainText("settings.json");
+  await expect(settingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
+  await expect(page.locator('[data-check-id="settings-project"]')).toHaveCount(0);
 
   // The GitHub CLI check is surfaced (its ok/warn verdict depends on the host's
   // gh install/auth, so only its presence is asserted here).
@@ -87,18 +100,188 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   await expect(githubCheck).toBeVisible();
   await expect(githubCheck).toContainText("GitHub CLI");
 
+  const exaCheck = page.locator('[data-check-id="web-access-exa"]');
+  await expect(exaCheck).toBeVisible();
+  await expect(exaCheck).toHaveAttribute("data-check-status", "warn");
+  await expect(exaCheck).toContainText("Warning");
+  await expect(exaCheck).toContainText(/optional.*EXA_API_KEY/i);
+  await expect(exaCheck).toContainText(/unavailable in this Electron build/i);
+  await expect(exaCheck).toContainText(/no network or credential validity test ran/i);
+
+  const urlFetchCheck = page.locator('[data-check-id="web-access-url-fetch"]');
+  await expect(urlFetchCheck).toBeVisible();
+  await expect(urlFetchCheck).toHaveAttribute("data-check-status", "warn");
+  await expect(urlFetchCheck).toContainText("Warning");
+  await expect(urlFetchCheck).toContainText(/known-URL fetching is unavailable/i);
+  await expect(urlFetchCheck).toContainText(/no network test ran/i);
+
   // Re-check button works.
   await page.getByTestId("doctor-refresh").click();
   await expect(page.locator('[data-check-id="pi-binary"]')).toBeVisible();
 });
 
+test("Doctor inspects the selected project's effective environment without leaking it", async ({
+  page,
+}) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  const doctorRequest = page.waitForRequest((request) =>
+    new URL(request.url()).pathname.endsWith("/runtime/doctor"),
+  );
+  await page.getByTestId("nav-doctor").click();
+  const request = await doctorRequest;
+  expect(new URL(request.url()).searchParams.get("projectId")).toBeTruthy();
+
+  const globalSettingsCheck = page.locator('[data-check-id="settings"]');
+  const projectSettingsCheck = page.locator('[data-check-id="settings-project"]');
+  await expect(globalSettingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
+  await expect(projectSettingsCheck).toContainText(path.join(project, ".pi", "settings.json"));
+  await expect(projectSettingsCheck).toContainText(/selected project's settings candidate/i);
+  await expect(projectSettingsCheck).toContainText(
+    /new trusted Pi sessions load a valid candidate.*matching values then override global settings/i,
+  );
+
+  const exaCheck = page.locator('[data-check-id="web-access-exa"]');
+  await expect(exaCheck).toContainText("EXA_API_KEY is configured");
+  await expect(exaCheck).toContainText(/tools are unavailable/i);
+  await expect(page.getByTestId("doctor-screen")).not.toContainText(
+    "exa-project-super-secret-7890",
+  );
+  await expect(exaCheck.getByTestId("doctor-fix-copy")).toHaveCount(0);
+
+  // Switching project while Doctor remains mounted triggers a fresh request
+  // and re-reads the effective global environment.
+  const globalRequest = page.waitForRequest((next) =>
+    new URL(next.url()).pathname.endsWith("/runtime/doctor"),
+  );
+  await page.getByTestId("project-picker").click();
+  await page.getByTestId("project-all-projects").click();
+  const nextRequest = await globalRequest;
+  expect(new URL(nextRequest.url()).searchParams.has("projectId")).toBe(false);
+  await expect(exaCheck).toContainText(/optional.*EXA_API_KEY/i);
+  await expect(projectSettingsCheck).toHaveCount(0);
+  await expect(globalSettingsCheck).toContainText(
+    path.join(harness.piHome, ".pi", "agent", "settings.json"),
+  );
+});
+
+test("Doctor preserves results across a retryable refresh failure", async ({ page }) => {
+  let requestCount = 0;
+  let releaseFirst: (() => void) | undefined;
+  const firstPending = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const report = {
+    report: {
+      checks: [
+        {
+          id: "web-access-exa",
+          label: "Web Access — Exa search",
+          status: "warn",
+          detail:
+            "Optional: add EXA_API_KEY in Environment. Exa web tools are unavailable in this Electron build, and no network or credential validity test ran.",
+        },
+        {
+          id: "web-access-url-fetch",
+          label: "Web Access — URL fetch",
+          status: "warn",
+          detail:
+            "Optional known-URL fetching is unavailable in this Electron build. No network test ran.",
+        },
+      ],
+    },
+  };
+  // OnboardingOverlay fetches Doctor unconditionally even when dismissed by the
+  // shared fixture. Let that real response finish before intercepting so request
+  // #1 below deterministically belongs to DoctorScreen.
+  const onboardingDoctor = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/runtime/doctor"),
+  );
+  await page.goto(harness.baseUrl);
+  await onboardingDoctor;
+
+  await page.route("**/runtime/doctor*", async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      await firstPending;
+      await route.fulfill({ status: 200, json: report });
+    } else if (requestCount === 2) {
+      await route.fulfill({ status: 503, json: { error: "private server detail" } });
+    } else {
+      await route.fulfill({ status: 200, json: report });
+    }
+  });
+
+  await page.getByTestId("nav-doctor").click();
+  await expect(page.getByTestId("doctor-screen").locator("[aria-busy=true]")).toBeVisible();
+  await expect(page.getByTestId("doctor-status")).toHaveText("Checking diagnostics…");
+  const refresh = page.getByTestId("doctor-refresh");
+  await expect(refresh).toBeDisabled();
+  releaseFirst!();
+  await expect(page.locator('[data-check-id="web-access-exa"]')).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  await expect(page.locator('[data-check-id="web-access-exa"] svg')).toHaveAttribute(
+    "aria-hidden",
+    "true",
+  );
+
+  // Re-check uses a native button: keyboard activation starts request #2.
+  await refresh.focus();
+  await refresh.press("Enter");
+  const error = page.getByTestId("doctor-error");
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toContainText("HTTP 503");
+  await expect(error).not.toContainText("private server detail");
+  // A failed refresh does not replace the last successful rows.
+  await expect(page.locator('[data-check-id="web-access-url-fetch"]')).toBeVisible();
+
+  const retry = error.getByRole("button", { name: "Retry" });
+  await retry.focus();
+  await retry.press("Enter");
+  await expect(error).toHaveCount(0);
+  await expect(page.getByTestId("doctor-status")).toHaveText("Diagnostics up to date.");
+  await expect(refresh).toBeFocused();
+  expect(requestCount).toBe(3);
+});
+
 test("Doctor offers a copyable fix command for a failing check", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-write"]);
+  const onboardingDoctor = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/runtime/doctor"),
+  );
   await page.goto(harness.baseUrl);
+  await onboardingDoctor;
+  await page.route("**/runtime/doctor*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        report: {
+          checks: [
+            {
+              id: "pi-binary",
+              label: "Pi binary",
+              status: "ok",
+              detail: "available",
+            },
+            {
+              id: "auth",
+              label: "AI model connection",
+              status: "warn",
+              detail: "Connect an AI model provider to run coding sessions",
+              fixCommand: "export ANTHROPIC_API_KEY=YOUR_KEY_HERE",
+            },
+          ],
+        },
+      },
+    });
+  });
   await page.getByTestId("nav-doctor").click();
 
-  // The provider-credentials check warns (no auth.json in the harness) and
-  // exposes a copyable fix command; an ok check (pi-binary) does not.
+  // A failing provider check exposes a copyable placeholder command; an ok
+  // check does not. The response is scripted because the E2E mock provider is
+  // intentionally configured and would otherwise make the real auth check OK.
   const authCheck = page.locator('[data-check-id="auth"]');
   await expect(authCheck).toHaveAttribute("data-check-status", "warn");
   const copyBtn = authCheck.getByTestId("doctor-fix-copy");

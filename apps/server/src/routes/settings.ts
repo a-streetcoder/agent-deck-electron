@@ -1,6 +1,11 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
-import { runDoctor } from "@agent-deck/pi-host";
+import {
+  hasEffectiveEnvValue,
+  resolveDoctorAgentDir,
+  runDoctor,
+  webAccessChecks,
+} from "@agent-deck/pi-host";
 import { listProviders, logoutProvider, scanEnv, writeEnvVar } from "@agent-deck/resources";
 import {
   isKeybindingCommand,
@@ -10,7 +15,7 @@ import {
 } from "@agent-deck/contracts";
 import { z } from "zod";
 import type { AppSettings } from "../persistence.ts";
-import type { ServerContext } from "../context.ts";
+import { envDefaults, type ServerContext } from "../context.ts";
 import {
   INSTRUCTIONS_MAX,
   RESOURCE_NAME,
@@ -82,8 +87,18 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
-  fastify.get("/runtime/doctor", async () => {
-    const report = await runDoctor(resourceHome());
+  fastify.get("/runtime/doctor", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
+    const roots = rootsFor(projectId);
+    const defaults = envDefaults();
+    const agentDir = resolveDoctorAgentDir(
+      roots.home,
+      roots.projectPath ?? defaults.cwd ?? process.cwd(),
+      defaults.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR,
+    );
+    const report = await runDoctor(roots.home, roots.projectPath, agentDir);
+    const envEntries = scanEnv(roots);
+    report.checks.push(...webAccessChecks(hasEffectiveEnvValue(envEntries, "EXA_API_KEY")));
     const connectedProviders = (await listProviders(rootsFor())).filter(
       (provider) => provider.signedIn || provider.configured,
     );
