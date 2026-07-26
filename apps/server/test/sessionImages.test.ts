@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SessionImageStore } from "../src/sessionImages.ts";
+import { SessionImageStore, syncDirectoryStrict } from "../src/sessionImages.ts";
 
 // 1x1 transparent PNG.
 const png = Buffer.from(
@@ -260,7 +260,8 @@ describe("SessionImageStore", () => {
     const data = mkdtempSync(path.join(tmpdir(), "deck-images-fresh-order-"));
     roots.push(data);
     const events: string[] = [];
-    const relative = (directory: string) => path.relative(data, directory) || "data";
+    const relative = (directory: string) =>
+      path.relative(data, directory).split(path.sep).join("/") || "data";
     const images = new SessionImageStore(data, (step) => events.push(`atomic:${step}`), {
       mkdir: (directory) => {
         events.push(`mkdir:${relative(directory)}`);
@@ -301,6 +302,80 @@ describe("SessionImageStore", () => {
     }).toThrow("fresh-directory-fsync-failed");
     expect(stageWasPossible).toBe(false);
     expect(readdirSync(path.join(data, "session-images"))).toEqual([]);
+  });
+
+  it("treats injected Windows directory fsync EPERM as unsupported after validation", () => {
+    const data = mkdtempSync(path.join(tmpdir(), "deck-images-directory-fsync-"));
+    roots.push(data);
+    const closed: number[] = [];
+    expect(() =>
+      syncDirectoryStrict(data, {
+        platform: "win32",
+        open: () => 42,
+        fsync: () => {
+          throw Object.assign(new Error("unsupported-directory-fsync"), { code: "EPERM" });
+        },
+        close: (fd) => closed.push(fd),
+      }),
+    ).not.toThrow();
+    expect(closed).toEqual([42]);
+  });
+
+  it("keeps injected Windows directory open EPERM fatal", () => {
+    const data = mkdtempSync(path.join(tmpdir(), "deck-images-directory-open-"));
+    roots.push(data);
+    expect(() =>
+      syncDirectoryStrict(data, {
+        platform: "win32",
+        open: () => {
+          throw Object.assign(new Error("directory-open-denied"), { code: "EPERM" });
+        },
+        fsync: () => {},
+        close: () => {},
+      }),
+    ).toThrow("directory-open-denied");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "treats the native Windows directory fsync EPERM as unsupported",
+    () => {
+      const images = store();
+      expect(() => images.stage("s", "", [attachment])).not.toThrow();
+    },
+  );
+
+  it.each([
+    ["blob", 1],
+    ["manifest", 2],
+  ])("keeps an injected EPERM from %s file fsync fatal", (_kind, failingCall) => {
+    const data = mkdtempSync(path.join(tmpdir(), "deck-images-file-fsync-"));
+    roots.push(data);
+    let calls = 0;
+    const images = new SessionImageStore(data, undefined, {
+      mkdir: (directory) => mkdirSync(directory, { mode: 0o700 }),
+      syncDirectory: () => {},
+      syncFile: () => {
+        calls += 1;
+        if (calls === failingCall)
+          throw Object.assign(new Error("file-fsync-denied"), { code: "EPERM" });
+      },
+    });
+    expect(() => images.stage("s", "", [attachment])).toThrow("file-fsync-denied");
+  });
+
+  it.each(["creation", "access"])("keeps directory %s EPERM fatal", (operation) => {
+    const data = mkdtempSync(path.join(tmpdir(), "deck-images-directory-permission-"));
+    roots.push(data);
+    const denied = () => {
+      throw Object.assign(new Error("directory-denied"), { code: "EPERM" });
+    };
+    expect(
+      () =>
+        new SessionImageStore(data, undefined, {
+          mkdir: operation === "creation" ? denied : (directory) => mkdirSync(directory),
+          syncDirectory: operation === "access" ? denied : () => {},
+        }),
+    ).toThrow("directory-denied");
   });
 
   it("fsyncs temp files before rename and directories after publication", () => {

@@ -53,6 +53,7 @@ export type DurabilityStep = "temp-fsync" | "rename" | "directory-fsync";
 export interface SessionImageDirectoryOps {
   mkdir(directory: string): void;
   syncDirectory(directory: string): void;
+  syncFile?(fd: number): void;
 }
 
 function verifyDirectory(directory: string): void {
@@ -64,27 +65,47 @@ function errorCode(error: unknown): string | undefined {
     ? String((error as { code?: unknown }).code)
     : undefined;
 }
-function syncDirectoryStrict(directory: string): void {
+export interface SessionImageDirectorySyncOps {
+  platform: NodeJS.Platform;
+  open(directory: string): number;
+  fsync(fd: number): void;
+  close(fd: number): void;
+}
+const DEFAULT_DIRECTORY_SYNC_OPS: SessionImageDirectorySyncOps = {
+  platform: process.platform,
+  open: (directory) => openSync(directory, "r"),
+  fsync: fsyncSync,
+  close: closeSync,
+};
+export function syncDirectoryStrict(
+  directory: string,
+  ops: SessionImageDirectorySyncOps = DEFAULT_DIRECTORY_SYNC_OPS,
+): void {
+  // lstat is deliberately before the Windows unsupported-operation handling:
+  // only a real, no-follow directory is eligible for that narrow exception.
+  verifyDirectory(directory);
   let fd: number;
   try {
-    fd = openSync(directory, "r");
+    fd = ops.open(directory);
   } catch (error) {
     // Node/libuv may report opening a directory itself as unsupported on
     // Windows. Permission and general I/O failures remain fatal.
-    if (process.platform === "win32" && errorCode(error) === "EISDIR") return;
+    if (ops.platform === "win32" && errorCode(error) === "EISDIR") return;
     throw error;
   }
   let failure: unknown;
   try {
-    fsyncSync(fd);
+    ops.fsync(fd);
   } catch (error) {
     const code = errorCode(error);
-    // Directory fsync is not available on every Windows filesystem/libuv
-    // combination. Ignore only the explicit unsupported-operation results.
-    if (process.platform !== "win32" || (code !== "EINVAL" && code !== "ENOTSUP")) failure = error;
+    // Windows reports EPERM for fsync on a validated directory. Directory
+    // fsync is unsupported there; file fsync and other permission failures
+    // remain fatal because this exception is confined to this helper.
+    if (ops.platform !== "win32" || (code !== "EPERM" && code !== "EINVAL" && code !== "ENOTSUP"))
+      failure = error;
   }
   try {
-    closeSync(fd);
+    ops.close(fd);
   } catch (error) {
     failure ??= error;
   }
@@ -99,6 +120,7 @@ function atomicFile(
   data: Buffer | string,
   onDurabilityStep: ((step: DurabilityStep) => void) | undefined,
   syncDirectory: (directory: string) => void,
+  syncFile: (fd: number) => void,
 ): void {
   const tmp = `${file}.tmp-${randomUUID()}`;
   let fd: number | undefined;
@@ -106,7 +128,7 @@ function atomicFile(
   try {
     fd = openSync(tmp, "wx", 0o600);
     writeFileSync(fd, data);
-    fsyncSync(fd);
+    syncFile(fd);
     onDurabilityStep?.("temp-fsync");
     closeSync(fd);
     fd = undefined;
@@ -519,6 +541,7 @@ export class SessionImageStore {
       `${JSON.stringify(manifest)}\n`,
       this.onDurabilityStep,
       (directory) => this.directoryOps.syncDirectory(directory),
+      (fd) => (this.directoryOps.syncFile ?? fsyncSync)(fd),
     );
   }
   private readManifest(sessionId: string): Manifest {
@@ -579,8 +602,12 @@ export class SessionImageStore {
         this.verifyBlob(blob, blobHash, image.data.length);
         this.directoryOps.syncDirectory(this.blobs);
       } else
-        atomicFile(blob, image.data, this.onDurabilityStep, (directory) =>
-          this.directoryOps.syncDirectory(directory),
+        atomicFile(
+          blob,
+          image.data,
+          this.onDurabilityStep,
+          (directory) => this.directoryOps.syncDirectory(directory),
+          (fd) => (this.directoryOps.syncFile ?? fsyncSync)(fd),
         );
       this.verifyBlob(blob, blobHash, image.data.length);
       manifest.images.push({
@@ -664,8 +691,12 @@ export class SessionImageStore {
         const blobHash = createHash("sha256").update(image.data).digest("hex");
         const blob = path.join(this.blobs, blobHash);
         if (!existsSync(blob))
-          atomicFile(blob, image.data, this.onDurabilityStep, (directory) =>
-            this.directoryOps.syncDirectory(directory),
+          atomicFile(
+            blob,
+            image.data,
+            this.onDurabilityStep,
+            (directory) => this.directoryOps.syncDirectory(directory),
+            (fd) => (this.directoryOps.syncFile ?? fsyncSync)(fd),
           );
         else this.directoryOps.syncDirectory(this.blobs);
         this.verifyBlob(blob, blobHash, image.data.length);
