@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import nodePath from "node:path";
 import {
   canRetryLoopRun,
@@ -33,6 +33,15 @@ import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import {
   createLoopWorktree,
+  gitApplyPatch,
+  gitApplyPatchCheck,
+  gitCommitOid,
+  gitCurrentBranch,
+  gitLoopWorktreePatch,
+  gitOperationInProgress,
+  gitRepositoryIdentity,
+  gitWorkingTreeClean,
+  gitWorktreePrune,
   gitWorktreeRegistrations,
   type GitWorktree,
   type OwnedLoopWorktreeProof,
@@ -107,6 +116,17 @@ export interface LoopRouteTestDependencies {
   canonicalCheckoutLockKey: typeof canonicalCheckoutLockKey;
   createLoopWorktree: typeof createLoopWorktree;
   gitWorktreeRegistrations: typeof gitWorktreeRegistrations;
+  gitCommitOid?: typeof gitCommitOid;
+  gitCurrentBranch?: typeof gitCurrentBranch;
+  gitRepositoryIdentity?: typeof gitRepositoryIdentity;
+  gitLoopWorktreePatch?: typeof gitLoopWorktreePatch;
+  gitWorkingTreeClean?: typeof gitWorkingTreeClean;
+  gitOperationInProgress?: typeof gitOperationInProgress;
+  gitApplyPatchCheck?: typeof gitApplyPatchCheck;
+  gitApplyPatch?: typeof gitApplyPatch;
+  gitWorktreePrune?: typeof gitWorktreePrune;
+  /** Test seam around the single exact-entry atomic rename; production uses renameSync. */
+  renameWorktree?: (source: string, destination: string) => void;
 }
 
 export function registerLoopRoutes(
@@ -133,10 +153,149 @@ export function registerLoopRoutes(
   const loopWorktreesRoot = ensurePrivateLoopWorktreesRoot(worktreesRoot);
   // Trust-boundary lock: at most one destructive Loop may own a canonical
   // checkout. Interrupted runs seed durable recovery locks before onReady.
-  const checkoutLocks = new Map<string, { owner: string; kind: "active" | "recovery" }>();
+  const checkoutLocks = new Map<
+    string,
+    { owner: string; kind: "active" | "recovery" | "review" }
+  >();
+  const worktreeOperationLocks = new Set<string>();
   for (const [key, runId] of loopEngine.recoveryCheckoutLocks()) {
     checkoutLocks.set(key, { owner: runId, kind: "recovery" });
   }
+
+  const gitOps = {
+    commitOid: routeDependencies.gitCommitOid ?? gitCommitOid,
+    currentBranch: routeDependencies.gitCurrentBranch ?? gitCurrentBranch,
+    repositoryIdentity: routeDependencies.gitRepositoryIdentity ?? gitRepositoryIdentity,
+    patch: routeDependencies.gitLoopWorktreePatch ?? gitLoopWorktreePatch,
+    clean: routeDependencies.gitWorkingTreeClean ?? gitWorkingTreeClean,
+    operationInProgress: routeDependencies.gitOperationInProgress ?? gitOperationInProgress,
+    applyCheck: routeDependencies.gitApplyPatchCheck ?? gitApplyPatchCheck,
+    apply: routeDependencies.gitApplyPatch ?? gitApplyPatch,
+    prune: routeDependencies.gitWorktreePrune ?? gitWorktreePrune,
+    renameWorktree: routeDependencies.renameWorktree ?? renameSync,
+  };
+
+  type ValidatedLoopWorktree = {
+    run: NonNullable<ReturnType<typeof loopEngine.get>>;
+    ownership: OwnedLoopWorktreeProof & { baseCommit: string };
+    projectRoot: string;
+    worktreePath: string;
+  };
+  const validateOwnedWorktree = async (id: string): Promise<ValidatedLoopWorktree> => {
+    const run = loopEngine.get(id);
+    const ownership = run?.launch?.worktree as Partial<OwnedLoopWorktreeProof> | undefined;
+    if (
+      !run ||
+      !isLoopRunTerminal(run.status) ||
+      run.launch?.writeTarget !== "newWorktree" ||
+      !ownership ||
+      ownership.ownershipVersion !== 1 ||
+      typeof ownership.ownershipId !== "string" ||
+      !z.string().uuid().safeParse(ownership.ownershipId).success ||
+      typeof ownership.projectRoot !== "string" ||
+      typeof ownership.path !== "string" ||
+      typeof ownership.branch !== "string" ||
+      typeof ownership.sourceBranch !== "string" ||
+      typeof ownership.baseCommit !== "string" ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ownership.baseCommit) ||
+      ownership.branchOwned !== true ||
+      !run.projectId
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    const project = projects.find((candidate) => candidate.id === run.projectId);
+    if (!project) throw new Error("loop_worktree_unavailable");
+    const rootStat = lstatSync(loopWorktreesRoot);
+    if (
+      !rootStat.isDirectory() ||
+      rootStat.isSymbolicLink() ||
+      (process.platform !== "win32" && (rootStat.mode & 0o077) !== 0)
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    const projectRoot = routeDependencies.canonicalCheckoutLockKey(project.path);
+    if (ownership.projectRoot !== projectRoot) throw new Error("loop_worktree_unavailable");
+    const expectedBasename = `loop-${ownership.ownershipId}`;
+    const expectedPath = nodePath.join(loopWorktreesRoot, expectedBasename);
+    if (
+      nodePath.basename(ownership.path) !== expectedBasename ||
+      ownership.branch !== loopWorktreeBranch(run.loopName, ownership.ownershipId) ||
+      routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
+        routeDependencies.canonicalCheckoutLockKey(expectedPath)
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    const candidateStat = lstatSync(expectedPath);
+    if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    const worktreePath = realpathSync.native(expectedPath);
+    if (
+      routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
+        routeDependencies.canonicalCheckoutLockKey(worktreePath) ||
+      routeDependencies.canonicalCheckoutLockKey(nodePath.dirname(worktreePath)) !==
+        routeDependencies.canonicalCheckoutLockKey(loopWorktreesRoot)
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    const registrations = await routeDependencies.gitWorktreeRegistrations(projectRoot);
+    if (
+      !registrations.some(
+        (entry) =>
+          entry.branch === ownership.branch &&
+          routeDependencies.canonicalCheckoutLockKey(entry.path) ===
+            routeDependencies.canonicalCheckoutLockKey(worktreePath),
+      )
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    if (
+      (await gitOps.repositoryIdentity(projectRoot)) !==
+        (await gitOps.repositoryIdentity(worktreePath)) ||
+      (await gitOps.currentBranch(worktreePath)) !== ownership.branch ||
+      (await gitOps.commitOid(worktreePath, ownership.baseCommit)) !== ownership.baseCommit
+    ) {
+      throw new Error("loop_worktree_unavailable");
+    }
+    await gitOps.commitOid(worktreePath, `refs/heads/${ownership.branch}`);
+    return {
+      run,
+      ownership: ownership as OwnedLoopWorktreeProof & { baseCommit: string },
+      projectRoot,
+      worktreePath,
+    };
+  };
+
+  const validateArchivedWorktree = async (
+    archivedPath: string,
+    validated: ValidatedLoopWorktree,
+  ): Promise<void> => {
+    const archivedStat = lstatSync(archivedPath);
+    // rename(2) moves a symlink directory entry, never its target. We still
+    // refuse to prune after any same-user swap by validating the moved entry.
+    if (!archivedStat.isDirectory() || archivedStat.isSymbolicLink()) {
+      throw new Error("archived entry is not a real directory");
+    }
+    const canonicalArchive = realpathSync.native(archivedPath);
+    if (
+      routeDependencies.canonicalCheckoutLockKey(canonicalArchive) !==
+        routeDependencies.canonicalCheckoutLockKey(archivedPath) ||
+      routeDependencies.canonicalCheckoutLockKey(nodePath.dirname(canonicalArchive)) !==
+        routeDependencies.canonicalCheckoutLockKey(loopWorktreesRoot)
+    ) {
+      throw new Error("archived entry is outside the private worktree root");
+    }
+    if (
+      (await gitOps.repositoryIdentity(canonicalArchive)) !==
+        (await gitOps.repositoryIdentity(validated.projectRoot)) ||
+      (await gitOps.currentBranch(canonicalArchive)) !== validated.ownership.branch ||
+      (await gitOps.commitOid(canonicalArchive, validated.ownership.baseCommit)) !==
+        validated.ownership.baseCommit
+    ) {
+      throw new Error("archived entry does not match Loop ownership");
+    }
+    await gitOps.commitOid(canonicalArchive, `refs/heads/${validated.ownership.branch}`);
+  };
 
   // Reconcile only transient parent sessions whose exact ownership was durably
   // recorded. Registered Loop worktrees and branches are review evidence and
@@ -574,6 +733,7 @@ export function registerLoopRoutes(
           path: worktree.path,
           branch: worktree.branch,
           sourceBranch: worktree.sourceBranch,
+          baseCommit: worktree.baseCommit,
           branchOwned: true,
         };
         cwd = target;
@@ -770,93 +930,330 @@ export function registerLoopRoutes(
     return { run };
   });
 
-  // Electron main calls this with an opaque run id. Every persisted ownership
-  // claim is re-proven against current project metadata, the private root, the
-  // filesystem, and Git's registration table before a path crosses the boundary.
+  const worktreeUnavailable = (reply: FastifyReply): FastifyReply =>
+    reply.status(409).send({
+      code: "loop_worktree_unavailable",
+      error: "The retained Loop worktree is unavailable for review.",
+    });
+
+  // Electron main receives only an opaque run id. The backend is the sole path authority.
   fastify.get("/loops/runs/:id/worktree-directory", async (request, reply) => {
-    const unavailable = () =>
-      reply.status(409).send({
-        code: "loop_worktree_unavailable",
-        error: "The retained Loop worktree is unavailable for review.",
-      });
     const id = (request.params as { id: string }).id;
-    const run = loopEngine.get(id);
-    if (!run) return reply.status(404).send({ error: "unknown loop run" });
-    const ownership = run.launch?.worktree as Partial<OwnedLoopWorktreeProof> | undefined;
-    if (
-      !isLoopRunTerminal(run.status) ||
-      run.launch?.writeTarget !== "newWorktree" ||
-      !ownership ||
-      ownership.ownershipVersion !== 1 ||
-      typeof ownership.ownershipId !== "string" ||
-      !z.string().uuid().safeParse(ownership.ownershipId).success ||
-      typeof ownership.projectRoot !== "string" ||
-      !nodePath.isAbsolute(ownership.projectRoot) ||
-      typeof ownership.path !== "string" ||
-      !nodePath.isAbsolute(ownership.path) ||
-      typeof ownership.branch !== "string" ||
-      typeof ownership.sourceBranch !== "string" ||
-      ownership.sourceBranch.length === 0 ||
-      ownership.branchOwned !== true ||
-      !run.projectId
-    ) {
-      return unavailable();
-    }
-    const project = projects.find((candidate) => candidate.id === run.projectId);
-    if (!project) return unavailable();
+    if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });
     try {
-      const rootStat = lstatSync(loopWorktreesRoot);
-      if (
-        !rootStat.isDirectory() ||
-        rootStat.isSymbolicLink() ||
-        (process.platform !== "win32" && (rootStat.mode & 0o077) !== 0)
-      ) {
-        return unavailable();
-      }
-      const projectRoot = routeDependencies.canonicalCheckoutLockKey(project.path);
-      if (routeDependencies.canonicalCheckoutLockKey(ownership.projectRoot) !== projectRoot) {
-        return unavailable();
-      }
-      const expectedBasename = `loop-${ownership.ownershipId}`;
-      const expectedPath = nodePath.join(loopWorktreesRoot, expectedBasename);
-      const expectedBranch = loopWorktreeBranch(run.loopName, ownership.ownershipId);
-      if (
-        nodePath.basename(ownership.path) !== expectedBasename ||
-        (process.platform === "win32"
-          ? routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
-            routeDependencies.canonicalCheckoutLockKey(expectedPath)
-          : nodePath.normalize(ownership.path) !== nodePath.normalize(expectedPath)) ||
-        ownership.branch !== expectedBranch
-      ) {
-        return unavailable();
-      }
-      const candidateStat = lstatSync(expectedPath);
-      if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) return unavailable();
-      const canonicalPath = realpathSync.native(expectedPath);
-      if (
-        routeDependencies.canonicalCheckoutLockKey(ownership.path) !==
-          routeDependencies.canonicalCheckoutLockKey(canonicalPath) ||
-        routeDependencies.canonicalCheckoutLockKey(nodePath.dirname(canonicalPath)) !==
-          routeDependencies.canonicalCheckoutLockKey(loopWorktreesRoot)
-      ) {
-        return unavailable();
-      }
-      const registrations = await routeDependencies.gitWorktreeRegistrations(projectRoot);
-      const registered = registrations.some((entry) => {
-        if (entry.branch !== ownership.branch) return false;
-        try {
-          return (
-            routeDependencies.canonicalCheckoutLockKey(entry.path) ===
-            routeDependencies.canonicalCheckoutLockKey(canonicalPath)
-          );
-        } catch {
-          return false;
-        }
-      });
-      if (!registered) return unavailable();
-      return { directory: canonicalPath };
+      const validated = await validateOwnedWorktree(id);
+      return { directory: validated.worktreePath };
     } catch {
-      return unavailable();
+      return worktreeUnavailable(reply);
+    }
+  });
+
+  fastify.get("/loops/runs/:id/review", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });
+    if (worktreeOperationLocks.has(id)) {
+      return reply
+        .status(409)
+        .send({ code: "loop_review_busy", error: "A worktree decision is already in progress." });
+    }
+    worktreeOperationLocks.add(id);
+    try {
+      const validated = await validateOwnedWorktree(id);
+      const review = loopEngine.ensureWorktreeReviewAvailable(id);
+      if (review.status !== "available") {
+        return reply.status(409).send({
+          code: "loop_review_unavailable",
+          error: "This worktree is no longer available for review.",
+        });
+      }
+      const generated = await gitOps.patch(validated.worktreePath, validated.ownership.baseCommit);
+      const hash = createHash("sha256").update(generated.bytes).digest("hex");
+      const saved = loopEngine.saveWorktreePatch(id, generated.bytes, hash, generated.changedFiles);
+      const previewLimit = 240_000;
+      const patch = generated.bytes.subarray(0, previewLimit).toString("utf8");
+      return {
+        run: loopEngine.get(id),
+        review: saved,
+        patch,
+        patchTruncated: generated.bytes.length > previewLimit,
+        changedFiles: generated.changedFiles,
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === "loop_patch_too_large") {
+        return reply.status(413).send({
+          code: "loop_patch_too_large",
+          error: "The worktree patch exceeds the safe review limit.",
+        });
+      }
+      return worktreeUnavailable(reply);
+    } finally {
+      worktreeOperationLocks.delete(id);
+    }
+  });
+
+  const decisionBody = z.object({
+    confirmed: z.literal(true),
+    expectedUpdatedAt: z.string().min(1),
+  });
+
+  fastify.post("/loops/runs/:id/apply", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const parsed = decisionBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    if (!loopEngine.get(id)) return reply.status(404).send({ error: "unknown loop run" });
+    if (worktreeOperationLocks.has(id)) {
+      return reply
+        .status(409)
+        .send({ code: "loop_review_busy", error: "A worktree decision is already in progress." });
+    }
+    worktreeOperationLocks.add(id);
+    let projectLockKey: string | undefined;
+    let applyingUpdatedAt: string | undefined;
+    try {
+      const validated = await validateOwnedWorktree(id);
+      projectLockKey = routeDependencies.canonicalCheckoutLockKey(validated.projectRoot);
+      if (checkoutLocks.has(projectLockKey)) {
+        return reply
+          .status(409)
+          .send({ code: "loop_checkout_busy", error: "The project checkout is busy." });
+      }
+      checkoutLocks.set(projectLockKey, { owner: id, kind: "review" });
+      const current = loopEngine.ensureWorktreeReviewAvailable(id);
+      if (current.status !== "available") {
+        return reply.status(409).send({
+          code: "loop_review_unavailable",
+          error: "This worktree is no longer available to apply.",
+        });
+      }
+      if (
+        !(await gitOps.clean(validated.projectRoot)) ||
+        (await gitOps.operationInProgress(validated.projectRoot)) ||
+        (await gitOps.currentBranch(validated.projectRoot)) !== validated.ownership.sourceBranch
+      ) {
+        return reply.status(409).send({
+          code: "loop_apply_preflight_failed",
+          error: "The project checkout must be clean, idle, and on the recorded source branch.",
+        });
+      }
+      // Applying is a decision on bytes the user actually reviewed. Generate a
+      // fixed in-memory candidate while holding the operation lock, but never
+      // replace the persisted reviewed hash on a stale or direct apply request.
+      const generated = await gitOps.patch(validated.worktreePath, validated.ownership.baseCommit);
+      const hash = createHash("sha256").update(generated.bytes).digest("hex");
+      if (!current.patchHash || hash !== current.patchHash) {
+        return reply.status(409).send({
+          code: "loop_worktree_changed",
+          error:
+            "The Loop worktree changed after review. Review the latest changes before applying.",
+          run: loopEngine.get(id),
+        });
+      }
+      let run;
+      try {
+        run = loopEngine.transitionWorktreeReview(id, parsed.data.expectedUpdatedAt, "applying");
+      } catch {
+        return reply.status(409).send({
+          code: "loop_review_conflict",
+          error: "The run changed; reload before applying.",
+        });
+      }
+      applyingUpdatedAt = run.review!.updatedAt;
+      // The durable artifact is evidence only. Both check and apply consume the
+      // exact reviewed bytes through stdin, never a mutable artifact pathname.
+      await gitOps.applyCheck(validated.projectRoot, generated.bytes);
+      try {
+        await gitOps.apply(validated.projectRoot, generated.bytes);
+      } catch (error) {
+        const uncertain = loopEngine.transitionWorktreeReview(
+          id,
+          applyingUpdatedAt,
+          "applyUncertain",
+          {
+            error: `Apply outcome is uncertain: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        );
+        return reply
+          .status(500)
+          .send({ code: "loop_apply_uncertain", error: uncertain.review!.error, run: uncertain });
+      }
+      const applied = loopEngine.transitionWorktreeReview(id, applyingUpdatedAt, "applied", {
+        error: undefined,
+      });
+      return { run: applied };
+    } catch (error) {
+      if (applyingUpdatedAt) {
+        try {
+          const available = loopEngine.transitionWorktreeReview(
+            id,
+            applyingUpdatedAt,
+            "available",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return reply
+            .status(409)
+            .send({ code: "loop_apply_failed", error: available.review!.error, run: available });
+        } catch {
+          // A mismatch after applying was persisted is itself uncertain.
+          const run = loopEngine.get(id);
+          return reply.status(500).send({
+            code: "loop_apply_uncertain",
+            error: "Apply outcome is uncertain; inspect the checkout before continuing.",
+            run,
+          });
+        }
+      }
+      return worktreeUnavailable(reply);
+    } finally {
+      if (projectLockKey && checkoutLocks.get(projectLockKey)?.owner === id)
+        checkoutLocks.delete(projectLockKey);
+      worktreeOperationLocks.delete(id);
+    }
+  });
+
+  fastify.post("/loops/runs/:id/discard", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const parsed = decisionBody
+      .extend({ loopName: z.string().min(1).max(200) })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const existing = loopEngine.get(id);
+    if (!existing) return reply.status(404).send({ error: "unknown loop run" });
+    if (parsed.data.loopName !== existing.loopName) {
+      return reply.status(422).send({
+        code: "loop_discard_confirmation_failed",
+        error: "Type the exact Loop name to confirm safe archival.",
+      });
+    }
+    if (worktreeOperationLocks.has(id)) {
+      return reply
+        .status(409)
+        .send({ code: "loop_review_busy", error: "A worktree decision is already in progress." });
+    }
+    worktreeOperationLocks.add(id);
+    let discardingUpdatedAt: string | undefined;
+    let archivedPath: string | undefined;
+    try {
+      const validated = await validateOwnedWorktree(id);
+      const current = loopEngine.ensureWorktreeReviewAvailable(id);
+      if (current.status !== "available") {
+        return reply.status(409).send({
+          code: "loop_review_unavailable",
+          error: "This worktree is no longer available to archive.",
+        });
+      }
+      archivedPath = nodePath.join(
+        loopWorktreesRoot,
+        `${nodePath.basename(validated.worktreePath)}.archived-${Date.now()}-${randomUUID()}`,
+      );
+      let run;
+      try {
+        run = loopEngine.transitionWorktreeReview(id, parsed.data.expectedUpdatedAt, "discarding", {
+          archivedPath,
+        });
+      } catch {
+        return reply.status(409).send({
+          code: "loop_review_conflict",
+          error: "The run changed; reload before archiving.",
+        });
+      }
+      discardingUpdatedAt = run.review!.updatedAt;
+      try {
+        // Revalidate immediately before the synchronous exact-entry rename.
+        // The injected seam may deterministically model a same-user swap.
+        await validateOwnedWorktree(id);
+        gitOps.renameWorktree(validated.worktreePath, archivedPath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        try {
+          // A failed atomic rename is a normal retryable failure only when the
+          // original exact entry still proves ownership and no archive appeared.
+          try {
+            lstatSync(archivedPath);
+            throw new Error("archive entry exists");
+          } catch (archiveError) {
+            if (
+              archiveError instanceof Error &&
+              "code" in archiveError &&
+              archiveError.code === "ENOENT"
+            ) {
+              await validateOwnedWorktree(id);
+              const available = loopEngine.transitionWorktreeReview(
+                id,
+                discardingUpdatedAt,
+                "available",
+                {
+                  archivedPath: undefined,
+                  error: `The worktree was not archived: ${detail}`,
+                },
+              );
+              return reply.status(409).send({
+                code: "loop_discard_failed",
+                error: available.review!.error,
+                run: available,
+              });
+            }
+            throw archiveError;
+          }
+        } catch {
+          const uncertain = loopEngine.transitionWorktreeReview(
+            id,
+            discardingUpdatedAt,
+            "discardUncertain",
+            {
+              archivedPath,
+              error: `The archive outcome is uncertain; the recorded entry was not modified further: ${detail}`,
+            },
+          );
+          return reply.status(500).send({
+            code: "loop_discard_uncertain",
+            error: uncertain.review!.error,
+            run: uncertain,
+          });
+        }
+      }
+      try {
+        await validateArchivedWorktree(archivedPath, validated);
+      } catch (error) {
+        const uncertain = loopEngine.transitionWorktreeReview(
+          id,
+          discardingUpdatedAt,
+          "discardUncertain",
+          {
+            archivedPath,
+            error: `The archived entry failed ownership validation and was left untouched: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        );
+        return reply
+          .status(500)
+          .send({ code: "loop_discard_uncertain", error: uncertain.review!.error, run: uncertain });
+      }
+      try {
+        await gitOps.prune(validated.projectRoot);
+      } catch (error) {
+        const uncertain = loopEngine.transitionWorktreeReview(
+          id,
+          discardingUpdatedAt,
+          "discardUncertain",
+          {
+            archivedPath,
+            error: `The worktree was archived at the recorded path, but Git registration pruning is uncertain: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        );
+        return reply
+          .status(500)
+          .send({ code: "loop_discard_uncertain", error: uncertain.review!.error, run: uncertain });
+      }
+      const discarded = loopEngine.transitionWorktreeReview(id, discardingUpdatedAt, "discarded", {
+        archivedPath,
+        error: undefined,
+      });
+      return { run: discarded };
+    } catch {
+      return worktreeUnavailable(reply);
+    } finally {
+      worktreeOperationLocks.delete(id);
     }
   });
 

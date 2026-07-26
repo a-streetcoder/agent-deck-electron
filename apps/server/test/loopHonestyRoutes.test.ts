@@ -1,4 +1,5 @@
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,7 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { LOOP_PARALLEL_WRITE_TARGET_CODE, type LoopStructure } from "@agent-deck/domain";
+import {
+  LOOP_PARALLEL_WRITE_TARGET_CODE,
+  type LoopDefinition,
+  type LoopStructure,
+} from "@agent-deck/domain";
 import {
   deleteLoopFile,
   loopsDir,
@@ -19,12 +24,16 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 
-vi.mock("../src/git.ts", () => ({
-  createLoopWorktree: vi.fn(),
-  gitWorktreeRegistrations: vi.fn(),
-  gitWorktreePrune: vi.fn(),
-  gitDeleteOwnedWorktreeBranch: vi.fn(),
-}));
+vi.mock("../src/git.ts", async (importOriginal) => {
+  const actual = (await importOriginal()) as object;
+  return {
+    ...actual,
+    createLoopWorktree: vi.fn(),
+    gitWorktreeRegistrations: vi.fn(),
+    gitWorktreePrune: vi.fn(),
+    gitDeleteOwnedWorktreeBranch: vi.fn(),
+  };
+});
 
 import {
   createLoopWorktree,
@@ -33,7 +42,11 @@ import {
   gitWorktreePrune,
 } from "../src/git.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
-import { canonicalCheckoutLockKey, registerLoopRoutes } from "../src/routes/loops.ts";
+import {
+  canonicalCheckoutLockKey,
+  registerLoopRoutes,
+  type LoopRouteTestDependencies,
+} from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
 const servers: ReturnType<typeof Fastify>[] = [];
@@ -59,6 +72,10 @@ function makeRoutes(
   home: string,
   rootsFor: () => { home: string } = () => ({ home }),
   recovery: { locks?: Map<string, string>; runs?: unknown[] } = {},
+  extras: {
+    engine?: LoopEngine;
+    routeDependencies?: Partial<LoopRouteTestDependencies>;
+  } = {},
 ) {
   const fastify = Fastify();
   servers.push(fastify);
@@ -108,6 +125,11 @@ function makeRoutes(
   const createWorktreeEffect = vi.fn((...args: Parameters<typeof createLoopWorktree>) =>
     createLoopWorktree(...args),
   );
+  const gitCommitOidEffect = vi.fn(async (_cwd: string, revision: string) =>
+    /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision) ? revision : "a".repeat(40),
+  );
+  const gitCurrentBranchEffect = vi.fn(async () => "agent-deck/loop-Review-Proof-12345678");
+  const gitRepositoryIdentityEffect = vi.fn(async () => "same-repository");
   registerLoopRoutes(
     {
       fastify,
@@ -132,20 +154,22 @@ function makeRoutes(
         remove: (id: string) => indexRows.delete(id),
       },
       projects: { find: findProject },
-      loopEngine: {
-        start: startEngine,
-        recordFailedStart,
-        stop: stopEngine,
-        settled: settledEngine,
-        rollbackStart: rollbackEngine,
-        recoveryCheckoutLocks,
-        pendingResourceReconciliations,
-        markSessionReconciled,
-        acknowledgeCheckoutRecovery,
-        resolveHumanApproval,
-        list: () => [],
-        get: getEngine,
-      },
+      loopEngine:
+        extras.engine ??
+        ({
+          start: startEngine,
+          recordFailedStart,
+          stop: stopEngine,
+          settled: settledEngine,
+          rollbackStart: rollbackEngine,
+          recoveryCheckoutLocks,
+          pendingResourceReconciliations,
+          markSessionReconciled,
+          acknowledgeCheckoutRecovery,
+          resolveHumanApproval,
+          list: () => [],
+          get: getEngine,
+        } as unknown as ServerContext["loopEngine"]),
       bridgeTokens,
       broadcast,
       rootsFor,
@@ -157,6 +181,10 @@ function makeRoutes(
       canonicalCheckoutLockKey: canonicalCheckoutEffect,
       createLoopWorktree: createWorktreeEffect,
       gitWorktreeRegistrations,
+      gitCommitOid: gitCommitOidEffect,
+      gitCurrentBranch: gitCurrentBranchEffect,
+      gitRepositoryIdentity: gitRepositoryIdentityEffect,
+      ...extras.routeDependencies,
     },
   );
   return {
@@ -777,6 +805,7 @@ describe("loop route honesty gate", () => {
           path: worktreePath,
           branch,
           sourceBranch: "main",
+          baseCommit: "a".repeat(40),
           branchOwned: true,
         },
       },
@@ -908,6 +937,104 @@ describe("loop route honesty gate", () => {
     expect(startEngine).not.toHaveBeenCalled();
     expect(createLoopWorktree).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "leaves a swapped symlink entry and its outside target untouched and marks discard uncertain",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "loop-discard-swap-"));
+      const outside = mkdtempSync(path.join(tmpdir(), "loop-discard-outside-"));
+      const sentinel = path.join(outside, "sentinel.txt");
+      writeFileSync(sentinel, "outside stays untouched\n");
+      const engine = new LoopEngine({
+        dataDir: path.join(home, "loop-data"),
+        executeRole: async ({ phase }) => (phase === "evaluator" ? "SUCCESS" : "done"),
+        runValidation: async () => true,
+      });
+      let ownedBackup = "";
+      const renameWorktree = vi.fn((source: string, destination: string) => {
+        // Model a same-user race after immediate validation. rename moves the
+        // symlink entry itself, not the directory it targets.
+        ownedBackup = `${source}.swapped-owned`;
+        renameSync(source, ownedBackup);
+        symlinkSync(outside, source);
+        renameSync(source, destination);
+      });
+      const { fastify } = makeRoutes(
+        home,
+        () => ({ home }),
+        {},
+        {
+          engine,
+          routeDependencies: { renameWorktree },
+        },
+      );
+      const ownershipId = "12345678-1234-4123-8123-123456789abc";
+      const projectRoot = canonicalCheckoutLockKey(home);
+      const worktreePath = path.join(home, "managed-worktrees", "loop", `loop-${ownershipId}`);
+      mkdirSync(worktreePath);
+      writeFileSync(path.join(worktreePath, ".git"), "gitdir: retained-admin\n");
+      const branch = "agent-deck/loop-Review-Proof-12345678";
+      vi.mocked(gitWorktreeRegistrations).mockResolvedValue([{ path: worktreePath, branch }]);
+      const definition: LoopDefinition = {
+        id: "review-proof",
+        name: "Review Proof",
+        description: "",
+        goal: "review",
+        structure: "singleAgent",
+        agentName: "Agent A",
+        maxIterations: 1,
+        validationCommand: "exit 0",
+        writeTarget: "newWorktree",
+        source: "user",
+        availability: "allProjects",
+        projectPaths: [],
+        filePath: "review-proof.loop.md",
+        launchContextScope: "firstIterationOnly",
+      };
+      const run = engine.start(definition, worktreePath, {
+        projectId: "project",
+        launch: {
+          sessionId: "review-session",
+          writeTarget: "newWorktree",
+          worktree: {
+            ownershipVersion: 1,
+            ownershipId,
+            projectRoot,
+            path: worktreePath,
+            branch,
+            sourceBranch: "main",
+            baseCommit: "a".repeat(40),
+            branchOwned: true,
+          },
+        },
+      });
+      await engine.settled(run.id);
+
+      const response = await fastify.inject({
+        method: "POST",
+        url: `/loops/runs/${run.id}/discard`,
+        payload: {
+          confirmed: true,
+          expectedUpdatedAt: engine.get(run.id)!.updatedAt,
+          loopName: "Review Proof",
+        },
+      });
+
+      expect(response.statusCode).toBe(500);
+      const body = response.json();
+      expect(body.code).toBe("loop_discard_uncertain");
+      expect(body.run.review).toMatchObject({
+        status: "discardUncertain",
+        archivedPath: expect.any(String),
+        error: expect.stringContaining("failed ownership validation"),
+      });
+      expect(renameWorktree).toHaveBeenCalledOnce();
+      expect(gitWorktreePrune).not.toHaveBeenCalled();
+      expect(readFileSync(sentinel, "utf8")).toBe("outside stays untouched\n");
+      expect(readFileSync(path.join(ownedBackup, ".git"), "utf8")).toContain("gitdir:");
+      expect(lstatSync(body.run.review.archivedPath).isSymbolicLink()).toBe(true);
+    },
+  );
 
   it("applies Discovery/Triage tool policy for every target and preserves configured identity", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-triage-policy-"));

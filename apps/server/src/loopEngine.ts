@@ -35,6 +35,7 @@ import {
   type LoopRunStatus,
   type LoopValidationResult,
   type LoopStopReason,
+  type LoopWorktreeReview,
 } from "@agent-deck/domain";
 import { z } from "zod";
 
@@ -358,6 +359,7 @@ const persistedRunSchema = z
             path: z.string().min(1),
             branch: z.string().min(1),
             sourceBranch: z.string().min(1),
+            baseCommit: z.string().min(1).optional(),
             branchOwned: z.literal(true),
           })
           .optional(),
@@ -377,6 +379,35 @@ const persistedRunSchema = z
         if (launch.writeTarget !== "newWorktree" && launch.worktree) {
           context.addIssue({ code: "custom", message: "unexpected worktree ownership" });
         }
+      })
+      .optional(),
+    review: z
+      .object({
+        status: z.enum([
+          "available",
+          "applying",
+          "applied",
+          "discarding",
+          "discarded",
+          "applyUncertain",
+          "discardUncertain",
+        ]),
+        updatedAt: z.string(),
+        availableAt: z.string(),
+        applyingAt: z.string().optional(),
+        appliedAt: z.string().optional(),
+        discardingAt: z.string().optional(),
+        discardedAt: z.string().optional(),
+        uncertainAt: z.string().optional(),
+        patchArtifact: z.string().optional(),
+        patchHash: z.string().optional(),
+        patchBytes: z.number().int().nonnegative().optional(),
+        patchTruncated: z.boolean().optional(),
+        changedFiles: z
+          .array(z.object({ path: z.string(), status: z.string() }).passthrough())
+          .optional(),
+        archivedPath: z.string().optional(),
+        error: z.string().optional(),
       })
       .optional(),
     status: z.enum([
@@ -684,6 +715,13 @@ export class LoopEngine {
           }
         }
         for (const iteration of run.iterations) iteration.artifacts ??= [];
+        if (run.review?.status === "applying" || run.review?.status === "discarding") {
+          const operation = run.review.status === "applying" ? "apply" : "discard";
+          run.review.status = operation === "apply" ? "applyUncertain" : "discardUncertain";
+          run.review.uncertainAt = this.now();
+          run.review.updatedAt = run.review.uncertainAt;
+          run.review.error = `${operation === "apply" ? "Apply" : "Discard"} was interrupted. Inspect the recorded evidence before taking further action.`;
+        }
         if (run.status === "running" || run.status === "stopping") {
           run.status = "interrupted";
           run.stopReason = "appInterrupted";
@@ -853,7 +891,7 @@ export class LoopEngine {
     }
   }
 
-  private atomicArtifactWrite(filePath: string, content: string): void {
+  private atomicArtifactWrite(filePath: string, content: string | Uint8Array): void {
     if (!this.artifactsRoot) throw new Error("Loop artifact root is unavailable");
     const relative = path.relative(this.artifactsRoot, path.resolve(filePath));
     const ownerId = relative.split(path.sep)[0]!;
@@ -861,7 +899,11 @@ export class LoopEngine {
     this.assertSafeArtifactPath(owner, filePath, false);
     const temp = `${filePath}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temp, content, { encoding: "utf8", mode: 0o600 });
+      writeFileSync(
+        temp,
+        content,
+        typeof content === "string" ? { encoding: "utf8", mode: 0o600 } : { mode: 0o600 },
+      );
       renameSync(temp, filePath);
     } finally {
       rmSync(temp, { force: true });
@@ -901,6 +943,69 @@ export class LoopEngine {
 
   list(): LoopRun[] {
     return [...this.runs.values()];
+  }
+
+  /** Initialize the terminal review decision point without guessing for legacy proofs. */
+  ensureWorktreeReviewAvailable(id: string): LoopWorktreeReview {
+    const run = this.runs.get(id);
+    if (!run || !isLoopRunTerminal(run.status) || !run.launch?.worktree?.baseCommit) {
+      throw new Error("loop_worktree_review_unavailable");
+    }
+    if (!run.review) {
+      const now = this.now();
+      run.review = { status: "available", availableAt: now, updatedAt: now };
+      run.updatedAt = now;
+      this.persist();
+    }
+    return run.review;
+  }
+
+  saveWorktreePatch(
+    id: string,
+    patch: Uint8Array,
+    patchHash: string,
+    changedFiles: NonNullable<LoopWorktreeReview["changedFiles"]>,
+  ): LoopWorktreeReview {
+    const run = this.runs.get(id);
+    const review = this.ensureWorktreeReviewAvailable(id);
+    if (
+      !run?.artifactDirectory ||
+      (review.status !== "available" && review.status !== "applying")
+    ) {
+      throw new Error("loop_worktree_review_unavailable");
+    }
+    const patchArtifact = path.join(run.artifactDirectory, "worktree.patch");
+    this.atomicArtifactWrite(patchArtifact, patch);
+    review.patchArtifact = patchArtifact;
+    review.patchHash = patchHash;
+    review.patchBytes = patch.byteLength;
+    review.changedFiles = structuredClone(changedFiles);
+    review.error = undefined;
+    review.updatedAt = this.now();
+    run.updatedAt = review.updatedAt;
+    this.persist();
+    return review;
+  }
+
+  transitionWorktreeReview(
+    id: string,
+    expectedUpdatedAt: string,
+    next: LoopWorktreeReview["status"],
+    details: Partial<LoopWorktreeReview> = {},
+  ): LoopRun {
+    const run = this.runs.get(id);
+    const review = this.ensureWorktreeReviewAvailable(id);
+    if (!run || review.updatedAt !== expectedUpdatedAt) throw new Error("loop_review_conflict");
+    const now = this.now();
+    Object.assign(review, details, { status: next, updatedAt: now });
+    if (next === "applying") review.applyingAt = now;
+    if (next === "applied") review.appliedAt = now;
+    if (next === "discarding") review.discardingAt = now;
+    if (next === "discarded") review.discardedAt = now;
+    if (next === "applyUncertain" || next === "discardUncertain") review.uncertainAt = now;
+    run.updatedAt = now;
+    this.persist();
+    return run;
   }
   settled(id: string): Promise<void> {
     return this.settledPromises.get(id) ?? Promise.resolve();
@@ -993,6 +1098,9 @@ export class LoopEngine {
       endedAt: now,
     };
     void cwd;
+    if (launch?.worktree?.baseCommit) {
+      run.review = { status: "available", availableAt: now, updatedAt: now };
+    }
     this.runs.set(run.id, run);
     this.persist();
     this.settledPromises.set(run.id, Promise.resolve());
@@ -1235,6 +1343,13 @@ export class LoopEngine {
     run.stopReason = reason;
     run.endedAt = this.now();
     run.updatedAt = run.endedAt;
+    if (run.launch?.worktree?.baseCommit && !run.review) {
+      run.review = {
+        status: "available",
+        availableAt: run.endedAt,
+        updatedAt: run.endedAt,
+      };
+    }
     this.writeArtifactEvidence(run);
     this.persist();
   }

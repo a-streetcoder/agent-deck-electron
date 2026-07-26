@@ -43,6 +43,44 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
   };
 }
 
+describe("Loop worktree decision recovery", () => {
+  it("converts an in-flight apply to uncertain on restart and never retries it", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "loop-review-restart-"));
+    const now = vi.fn(() => new Date(Date.now() + now.mock.calls.length * 1_000).toISOString());
+    const executeRole = vi.fn(async ({ phase }: { phase: string }) =>
+      phase === "evaluator" ? "SUCCESS" : "done",
+    );
+    const engine = new LoopEngine({ dataDir, now, executeRole, runValidation: async () => true });
+    const run = engine.start(makeLoop({ writeTarget: "newWorktree", maxIterations: 1 }), cwd(), {
+      launch: {
+        sessionId: "loop-parent",
+        writeTarget: "newWorktree",
+        worktree: {
+          ownershipVersion: 1,
+          ownershipId: "12345678-1234-4123-8123-123456789abc",
+          projectRoot: cwd(),
+          path: path.join(cwd(), "loop-12345678-1234-4123-8123-123456789abc"),
+          branch: "agent-deck/loop-test-12345678",
+          sourceBranch: "main",
+          baseCommit: "a".repeat(40),
+          branchOwned: true,
+        },
+      },
+    });
+    await engine.settled(run.id);
+    expect(run.review?.status).toBe("available");
+    engine.transitionWorktreeReview(run.id, run.updatedAt, "applying");
+
+    const restarted = new LoopEngine({ dataDir, now, executeRole });
+    expect(restarted.get(run.id)?.review).toMatchObject({
+      status: "applyUncertain",
+      uncertainAt: expect.any(String),
+      error: expect.stringContaining("interrupted"),
+    });
+    expect(executeRole).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("loop engine (single-agent)", () => {
   it("fails closed for a blank required Single Agent name before creating a run", () => {
     const engine = new LoopEngine({ executeAgent: async () => "must not run" });
