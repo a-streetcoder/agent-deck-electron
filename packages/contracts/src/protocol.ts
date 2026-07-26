@@ -235,6 +235,8 @@ export const SessionMeta = Schema.mutable(
      * session runs in the project root.
      */
     worktreePath: Schema.optional(Schema.String),
+    /** Native stable identity captured when the isolated checkout was allocated. */
+    worktreeIdentity: Schema.optional(Schema.String),
     worktreeBranch: Schema.optional(Schema.String),
     worktreeSourceBranch: Schema.optional(Schema.String),
     /** Internal durable marker for a retained Loop review session. The renderer

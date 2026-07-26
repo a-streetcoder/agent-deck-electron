@@ -33,6 +33,24 @@ export class ResourceCatalogCapabilityError extends Error {
   }
 }
 
+export type SessionWorktreeErrorCode =
+  | "SESSION_WORKTREE_INVALID_PATH"
+  | "SESSION_WORKTREE_UNSAFE"
+  | "SESSION_WORKTREE_NOT_FOUND"
+  | "SESSION_WORKTREE_BUSY"
+  | "SESSION_WORKTREE_IO"
+  | "SESSION_WORKTREE_NATIVE_UNAVAILABLE";
+
+export class SessionWorktreeCapabilityError extends Error {
+  constructor(
+    readonly code: SessionWorktreeErrorCode,
+    message = "Native session worktree safety boundary refused the operation.",
+  ) {
+    super(message);
+    this.name = "SessionWorktreeCapabilityError";
+  }
+}
+
 export type LoopCatalogErrorCode =
   | "LOOP_CATALOG_INVALID_BASENAME"
   | "LOOP_CATALOG_UNSAFE_COMPONENT"
@@ -96,6 +114,13 @@ interface NativeManagedSkillRepositoryStore {
   deleteRepository(leaf: string): void;
 }
 
+interface NativeSessionWorktreeStore {
+  readonly rootPath: string;
+  reserveWorktree(targetPath: string): string;
+  captureWorktreeIdentity(targetPath: string): string;
+  deleteWorktree(targetPath: string, identityToken: string): Promise<void>;
+}
+
 interface NativeBinding {
   readResourceCatalogFile(home: string, catalog: ResourceCatalog, components: string[]): string;
   writeResourceCatalogFile(
@@ -120,6 +145,7 @@ interface NativeBinding {
     sourcePath: string,
     replace: boolean,
   ): void;
+  SessionWorktreeStore: new (dataDir: string) => NativeSessionWorktreeStore;
   ManagedSkillRepositoryStore: new (
     dataDir: string,
     expectedRealpath: string,
@@ -145,7 +171,7 @@ const candidates = [
 let loadedBinding: NativeBinding | undefined;
 let bindingLoadFailed = false;
 
-function loadBinding(domain: "loop" | "resource"): NativeBinding {
+function loadBinding(domain: "loop" | "resource" | "worktree"): NativeBinding {
   if (loadedBinding) return loadedBinding;
   const selected = candidates.find(existsSync);
   if (!selected || bindingLoadFailed) {
@@ -153,6 +179,12 @@ function loadBinding(domain: "loop" | "resource"): NativeBinding {
       throw new ResourceCatalogCapabilityError(
         "RESOURCE_NATIVE_UNAVAILABLE",
         `Required native resource safety addon is unavailable for ${process.platform}-${process.arch}.`,
+      );
+    }
+    if (domain === "worktree") {
+      throw new SessionWorktreeCapabilityError(
+        "SESSION_WORKTREE_NATIVE_UNAVAILABLE",
+        `Required native session worktree safety addon is unavailable for ${process.platform}-${process.arch}.`,
       );
     }
     throw new LoopCatalogCapabilityError(
@@ -175,6 +207,14 @@ const CODES = new Set<LoopCatalogErrorCode>([
   "LOOP_CATALOG_ALREADY_EXISTS",
   "LOOP_CATALOG_INVALID_UTF8",
   "LOOP_CATALOG_IO",
+]);
+
+const SESSION_WORKTREE_CODES = new Set<SessionWorktreeErrorCode>([
+  "SESSION_WORKTREE_INVALID_PATH",
+  "SESSION_WORKTREE_UNSAFE",
+  "SESSION_WORKTREE_NOT_FOUND",
+  "SESSION_WORKTREE_BUSY",
+  "SESSION_WORKTREE_IO",
 ]);
 
 const RESOURCE_CODES = new Set<ResourceCatalogErrorCode>([
@@ -211,6 +251,32 @@ async function invokeResourceAsync<T>(operation: () => Promise<T>): Promise<T> {
     const candidate = reason.split(":", 1)[0] as ResourceCatalogErrorCode;
     throw new ResourceCatalogCapabilityError(
       RESOURCE_CODES.has(candidate) ? candidate : "RESOURCE_IO",
+    );
+  }
+}
+
+function invokeSessionWorktree<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof SessionWorktreeCapabilityError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const candidate = reason.split(":", 1)[0] as SessionWorktreeErrorCode;
+    throw new SessionWorktreeCapabilityError(
+      SESSION_WORKTREE_CODES.has(candidate) ? candidate : "SESSION_WORKTREE_IO",
+    );
+  }
+}
+
+async function invokeSessionWorktreeAsync<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof SessionWorktreeCapabilityError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const candidate = reason.split(":", 1)[0] as SessionWorktreeErrorCode;
+    throw new SessionWorktreeCapabilityError(
+      SESSION_WORKTREE_CODES.has(candidate) ? candidate : "SESSION_WORKTREE_IO",
     );
   }
 }
@@ -288,6 +354,32 @@ export const copyResourceTree = (
       replace,
     ),
   );
+
+export class SessionWorktreeStore {
+  private readonly native: NativeSessionWorktreeStore;
+
+  constructor(dataDir: string) {
+    this.native = invokeSessionWorktree(
+      () => new (loadBinding("worktree").SessionWorktreeStore)(dataDir),
+    );
+  }
+
+  get rootPath(): string {
+    return this.native.rootPath;
+  }
+
+  reserveWorktree(targetPath: string): string {
+    return invokeSessionWorktree(() => this.native.reserveWorktree(targetPath));
+  }
+
+  captureWorktreeIdentity(targetPath: string): string {
+    return invokeSessionWorktree(() => this.native.captureWorktreeIdentity(targetPath));
+  }
+
+  deleteWorktree(targetPath: string, identityToken: string): Promise<void> {
+    return invokeSessionWorktreeAsync(() => this.native.deleteWorktree(targetPath, identityToken));
+  }
+}
 
 export class ManagedSkillRepositoryStore {
   private readonly native: NativeManagedSkillRepositoryStore;

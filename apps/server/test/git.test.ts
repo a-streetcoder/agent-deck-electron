@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,9 @@ import {
   gitReleaseSynchronization,
   gitRemoteTagExists,
   gitRepoRelativePosixPath,
+  gitWorktreePrune,
+  gitWorktreeRegistrationMatches,
+  gitWorktreeRegistrations,
   parseStatus,
 } from "../src/git.ts";
 
@@ -318,17 +321,69 @@ describe("strict release synchronization", () => {
 });
 
 describe("session worktree branch ownership", () => {
-  it("removes the branch it created when worktree add fails", async () => {
+  it("returns ownership proof without deleting an occupied target when worktree add fails", async () => {
     const repo = makeRepo();
     const target = path.join(repo, "occupied-target");
-    writeFileSync(target, "occupied\n");
+    mkdirSync(target);
+    writeFileSync(path.join(target, "sentinel"), "occupied\n");
 
     await expect(
-      createSessionWorktree(repo, target, "agent-deck/session-failed-add"),
-    ).rejects.toThrow();
+      createSessionWorktree(
+        repo,
+        target,
+        "agent-deck/session-failed-add",
+        "v1:0000000000000001:0000000000000002",
+      ),
+    ).rejects.toMatchObject({
+      worktree: expect.objectContaining({
+        branch: "agent-deck/session-failed-add",
+        branchOwned: true,
+      }),
+    });
 
-    expect(branches(repo)).toEqual(["main"]);
-    expect(existsSync(target)).toBe(false);
+    expect(branches(repo)).toEqual(["agent-deck/session-failed-add", "main"]);
+    expect(readFileSync(path.join(target, "sentinel"), "utf8")).toBe("occupied\n");
+  });
+
+  it("keeps a target registered to another branch untouched", async () => {
+    const repo = makeRepo();
+    const target = path.join(mkdtempSync(path.join(tmpdir(), "other-worktree-")), "target");
+    execFileSync("git", ["branch", "other-owner", "main"], { cwd: repo });
+    execFileSync("git", ["worktree", "add", target, "other-owner"], { cwd: repo });
+    const sentinel = path.join(target, "README.md");
+
+    await expect(
+      createSessionWorktree(
+        repo,
+        target,
+        "agent-deck/session-collision",
+        "v1:0000000000000001:0000000000000002",
+      ),
+    ).rejects.toMatchObject({
+      worktree: expect.objectContaining({ branch: "agent-deck/session-collision" }),
+    });
+
+    expect(await gitWorktreeRegistrationMatches(repo, target, "agent-deck/session-collision")).toBe(
+      false,
+    );
+    expect(readFileSync(sentinel, "utf8").replaceAll("\r\n", "\n")).toBe("test\n");
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it("expires registration immediately after physical removal so its owned branch can be deleted", async () => {
+    const repo = makeRepo();
+    const target = path.join(mkdtempSync(path.join(tmpdir(), "prune-worktree-")), "target");
+    const branch = "agent-deck/session-prune-now";
+    execFileSync("git", ["branch", branch, "main"], { cwd: repo });
+    execFileSync("git", ["worktree", "add", target, branch], { cwd: repo });
+    rmSync(target, { recursive: true });
+
+    await gitWorktreePrune(repo);
+
+    expect((await gitWorktreeRegistrations(repo)).some((entry) => entry.path === target)).toBe(
+      false,
+    );
+    expect(() => execFileSync("git", ["branch", "-D", "--", branch], { cwd: repo })).not.toThrow();
   });
 
   it("never deletes a pre-existing same-named branch", async () => {
@@ -337,7 +392,9 @@ describe("session worktree branch ownership", () => {
     execFileSync("git", ["branch", branch, "main"], { cwd: repo });
     const target = path.join(repo, "target");
 
-    await expect(createSessionWorktree(repo, target, branch)).rejects.toThrow();
+    await expect(
+      createSessionWorktree(repo, target, branch, "v1:0000000000000001:0000000000000002"),
+    ).rejects.toThrow();
 
     expect(branches(repo)).toEqual([branch, "main"]);
     expect(existsSync(target)).toBe(false);

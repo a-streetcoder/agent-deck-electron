@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
@@ -7,7 +8,9 @@ import type * as GitModule from "../src/git.ts";
 
 const gitMocks = vi.hoisted(() => ({
   createSessionWorktree: vi.fn(),
-  gitWorktreeRemove: vi.fn(),
+  gitWorktreePrune: vi.fn(),
+  gitWorktreeRegistrationAtPath: vi.fn(),
+  gitWorktreeRegistrationMatches: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
   gitCommitAll: vi.fn(),
   gitCommitsAhead: vi.fn(),
@@ -22,19 +25,22 @@ vi.mock("@agent-deck/resources", () => ({
 vi.mock("../src/git.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof GitModule>()),
   createSessionWorktree: gitMocks.createSessionWorktree,
-  gitWorktreeRemove: gitMocks.gitWorktreeRemove,
+  gitWorktreePrune: gitMocks.gitWorktreePrune,
+  gitWorktreeRegistrationAtPath: gitMocks.gitWorktreeRegistrationAtPath,
+  gitWorktreeRegistrationMatches: gitMocks.gitWorktreeRegistrationMatches,
   gitDeleteOwnedWorktreeBranch: gitMocks.gitDeleteOwnedWorktreeBranch,
   gitCommitAll: gitMocks.gitCommitAll,
   gitCommitsAhead: gitMocks.gitCommitsAhead,
   gitMerge: gitMocks.gitMerge,
 }));
 
+import { SessionWorktreeAddError } from "../src/git.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
 const PROJECT_PATH = path.join(tmpdir(), "agent-deck-route-project");
 const WORKTREES_ROOT = path.join(tmpdir(), "agent-deck-route-worktrees");
-const WORKTREE_PATH = path.join(WORKTREES_ROOT, "allocated");
+const WORKTREE_PATH = path.join(WORKTREES_ROOT, "a1b2c3d4");
 
 interface Meta {
   id: string;
@@ -42,6 +48,7 @@ interface Meta {
   projectId?: string;
   agentName?: string;
   worktreePath?: string;
+  worktreeIdentity?: string;
   worktreeBranch?: string;
   worktreeSourceBranch?: string;
   loopReviewRunId?: string;
@@ -60,16 +67,24 @@ function makeRoute(
   const project = { id: "project-1", name: "project", path: PROJECT_PATH };
   const sessions = {
     list: vi.fn(() => [...state.live.values()]),
-    get: vi.fn((id: string) => state.live.get(id)),
+    get: vi.fn((id: string) => {
+      const meta = state.live.get(id);
+      return meta ? { meta } : undefined;
+    }),
     create: vi.fn((options: Record<string, unknown>) => {
       if (overrides.create) return { meta: overrides.create(options, state) };
-      const worktree = options.worktree as { path: string } | undefined;
+      const worktree = options.worktree as { path: string; identityToken?: string } | undefined;
       const meta: Meta = {
         id: "new-session",
         cwd: options.cwd as string,
         projectId: options.projectId as string | undefined,
         agentName: options.agentName as string | undefined,
-        ...(worktree ? { worktreePath: worktree.path } : {}),
+        ...(worktree
+          ? {
+              worktreePath: worktree.path,
+              worktreeIdentity: worktree.identityToken as string | undefined,
+            }
+          : {}),
       };
       state.live.set(meta.id, meta);
       return { meta };
@@ -110,6 +125,12 @@ function makeRoute(
     settings: { get: () => settingsValue },
     bridgeTokens: state.tokens,
     worktreesRoot: WORKTREES_ROOT,
+    sessionWorktreeStore: {
+      rootPath: WORKTREES_ROOT,
+      reserveWorktree: state.reserveWorktree,
+      captureWorktreeIdentity: state.captureWorktreeIdentity,
+      deleteWorktree: state.deleteWorktree,
+    },
     broadcast: (message: unknown) => state.broadcasts.push(message),
     rootsFor: () => ({}),
     scanSkillsFor: () => [],
@@ -138,12 +159,20 @@ function makeState() {
     tokens: new Map<string, string>(),
     broadcasts: [] as unknown[],
     receipts: [] as string[],
+    reserveWorktree: vi.fn((_target: string) => "v1:0000000000000001:0000000000000002"),
+    captureWorktreeIdentity: vi.fn(() => "v1:0000000000000001:0000000000000002"),
+    deleteWorktree: vi.fn(async () => {}),
   };
 }
 
 beforeEach(() => {
   gitMocks.createSessionWorktree.mockReset();
-  gitMocks.gitWorktreeRemove.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitWorktreePrune.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitWorktreeRegistrationAtPath.mockReset().mockResolvedValue({
+    path: WORKTREE_PATH,
+    branch: "agent-deck/session-a1b2c3d4",
+  });
+  gitMocks.gitWorktreeRegistrationMatches.mockReset().mockResolvedValue(true);
   gitMocks.gitDeleteOwnedWorktreeBranch.mockReset().mockResolvedValue(undefined);
   gitMocks.gitCommitAll.mockReset().mockResolvedValue({ committed: true });
   gitMocks.gitCommitsAhead.mockReset().mockResolvedValue(1);
@@ -152,6 +181,7 @@ beforeEach(() => {
     path: WORKTREE_PATH,
     branch: "agent-deck/session-allocated",
     sourceBranch: "main",
+    identityToken: "v1:0000000000000001:0000000000000002",
     branchOwned: true,
   });
 });
@@ -181,6 +211,92 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
+    expect(state.reserveWorktree).toHaveBeenCalledOnce();
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      state.reserveWorktree.mock.calls[0]![0],
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("leaves a reservation collision untouched and creates no branch", async () => {
+    const { fastify, state } = makeRoute();
+    state.reserveWorktree.mockImplementation(() => {
+      throw new Error("target occupied");
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("cleans an unregistered partial target with its reservation token", async () => {
+    gitMocks.createSessionWorktree.mockRejectedValue(
+      new SessionWorktreeAddError(
+        {
+          path: WORKTREE_PATH,
+          branch: "agent-deck/session-a1b2c3d4",
+          sourceBranch: "main",
+          identityToken: "v1:0000000000000001:0000000000000002",
+          branchOwned: true,
+        },
+        new Error("add interrupted"),
+      ),
+    );
+    gitMocks.gitWorktreeRegistrationMatches.mockResolvedValue(false);
+    const { fastify, state } = makeRoute();
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(state.deleteWorktree).toHaveBeenCalledOnce();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("cleans a registered partial target before pruning its exact registration", async () => {
+    gitMocks.createSessionWorktree.mockRejectedValue(
+      new SessionWorktreeAddError(
+        {
+          path: WORKTREE_PATH,
+          branch: "agent-deck/session-a1b2c3d4",
+          sourceBranch: "main",
+          identityToken: "v1:0000000000000001:0000000000000002",
+          branchOwned: true,
+        },
+        new Error("add interrupted"),
+      ),
+    );
+    const { fastify, state } = makeRoute();
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(state.deleteWorktree).toHaveBeenCalledOnce();
+    expect(gitMocks.gitWorktreePrune).toHaveBeenCalledWith(PROJECT_PATH);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalled();
+    expect(state.deleteWorktree.mock.invocationCallOrder[0]).toBeLessThan(
+      gitMocks.gitWorktreePrune.mock.invocationCallOrder[0]!,
+    );
     await fastify.close();
   });
 
@@ -193,6 +309,29 @@ describe("POST /sessions worktree transaction", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("persists the reservation identity without post-add capture", async () => {
+    const { fastify, state } = makeRoute();
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(gitMocks.createSessionWorktree).toHaveBeenCalledWith(
+      PROJECT_PATH,
+      expect.any(String),
+      expect.stringMatching(/^agent-deck\/session-/),
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(state.captureWorktreeIdentity).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      session: { worktreeIdentity: "v1:0000000000000001:0000000000000002" },
+    });
     await fastify.close();
   });
 
@@ -215,7 +354,7 @@ describe("POST /sessions worktree transaction", () => {
       payload: { projectId: "project-1" },
     });
     await Promise.resolve();
-    expect(gitMocks.gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
     releaseCleanup();
     const response = await responsePromise;
 
@@ -226,7 +365,11 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
-    expect(gitMocks.gitWorktreeRemove).toHaveBeenCalledWith(PROJECT_PATH, WORKTREE_PATH);
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      WORKTREE_PATH,
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(gitMocks.gitWorktreePrune).toHaveBeenCalledWith(PROJECT_PATH);
     expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalledWith(
       PROJECT_PATH,
       expect.objectContaining({ branch: "agent-deck/session-allocated", branchOwned: true }),
@@ -261,7 +404,11 @@ describe("POST /sessions worktree transaction", () => {
     });
     expect(sessions.destroy).toHaveBeenCalledWith("partial");
     expect(index.remove).toHaveBeenCalledWith("partial");
-    expect(gitMocks.gitWorktreeRemove).toHaveBeenCalledWith(PROJECT_PATH, WORKTREE_PATH);
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      WORKTREE_PATH,
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(gitMocks.gitWorktreePrune).toHaveBeenCalledWith(PROJECT_PATH);
     expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalledWith(
       PROJECT_PATH,
       expect.objectContaining({ branch: "agent-deck/session-allocated", branchOwned: true }),
@@ -303,6 +450,153 @@ describe("POST /sessions worktree transaction", () => {
     await fastify.close();
   });
 
+  it("retains persisted metadata when an unsafe external worktree target is refused", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const external = path.join(tmpdir(), "external-session-target");
+    state.index.set("persisted-unsafe", {
+      id: "persisted-unsafe",
+      cwd: external,
+      projectId: "project-1",
+      worktreePath: external,
+    });
+    state.deleteWorktree.mockRejectedValue(
+      Object.assign(new Error("refused"), { code: "SESSION_WORKTREE_INVALID_PATH" }),
+    );
+
+    const response = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/persisted-unsafe",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "session_worktree_cleanup_failed" });
+    expect(sessions.destroy).not.toHaveBeenCalledWith("persisted-unsafe");
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(index.remove).not.toHaveBeenCalledWith("persisted-unsafe");
+    expect(state.index.has("persisted-unsafe")).toBe(true);
+    expect(state.broadcasts).toEqual([]);
+    await fastify.close();
+  });
+
+  it("durably adopts a proven live legacy identity before teardown", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const present = mkdtempSync(path.join(tmpdir(), "live-legacy-"));
+    const legacy: Meta = {
+      id: "live-legacy",
+      cwd: present,
+      projectId: "project-1",
+      worktreePath: present,
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    };
+    state.live.set(legacy.id, legacy);
+    state.index.set(legacy.id, legacy);
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: present,
+      branch: legacy.worktreeBranch,
+    });
+
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/live-legacy" });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(legacy.worktreeIdentity).toBe("v1:0000000000000001:0000000000000002");
+    const adoptedCall = index.upsert.mock.calls.find(([record]) => record.id === legacy.id);
+    expect(adoptedCall?.[0].worktreeIdentity).toBe("v1:0000000000000001:0000000000000002");
+    expect(index.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+      sessions.destroy.mock.invocationCallOrder[0]!,
+    );
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      present,
+      "v1:0000000000000001:0000000000000002",
+    );
+    await fastify.close();
+  });
+
+  it("rejects a missing target still registered to another branch", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const missing = path.join(tmpdir(), "missing-registered-a1b2c3d4");
+    state.index.set("missing-mismatch", {
+      id: "missing-mismatch",
+      cwd: missing,
+      projectId: "project-1",
+      worktreePath: missing,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: missing,
+      branch: "agent-deck/session-other",
+    });
+
+    const response = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/missing-mismatch",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(sessions.destroy).not.toHaveBeenCalledWith("missing-mismatch");
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(index.remove).not.toHaveBeenCalledWith("missing-mismatch");
+    expect(state.index.has("missing-mismatch")).toBe(true);
+    await fastify.close();
+  });
+
+  it("rejects a present target whose Git registration does not match the persisted branch", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const present = mkdtempSync(path.join(tmpdir(), "branch-mismatch-"));
+    state.index.set("branch-mismatch", {
+      id: "branch-mismatch",
+      cwd: present,
+      projectId: "project-1",
+      worktreePath: present,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: present,
+      branch: "agent-deck/session-other",
+    });
+
+    const response = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/branch-mismatch",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(sessions.destroy).not.toHaveBeenCalledWith("branch-mismatch");
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(index.remove).not.toHaveBeenCalledWith("branch-mismatch");
+    expect(state.index.has("branch-mismatch")).toBe(true);
+    await fastify.close();
+  });
+
+  it("rejects duplicate persisted worktree ownership before teardown", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    for (const id of ["first", "second"]) {
+      state.index.set(id, {
+        id,
+        cwd: WORKTREE_PATH,
+        projectId: "project-1",
+        worktreePath: WORKTREE_PATH,
+        worktreeIdentity: "v1:0000000000000001:0000000000000002",
+        worktreeBranch: "agent-deck/session-a1b2c3d4",
+      });
+    }
+
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/first" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "session_worktree_cleanup_failed" });
+    expect(sessions.destroy).not.toHaveBeenCalledWith("first");
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreeRegistrationAtPath).not.toHaveBeenCalled();
+    expect(index.remove).not.toHaveBeenCalledWith("first");
+    expect(state.index.has("first")).toBe(true);
+    expect(state.index.has("second")).toBe(true);
+    await fastify.close();
+  });
+
   it("refuses Loop review merge before any Git mutation", async () => {
     const { fastify, state } = makeRoute();
     state.index.set("loop-review-session", {
@@ -333,7 +627,7 @@ describe("POST /sessions worktree transaction", () => {
       url: "/sessions/loop-review-session",
     });
     expect(removed.statusCode).toBe(200);
-    expect(gitMocks.gitWorktreeRemove).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
     expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     await fastify.close();
   });

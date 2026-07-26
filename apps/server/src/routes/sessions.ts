@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
@@ -7,13 +7,17 @@ import type { PromptInfo } from "@agent-deck/domain";
 import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
 import { z } from "zod";
 import {
+  canonicalWorktreePath,
   createSessionWorktree,
   gitCommitAll,
   gitCommitsAhead,
   gitDeleteOwnedWorktreeBranch,
   gitErrorText,
   gitMerge,
-  gitWorktreeRemove,
+  gitWorktreePrune,
+  gitWorktreeRegistrationAtPath,
+  gitWorktreeRegistrationMatches,
+  SessionWorktreeAddError,
   type GitWorktree,
 } from "../git.ts";
 import { SessionCreationError, type LaunchPlan } from "../SessionManager.ts";
@@ -47,6 +51,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     settings,
     bridgeTokens,
     worktreesRoot,
+    sessionWorktreeStore,
     broadcast,
     rootsFor,
     scanSkillsFor,
@@ -225,9 +230,120 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // session file. Session content is destroyed — this is the explicit delete.
   fastify.delete("/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+    let meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
+    // Retained Loop review evidence is explicitly outside this boundary. Before
+    // stopping an ordinary session, prove no other session record owns the same
+    // normalized path. Persisted metadata is untrusted and may be duplicated.
+    if (meta.worktreePath && !meta.loopReviewRunId) {
+      const targetKey = await canonicalWorktreePath(meta.worktreePath);
+      const live = sessions.list();
+      const otherRecords = [
+        ...live,
+        ...index.list().filter((candidate) => !live.some((item) => item.id === candidate.id)),
+      ].filter((candidate) => candidate.id !== id && candidate.worktreePath);
+      for (const candidate of otherRecords) {
+        if ((await canonicalWorktreePath(candidate.worktreePath!)) === targetKey) {
+          return reply.status(409).send({
+            code: "session_worktree_cleanup_failed",
+            error:
+              "The isolated worktree is also referenced by another session. No session data was removed.",
+          });
+        }
+      }
+      const projectId = meta.projectId;
+      const project = projectId
+        ? projects.find((candidate) => candidate.id === projectId)
+        : undefined;
+      if (!project || !meta.worktreeBranch) {
+        return reply.status(409).send({
+          code: "session_worktree_cleanup_failed",
+          error:
+            "The isolated worktree lacks trusted project/branch ownership. The worktree path and session metadata were retained for manual recovery.",
+        });
+      }
+      // Always inspect Git, including when the leaf is physically missing: a
+      // stale registration for another branch must never be silently pruned.
+      // Missing + no registration is the idempotent post-prune/crash case; a
+      // present checkout still requires an exact matching registration.
+      let registration: { path: string; branch: string } | undefined;
+      try {
+        registration = await gitWorktreeRegistrationAtPath(project.path, meta.worktreePath);
+      } catch {
+        return reply.status(409).send({
+          code: "session_worktree_cleanup_failed",
+          error: "Git worktree ownership could not be verified. Session metadata was retained.",
+        });
+      }
+      if (!meta.worktreeIdentity) {
+        // Pre-identity compatibility is deliberately narrow: only an existing
+        // private target with exact persisted project+branch registration may be
+        // adopted. Capture through the held native root, durably persist first,
+        // then update the live object. No teardown occurs until all three settle.
+        if (!registration || registration.branch !== meta.worktreeBranch) {
+          return reply.status(409).send({
+            code: "session_worktree_cleanup_failed",
+            error:
+              "This legacy session's worktree ownership could not be proven. Its path and metadata were retained.",
+          });
+        }
+        try {
+          const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(meta.worktreePath);
+          const adopted = { ...meta, worktreeIdentity };
+          index.upsert(adopted);
+          const liveSession = sessions.get(id);
+          if (liveSession) {
+            liveSession.meta.worktreeIdentity = worktreeIdentity;
+            meta = liveSession.meta;
+          } else {
+            meta = adopted;
+          }
+        } catch {
+          return reply.status(409).send({
+            code: "session_worktree_cleanup_failed",
+            error:
+              "This legacy session's worktree identity could not be safely adopted. Its path and metadata were retained.",
+          });
+        }
+      } else if (
+        (registration && registration.branch !== meta.worktreeBranch) ||
+        (!registration && existsSync(meta.worktreePath))
+      ) {
+        return reply.status(409).send({
+          code: "session_worktree_cleanup_failed",
+          error:
+            "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
+        });
+      }
+    }
     await sessions.destroy(id);
+    // For an ordinary isolated session, physical deletion must succeed through the held
+    // native root before Git metadata or persisted session metadata is removed.
+    // A forged/stale persisted path therefore fails honestly and remains visible
+    // for repair; it can never select an ambient deletion target.
+    if (meta.worktreePath && !meta.loopReviewRunId) {
+      const projectId = meta.projectId;
+      const project = projectId
+        ? projects.find((candidate) => candidate.id === projectId)
+        : undefined;
+      if (!project) {
+        return reply.status(409).send({
+          code: "session_worktree_cleanup_failed",
+          error:
+            "The session was stopped, but its isolated worktree could not be safely matched to its project. Session metadata was retained.",
+        });
+      }
+      try {
+        await sessionWorktreeStore.deleteWorktree(meta.worktreePath, meta.worktreeIdentity!);
+        await gitWorktreePrune(project.path);
+      } catch {
+        return reply.status(409).send({
+          code: "session_worktree_cleanup_failed",
+          error:
+            "The session was stopped, but its isolated worktree could not be safely removed. Session metadata was retained; retry deletion after resolving the cleanup issue.",
+        });
+      }
+    }
     sessions.removeLoopSessionSnapshot(id);
     index.remove(id);
     bridgeTokens.delete(id);
@@ -237,15 +353,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       } catch {
         // pi may still hold the file briefly; best-effort.
       }
-    }
-    // Remove an ordinary session's isolated worktree (native: session-delete
-    // removes the worktree). Retained Loop review evidence is explicitly outside
-    // this deletion boundary and remains registered even if its transcript is
-    // removed. The ordinary-session BRANCH is deliberately kept so committed-but-
-    // unmerged work is never lost (gitWorktreeRemove doesn't delete it).
-    if (meta.worktreePath && meta.projectId && !meta.loopReviewRunId) {
-      const project = projects.find((p) => p.id === meta.projectId);
-      if (project) await gitWorktreeRemove(project.path, meta.worktreePath).catch(() => {});
     }
     broadcast({ type: "session_removed", sessionId: id });
     return { ok: true };
@@ -491,17 +598,52 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (settings.get().worktreeIsolation && project) {
       const suffix = randomUUID().slice(0, 8);
       const target = nodePath.join(worktreesRoot, suffix);
+      let reservationIdentity: string | undefined;
       try {
-        mkdirSync(worktreesRoot, { recursive: true }); // git worktree add won't create missing parents
+        // Reserve the exact private leaf and bind its native identity before Git
+        // creates any ref or writes checkout content. Existing leaves fail
+        // atomically and are never candidates for rollback deletion.
+        reservationIdentity = sessionWorktreeStore.reserveWorktree(target);
         // Deliberately attempt the operation directly. A repo precheck would
         // collapse unavailable Git/non-repo into a silent primary-cwd fallback.
         worktree = await createSessionWorktree(
           project.path,
           target,
           `agent-deck/session-${suffix}`,
+          reservationIdentity,
         );
         cwd = target;
       } catch (error) {
+        // Preserve the primary allocation error. A successful reservation is
+        // sufficient deletion authority even if source/branch/add fails before
+        // Git can return branch ownership proof.
+        const physicallyRemoved = reservationIdentity
+          ? await sessionWorktreeStore
+              .deleteWorktree(target, reservationIdentity)
+              .then(() => true)
+              .catch((cleanupError) => {
+                fastify.log.warn(
+                  { err: cleanupError },
+                  "failed to clean reserved session worktree",
+                );
+                return false;
+              })
+          : false;
+        if (error instanceof SessionWorktreeAddError) {
+          // Prune only after proving this exact stale registration belongs to the
+          // branch conclusively created by this attempt.
+          const registeredToAttempt = physicallyRemoved
+            ? await gitWorktreeRegistrationMatches(
+                project.path,
+                target,
+                error.worktree.branch,
+              ).catch(() => false)
+            : false;
+          if (registeredToAttempt) await gitWorktreePrune(project.path).catch(() => {});
+          // This deletes only the conclusively-owned branch and naturally fails
+          // while Git still considers it checked out. Never mask the add error.
+          await gitDeleteOwnedWorktreeBranch(project.path, error.worktree).catch(() => {});
+        }
         return reply.status(409).send({
           code: "worktree_isolation_failed",
           error: `Session creation stopped because an isolated worktree couldn't be created: ${gitErrorText(error)} — Fix the project's Git state or disable worktree isolation, then try again.`,
@@ -558,18 +700,25 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // branch is then safe to delete; cleanup failures are logged but never
       // replace the typed fail-closed response.
       if (worktree && project) {
-        await gitWorktreeRemove(project.path, worktree.path).catch((cleanupError) => {
-          fastify.log.warn(
-            { err: cleanupError },
-            "failed to remove session worktree after startup",
-          );
-        });
-        await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
-          fastify.log.warn(
-            { err: cleanupError, branch: worktree?.branch },
-            "failed to remove generated session branch after startup",
-          );
-        });
+        const physicallyRemoved = await sessionWorktreeStore
+          .deleteWorktree(worktree.path, worktree.identityToken!)
+          .then(() => true)
+          .catch((cleanupError) => {
+            fastify.log.warn(
+              { err: cleanupError },
+              "failed to remove session worktree after startup",
+            );
+            return false;
+          });
+        if (physicallyRemoved) {
+          await gitWorktreePrune(project.path).catch(() => {});
+          await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
+            fastify.log.warn(
+              { err: cleanupError, branch: worktree?.branch },
+              "failed to remove generated session branch after startup",
+            );
+          });
+        }
       }
       return reply.status(500).send({
         code: "session_creation_failed",

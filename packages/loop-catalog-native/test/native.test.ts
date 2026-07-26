@@ -25,6 +25,7 @@ import {
   LoopCatalogCapabilityError,
   ManagedSkillRepositoryStore,
   readResourceCatalogFile,
+  SessionWorktreeStore,
   scanLoopCatalog,
   writeResourceCatalogFile,
 } from "../src/index.ts";
@@ -135,6 +136,172 @@ describe("native Loop catalog binding", () => {
     store.deleteRepository("owner-repo");
     expect(() => statSync(path.join(root, "owner-repo"))).toThrow();
   });
+
+  it("reserves only a new empty generated leaf and leaves collisions untouched", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "session-worktree-reserve-"));
+    const store = new SessionWorktreeStore(home);
+    const occupied = path.join(store.rootPath, "a1b2c3d4");
+    mkdirSync(occupied);
+    writeFileSync(path.join(occupied, "sentinel"), "untouched");
+
+    expect(() => store.reserveWorktree(occupied)).toThrow();
+    expect(readFileSync(path.join(occupied, "sentinel"), "utf8")).toBe("untouched");
+
+    const reserved = path.join(store.rootPath, "decafbad");
+    const identity = store.reserveWorktree(reserved);
+    expect(readdirSync(reserved)).toEqual([]);
+    await store.deleteWorktree(reserved, identity);
+    expect(existsSync(reserved)).toBe(false);
+  });
+
+  it("deletes only generated direct-child session worktrees through its held root", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "session-worktree-store-"));
+    const store = new SessionWorktreeStore(home);
+    const target = path.join(store.rootPath, "a1b2c3d4");
+    const outside = path.join(home, "outside");
+    mkdirSync(path.join(target, "nested"), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(path.join(target, "nested", "owned.txt"), "owned");
+    writeFileSync(path.join(outside, "sentinel.txt"), "external");
+    symlinkSync(
+      outside,
+      path.join(target, "nested", "link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const identity = store.captureWorktreeIdentity(target);
+    await store.deleteWorktree(target, identity);
+    expect(existsSync(target)).toBe(false);
+    expect(readFileSync(path.join(outside, "sentinel.txt"), "utf8")).toBe("external");
+    // A valid missing target is idempotent.
+    await expect(store.deleteWorktree(target, identity)).resolves.toBeUndefined();
+
+    for (const invalid of [
+      outside,
+      path.join(store.rootPath, "A1B2C3D4"),
+      path.join(store.rootPath, "a1b2c3d"),
+      path.join(store.rootPath, "nested", "a1b2c3d4"),
+      "a1b2c3d4",
+    ]) {
+      await expect(store.deleteWorktree(invalid, identity)).rejects.toMatchObject({
+        code: "SESSION_WORKTREE_INVALID_PATH",
+      });
+    }
+    expect(readFileSync(path.join(outside, "sentinel.txt"), "utf8")).toBe("external");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "exposes a conventional worktree root accepted by Git and native identity operations",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "session-worktree-windows-root-"));
+      const repo = mkdtempSync(path.join(tmpdir(), "session-worktree-windows-git-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+      writeFileSync(path.join(repo, "README.md"), "test\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+      execFileSync("git", ["branch", "worktree-owner", "main"], { cwd: repo });
+
+      const store = new SessionWorktreeStore(home);
+      expect(store.rootPath.startsWith("\\\\?\\")).toBe(false);
+      expect(path.isAbsolute(store.rootPath)).toBe(true);
+      const target = path.join(store.rootPath, "a1b2c3d4");
+      const identity = store.reserveWorktree(target);
+      expect(readdirSync(target)).toEqual([]);
+      expect(() =>
+        execFileSync("git", ["worktree", "add", target, "worktree-owner"], {
+          cwd: repo,
+          stdio: "ignore",
+        }),
+      ).not.toThrow();
+
+      expect(store.captureWorktreeIdentity(target)).toBe(identity);
+      await expect(store.deleteWorktree(target, identity)).resolves.toBeUndefined();
+      expect(existsSync(target)).toBe(false);
+    },
+  );
+
+  it("rejects a replacement real directory and forged allocation identity", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "session-worktree-identity-"));
+    const store = new SessionWorktreeStore(home);
+    const target = path.join(store.rootPath, "decafbad");
+    const original = `${target}-original`;
+    mkdirSync(target);
+    const identity = store.captureWorktreeIdentity(target);
+    renameSync(target, original);
+    mkdirSync(target);
+    writeFileSync(path.join(target, "sentinel"), "replacement");
+
+    await expect(store.deleteWorktree(target, identity)).rejects.toMatchObject({
+      code: "SESSION_WORKTREE_UNSAFE",
+    });
+    await expect(
+      store.deleteWorktree(target, "v1:0000000000000000:0000000000000000"),
+    ).rejects.toMatchObject({ code: "SESSION_WORKTREE_UNSAFE" });
+    expect(readFileSync(path.join(target, "sentinel"), "utf8")).toBe("replacement");
+  });
+
+  it("rejects a final session-worktree link and a replaced held root", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "session-worktree-race-"));
+    const store = new SessionWorktreeStore(home);
+    const outside = path.join(home, "outside");
+    const linked = path.join(store.rootPath, "deadbeef");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "sentinel"), "safe");
+    symlinkSync(outside, linked, process.platform === "win32" ? "junction" : "dir");
+    await expect(
+      store.deleteWorktree(linked, "v1:0000000000000000:0000000000000000"),
+    ).rejects.toMatchObject({
+      code: "SESSION_WORKTREE_UNSAFE",
+    });
+    expect(readFileSync(path.join(outside, "sentinel"), "utf8")).toBe("safe");
+
+    if (process.platform !== "win32") {
+      const original = path.join(store.rootPath, "aabbccdd");
+      mkdirSync(original);
+      const identity = store.captureWorktreeIdentity(original);
+      rmSync(original, { recursive: true });
+      const captured = `${store.rootPath}-captured`;
+      renameSync(store.rootPath, captured);
+      mkdirSync(store.rootPath);
+      mkdirSync(path.join(store.rootPath, "cafebabe"));
+      await expect(
+        store.deleteWorktree(path.join(store.rootPath, "cafebabe"), identity),
+      ).rejects.toMatchObject({
+        code: "SESSION_WORKTREE_UNSAFE",
+      });
+      expect(existsSync(path.join(store.rootPath, "cafebabe"))).toBe(true);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not report retry success while candidate quarantine removal is blocked",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "session-worktree-reconcile-"));
+      const store = new SessionWorktreeStore(home);
+      const target = path.join(store.rootPath, "facefeed");
+      mkdirSync(target);
+      execFileSync("mkfifo", [path.join(target, "blocked")]);
+      const identity = store.captureWorktreeIdentity(target);
+
+      await expect(store.deleteWorktree(target, identity)).rejects.toMatchObject({
+        code: "SESSION_WORKTREE_UNSAFE",
+      });
+      const quarantine = readdirSync(store.rootPath).find((entry) =>
+        entry.startsWith(".agent-deck-session-delete-facefeed-"),
+      );
+      expect(quarantine).toBeDefined();
+      await expect(store.deleteWorktree(target, identity)).rejects.toMatchObject({
+        code: "SESSION_WORKTREE_UNSAFE",
+      });
+      expect(existsSync(path.join(store.rootPath, quarantine!))).toBe(true);
+
+      rmSync(path.join(store.rootPath, quarantine!, "blocked"));
+      await expect(store.deleteWorktree(target, identity)).resolves.toBeUndefined();
+      expect(existsSync(path.join(store.rootPath, quarantine!))).toBe(false);
+    },
+  );
 
   it("quarantines a replaced active snapshot leaf instead of exposing external content", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "managed-snapshot-swap-"));

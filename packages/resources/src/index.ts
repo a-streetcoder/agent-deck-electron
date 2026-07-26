@@ -102,7 +102,10 @@ export {
   LoopCatalogCapabilityError,
   ManagedSkillRepositoryStore,
   ResourceCatalogCapabilityError,
+  SessionWorktreeCapabilityError,
+  SessionWorktreeStore,
   type ResourceCatalogErrorCode,
+  type SessionWorktreeErrorCode,
 } from "@agent-deck/loop-catalog-native";
 export {
   loopsDir,

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -57,6 +57,7 @@ async function patchSettings(body: unknown): Promise<Response> {
 interface SessionResp {
   id: string;
   cwd: string;
+  worktreeIdentity?: string;
   worktreeBranch?: string;
   worktreeSourceBranch?: string;
 }
@@ -120,7 +121,10 @@ describe("session worktree isolation", () => {
     const session = await createSession(projectId);
     // cwd is an isolated worktree under the data dir, NOT the project root.
     expect(session.cwd).not.toBe(repoDir);
-    expect(session.cwd.startsWith(path.join(dataDir, "session-worktrees"))).toBe(true);
+    expect(session.cwd.startsWith(realpathSync(path.join(dataDir, "session-worktrees")))).toBe(
+      true,
+    );
+    expect(session.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
     expect(session.worktreeBranch).toMatch(/^agent-deck\/session-/);
     expect(session.worktreeSourceBranch).toBe("main");
     expect(existsSync(session.cwd)).toBe(true);
