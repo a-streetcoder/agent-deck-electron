@@ -59,6 +59,18 @@ describe("PiSession request/response correlation", () => {
     await expect(session.abort()).rejects.toThrow(/exited/);
   });
 
+  it("forwards prompt streamingBehavior through the correlated RPC wrapper", async () => {
+    const session = makeSession();
+    const seen = new Promise<string>((resolve) => {
+      session.on("event", (event) => {
+        const candidate = event as unknown as { type?: string; streamingBehavior?: string };
+        if (candidate.type === "test_prompt_options") resolve(candidate.streamingBehavior ?? "");
+      });
+    });
+    await session.prompt("/template", undefined, "followUp");
+    await expect(seen).resolves.toBe("followUp");
+  });
+
   it("streams events in order and surfaces malformed lines without breaking the stream", async () => {
     const session = makeSession();
     const events: PiInboundEvent[] = [];

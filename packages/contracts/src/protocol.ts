@@ -31,6 +31,10 @@ export type ImageAttachment = typeof ImageAttachment.Type;
 export const ThinkingLevel = Schema.Literal("off", "minimal", "low", "medium", "high", "xhigh");
 export type ThinkingLevel = typeof ThinkingLevel.Type;
 
+/** How Pi handles a prompt submitted while it is already streaming. */
+export const StreamingBehavior = Schema.Literal("steer", "followUp");
+export type StreamingBehavior = typeof StreamingBehavior.Type;
+
 /**
  * Integer with zod `.int()` semantics (`Number.isInteger`), NOT Effect's
  * `Schema.int()` (`Number.isSafeInteger`). The difference matters for wire
@@ -85,6 +89,8 @@ export const ClientMessage = Schema.Union(
     message: Schema.String,
     /** Base64 image attachments sent with the prompt (pi ImageContent). */
     images: Schema.optional(Schema.mutable(Schema.Array(ImageAttachment)).pipe(Schema.maxItems(8))),
+    /** Preserve Pi's prompt expansion path while choosing its live queue. */
+    streamingBehavior: Schema.optional(StreamingBehavior),
   }),
   Schema.Struct({
     type: Schema.Literal("steer"),

@@ -691,7 +691,7 @@ export function createRpcConnection(deps: {
           subscribe(session, request.lastSeq);
           break;
         case "prompt":
-          await session.prompt(request.message, request.images);
+          await session.prompt(request.message, request.images, request.streamingBehavior);
           break;
         case "steer":
           await session.steer(request.message);

@@ -234,6 +234,7 @@ export interface PiHostHandle {
   readonly prompt: (
     message: string,
     images?: PiCommand<"prompt">["images"],
+    streamingBehavior?: PiCommand<"prompt">["streamingBehavior"],
   ) => Effect.Effect<void, PiRequestError>;
   readonly steer: (message: string) => Effect.Effect<void, PiRequestError>;
   readonly followUp: (message: string) => Effect.Effect<void, PiRequestError>;
@@ -428,7 +429,8 @@ export const spawnPiProcess = (
           awaitExit: Deferred.await(exitDeferred),
           pid: Effect.sync(() => Option.fromNullable(proc.pid)),
           stderr: Effect.sync(() => proc.stderr),
-          prompt: (message, images) => Effect.asVoid(request({ type: "prompt", message, images })),
+          prompt: (message, images, streamingBehavior) =>
+            Effect.asVoid(request({ type: "prompt", message, images, streamingBehavior })),
           steer: (message) => Effect.asVoid(request({ type: "steer", message })),
           followUp: (message) => Effect.asVoid(request({ type: "follow_up", message })),
           abort: Effect.asVoid(request({ type: "abort" })),

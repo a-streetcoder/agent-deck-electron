@@ -60,13 +60,18 @@ export function ModelChip({
   state,
   models,
   onSelect,
+  disabled = false,
 }: {
   state: PiComposerState | null;
   models: PiModelInfo[];
   onSelect: (model: PiModelInfo) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useDismiss(() => setOpen(false));
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   const byProvider = new Map<string, PiModelInfo[]>();
   for (const model of models) {
@@ -81,6 +86,7 @@ export function ModelChip({
         title="Model"
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         {state?.provider ? (
@@ -112,11 +118,14 @@ export function ModelChip({
                   data-testid={`model-option-${model.id}`}
                   className={cn(
                     "block w-full truncate rounded-md px-2 py-1 text-left text-xs",
+                    "disabled:cursor-not-allowed disabled:opacity-40",
                     model.id === state?.modelId && model.provider === state?.provider
                       ? "bg-selection text-text-primary"
                       : "text-text-secondary hover:bg-hover",
                   )}
+                  disabled={disabled}
                   onClick={() => {
+                    if (disabled) return;
                     setOpen(false);
                     onSelect(model);
                   }}
@@ -139,14 +148,19 @@ export function ThinkingChip({
   state,
   levels = THINKING_LEVELS,
   onSelect,
+  disabled = false,
 }: {
   state: PiComposerState | null;
   /** Levels the current model supports; a non-reasoning model offers only "off". */
   levels?: readonly ThinkingLevel[];
   onSelect: (level: ThinkingLevel) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useDismiss(() => setOpen(false));
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   // Native `displayLevel`: when the active level isn't one the current model
   // supports (e.g. after switching to a non-reasoning model), surface it as
@@ -167,6 +181,7 @@ export function ThinkingChip({
         title="Thinking level"
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         <Brain size={12} />
@@ -186,11 +201,14 @@ export function ThinkingChip({
               data-testid={`thinking-option-${level}`}
               className={cn(
                 "block w-full rounded-md px-2 py-1 text-left text-xs",
+                "disabled:cursor-not-allowed disabled:opacity-40",
                 level === state?.thinkingLevel
                   ? "bg-selection text-text-primary"
                   : "text-text-secondary hover:bg-hover",
               )}
+              disabled={disabled}
               onClick={() => {
+                if (disabled) return;
                 setOpen(false);
                 onSelect(level);
               }}
@@ -216,23 +234,39 @@ export function SendStopButton({
   onStop: () => void;
 }) {
   return (
-    <ControlButton
-      data-testid={running ? "abort-button" : "send-button"}
-      className={cn(
-        "flex h-9 w-9 items-center justify-center rounded-full shadow-capsule transition-all",
-        running ? "text-white" : "disabled:opacity-40",
-      )}
-      style={{
-        background: running
-          ? "var(--color-role-error)"
-          : "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-        color: running ? "var(--color-text-inverse)" : "var(--color-text-on-accent)",
-      }}
-      disabled={!running && disabled}
-      title={running ? "Stop" : "Send"}
-      onClick={running ? onStop : onSend}
-    >
-      {running ? <Square size={13} fill="currentColor" /> : <ArrowUp size={16} strokeWidth={2.5} />}
-    </ControlButton>
+    <div className="flex items-center gap-2">
+      {running ? (
+        <ControlButton
+          data-testid="abort-button"
+          className="flex h-9 w-9 items-center justify-center rounded-full shadow-capsule transition-all"
+          style={{
+            background: "var(--color-role-error)",
+            color: "var(--color-text-inverse)",
+          }}
+          title="Stop current response"
+          aria-label="Stop current response"
+          onClick={onStop}
+        >
+          <Square size={13} fill="currentColor" />
+        </ControlButton>
+      ) : null}
+      <ControlButton
+        data-testid="send-button"
+        className={cn(
+          "flex h-9 w-9 items-center justify-center rounded-full shadow-capsule transition-all disabled:opacity-40",
+        )}
+        style={{
+          background:
+            "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+          color: "var(--color-text-on-accent)",
+        }}
+        disabled={disabled}
+        title={running ? "Queue input" : "Send"}
+        aria-label={running ? "Queue input" : "Send"}
+        onClick={onSend}
+      >
+        <ArrowUp size={16} strokeWidth={2.5} />
+      </ControlButton>
+    </div>
   );
 }

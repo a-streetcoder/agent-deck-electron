@@ -142,6 +142,8 @@ function updateWorkspaceTabs(
 
 export interface AppState {
   connection: ConnectionStatus;
+  /** True only after the current session's (re)subscription ack settles. */
+  sessionSubscriptionSettled: boolean;
   view: AppView;
   /**
    * Whether the sessions pull-up panel covers the sidebar nav (native
@@ -250,6 +252,7 @@ export interface AppState {
   /** Transient notifications (native toasts), newest last; auto-dismissed by the Toaster. */
   toasts: Toast[];
   setConnection(connection: ConnectionStatus): void;
+  setSessionSubscriptionSettled(settled: boolean): void;
   setView(view: AppView): void;
   setPanelExpanded(expanded: boolean): void;
   bumpResourcesVersion(): void;
@@ -331,6 +334,7 @@ function initialPanelExpanded(): boolean {
 
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
+  sessionSubscriptionSettled: false,
   view: "chat",
   panelExpanded: initialPanelExpanded(),
   resourcesVersion: 0,
@@ -359,7 +363,10 @@ export const useAppStore = create<AppState>((set) => ({
   lastSeq: 0,
   error: null,
   toasts: [],
-  setConnection: (connection) => set({ connection }),
+  setConnection: (connection) =>
+    set({ connection, ...(connection !== "open" ? { sessionSubscriptionSettled: false } : {}) }),
+  setSessionSubscriptionSettled: (sessionSubscriptionSettled) =>
+    set({ sessionSubscriptionSettled }),
   // Leaving chat for another nav section auto-collapses the panel (revealing the
   // nav it covers); staying in chat — e.g. selecting a session — leaves the
   // expansion untouched so it persists across session switches.
