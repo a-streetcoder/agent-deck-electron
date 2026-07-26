@@ -290,12 +290,45 @@ describe("collection-v1 managed root security", () => {
     server = await startServer({ dataDir });
     const base = `http://127.0.0.1:${server.port}`;
 
-    renameSync(root, `${root}-held`);
+    const heldRoot = `${root}-held`;
+    if (process.platform === "win32") {
+      const outside = mkdtempSync(path.join(tmpdir(), "managed-replace-victim-"));
+      const sentinel = path.join(outside, "sentinel");
+      writeFileSync(sentinel, "outside-safe");
+
+      let renameError: NodeJS.ErrnoException | undefined;
+      try {
+        renameSync(root, heldRoot);
+      } catch (error) {
+        renameError = error as NodeJS.ErrnoException;
+      }
+      expect(["EBUSY", "EPERM"]).toContain(renameError?.code);
+      expect(existsSync(path.join(root, "owner-repo", "skill", "SKILL.md"))).toBe(true);
+
+      const listed = (await (await fetch(`${base}/resources/skill-repos`)).json()) as {
+        repos: Array<{ available: boolean }>;
+      };
+      expect(listed.repos[0]?.available).toBe(true);
+      const skills = (await (await fetch(`${base}/resources/skills`)).json()) as {
+        skills: Array<{ name: string }>;
+      };
+      expect(skills.skills.some((skill) => skill.name === "managed-skill")).toBe(true);
+      expect(readFileSync(sentinel, "utf8")).toBe("outside-safe");
+
+      await server.close();
+      server = undefined;
+      renameSync(root, heldRoot);
+      expect(existsSync(path.join(heldRoot, "owner-repo", "skill", "SKILL.md"))).toBe(true);
+      expect(readFileSync(sentinel, "utf8")).toBe("outside-safe");
+      return;
+    }
+
+    renameSync(root, heldRoot);
     mkdirSync(root);
     expect((await fetch(`${base}/resources/skill-repos/repo`, { method: "DELETE" })).status).toBe(
       409,
     );
-    expect(existsSync(path.join(`${root}-held`, "owner-repo", "skill", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(heldRoot, "owner-repo", "skill", "SKILL.md"))).toBe(true);
   });
 
   it("capability-deletes a safe direct child", async () => {
