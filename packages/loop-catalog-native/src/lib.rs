@@ -2195,6 +2195,37 @@ fn cleanup_owned_managed_stage_error(root: &Dir, stage_leaf: &str, original: Err
     }
 }
 
+/// Consume the stage capability before cleanup. Windows opens directory
+/// capabilities without delete sharing, so cleanup while `stage` is alive
+/// self-blocks and masks the operation's original typed error.
+fn finish_managed_stage<T>(
+    root: &Dir,
+    stage_leaf: &str,
+    stage: Dir,
+    result: Result<T>,
+) -> Result<T> {
+    drop(stage);
+    match remove_owned_managed_stage(root, stage_leaf) {
+        Ok(()) => result,
+        Err(_) => Err(resource_error(
+            "RESOURCE_RECONCILE_INCOMPLETE",
+            "managed operation finished but private-stage cleanup was interrupted",
+        )),
+    }
+}
+
+fn publish_managed_stage(
+    root: &Dir,
+    stage_leaf: &str,
+    stage: Dir,
+    destination: &str,
+    replace: bool,
+    expected_identity: Option<ExpectedEntryIdentity>,
+) -> Result<()> {
+    drop(stage);
+    publish_staged_tree_with_identity(root, stage_leaf, destination, replace, expected_identity)
+}
+
 fn managed_clone(
     root: &Dir,
     root_path: &str,
@@ -2214,23 +2245,27 @@ fn managed_clone(
         args.extend(["--branch", reference, "--single-branch"]);
     }
     args.extend([remote, "."]);
-    if let Err(error) = run_managed_git(&stage, &stage_path, &args, cancelled) {
-        return Err(cleanup_owned_managed_stage_error(root, &stage_leaf, error));
-    }
-    if let Err(error) = validate_managed_git_tree(&stage) {
-        return Err(cleanup_owned_managed_stage_error(root, &stage_leaf, error));
-    }
-    let result = inspect_stage(&stage, &stage_path, reference, cancelled)
-        .map_err(|error| cleanup_owned_managed_stage_error(root, &stage_leaf, error))?;
-    publish_staged_tree(root, &stage_leaf, destination, false)?;
+    let operation = (|| -> Result<ManagedGitRepositoryResult> {
+        run_managed_git(&stage, &stage_path, &args, cancelled)?;
+        validate_managed_git_tree(&stage)?;
+        inspect_stage(&stage, &stage_path, reference, cancelled)
+    })();
+    let result = match operation {
+        Ok(result) => result,
+        Err(error) => return finish_managed_stage(root, &stage_leaf, stage, Err(error)),
+    };
+    // Publishing consumes the stage capability before renaming its directory.
+    publish_managed_stage(root, &stage_leaf, stage, destination, false, None)?;
     Ok(result)
 }
 
 fn copy_clone_to_stage(root: &Dir, leaf: &str) -> Result<(String, Dir, cap_std::fs::Metadata)> {
     let (identity, source) = capture_managed_clone(root, leaf)?;
     let (stage_leaf, stage) = allocate_managed_stage(root)?;
-    if let Err(error) = copy_tree_inner(&source, &stage, true) {
-        return Err(cleanup_owned_stage_error(root, &stage_leaf, error));
+    let copy_result = copy_tree_inner(&source, &stage, true);
+    drop(source);
+    if let Err(error) = copy_result {
+        return finish_managed_stage(root, &stage_leaf, stage, Err(error));
     }
     Ok((stage_leaf, stage, identity))
 }
@@ -2248,13 +2283,7 @@ fn managed_inspect(
         .to_string_lossy()
         .into_owned();
     let result = inspect_stage(&stage, &stage_path, reference, cancelled);
-    match cleanup_owned_stage(root, &stage_leaf) {
-        Ok(()) => result,
-        Err(_) => Err(resource_error(
-            "RESOURCE_RECONCILE_INCOMPLETE",
-            "managed inspection stage cleanup failed",
-        )),
-    }
+    finish_managed_stage(root, &stage_leaf, stage, result)
 }
 
 fn managed_update(
@@ -2274,59 +2303,61 @@ fn managed_update(
             .join(&stage_leaf)
             .to_string_lossy()
             .into_owned();
-        let before = inspect_stage(&stage, &stage_path, reference, cancelled)
-            .map_err(|error| cleanup_owned_stage_error(root, &stage_leaf, error))?;
-        if !before.clean {
-            return Err(cleanup_owned_stage_error(
-                root,
-                &stage_leaf,
-                resource_error("RESOURCE_BUSY", "managed repository is dirty"),
-            ));
-        }
-        let branch = if let Some(reference) = reference {
-            reference.to_owned()
-        } else {
+        let operation = (|| -> Result<ManagedGitRepositoryResult> {
+            let before = inspect_stage(&stage, &stage_path, reference, cancelled)?;
+            if !before.clean {
+                return Err(resource_error(
+                    "RESOURCE_BUSY",
+                    "managed repository is dirty",
+                ));
+            }
+            let branch = if let Some(reference) = reference {
+                reference.to_owned()
+            } else {
+                run_managed_git(
+                    &stage,
+                    &stage_path,
+                    &["rev-parse", "--abbrev-ref", "HEAD"],
+                    cancelled,
+                )?
+                .trim()
+                .to_owned()
+            };
             run_managed_git(
                 &stage,
                 &stage_path,
-                &["rev-parse", "--abbrev-ref", "HEAD"],
+                &["fetch", "origin", &branch],
                 cancelled,
-            )?
-            .trim()
-            .to_owned()
-        };
-        run_managed_git(
-            &stage,
-            &stage_path,
-            &["fetch", "origin", &branch],
-            cancelled,
-        )?;
-        run_managed_git(
-            &stage,
-            &stage_path,
-            &["reset", "--hard", "FETCH_HEAD"],
-            cancelled,
-        )?;
-        let result = inspect_stage(&stage, &stage_path, reference, cancelled)?;
-        validate_managed_git_tree(&stage)
-            .map_err(|error| cleanup_owned_stage_error(root, &stage_leaf, error))?;
-        let current = root.symlink_metadata(leaf).map_err(map_resource_io)?;
-        if current.dev() != expected.dev() || current.ino() != expected.ino() {
-            return Err(cleanup_owned_stage_error(
-                root,
-                &stage_leaf,
-                resource_error(
+            )?;
+            run_managed_git(
+                &stage,
+                &stage_path,
+                &["reset", "--hard", "FETCH_HEAD"],
+                cancelled,
+            )?;
+            let result = inspect_stage(&stage, &stage_path, reference, cancelled)?;
+            validate_managed_git_tree(&stage)?;
+            let current = root.symlink_metadata(leaf).map_err(map_resource_io)?;
+            if current.dev() != expected.dev() || current.ino() != expected.ino() {
+                return Err(resource_error(
                     "RESOURCE_UNSAFE_COMPONENT",
                     "managed clone changed during update",
-                ),
-            ));
-        }
-        publish_staged_tree_with_identity(
+                ));
+            }
+            Ok(result)
+        })();
+        let result = match operation {
+            Ok(result) => result,
+            Err(error) => return finish_managed_stage(root, &stage_leaf, stage, Err(error)),
+        };
+        let expected_identity = (expected.dev(), expected.ino());
+        publish_managed_stage(
             root,
             &stage_leaf,
+            stage,
             leaf,
             true,
-            Some((expected.dev(), expected.ino())),
+            Some(expected_identity),
         )?;
         Ok(result)
     }
@@ -3656,6 +3687,37 @@ mod tests {
         drop(repository);
         drop(stage);
         drop(snapshots);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_clone_stage_is_closed_before_publication() {
+        let home = home();
+        let root = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let (stage_leaf, stage) = allocate_managed_stage(&root).unwrap();
+        stage.write("owned", b"content").unwrap();
+
+        publish_managed_stage(&root, &stage_leaf, stage, "repository", false, None).unwrap();
+        assert!(root.symlink_metadata(&stage_leaf).is_err());
+        assert!(root.symlink_metadata("repository").unwrap().is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_failed_managed_inspect_cleanup_preserves_typed_error() {
+        let home = home();
+        let root = Dir::open_ambient_dir(home.path(), ambient_authority()).unwrap();
+        let (stage_leaf, stage) = allocate_managed_stage(&root).unwrap();
+        stage.write("owned", b"content").unwrap();
+        let original = resource_error("RESOURCE_OUTPUT_LIMIT", "managed git output exceeded limit");
+
+        let error =
+            finish_managed_stage::<()>(&root, &stage_leaf, stage, Err(original)).unwrap_err();
+        assert!(
+            error.reason.starts_with("RESOURCE_OUTPUT_LIMIT:"),
+            "{error:?}"
+        );
+        assert!(root.symlink_metadata(&stage_leaf).is_err());
     }
 
     #[cfg(windows)]
