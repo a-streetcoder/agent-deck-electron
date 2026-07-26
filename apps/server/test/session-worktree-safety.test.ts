@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { SessionWorktreeStore } from "@agent-deck/resources";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonicalWorktreePath, gitWorktreeRegistrationAtPath } from "../src/git.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 process.env.AGENT_DECK_TEST = "1";
@@ -147,12 +148,11 @@ describe("persisted session worktree deletion boundary", () => {
     });
 
     expect(response.status).toBe(409);
-    const registrations = execFileSync("git", ["worktree", "list", "--porcelain"], {
-      cwd: project,
-      encoding: "utf8",
-    });
-    expect(registrations).toContain(`worktree ${target}`);
-    expect(registrations).toContain("branch refs/heads/other-owner");
+    const registration = await gitWorktreeRegistrationAtPath(project, target);
+    expect(registration).toMatchObject({ branch: "other-owner" });
+    expect(await canonicalWorktreePath(registration!.path)).toBe(
+      await canonicalWorktreePath(target),
+    );
     const listed = await fetch(`http://127.0.0.1:${server.port}/sessions`);
     expect(
       ((await listed.json()) as { sessions: Array<{ id: string }> }).sessions.map(({ id }) => id),
