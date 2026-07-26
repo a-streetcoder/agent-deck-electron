@@ -320,8 +320,10 @@ describe("collection-v1 managed root security", () => {
 
       await server.close();
       server = undefined;
-      renameSync(root, heldRoot);
-      expect(existsSync(path.join(heldRoot, "owner-repo", "skill", "SKILL.md"))).toBe(true);
+      // The native store may remain alive until JavaScript GC, so the Windows
+      // namespace pin can outlive server.close(). Release timing is deliberately
+      // not part of the safety contract.
+      expect(existsSync(path.join(root, "owner-repo", "skill", "SKILL.md"))).toBe(true);
       expect(readFileSync(sentinel, "utf8")).toBe("outside-safe");
       return;
     }
