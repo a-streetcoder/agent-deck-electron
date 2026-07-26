@@ -285,7 +285,10 @@ describe("collection-v1 managed root security", () => {
     const skillRoot = path.join(clone, "skill");
     mkdirSync(path.join(clone, ".git"), { recursive: true });
     mkdirSync(skillRoot);
-    writeFileSync(path.join(skillRoot, "SKILL.md"), "---\nname: managed-skill\n---\nsafe");
+    writeFileSync(
+      path.join(skillRoot, "SKILL.md"),
+      "---\nname: managed-skill\ndescription: Managed security fixture\n---\nsafe",
+    );
     writeSettings(dataDir, record(clone, skillRoot));
     server = await startServer({ dataDir });
     const base = `http://127.0.0.1:${server.port}`;
