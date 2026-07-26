@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 describe("RpcClientTransport.disconnect", () => {
-  it("closes and forgets the prior subscription so stale callbacks cannot reactivate it", () => {
+  it("closes and forgets the prior subscription so stale callbacks cannot reactivate it", async () => {
     const statuses: string[] = [];
     const host: TransportHost = {
       onServerMessage: vi.fn(),
@@ -41,7 +41,9 @@ describe("RpcClientTransport.disconnect", () => {
     expect(statuses.at(-1)).toBe("closed");
     socket.onopen?.();
     expect(host.onSessionSubscribed).not.toHaveBeenCalled();
-    transport.send({ type: "abort", sessionId: "old-session" });
+    await expect(transport.send({ type: "abort", sessionId: "old-session" })).rejects.toThrow(
+      "transport not connected",
+    );
     expect(socket.send).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,9 @@ rl.on("line", (line) => {
     case "prompt":
       // Ack, then stream events, including a malformed line.
       send({ id: cmd.id, type: "response", command: "prompt", success: true });
+      if (cmd.streamingBehavior) {
+        send({ type: "test_prompt_options", streamingBehavior: cmd.streamingBehavior });
+      }
       send({ type: "turn_start" });
       send({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "he" } });
       process.stdout.write("this is not json\n");

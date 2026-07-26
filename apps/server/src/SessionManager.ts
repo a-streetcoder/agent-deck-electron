@@ -220,8 +220,9 @@ export class ManagedSession {
   async prompt(
     message: string,
     images?: Parameters<ManagedSessionRuntime["prompt"]>[1],
+    streamingBehavior?: Parameters<ManagedSessionRuntime["prompt"]>[2],
   ): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.prompt(message, images));
+    await runPromiseUnwrapped(this.runtime, this.rt.prompt(message, images, streamingBehavior));
   }
 
   async steer(message: string): Promise<void> {

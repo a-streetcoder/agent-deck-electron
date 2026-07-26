@@ -147,6 +147,61 @@ describe("ingest → reduce pipeline", () => {
     });
   });
 
+  it("replaces Pi's pending queues exactly, preserving order, duplicates, and clear", () => {
+    const ingest = createIngestState();
+    let state = emptyTranscript();
+    for (const event of ingestPiEvent(ingest, {
+      type: "queue_update",
+      steering: ["first", "same", "same"],
+      followUp: ["later", "last"],
+    } as unknown as PiInboundEvent)) {
+      state = reduceTranscript(state, event);
+    }
+    expect(state.pendingInput).toEqual({
+      status: "available",
+      steering: ["first", "same", "same"],
+      followUp: ["later", "last"],
+    });
+
+    for (const event of ingestPiEvent(ingest, {
+      type: "queue_update",
+      steering: [],
+      followUp: [],
+    } as unknown as PiInboundEvent)) {
+      state = reduceTranscript(state, event);
+    }
+    expect(state.pendingInput).toEqual({ status: "available", steering: [], followUp: [] });
+  });
+
+  it("replaces stale queues with unavailable state, then recovers on a valid clear", () => {
+    const ingest = createIngestState();
+    let state = emptyTranscript();
+    const apply = (raw: unknown): void => {
+      for (const event of ingestPiEvent(ingest, raw as PiInboundEvent)) {
+        state = reduceTranscript(state, event);
+      }
+    };
+    apply({ type: "queue_update", steering: ["stale"], followUp: ["stale-later"] });
+    apply({ type: "queue_update", steering: Array.from({ length: 101 }, () => "x"), followUp: [] });
+    expect(state.pendingInput).toEqual({
+      status: "unavailable",
+      truncated: true,
+      reason: "limit_exceeded",
+      steering: [],
+      followUp: [],
+    });
+
+    apply({ type: "queue_update", steering: ["valid"], followUp: [7] });
+    expect(state.pendingInput).toMatchObject({
+      status: "unavailable",
+      truncated: false,
+      reason: "malformed",
+    });
+
+    apply({ type: "queue_update", steering: [], followUp: [] });
+    expect(state.pendingInput).toEqual({ status: "available", steering: [], followUp: [] });
+  });
+
   it("maps the runtime `compaction_end` event to a contextRevision bump", () => {
     // pi's RPC forwards AgentSessionEvent at runtime (incl. compaction_end),
     // though the exported type union omits it — the ingest still surfaces it.

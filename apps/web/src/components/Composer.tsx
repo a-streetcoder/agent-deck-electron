@@ -40,6 +40,14 @@ import { FileTagChips } from "./composer/FileTagChips.tsx";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { parseFileMentions, removeFileMention } from "../lib/fileMentions.ts";
 import { buildExpandedImagePreview } from "../lib/expandedImage.ts";
+import {
+  createPendingImageId,
+  isCurrentComposerSubmission,
+  retainUnsubmittedImages,
+  settleComposerImageBatch,
+  statusAfterAgentTransition,
+  type ComposerSubmitStatus,
+} from "../lib/composerSubmission.ts";
 
 interface PendingImage extends ImageAttachment {
   id: string;
@@ -62,7 +70,7 @@ async function fileToImage(file: File): Promise<PendingImage | null> {
     type: "image",
     data: btoa(binary),
     mimeType: file.type,
-    id: `${file.name}-${bytes.length}`,
+    id: createPendingImageId(),
     name: file.name || "pasted image",
   };
 }
@@ -91,6 +99,7 @@ export function Composer() {
   // same existing ui_response path, and answering either drops both.
   const pendingQuestion = useAppStore((state) => openQuestion(state.transcript));
   const connection = useAppStore((state) => state.connection);
+  const queueSettled = useAppStore((state) => state.sessionSubscriptionSettled);
   const session = useAppStore((state) => state.session);
   const currentAgentName = useAppStore((state) => state.currentAgentName);
   // Pending review comments (Slice 12) for the CURRENT session: captured on
@@ -102,7 +111,6 @@ export function Composer() {
       : EMPTY_COMMENTS,
   );
   const removeReviewComment = useAppStore((state) => state.removeReviewComment);
-  const clearReviewComments = useAppStore((state) => state.clearReviewComments);
   const requestDiffJump = useAppStore((state) => state.requestDiffJump);
   const openWorkspaceTab = useAppStore((state) => state.openWorkspaceTab);
   // Pending preview element contexts (Slice 16) for the CURRENT session:
@@ -113,7 +121,6 @@ export function Composer() {
       : EMPTY_ELEMENT_CONTEXTS,
   );
   const removeElementContext = useAppStore((state) => state.removeElementContext);
-  const clearElementContexts = useAppStore((state) => state.clearElementContexts);
   const agents = useAgents();
   const running = agentStatus === "running";
   const pickableAgents = agents.filter((agent) => !agent.shadowed && !agent.disabled);
@@ -146,8 +153,17 @@ export function Composer() {
   // Previous values so stats refresh only on genuine transitions (a turn
   // completing / a compaction), never on the fresh/initial session state.
   const prevAgentStatusRef = useRef<"idle" | "running" | null>(null);
-  /** Blocks a same-frame double-submit (see submit(); reset on the next tick). */
+  /** Blocks duplicate submits until the exact correlated prompt ack settles. */
   const sendLockRef = useRef(false);
+  const submissionGenerationRef = useRef(0);
+  /** Invalidates File.arrayBuffer completions whenever the active session changes. */
+  const imageLoadGenerationRef = useRef(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<ComposerSubmitStatus | null>(null);
+  const [streamingBehavior, setStreamingBehavior] = useState<"steer" | "followUp">("steer");
+  const previousRunningRef = useRef(false);
+  const runningRef = useRef(running);
+  runningRef.current = running;
   const prevContextRevisionRef = useRef(0);
 
   const refreshPiState = useCallback(async (): Promise<void> => {
@@ -213,6 +229,13 @@ export function Composer() {
 
   useEffect(() => {
     activeSessionRef.current = sessionId;
+    // Invalidate every callback belonging to the session we just left. The
+    // store-id guard also covers the render→effect gap during a switch.
+    submissionGenerationRef.current += 1;
+    imageLoadGenerationRef.current += 1;
+    sendLockRef.current = false;
+    setSubmitting(false);
+    setSubmitStatus(null);
     setPiState(null);
     setModels([]);
     setContextUsage(null);
@@ -280,6 +303,28 @@ export function Composer() {
   const expandedPreview = expandedImageId
     ? buildExpandedImagePreview(images, expandedImageId)
     : null;
+  const pendingInput = useAppStore(
+    (state) =>
+      state.transcript.pendingInput ?? {
+        status: "available" as const,
+        steering: [],
+        followUp: [],
+      },
+  );
+
+  useEffect(() => {
+    if (running && !previousRunningRef.current) {
+      setStreamingBehavior("steer");
+      if (images.length > 0) {
+        setSubmitStatus({
+          kind: "image",
+          message: "Remove attached images or wait for Pi to finish before sending.",
+        });
+      }
+    }
+    previousRunningRef.current = running;
+    setSubmitStatus((current) => statusAfterAgentTransition(current, running));
+  }, [running, images.length]);
 
   // Seed the composer from elsewhere (e.g. an issue) — replaces the draft,
   // since seeding is a deliberate "start on this" action, not an append.
@@ -291,6 +336,7 @@ export function Composer() {
   }, [pendingComposerText, setPendingComposerText]);
 
   const applyAccept = (accepted: { value: string; caret: number }): void => {
+    setSubmitStatus(null);
     setDraft(accepted.value);
     // Restore the caret after React commits the new value.
     requestAnimationFrame(() => {
@@ -304,69 +350,138 @@ export function Composer() {
 
   const addFiles = useCallback(
     async (files: FileList | File[]): Promise<void> => {
-      // Cap to the remaining slots *before* encoding so many/huge files can't
-      // freeze the tab base64-encoding images that would be discarded anyway.
+      const imageFiles = [...files].filter((file) => file.type.startsWith("image/"));
+      if (imageFiles.length === 0 || !sessionId) return;
+      const originatingSessionId = sessionId;
+      const generation = imageLoadGenerationRef.current;
+      setSubmitStatus(null);
+      if (runningRef.current) {
+        setSubmitStatus({
+          kind: "image",
+          message: "Images can only be added while Pi is idle.",
+        });
+        return;
+      }
+      // Cap before encoding so discarded files cannot freeze the renderer.
       const remaining = 8 - images.length;
       if (remaining <= 0) return;
-      const candidates = [...files].filter((f) => f.type.startsWith("image/")).slice(0, remaining);
-      const imgs = (await Promise.all(candidates.map(fileToImage))).filter(
-        (i): i is PendingImage => i !== null,
+      const candidates = imageFiles.slice(0, remaining);
+      const imgs = await settleComposerImageBatch(
+        candidates.map(fileToImage),
+        originatingSessionId,
+        generation,
+        () => ({
+          sessionId: useAppStore.getState().session?.id ?? null,
+          generation: imageLoadGenerationRef.current,
+        }),
       );
-      if (imgs.length > 0) setImages((prev) => [...prev, ...imgs].slice(0, 8));
+      // A stale batch must not mutate the newly active session's images or status.
+      if (imgs === null) return;
+      // Pi may have started while File.arrayBuffer() was pending. Discard the
+      // completion rather than introducing an attachment queue_update cannot represent.
+      if (runningRef.current) {
+        if (imgs.length > 0) {
+          setSubmitStatus({
+            kind: "image",
+            message: "Image loading finished after Pi started; the new image was not added.",
+          });
+        }
+        return;
+      }
+      if (imgs.length > 0) setImages((previous) => [...previous, ...imgs].slice(0, 8));
     },
-    [images.length],
+    [images.length, sessionId],
   );
 
   const submit = (): void => {
-    // Same-frame re-entry guard: `running` only disables the send control after
-    // an async WS echo, so two click events dispatched in one frame (fast
-    // double-click, or Enter+click) both pass the `running` check against the
-    // same render-scope closures and send TWICE — duplicating the turn AND its
-    // serialized review comments (which the first call clears but the second
-    // still sees pre-re-render). The synchronous ref blocks the second; a
-    // microtask reset reopens it next tick (legitimate rapid sends still work).
     if (sendLockRef.current) return;
-    const message = draft.trim();
-    // A send is valid with just pending review comments or element contexts (a
-    // context-only turn), matching the donor's append-and-send when the composer
-    // text is empty.
+    const submittedDraft = draft;
+    const message = submittedDraft.trim();
     if (
       (!message &&
         images.length === 0 &&
         pendingComments.length === 0 &&
         pendingElementContexts.length === 0) ||
       !session ||
-      connection !== "open" ||
-      running
+      connection !== "open"
     )
       return;
-    sendLockRef.current = true;
-    queueMicrotask(() => {
-      sendLockRef.current = false;
-    });
-    // Attach the pending review comments (Slice 12) then the pending element
-    // contexts (Slice 16) as the donor serializes each — a <review_comment>
-    // block per comment, an <element_context> block for the contexts — and clear
-    // both sets. They ride this single prompt turn to pi, not a new server op.
+    if (running && images.length > 0) {
+      setSubmitStatus({
+        kind: "image",
+        message: "Remove attached images or wait for Pi to finish before sending.",
+      });
+      return;
+    }
+
+    const originatingSessionId = session.id;
+    const generation = ++submissionGenerationRef.current;
+    const isCurrentSubmission = (): boolean =>
+      isCurrentComposerSubmission(
+        originatingSessionId,
+        generation,
+        useAppStore.getState().session?.id ?? null,
+        submissionGenerationRef.current,
+      );
+    const submittedComments = [...pendingComments];
+    const submittedContexts = [...pendingElementContexts];
+    const submittedImages = [...images];
     const outgoing = appendElementContextsToPrompt(
-      appendReviewCommentsToPrompt(message, pendingComments),
-      pendingElementContexts,
+      appendReviewCommentsToPrompt(message, submittedComments),
+      submittedContexts,
     );
-    sendPrompt(
+    sendLockRef.current = true;
+    setSubmitting(true);
+    setSubmitStatus({
+      kind: "info",
+      message: running ? "Waiting for Pi to acknowledge queued input…" : "Sending…",
+    });
+    void sendPrompt(
+      originatingSessionId,
       outgoing,
-      images.length > 0
-        ? images.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
+      submittedImages.length > 0
+        ? submittedImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
         : undefined,
-    );
-    if (pendingComments.length > 0 && sessionIdForComments) {
-      clearReviewComments(sessionIdForComments);
-    }
-    if (pendingElementContexts.length > 0 && sessionIdForComments) {
-      clearElementContexts(sessionIdForComments);
-    }
-    setDraft("");
-    setImages([]);
-    suggestions.close();
+      running ? streamingBehavior : undefined,
+    )
+      .then(() => {
+        if (!isCurrentSubmission()) return;
+        // Clear only what this acknowledged request submitted. Draft edits and
+        // contexts added while the ack was in flight remain untouched.
+        setDraft((current) => (current === submittedDraft ? "" : current));
+        if (sessionIdForComments) {
+          for (const comment of submittedComments) {
+            removeReviewComment(sessionIdForComments, comment.id);
+          }
+          for (const context of submittedContexts) {
+            removeElementContext(sessionIdForComments, context.id);
+          }
+        }
+        setImages((current) => retainUnsubmittedImages(current, submittedImages));
+        setSubmitStatus(
+          running
+            ? {
+                kind: "info",
+                message: streamingBehavior === "steer" ? "Guidance queued." : "Follow-up queued.",
+              }
+            : null,
+        );
+        suggestions.close();
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentSubmission()) return;
+        // A disconnect after write is ambiguous: retain everything so the user
+        // can reconcile against the authoritative queue after reconnect.
+        setSubmitStatus({
+          kind: "rejection",
+          message: `Not acknowledged — draft retained. ${String(error)}`,
+        });
+      })
+      .finally(() => {
+        if (!isCurrentSubmission()) return;
+        sendLockRef.current = false;
+        setSubmitting(false);
+      });
   };
 
   return (
@@ -408,6 +523,56 @@ export function Composer() {
           }}
         />
 
+        {running ||
+        pendingInput.status === "unavailable" ||
+        pendingInput.steering.length > 0 ||
+        pendingInput.followUp.length > 0 ? (
+          <div
+            className="mx-3 mt-3 space-y-2 rounded-xl border border-border-subtle bg-surface px-3 py-2 text-xs"
+            data-testid="pending-input"
+            aria-live="polite"
+          >
+            {pendingInput.status === "unavailable" ? (
+              <p className="text-warning" data-testid="pending-input-unavailable">
+                {pendingInput.truncated
+                  ? "Queue unavailable: Pi reported more queued input than can be displayed safely."
+                  : "Queue unavailable: Pi reported malformed queued input."}
+              </p>
+            ) : null}
+            {pendingInput.status === "available" && pendingInput.steering.length > 0 ? (
+              <div>
+                <p className="font-medium text-text-secondary">Guidance</p>
+                <ol className="list-inside list-decimal text-text-muted">
+                  {pendingInput.steering.map((item, index) => (
+                    <li key={`steering-${index}`}>{item}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+            {pendingInput.status === "available" && pendingInput.followUp.length > 0 ? (
+              <div>
+                <p className="font-medium text-text-secondary">Follow-ups</p>
+                <ol className="list-inside list-decimal text-text-muted">
+                  {pendingInput.followUp.map((item, index) => (
+                    <li key={`follow-up-${index}`}>{item}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+            {running &&
+            pendingInput.status === "available" &&
+            pendingInput.steering.length === 0 &&
+            pendingInput.followUp.length === 0 ? (
+              <p className="text-text-muted">No input queued.</p>
+            ) : null}
+            {!queueSettled ? (
+              <p className="text-warning" data-testid="pending-input-stale">
+                Queue status may be stale while reconnecting…
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <FileTagChips
           mentions={fileMentions}
           onRemove={(start) => {
@@ -442,12 +607,13 @@ export function Composer() {
                 <ControlButton
                   className="text-text-muted hover:text-danger"
                   aria-label="Remove attachment"
-                  onClick={() =>
+                  onClick={() => {
+                    setSubmitStatus(null);
                     setImages((prev) => {
                       if (expandedImageId === image.id) setExpandedImageId(null);
                       return prev.filter((i) => i.id !== image.id);
-                    })
-                  }
+                    });
+                  }}
                 >
                   <X size={12} />
                 </ControlButton>
@@ -461,12 +627,17 @@ export function Composer() {
           data-testid="composer-input"
           className="block w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-sm text-text-primary outline-none placeholder:text-text-muted"
           placeholder={
-            running ? "pi is responding — Enter to queue…" : "Message pi ( / commands, @ files )"
+            running
+              ? streamingBehavior === "steer"
+                ? "Guide the current response…"
+                : "Queue a follow-up prompt…"
+              : "Message pi ( / commands, @ files )"
           }
           minRows={2}
           maxRows={6}
           value={draft}
           onChange={(event) => {
+            setSubmitStatus(null);
             setDraft(event.target.value);
             suggestions.update(
               event.target.value,
@@ -522,7 +693,9 @@ export function Composer() {
           <ModelChip
             state={piState}
             models={models}
+            disabled={running}
             onSelect={(model) => {
+              if (runningRef.current) return;
               sendSetModel(model.provider, model.id);
               setPiState((prev) =>
                 prev ? { ...prev, provider: model.provider, modelId: model.id } : prev,
@@ -533,7 +706,9 @@ export function Composer() {
           <ThinkingChip
             state={piState}
             levels={thinkingLevels}
+            disabled={running}
             onSelect={(level) => {
+              if (runningRef.current) return;
               sendSetThinking(level);
               setPiState((prev) => (prev ? { ...prev, thinkingLevel: level } : prev));
               scheduleRefresh();
@@ -601,10 +776,32 @@ export function Composer() {
               <Shrink size={13} />
             </ControlButton>
           ) : null}
+          {running ? (
+            <label className={chipClass()} title="Choose where this prompt is queued">
+              <span className="sr-only">Running prompt mode</span>
+              <ControlSelect
+                data-testid="streaming-behavior"
+                className="cursor-pointer bg-transparent text-xs font-medium outline-none"
+                value={streamingBehavior}
+                disabled={submitting}
+                onChange={(event) => {
+                  setSubmitStatus(null);
+                  setStreamingBehavior(event.target.value as "steer" | "followUp");
+                }}
+              >
+                <option value="steer">Guide now</option>
+                <option value="followUp">Follow up</option>
+              </ControlSelect>
+            </label>
+          ) : null}
           <div className="flex-1" />
           <label
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary"
-            title="Attach image"
+            className={`flex h-8 w-8 items-center justify-center rounded-full text-text-muted ${
+              running
+                ? "cursor-not-allowed opacity-40"
+                : "cursor-pointer hover:bg-hover hover:text-text-primary"
+            }`}
+            title={running ? "Images can only be sent when Pi is idle" : "Attach image"}
             data-testid="attach-button"
           >
             <Paperclip size={15} />
@@ -614,6 +811,7 @@ export function Composer() {
               multiple
               className="hidden"
               data-testid="attach-input"
+              disabled={running}
               onChange={(event) => {
                 if (event.target.files) void addFiles(event.target.files);
                 event.target.value = "";
@@ -623,18 +821,29 @@ export function Composer() {
           <SendStopButton
             running={running}
             disabled={
+              submitting ||
               (!draft.trim() &&
                 images.length === 0 &&
                 pendingComments.length === 0 &&
                 pendingElementContexts.length === 0) ||
               !session ||
-              connection !== "open"
+              connection !== "open" ||
+              (running && images.length > 0)
             }
             onSend={submit}
             onStop={sendAbort}
           />
         </div>
       </div>
+      {submitStatus ? (
+        <p
+          className={`px-3 pt-2 text-xs ${submitStatus.kind === "rejection" || submitStatus.kind === "image" ? "text-danger" : "text-text-muted"}`}
+          data-testid="composer-submit-status"
+          role="status"
+        >
+          {submitStatus.message}
+        </p>
+      ) : null}
       {expandedPreview ? (
         <ExpandedImageDialog preview={expandedPreview} onClose={() => setExpandedImageId(null)} />
       ) : null}

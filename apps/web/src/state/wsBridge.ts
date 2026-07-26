@@ -66,6 +66,7 @@ const transportHost: TransportHost = {
   // session's set (a session switch dropped the old one; a reconnect may have
   // missed pushes while down).
   onSessionSubscribed: (sessionId) => {
+    useAppStore.getState().setSessionSubscriptionSettled(true);
     void refreshDiffFiles(sessionId);
     void refreshCheckpoints(sessionId);
   },
@@ -559,11 +560,18 @@ function connect(sessionId: string): void {
   // new one; the fresh sets arrive via onSessionSubscribed once it settles.
   useAppStore.getState().resetDiffState();
   useAppStore.getState().setCheckpoints([]);
+  useAppStore.getState().setSessionSubscriptionSettled(false);
   transport.connect(sessionId);
 }
 
-function send(message: ClientMessage): void {
-  transport.send(message);
+function send(message: ClientMessage): Promise<void> {
+  return transport.send(message);
+}
+
+function sendCompatibleCommand(message: ClientMessage): void {
+  void send(message).catch((error: unknown) => {
+    useAppStore.getState().setError(String(error));
+  });
 }
 
 function handleMessage(message: ServerMessage): void {
@@ -912,7 +920,7 @@ export async function sendSupervisorAnswer(requestId: string, response: string):
 /** Answer a question card. */
 export function sendUiResponse(requestId: string, response: Record<string, unknown>): void {
   if (currentSessionId) {
-    send({
+    sendCompatibleCommand({
       type: "ui_response",
       sessionId: currentSessionId,
       response: { type: "extension_ui_response", id: requestId, ...response },
@@ -1005,34 +1013,43 @@ export interface ImageAttachment {
   mimeType: string;
 }
 
-export function sendPrompt(message: string, images?: ImageAttachment[]): void {
-  if (currentSessionId) {
-    send({
-      type: "prompt",
-      sessionId: currentSessionId,
-      message,
-      ...(images && images.length > 0 ? { images } : {}),
-    });
-  }
+export function sendPrompt(
+  sessionId: string,
+  message: string,
+  images?: ImageAttachment[],
+  streamingBehavior?: "steer" | "followUp",
+): Promise<void> {
+  // The caller captures the originating session. Never retarget an in-flight
+  // composer submission merely because the user switched sessions.
+  if (sessionId !== currentSessionId) return Promise.reject(new Error("active session changed"));
+  return send({
+    type: "prompt",
+    sessionId,
+    message,
+    ...(images && images.length > 0 ? { images } : {}),
+    ...(streamingBehavior ? { streamingBehavior } : {}),
+  });
 }
 
 export function sendAbort(): void {
-  if (currentSessionId) send({ type: "abort", sessionId: currentSessionId });
+  if (currentSessionId) sendCompatibleCommand({ type: "abort", sessionId: currentSessionId });
 }
 
 /** Manually compact the current session's context (native "Compact context"). */
 export function sendCompact(): void {
-  if (currentSessionId) send({ type: "compact", sessionId: currentSessionId });
+  if (currentSessionId) sendCompatibleCommand({ type: "compact", sessionId: currentSessionId });
 }
 
 export function sendSetModel(provider: string, modelId: string): void {
   if (currentSessionId) {
-    send({ type: "set_model", sessionId: currentSessionId, provider, modelId });
+    sendCompatibleCommand({ type: "set_model", sessionId: currentSessionId, provider, modelId });
   }
 }
 
 export function sendSetThinking(
   level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
 ): void {
-  if (currentSessionId) send({ type: "set_thinking", sessionId: currentSessionId, level });
+  if (currentSessionId) {
+    sendCompatibleCommand({ type: "set_thinking", sessionId: currentSessionId, level });
+  }
 }

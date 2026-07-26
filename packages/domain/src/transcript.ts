@@ -196,6 +196,24 @@ export interface SessionPlanUpdate {
 
 export type AgentStatus = "idle" | "running";
 
+export type PendingInput =
+  | {
+      status: "available";
+      /** Prompts that will steer the current turn, in Pi's authoritative order. */
+      steering: string[];
+      /** Prompts that will start subsequent turns, in Pi's authoritative order. */
+      followUp: string[];
+    }
+  | {
+      status: "unavailable";
+      /** Untrusted Pi data exceeded our display/storage bounds and was discarded. */
+      truncated: boolean;
+      reason: "malformed" | "limit_exceeded";
+      /** Always empty: stale queue entries must never survive an invalid replacement. */
+      steering: [];
+      followUp: [];
+    };
+
 /**
  * One native-subagent run as the deck/activity panel sees it — derived purely
  * from the transcript's subagent + supervisor cells (no separate server state in
@@ -296,6 +314,7 @@ export type DomainEvent =
   | { type: "question_answered"; cellId: string }
   | { type: "cell_final"; cell: TranscriptCell }
   | { type: "agent_status"; status: AgentStatus }
+  | { type: "pending_input"; pendingInput: PendingInput }
   | { type: "plan_set"; items: SessionPlanItem[] }
   | { type: "plan_update"; updates: SessionPlanUpdate[] }
   | { type: "context_changed" };
@@ -303,6 +322,8 @@ export type DomainEvent =
 export interface TranscriptState {
   cells: TranscriptCell[];
   agentStatus: AgentStatus;
+  /** Pi's authoritative live steering/follow-up queues. */
+  pendingInput: PendingInput;
   /** The session's activity plan (set_session_plan / update_session_plan). */
   plan: SessionPlanItem[];
   /**
@@ -315,7 +336,13 @@ export interface TranscriptState {
 }
 
 export function emptyTranscript(): TranscriptState {
-  return { cells: [], agentStatus: "idle", plan: [], contextRevision: 0 };
+  return {
+    cells: [],
+    agentStatus: "idle",
+    pendingInput: { status: "available", steering: [], followUp: [] },
+    plan: [],
+    contextRevision: 0,
+  };
 }
 
 function upsertCell(cells: TranscriptCell[], cell: TranscriptCell): TranscriptCell[] {
@@ -348,6 +375,10 @@ export function reduceTranscript(state: TranscriptState, event: DomainEvent): Tr
   switch (event.type) {
     case "agent_status":
       return { ...state, agentStatus: event.status };
+    case "pending_input":
+      // queue_update is a full authoritative replacement. Do not de-duplicate:
+      // repeated guidance is meaningful and order is controlled by Pi.
+      return { ...state, pendingInput: event.pendingInput };
     case "context_changed":
       return { ...state, contextRevision: state.contextRevision + 1 };
     case "plan_set":

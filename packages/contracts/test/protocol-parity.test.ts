@@ -116,6 +116,16 @@ const fixtures: Fixture[] = [
     expected: "accept",
   },
   {
+    name: "prompt streaming behavior",
+    message: { type: "prompt", sessionId: "s1", message: "/template", streamingBehavior: "steer" },
+    expected: "accept",
+  },
+  {
+    name: "prompt invalid streaming behavior",
+    message: { type: "prompt", sessionId: "s1", message: "hi", streamingBehavior: "later" },
+    expected: "reject",
+  },
+  {
     name: "steer",
     message: { type: "steer", sessionId: "s1", message: "go left" },
     expected: "accept",

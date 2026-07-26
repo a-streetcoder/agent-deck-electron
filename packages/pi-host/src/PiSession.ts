@@ -160,8 +160,12 @@ export class PiSession extends EventEmitter<PiSessionEvents> {
 
   // Convenience wrappers mirroring pi's RpcClient names.
 
-  async prompt(message: string, images?: CommandOf<"prompt">["images"]): Promise<void> {
-    await this.request({ type: "prompt", message, images });
+  async prompt(
+    message: string,
+    images?: CommandOf<"prompt">["images"],
+    streamingBehavior?: CommandOf<"prompt">["streamingBehavior"],
+  ): Promise<void> {
+    await this.request({ type: "prompt", message, images, streamingBehavior });
   }
 
   async steer(message: string): Promise<void> {

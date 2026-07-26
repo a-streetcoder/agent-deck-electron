@@ -56,6 +56,7 @@ function makeSession(
   const ops = {
     prompt: vi.fn(async () => {}),
     steer: vi.fn(async () => {}),
+    followUp: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
     compact: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
@@ -407,13 +408,21 @@ describe("createRpcConnection", () => {
   });
 
   it("subscribe_session with no lastSeq pushes a snapshot then acks", async () => {
-    const { session } = makeSession("s1", { snapshot: { seq: 5, state: { cells: ["x"] } } });
+    const state = {
+      cells: ["x"],
+      pendingInput: {
+        status: "available",
+        steering: ["guide", "guide"],
+        followUp: ["later"],
+      },
+    };
+    const { session } = makeSession("s1", { snapshot: { seq: 5, state } });
     const { conn, frames } = harness(makeManager({ s1: session }));
     await conn.handleMessage(frame(2, { type: "subscribe_session", sessionId: "s1" }));
     expect(frames).toEqual([
       {
         kind: "push",
-        message: { type: "snapshot", sessionId: "s1", seq: 5, state: { cells: ["x"] } },
+        message: { type: "snapshot", sessionId: "s1", seq: 5, state },
       },
       { kind: "reply", id: 2, ok: true },
     ]);
@@ -421,8 +430,20 @@ describe("createRpcConnection", () => {
 
   it("subscribe_session with lastSeq replays from the ring (no snapshot)", async () => {
     const replay: StampedEvent[] = [
-      { seq: 3, event: { kind: "text_delta" } as unknown as StampedEvent["event"] },
-      { seq: 4, event: { kind: "text_delta" } as unknown as StampedEvent["event"] },
+      {
+        seq: 3,
+        event: {
+          type: "pending_input",
+          pendingInput: { status: "available", steering: ["guide"], followUp: [] },
+        },
+      },
+      {
+        seq: 4,
+        event: {
+          type: "pending_input",
+          pendingInput: { status: "available", steering: [], followUp: [] },
+        },
+      },
     ];
     const { session } = makeSession("s1", { replay });
     const { conn, frames } = harness(makeManager({ s1: session }));
@@ -437,10 +458,27 @@ describe("createRpcConnection", () => {
   });
 
   it("subscribe_session with an evicted lastSeq falls back to a snapshot", async () => {
-    const { session } = makeSession("s1", { replay: null, snapshot: { seq: 9, state: {} } });
+    const unavailableQueue = {
+      status: "unavailable",
+      truncated: true,
+      reason: "limit_exceeded",
+      steering: [],
+      followUp: [],
+    };
+    const { session } = makeSession("s1", {
+      replay: null,
+      snapshot: { seq: 9, state: { pendingInput: unavailableQueue } },
+    });
     const { conn, frames } = harness(makeManager({ s1: session }));
     await conn.handleMessage(frame(4, { type: "subscribe_session", sessionId: "s1", lastSeq: 1 }));
-    expect(frames[0]).toMatchObject({ kind: "push", message: { type: "snapshot", seq: 9 } });
+    expect(frames[0]).toMatchObject({
+      kind: "push",
+      message: {
+        type: "snapshot",
+        seq: 9,
+        state: { pendingInput: unavailableQueue },
+      },
+    });
     expect(frames[1]).toEqual({ kind: "reply", id: 4, ok: true });
   });
 
@@ -487,8 +525,16 @@ describe("createRpcConnection", () => {
     const { session, ops } = makeSession("s1");
     const { conn, frames } = harness(makeManager({ s1: session }));
     const images = [{ type: "image", data: "aGk=", mimeType: "image/png" }];
-    await conn.handleMessage(frame(1, { type: "prompt", sessionId: "s1", message: "hi", images }));
-    expect(ops.prompt).toHaveBeenCalledWith("hi", images);
+    await conn.handleMessage(
+      frame(1, {
+        type: "prompt",
+        sessionId: "s1",
+        message: "hi",
+        images,
+        streamingBehavior: "followUp",
+      }),
+    );
+    expect(ops.prompt).toHaveBeenCalledWith("hi", images, "followUp");
     expect(frames).toEqual([{ kind: "reply", id: 1, ok: true }]);
   });
 

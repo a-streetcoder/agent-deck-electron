@@ -37,8 +37,8 @@ import type { ConnectionStatus } from "./store.ts";
  *     time"), and drives the store connection status through {@link TransportHost}.
  *   - on (re)open it resubscribes with the current `lastSeq` so the server
  *     replays the gap (or snapshots when the ring evicted it).
- *   - `send(message)` is fire-and-forget; a command sent while disconnected is
- *     dropped silently (the reconnect will re-sync).
+ *   - `send(message)` resolves only after its correlated server ack and rejects
+ *     while disconnected or when the server rejects the command.
  */
 
 /** The shared wiring both transports call back into (store + reducer bridge). */
@@ -67,7 +67,7 @@ export interface ClientTransport {
   connect(sessionId: string): void;
   /** Deliberately close and forget the current subscription; no reconnect. */
   disconnect(): void;
-  send(message: ClientMessage): void;
+  send(message: ClientMessage): Promise<void>;
   /** Open (or reattach `terminalId` to) the session terminal; rejects offline. */
   openTerminal(request: {
     sessionId: string;
@@ -220,23 +220,12 @@ export class RpcClientTransport implements ClientTransport {
     this.host.setConnection("closed");
   }
 
-  send(message: ClientMessage): void {
+  async send(message: ClientMessage): Promise<void> {
     const transport = this.transport;
-    // Fire-and-forget: a command sent while disconnected is dropped silently
-    // (legacy parity — the reconnect resyncs), so we never reject-spam the banner.
-    if (!transport || transport.getState() !== "connected") return;
-    void transport.request(message).catch((error: unknown) => {
-      // Only surface a genuine server error REPLY (arrives while still
-      // connected); a rejection from a mid-flight disconnect is suppressed —
-      // legacy shows no error there, just the reconnect banner.
-      if (transport !== this.transport) return;
-      if (transport.getState() !== "connected") return;
-      this.host.onServerMessage({
-        type: "error",
-        message: String(error),
-        sessionId: this.currentSessionId ?? undefined,
-      });
-    });
+    if (!transport || transport.getState() !== "connected") {
+      throw new Error("transport not connected");
+    }
+    await transport.request(message);
   }
 
   openTerminal(request: {

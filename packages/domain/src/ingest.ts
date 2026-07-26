@@ -84,6 +84,30 @@ function userText(content: unknown): string {
   return "";
 }
 
+const MAX_QUEUE_ITEMS = 100;
+const MAX_QUEUE_ITEM_CHARS = 10_000;
+const MAX_QUEUE_CHARS = 100_000;
+
+type BoundedQueue =
+  | { ok: true; items: string[]; chars: number }
+  | { ok: false; reason: "malformed" | "limit_exceeded" };
+
+/** Validate one external queue array without retaining any invalid prefix. */
+function boundedQueue(value: unknown): BoundedQueue {
+  if (!Array.isArray(value)) return { ok: false, reason: "malformed" };
+  if (value.length > MAX_QUEUE_ITEMS) return { ok: false, reason: "limit_exceeded" };
+  let chars = 0;
+  const items: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return { ok: false, reason: "malformed" };
+    if (item.length > MAX_QUEUE_ITEM_CHARS) return { ok: false, reason: "limit_exceeded" };
+    chars += item.length;
+    if (chars > MAX_QUEUE_CHARS) return { ok: false, reason: "limit_exceeded" };
+    items.push(item);
+  }
+  return { ok: true, items, chars };
+}
+
 /** Feed one pi event; mutates `state`, returns the domain events it produced. */
 export function ingestPiEvent(state: IngestState, event: PiInboundEvent): DomainEvent[] {
   // pi's RPC mode forwards the FULL AgentSessionEvent union at runtime
@@ -91,8 +115,50 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
   // the exported RpcEventListener/AgentEvent TYPE is narrower and omits it. A
   // compaction changes the context outside the normal turn cycle, so surface it
   // as `context_changed` (the context-usage indicator re-reads stats on it).
-  if ((event as { type: string }).type === "compaction_end") {
-    return [{ type: "context_changed" }];
+  const external = event as unknown as { type?: unknown; steering?: unknown; followUp?: unknown };
+  if (external.type === "compaction_end") return [{ type: "context_changed" }];
+  if (external.type === "queue_update") {
+    const steering = boundedQueue(external.steering);
+    const followUp = boundedQueue(external.followUp);
+    if (!steering.ok || !followUp.ok) {
+      const reason = !steering.ok ? steering.reason : !followUp.ok ? followUp.reason : "malformed";
+      return [
+        {
+          type: "pending_input",
+          pendingInput: {
+            status: "unavailable",
+            truncated: reason === "limit_exceeded",
+            reason,
+            steering: [],
+            followUp: [],
+          },
+        },
+      ];
+    }
+    if (steering.chars + followUp.chars > MAX_QUEUE_CHARS) {
+      return [
+        {
+          type: "pending_input",
+          pendingInput: {
+            status: "unavailable",
+            truncated: true,
+            reason: "limit_exceeded",
+            steering: [],
+            followUp: [],
+          },
+        },
+      ];
+    }
+    return [
+      {
+        type: "pending_input",
+        pendingInput: {
+          status: "available",
+          steering: steering.items,
+          followUp: followUp.items,
+        },
+      },
+    ];
   }
   switch (event.type) {
     case "agent_start":
@@ -264,8 +330,8 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
     }
 
     default:
-      // turn_start/turn_end, queue/compaction/retry events: handled in later
-      // slices; cell_final self-healing keeps the transcript sound.
+      // turn_start/turn_end and retry events do not affect the transcript;
+      // cell_final self-healing keeps durable message content sound.
       return [];
   }
 }

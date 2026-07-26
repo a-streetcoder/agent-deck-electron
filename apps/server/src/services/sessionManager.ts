@@ -231,7 +231,11 @@ export interface ManagedSessionRuntime {
   readonly respondToUiRequest: (raw: Record<string, unknown>) => Effect.Effect<void, Error>;
 
   // pi RPC operations.
-  readonly prompt: (message: string, images?: PromptImages) => Effect.Effect<void>;
+  readonly prompt: (
+    message: string,
+    images?: PromptImages,
+    streamingBehavior?: "steer" | "followUp",
+  ) => Effect.Effect<void>;
   readonly steer: (message: string) => Effect.Effect<void>;
   readonly followUp: (message: string) => Effect.Effect<void>;
   readonly compact: Effect.Effect<void>;
@@ -668,8 +672,8 @@ export const makeManagedSessionRuntime = (
           emit({ type: "question_answered", cellId: `question-${id}` });
         }),
 
-      prompt: (message, images) =>
-        handle.prompt(message, images).pipe(
+      prompt: (message, images, streamingBehavior) =>
+        handle.prompt(message, images, streamingBehavior).pipe(
           // Prompting is activity — bump updatedAt via the meta-change callback.
           Effect.tap(() => Effect.sync(() => onMetaChange(meta))),
           Effect.orDie,
