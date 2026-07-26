@@ -49,6 +49,7 @@ export interface AgentDeckBridge {
   }): Promise<string[]>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
+  trashSkillRecovery?(token: string): Promise<{ moved: boolean; acknowledgementPending: boolean }>;
   openResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   revealResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
@@ -93,6 +94,15 @@ export async function revealLoopWorktree(runId: string): Promise<boolean> {
   const bridge = nativeBridge();
   if (!bridge?.revealLoopWorktree) return false;
   return (await bridge.revealLoopWorktree(runId)) === true;
+}
+
+export async function trashSkillRecovery(
+  token: string,
+): Promise<{ moved: boolean; acknowledgementPending: boolean } | undefined> {
+  const bridge = nativeBridge();
+  if (!bridge?.trashSkillRecovery) return undefined;
+  const result = await bridge.trashSkillRecovery(token);
+  return result?.moved ? result : undefined;
 }
 
 /** Open a catalog-validated agent or prompt file in its default editor. */

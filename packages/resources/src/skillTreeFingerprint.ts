@@ -100,6 +100,20 @@ function readRegularFile(file: string, expected: Stats): Buffer {
   }
 }
 
+export interface SkillTreeEntry {
+  relativePath: string;
+  type: "directory" | "file";
+  /** Present only for files. Callers must treat these bytes as immutable. */
+  content?: Buffer;
+}
+
+export interface SkillTreeSnapshot {
+  fingerprint: string;
+  entries: SkillTreeEntry[];
+  /** A reserved .git entry was observed and intentionally not represented. */
+  unsafeReservedGit?: true;
+}
+
 export interface SkillTreeFingerprintOptions {
   /**
    * Native payload copying excludes `.git`. Catalog checks may still record a
@@ -118,15 +132,17 @@ export interface SkillTreeFingerprintOptions {
  * portable `/` separators and length framing makes every path/type/content
  * tuple unambiguous. Missing roots are a durable state, not an error.
  */
-export function skillTreeFingerprint(
+export function skillTreeSnapshot(
   root: string,
   options: SkillTreeFingerprintOptions = {},
-): string {
+): SkillTreeSnapshot {
   let rootStat: Stats;
   try {
     rootStat = lstatSync(root);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return MISSING_SKILL_TREE_FINGERPRINT;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { fingerprint: MISSING_SKILL_TREE_FINGERPRINT, entries: [] };
+    }
     throw new SkillTreeFingerprintError("skill tree root could not be inspected", { cause: error });
   }
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
@@ -220,7 +236,22 @@ export function skillTreeFingerprint(
   for (const entry of entries) {
     addEntry(hash, entry.relativePath, entry.type, entry.content);
   }
-  return `${SKILL_TREE_FINGERPRINT_PREFIX}${hash.digest("hex")}`;
+  return {
+    fingerprint: `${SKILL_TREE_FINGERPRINT_PREFIX}${hash.digest("hex")}`,
+    unsafeReservedGit: entries.some((entry) => entry.type.startsWith("reserved-git-")) || undefined,
+    entries: entries.flatMap((entry) =>
+      entry.type === "directory" || entry.type === "file"
+        ? [{ relativePath: entry.relativePath, type: entry.type, content: entry.content }]
+        : [],
+    ),
+  };
+}
+
+export function skillTreeFingerprint(
+  root: string,
+  options: SkillTreeFingerprintOptions = {},
+): string {
+  return skillTreeSnapshot(root, options).fingerprint;
 }
 
 export function isSkillTreeFingerprint(value: string | undefined): boolean {

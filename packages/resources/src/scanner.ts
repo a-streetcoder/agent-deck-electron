@@ -172,6 +172,31 @@ function toSkillInfo(
   };
 }
 
+const RESOURCE_RECOVERY_PREFIX = ".agent-deck-resource-recovery-v1-";
+
+function isRecoveryWrapperName(name: string): boolean {
+  if (!name.startsWith(RESOURCE_RECOVERY_PREFIX)) return false;
+  const suffix = name.slice(RESOURCE_RECOVERY_PREFIX.length);
+  const separator = suffix.indexOf("-");
+  if (separator < 1) return false;
+  const length = Number(suffix.slice(0, separator));
+  const remainder = suffix.slice(separator + 1);
+  const skillName = remainder.slice(0, length);
+  return (
+    Number.isSafeInteger(length) &&
+    length > 0 &&
+    remainder[length] === "-" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(skillName) &&
+    /^[0-9a-f]{32}$/i.test(remainder.slice(length + 1))
+  );
+}
+
+function isPrivateResourceSkill(catalog: string, baseDir: string): boolean {
+  const relative = path.relative(path.resolve(catalog), path.resolve(baseDir));
+  const parts = relative.split(path.sep);
+  return relative !== "" && parts.length >= 1 && isRecoveryWrapperName(parts[0]!);
+}
+
 /** Standard catalogs followed by selected in-place collection roots. The first
  * name wins, so a standard catalog deterministically shadows a collection. */
 export function scanSkills(
@@ -183,7 +208,7 @@ export function scanSkills(
   for (const { dir, scope } of skillCatalogDirs(roots)) {
     const result = loadSkillsFromDir({ dir, source: scope });
     for (const skill of result.skills) {
-      if (names.has(skill.name)) continue;
+      if (isPrivateResourceSkill(dir, skill.baseDir) || names.has(skill.name)) continue;
       names.add(skill.name);
       skills.push(toSkillInfo(skill, scope));
     }

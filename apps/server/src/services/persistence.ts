@@ -94,6 +94,23 @@ export interface SkillCollection {
   skillRootPaths: string[];
 }
 
+export interface LegacySkillPathConflict {
+  path: string;
+  local: "file" | "directory" | "missing";
+  remote: "file" | "directory" | "missing";
+}
+
+export interface LegacySkillMergeConflict {
+  name: string;
+  /** Generation-bound review identity; absent only on pre-SKL-02 persisted records. */
+  mergeId?: string;
+  /** Catalog state after non-overlapping changes were applied. */
+  localFingerprint: string;
+  /** Upstream payload state at lastSyncedCommit. */
+  sourceFingerprint: string;
+  paths: LegacySkillPathConflict[];
+}
+
 export interface ImportedSkillRepository {
   id: string;
   /** Absent on legacy copy-based Electron records. */
@@ -125,6 +142,8 @@ export interface ImportedSkillRepository {
    * fingerprints; bare SHA-256 SKILL.md values remain readable for lazy migration.
    */
   skillHashes?: Record<string, string>;
+  /** Durable, fail-closed per-path legacy merge preparation. */
+  pendingMerges?: LegacySkillMergeConflict[];
   /** The clone's HEAD commit at the last successful sync. */
   lastSyncedCommit: string;
   importedAt: string;
@@ -444,12 +463,12 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // Missing or corrupt — defaults apply.
     }
 
-    const flush = (): void => {
+    const flush = (value: AppSettings = settings): void => {
       const tmp = `${file}.tmp`;
       // Preserve byte-compatible legacy files: the collection field did not
       // exist before collection-v1 and an empty list has identical semantics.
-      const persisted: Partial<AppSettings> = { ...settings };
-      if (settings.skillCollections.length === 0) delete persisted.skillCollections;
+      const persisted: Partial<AppSettings> = { ...value };
+      if (value.skillCollections.length === 0) delete persisted.skillCollections;
       writeFileSync(tmp, JSON.stringify(persisted, null, 2));
       renameSync(tmp, file);
     };
@@ -536,8 +555,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       upsertImportedSkillRepository: (repo) =>
         Effect.sync(() => {
           const rest = settings.importedSkillRepositories.filter((r) => r.id !== repo.id);
-          settings = { ...settings, importedSkillRepositories: [...rest, repo] };
-          flush();
+          const next = { ...settings, importedSkillRepositories: [...rest, repo] };
+          // Publish in memory only after the atomic disk replacement succeeds.
+          flush(next);
+          settings = next;
           return settings;
         }),
       removeImportedSkillRepository: (id) =>

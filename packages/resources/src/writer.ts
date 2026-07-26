@@ -1,5 +1,20 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import {
@@ -10,6 +25,7 @@ import {
   ResourceCatalogCapabilityError,
   writeResourceCatalogFile,
   type ResourceCatalog,
+  type ResourceRecovery,
 } from "@agent-deck/loop-catalog-native";
 import YAML from "yaml";
 import type { AgentEdit } from "./overrides.ts";
@@ -19,7 +35,11 @@ import {
   skillCatalogDirs,
   type ResourceRoots,
 } from "./paths.ts";
-import { skillTreeFingerprint, SkillTreeFingerprintError } from "./skillTreeFingerprint.ts";
+import {
+  skillTreeFingerprint,
+  SkillTreeFingerprintError,
+  type SkillTreeEntry,
+} from "./skillTreeFingerprint.ts";
 
 /**
  * File writers for global/library agents and prompts, plus global skills. Existing files keep
@@ -723,6 +743,117 @@ export function catalogSkillTreeFingerprint(
  * `.git` entries excluded. Names come from SKILL.md frontmatter `name`, else the dir basename
  * (or `repoName` for the root case). Existing + invalid names are skipped.
  */
+export function materializeSkillTreeEntries(
+  destinationRoot: string,
+  payload: readonly SkillTreeEntry[],
+): void {
+  const seen = new Set<string>();
+  for (const entry of payload) {
+    const parts = entry.relativePath.split("/");
+    if (
+      entry.relativePath.length === 0 ||
+      entry.relativePath.includes("\\") ||
+      path.posix.normalize(entry.relativePath) !== entry.relativePath ||
+      parts.some((part) => part === "" || part === "." || part === ".." || part === ".git") ||
+      seen.has(entry.relativePath)
+    ) {
+      throw new ResourceCatalogCapabilityError(
+        "RESOURCE_INVALID_PATH",
+        "Invalid merged skill path.",
+      );
+    }
+    seen.add(entry.relativePath);
+    const destination = path.join(destinationRoot, ...parts);
+    if (entry.type === "directory") {
+      mkdirSync(destination, { recursive: true });
+    } else {
+      if (!entry.content) {
+        throw new ResourceCatalogCapabilityError("RESOURCE_IO", "Missing merged file bytes.");
+      }
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(destination, entry.content, { flag: "wx" });
+    }
+  }
+}
+
+/** Materialize then durably order every payload file/directory before journaling it. */
+export function durableMaterializeSkillTreeEntries(
+  destinationRoot: string,
+  payload: readonly SkillTreeEntry[],
+): void {
+  materializeSkillTreeEntries(destinationRoot, payload);
+  const directories = new Set<string>([destinationRoot]);
+  for (const entry of payload) {
+    const target = path.join(destinationRoot, ...entry.relativePath.split("/"));
+    let parent = entry.type === "directory" ? target : path.dirname(target);
+    while (parent.startsWith(`${destinationRoot}${path.sep}`)) {
+      directories.add(parent);
+      parent = path.dirname(parent);
+    }
+    if (entry.type === "file") {
+      const descriptor = openSync(target, "r");
+      try {
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    }
+  }
+  // Node cannot portably open directory handles on Windows. File fsync remains
+  // mandatory there; POSIX additionally persists directory entries bottom-up.
+  if (process.platform !== "win32") {
+    for (const directory of [...directories].sort((a, b) => b.length - a.length)) {
+      const descriptor = openSync(directory, "r");
+      try {
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    }
+  }
+}
+
+/**
+ * Replace one copied skill with an already verified payload snapshot. The
+ * snapshot is materialized in a private temporary directory and the existing
+ * native no-follow/atomic whole-tree capability remains the only catalog write.
+ */
+export function replaceSkillTreeFromEntries(
+  roots: ResourceRoots,
+  scope: WritableScope,
+  name: string,
+  entries: readonly SkillTreeEntry[],
+  expectedEntries?: readonly SkillTreeEntry[],
+  recoveryToken?: string,
+): ResourceRecovery | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+    throw new ResourceCatalogCapabilityError("RESOURCE_INVALID_PATH", "Invalid skill name.");
+  }
+  const staging = mkdtempSync(path.join(tmpdir(), "agent-deck-skill-merge-"));
+  const expectedStaging = expectedEntries
+    ? mkdtempSync(path.join(tmpdir(), "agent-deck-skill-expected-"))
+    : undefined;
+  try {
+    materializeSkillTreeEntries(staging, entries);
+    if (expectedStaging) materializeSkillTreeEntries(expectedStaging, expectedEntries!);
+    const dest = catalogLocation(roots, path.join(skillDirFor(roots, scope), name));
+    return copyResourceTree(
+      roots.home,
+      dest.catalog,
+      dest.components,
+      staging,
+      true,
+      expectedStaging,
+      expectedEntries !== undefined && expectedEntries.length === 0,
+      entries.length === 0,
+      recoveryToken,
+    );
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+    if (expectedStaging) rmSync(expectedStaging, { recursive: true, force: true });
+  }
+}
+
 export function importSkillsFromClone(
   roots: ResourceRoots,
   scope: WritableScope,

@@ -68,27 +68,22 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("preserves an asset-only edit and labels whole-folder remote resolution", async ({ page }) => {
+test("reviews a per-path conflict and applies a remote path choice", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-skills").click();
   await page.getByTestId("skill-repo-update-legacy-tree-e2e").click();
 
   const conflict = page.getByTestId("skill-repo-conflicts-legacy-tree-e2e");
   await expect(conflict).toBeVisible();
-  await expect(conflict).toContainText(
-    "replaces or deletes the entire skill folder, including assets",
-  );
+  await expect(conflict).toContainText("Non-overlapping changes were merged");
   expect(readFileSync(localAsset, "utf8")).toContain("LOCAL ASSET EDIT");
 
   await expect(conflict.getByTitle(skillName)).toHaveText(skillName);
-  await expect(
-    page.getByTestId(`skill-conflict-mine-legacy-tree-e2e-${skillName}`),
-  ).toHaveAccessibleName(`Keep mine for ${skillName}`);
-  const takeRemote = page.getByTestId(`skill-conflict-remote-legacy-tree-e2e-${skillName}`);
-  await expect(takeRemote).toHaveAccessibleName(
-    /replaces or deletes the entire folder and all assets/,
-  );
-  await takeRemote.click();
+  const pathGroup = conflict.getByRole("group", { name: `Conflicting paths for ${skillName}` });
+  await expect(pathGroup).toContainText("helper.py");
+  await expect(pathGroup.getByLabel("Keep Mine for helper.py")).toBeChecked();
+  await pathGroup.getByLabel("Take Remote for helper.py").check();
+  await page.getByTestId(`skill-conflict-apply-legacy-tree-e2e-${skillName}`).click();
   await expect(conflict).toHaveCount(0);
   await expect.poll(() => readFileSync(localAsset, "utf8")).toContain("UPSTREAM ASSET");
 });

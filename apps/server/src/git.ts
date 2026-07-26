@@ -224,6 +224,13 @@ export async function gitClonePersistent(
   }
 }
 
+/** Restore a managed legacy clone to a validated persisted commit after a failed prepare/apply. */
+export async function gitResetHardTo(dir: string, commit: string): Promise<void> {
+  validateGitObjectId(commit);
+  await runGit(dir, ["reset", "--hard", commit]);
+  await runGit(dir, ["clean", "-fd"]);
+}
+
 /** The HEAD commit sha of a clone (native rev-parse HEAD). */
 export async function gitHead(dir: string): Promise<string> {
   return (await runGit(dir, ["rev-parse", "HEAD"])).trim();

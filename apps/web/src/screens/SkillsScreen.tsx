@@ -23,7 +23,23 @@ import type { SkillInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 
+interface SkillPathConflict {
+  path: string;
+  local: "file" | "directory" | "missing";
+  remote: "file" | "directory" | "missing";
+}
+interface SkillMergeConflict {
+  name: string;
+  mergeId: string;
+  paths: SkillPathConflict[];
+}
+
 /** A git-imported skill repo (native ImportedSkillRepository), for re-sync. */
+interface SkillRecovery {
+  token: string;
+  skillName: string;
+}
+
 interface SkillRepo {
   id: string;
   remoteUrl: string;
@@ -34,11 +50,13 @@ interface SkillRepo {
   importedAt: string;
   available: boolean;
   unavailable?: { code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE"; message: string };
+  pendingMerges?: SkillMergeConflict[];
 }
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { deleteSkill, renameSkill, setSkillDisabled, updateProject } from "../state/wsBridge.ts";
 import { ScopeChip } from "../components/ScopeChip.tsx";
+import { trashSkillRecovery } from "../lib/native.ts";
 
 /**
  * Native SkillsScreen: master-detail split; rows with the wand glyph
@@ -424,15 +442,24 @@ export function SkillsScreen() {
   const repoBusyRef = useRef(new Map<string, "update" | "forget" | "remove-record">());
   // Per-repo unresolved conflicts (skills the user edited locally that an update
   // held back rather than overwriting) — native Keep Mine / Take Remote.
-  const [conflicts, setConflicts] = useState<Record<string, string[]>>({});
-  const [resolvingConflicts, setResolvingConflicts] = useState<Record<string, "mine" | "remote">>(
+  const [conflicts, setConflicts] = useState<Record<string, SkillMergeConflict[]>>({});
+  const [conflictChoices, setConflictChoices] = useState<Record<string, "mine" | "remote">>({});
+  const [resolvingConflicts, setResolvingConflicts] = useState<Record<string, "apply" | "refresh">>(
     {},
   );
+  const [staleConflicts, setStaleConflicts] = useState<Record<string, boolean>>({});
   const resolvingConflictsRef = useRef(new Set<string>());
   const conflictActionRefs = useRef(new Map<string, HTMLButtonElement>());
   const repoUpdateRefs = useRef(new Map<string, HTMLButtonElement>());
   const repoRemoveRecordRefs = useRef(new Map<string, HTMLButtonElement>());
   const [repoRecordRemovalAnnouncement, setRepoRecordRemovalAnnouncement] = useState("");
+  const [mergeAnnouncement, setMergeAnnouncement] = useState("");
+  const [recoveries, setRecoveries] = useState<SkillRecovery[]>([]);
+  const [recoveryBusy, setRecoveryBusy] = useState<Record<string, "trash" | "restore">>({});
+  const [recoveryAnnouncement, setRecoveryAnnouncement] = useState("");
+  const recoveryActionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const recoveryTombstones = useRef(new Set<string>());
+  const recoveryRequestGeneration = useRef(0);
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
@@ -459,6 +486,23 @@ export function SkillsScreen() {
       cancelled = true;
     };
   }, [currentProjectId, resourcesVersion, setGlobalError]);
+
+  const refreshRecoveries = useCallback(async (): Promise<void> => {
+    const generation = ++recoveryRequestGeneration.current;
+    try {
+      const response = await fetch("/resources/skill-recoveries");
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const data = (await response.json()) as { recoveries: SkillRecovery[] };
+      if (generation !== recoveryRequestGeneration.current) return;
+      setRecoveries(data.recoveries.filter((item) => !recoveryTombstones.current.has(item.token)));
+    } catch (error) {
+      if (generation === recoveryRequestGeneration.current) setGlobalError(String(error));
+    }
+  }, [setGlobalError]);
+
+  useEffect(() => {
+    void refreshRecoveries();
+  }, [resourcesVersion, refreshRecoveries]);
 
   useEffect(() => {
     if (resourceRequest?.action !== "skills.import") return;
@@ -570,6 +614,13 @@ export function SkillsScreen() {
         const data = (await response.json()) as { repos: SkillRepo[] };
         if (cancelled) return;
         setRepos(data.repos);
+        setConflicts(
+          Object.fromEntries(
+            data.repos
+              .filter((repo) => (repo.pendingMerges?.length ?? 0) > 0)
+              .map((repo) => [repo.id, repo.pendingMerges!]),
+          ),
+        );
         for (const repo of data.repos) {
           if (repo.available === false) continue;
           void (async () => {
@@ -613,6 +664,101 @@ export function SkillsScreen() {
     };
   }, [resourcesVersion, setGlobalError]);
 
+  const focusAfterRecoveryRemoval = (token: string): void => {
+    const index = recoveries.findIndex((item) => item.token === token);
+    const remaining = recoveries.filter((item) => item.token !== token);
+    const next = remaining[index] ?? remaining[Math.max(0, index - 1)];
+    requestAnimationFrame(() => {
+      if (next) recoveryActionRefs.current.get(next.token)?.focus();
+      else repoUpdateRefs.current.values().next().value?.focus();
+    });
+  };
+
+  const moveRecoveryToTrash = async (recovery: SkillRecovery): Promise<void> => {
+    if (recoveryBusy[recovery.token]) return;
+    const invoked = recoveryActionRefs.current.get(recovery.token);
+    const ownedFocus = invoked !== undefined && document.activeElement === invoked;
+    setRecoveryBusy((current) => ({ ...current, [recovery.token]: "trash" }));
+    try {
+      const result = await trashSkillRecovery(recovery.token);
+      if (!result) throw new Error("Move to Trash is available in the desktop app.");
+      recoveryTombstones.current.add(recovery.token);
+      setRecoveries((current) => current.filter((item) => item.token !== recovery.token));
+      setRecoveryAnnouncement(
+        result.acknowledgementPending
+          ? `${recovery.skillName} recovery moved to OS Trash; catalog acknowledgement will retry automatically.`
+          : `${recovery.skillName} recovery moved to OS Trash.`,
+      );
+      void refreshRecoveries();
+      if (ownedFocus) focusAfterRecoveryRemoval(recovery.token);
+    } catch (error) {
+      setGlobalError(
+        `Couldn't move ${recovery.skillName} recovery to Trash. ${error instanceof Error ? error.message : String(error)} You can restore it safely instead.`,
+      );
+      requestAnimationFrame(() => {
+        if (
+          ownedFocus &&
+          (document.activeElement === invoked || document.activeElement === document.body)
+        ) {
+          invoked?.focus();
+        }
+      });
+    } finally {
+      setRecoveryBusy((current) => {
+        const next = { ...current };
+        delete next[recovery.token];
+        return next;
+      });
+    }
+  };
+
+  const restoreRecovery = async (recovery: SkillRecovery): Promise<void> => {
+    if (recoveryBusy[recovery.token]) return;
+    const invoked = recoveryActionRefs.current.get(`${recovery.token}:restore`);
+    const ownedFocus = invoked !== undefined && document.activeElement === invoked;
+    setRecoveryBusy((current) => ({ ...current, [recovery.token]: "restore" }));
+    try {
+      const response = await fetch(
+        `/resources/skill-recoveries/${encodeURIComponent(recovery.token)}/restore`,
+        { method: "POST" },
+      );
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      recoveryTombstones.current.add(recovery.token);
+      setRecoveries((current) => current.filter((item) => item.token !== recovery.token));
+      setRecoveryAnnouncement(`${recovery.skillName} restored to the active catalog.`);
+      void refreshRecoveries();
+      if (ownedFocus) focusAfterRecoveryRemoval(recovery.token);
+    } catch (error) {
+      setGlobalError(
+        `Couldn't restore ${recovery.skillName}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+      requestAnimationFrame(() => {
+        if (
+          ownedFocus &&
+          (document.activeElement === invoked || document.activeElement === document.body)
+        ) {
+          invoked?.focus();
+        }
+      });
+    } finally {
+      setRecoveryBusy((current) => {
+        const next = { ...current };
+        delete next[recovery.token];
+        return next;
+      });
+    }
+  };
+
+  const handleNewRecoveries = (items: SkillRecovery[] | undefined): void => {
+    if (!items?.length) return;
+    setRecoveries((current) => {
+      const byToken = new Map(current.map((item) => [item.token, item]));
+      for (const item of items) byToken.set(item.token, item);
+      return [...byToken.values()];
+    });
+    for (const item of items) void moveRecoveryToTrash(item);
+  };
+
   const updateRepo = async (id: string): Promise<void> => {
     if (repoBusyRef.current.has(id)) return;
     repoBusyRef.current.set(id, "update");
@@ -620,7 +766,11 @@ export function SkillsScreen() {
     try {
       const res = await fetch(`/resources/skill-repos/${id}/update`, { method: "POST" });
       if (!res.ok) throw new Error(await responseErrorMessage(res));
-      const data = (await res.json()) as { conflicts?: string[] };
+      const data = (await res.json()) as {
+        mergeConflicts?: SkillMergeConflict[];
+        recoveries?: SkillRecovery[];
+      };
+      handleNewRecoveries(data.recoveries);
       // Clear the badge; the resources_changed broadcast refetches the skills.
       setUpdatable((prev) => {
         const next = new Set(prev);
@@ -630,8 +780,13 @@ export function SkillsScreen() {
       // Surface any locally-edited skills the update held back.
       setConflicts((prev) => {
         const next = { ...prev };
-        if (data.conflicts && data.conflicts.length > 0) next[id] = data.conflicts;
+        if (data.mergeConflicts && data.mergeConflicts.length > 0) next[id] = data.mergeConflicts;
         else delete next[id];
+        return next;
+      });
+      setConflictChoices((current) => {
+        const next = { ...current };
+        for (const key of Object.keys(next)) if (key.startsWith(`${id}\0`)) delete next[key];
         return next;
       });
     } catch (err) {
@@ -646,63 +801,144 @@ export function SkillsScreen() {
     }
   };
 
-  const resolveConflict = async (
-    id: string,
-    name: string,
-    resolution: "mine" | "remote",
-  ): Promise<void> => {
-    const key = `${id}\0${name}`;
+  const resolveConflict = async (id: string, conflict: SkillMergeConflict): Promise<void> => {
+    const key = `${id}\0${conflict.mergeId}`;
     if (resolvingConflictsRef.current.has(key)) return;
-    const actionKey = `${key}\0${resolution}`;
-    const invokedAction = conflictActionRefs.current.get(actionKey);
+    const invokedAction = conflictActionRefs.current.get(key);
     const ownedFocus = invokedAction !== undefined && document.activeElement === invokedAction;
-    const focusStillOnAction = (): boolean =>
-      ownedFocus && document.activeElement === invokedAction;
     const focusMayBeRestored = (): boolean =>
-      focusStillOnAction() || (ownedFocus && document.activeElement === document.body);
+      ownedFocus &&
+      (document.activeElement === invokedAction || document.activeElement === document.body);
     resolvingConflictsRef.current.add(key);
-    setResolvingConflicts((current) => ({ ...current, [key]: resolution }));
+    setResolvingConflicts((current) => ({ ...current, [key]: "apply" }));
     try {
+      const choices = conflict.paths.map((item) => ({
+        path: item.path,
+        resolution: conflictChoices[`${key}\0${item.path}`] ?? "mine",
+      }));
       const res = await fetch(`/resources/skill-repos/${id}/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, resolution }),
+        body: JSON.stringify({ name: conflict.name, mergeId: conflict.mergeId, choices }),
       });
-      if (!res.ok) throw new Error(await responseErrorMessage(res));
-      let nextName: string | undefined;
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string };
+        if (res.status === 409 && body.code === "LEGACY_MERGE_STALE") {
+          throw Object.assign(new Error(body.error ?? "Review is stale."), { stale: true });
+        }
+        throw new Error(body.error ?? `Couldn't apply conflict choices (${res.status}).`);
+      }
+      const data = (await res.json()) as { recoveries?: SkillRecovery[] };
+      handleNewRecoveries(data.recoveries);
+      setMergeAnnouncement(`Conflict choices applied for ${conflict.name}.`);
+      let nextConflictId: string | undefined;
       setConflicts((previous) => {
-        const currentNames = previous[id] ?? [];
-        const removedIndex = currentNames.indexOf(name);
-        const remaining = currentNames.filter((candidate) => candidate !== name);
-        nextName =
+        const currentConflicts = previous[id] ?? [];
+        const removedIndex = currentConflicts.findIndex((item) => item.name === conflict.name);
+        const remaining = currentConflicts.filter((item) => item.name !== conflict.name);
+        nextConflictId =
           removedIndex >= 0
-            ? (remaining[removedIndex] ?? remaining[Math.max(0, removedIndex - 1)])
-            : remaining[0];
+            ? (remaining[removedIndex]?.mergeId ??
+              remaining[Math.max(0, removedIndex - 1)]?.mergeId)
+            : remaining[0]?.mergeId;
         const next = { ...previous };
         if (remaining.length > 0) next[id] = remaining;
         else delete next[id];
         return next;
       });
+      setConflictChoices((current) => {
+        const next = { ...current };
+        for (const choiceKey of Object.keys(next)) {
+          if (choiceKey.startsWith(`${key}\0`)) delete next[choiceKey];
+        }
+        return next;
+      });
+      setStaleConflicts((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
       requestAnimationFrame(() => {
         if (!focusMayBeRestored()) return;
-        const primary = nextName
-          ? conflictActionRefs.current.get(`${id}\0${nextName}\0mine`)
+        const nextApply = nextConflictId
+          ? conflictActionRefs.current.get(`${id}\0${nextConflictId}`)
           : undefined;
-        if (primary && !primary.disabled) primary.focus();
+        if (nextApply && !nextApply.disabled) nextApply.focus();
         else repoUpdateRefs.current.get(id)?.focus();
       });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      setGlobalError(`Couldn't resolve ${name}. ${detail} Try again.`);
+      if ((err as Error & { stale?: boolean }).stale) {
+        setStaleConflicts((current) => ({ ...current, [key]: true }));
+      }
+      setGlobalError(`Couldn't resolve ${conflict.name}. ${detail} Try again.`);
       requestAnimationFrame(() => {
-        if (!focusMayBeRestored()) return;
-        conflictActionRefs.current.get(actionKey)?.focus();
+        if (focusMayBeRestored()) invokedAction?.focus();
       });
     } finally {
       resolvingConflictsRef.current.delete(key);
       setResolvingConflicts((current) => {
         const next = { ...current };
         delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const refreshConflict = async (id: string, conflict: SkillMergeConflict): Promise<void> => {
+    const oldKey = `${id}\0${conflict.mergeId}`;
+    if (resolvingConflictsRef.current.has(oldKey)) return;
+    const invokedAction =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const ownedFocus = invokedAction !== null;
+    resolvingConflictsRef.current.add(oldKey);
+    setResolvingConflicts((current) => ({ ...current, [oldKey]: "refresh" }));
+    try {
+      const response = await fetch(`/resources/skill-repos/${id}/refresh-merge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: conflict.name }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const data = (await response.json()) as { mergeConflict: SkillMergeConflict };
+      setConflicts((current) => ({
+        ...current,
+        [id]: (current[id] ?? []).map((item) =>
+          item.mergeId === conflict.mergeId ? data.mergeConflict : item,
+        ),
+      }));
+      setConflictChoices((current) => {
+        const next = { ...current };
+        for (const choiceKey of Object.keys(next)) {
+          if (choiceKey.startsWith(`${oldKey}\0`)) delete next[choiceKey];
+        }
+        return next;
+      });
+      setStaleConflicts((current) => {
+        const next = { ...current };
+        delete next[oldKey];
+        return next;
+      });
+      setMergeAnnouncement(`Review refreshed for ${conflict.name}. Choices reset to Keep Mine.`);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (
+            ownedFocus &&
+            (document.activeElement === invokedAction || document.activeElement === document.body)
+          ) {
+            conflictActionRefs.current.get(`${id}\0${data.mergeConflict.mergeId}`)?.focus();
+          }
+        });
+      });
+    } catch (error) {
+      setGlobalError(
+        `Couldn't refresh ${conflict.name}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      resolvingConflictsRef.current.delete(oldKey);
+      setResolvingConflicts((current) => {
+        const next = { ...current };
+        delete next[oldKey];
         return next;
       });
     }
@@ -941,169 +1177,274 @@ export function SkillsScreen() {
         >
           {repoRecordRemovalAnnouncement}
         </div>
-        {repos.length > 0 ? (
-          <div className="mx-3 mb-2 space-y-1" data-testid="skill-repos">
-            <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
-              Imported repositories
-            </div>
-            {repos.map((repo) => (
-              <div key={repo.id}>
-                <div
-                  data-testid={`skill-repo-${repo.id}`}
-                  className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
-                  aria-busy={repoBusy[repo.id] !== undefined}
-                >
-                  <GitBranch size={12} className="shrink-0 text-text-secondary" />
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
-                    title={repo.remoteUrl}
-                  >
-                    {repo.remoteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "")}
-                  </span>
-                  {repo.available === false ? (
-                    <span
-                      data-testid={`skill-repo-unavailable-${repo.id}`}
-                      className="rounded-capsule border border-warning/55 bg-warning/10 px-1.5 py-0.5 text-micro font-medium text-warning"
-                    >
-                      Unavailable
-                    </span>
-                  ) : null}
-                  {repo.available !== false && updatable.has(repo.id) ? (
-                    <span
-                      data-testid={`skill-repo-updatable-${repo.id}`}
-                      className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
-                      style={{
-                        background: "var(--color-selection-fill)",
-                        color: "var(--color-brand-accent)",
-                      }}
-                    >
-                      Update available
-                    </span>
-                  ) : null}
-                  <ControlButton
-                    ref={(element) => {
-                      if (element) repoUpdateRefs.current.set(repo.id, element);
-                      else repoUpdateRefs.current.delete(repo.id);
-                    }}
-                    data-testid={`skill-repo-update-${repo.id}`}
-                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={repo.available === false || repoBusy[repo.id] !== undefined}
-                    onClick={() => void updateRepo(repo.id)}
-                  >
-                    {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
-                  </ControlButton>
-                  <ControlButton
-                    data-testid={`skill-repo-forget-${repo.id}`}
-                    className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
-                    title={
-                      repo.storageMode === "collection-v1"
-                        ? "Forget this repository and remove its managed skill collection"
-                        : "Forget this repository (keeps the imported skills)"
-                    }
-                    aria-label={
-                      repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
-                    }
-                    disabled={repo.available === false || repoBusy[repo.id] !== undefined}
-                    onClick={() => void forgetRepo(repo.id)}
-                  >
-                    <X size={12} />
-                  </ControlButton>
-                  {repo.available === false ? (
-                    <ControlButton
-                      ref={(element) => {
-                        if (element) repoRemoveRecordRefs.current.set(repo.id, element);
-                        else repoRemoveRecordRefs.current.delete(repo.id);
-                      }}
-                      data-testid={`skill-repo-remove-record-${repo.id}`}
-                      className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
-                      disabled={repoBusy[repo.id] !== undefined}
-                      onClick={() => void removeUnavailableRecord(repo)}
-                    >
-                      {repoBusy[repo.id] === "remove-record" ? "Removing…" : "Remove record only"}
-                    </ControlButton>
-                  ) : null}
+        <div className="sr-only" role="status" aria-live="polite">
+          {recoveryAnnouncement}
+        </div>
+        {recoveries.length > 0 || repos.length > 0 ? (
+          <div
+            data-testid="skill-management-panels"
+            className="mx-3 mb-2 max-h-[min(36vh,20rem)] min-h-0 shrink-0 space-y-2 overflow-y-auto overscroll-contain"
+          >
+            {recoveries.length > 0 ? (
+              <div className="space-y-1" data-testid="skill-recoveries">
+                <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  Safe recovery
                 </div>
-                {repo.available === false ? (
-                  <div
-                    data-testid={`skill-repo-unavailable-guidance-${repo.id}`}
-                    className="px-2.5 py-1 text-micro text-text-muted"
-                    role="status"
-                  >
-                    Restore the original managed repository folder, then restart Agent Deck to
-                    recover it. “Remove record only” leaves all clone files untouched.
-                  </div>
-                ) : null}
-                {(conflicts[repo.id] ?? []).length > 0 ? (
-                  <div
-                    data-testid={`skill-repo-conflicts-${repo.id}`}
-                    className="mt-1 space-y-1 rounded-lg border border-warning bg-surface px-2.5 py-1.5"
-                  >
-                    <div className="text-micro text-text-muted">
-                      Local folder changes were kept. Taking remote replaces or deletes the entire
-                      skill folder, including assets.
-                    </div>
-                    {conflicts[repo.id]!.map((name) => {
-                      const resolution = resolvingConflicts[`${repo.id}\0${name}`];
-                      const conflictBusy = resolution !== undefined;
-                      return (
-                        <div
-                          key={name}
-                          className="flex items-center gap-2"
-                          aria-busy={conflictBusy}
-                        >
-                          <span
-                            className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
-                            title={name}
-                          >
-                            {name}
-                          </span>
+                {recoveries.map((recovery) => {
+                  const busy = recoveryBusy[recovery.token];
+                  return (
+                    <div
+                      key={recovery.token}
+                      className="rounded-lg border border-warning bg-surface px-2.5 py-2"
+                      aria-busy={busy !== undefined}
+                      data-testid={`skill-recovery-${recovery.skillName}`}
+                    >
+                      <div className="font-mono text-detail text-text-primary">
+                        {recovery.skillName}
+                      </div>
+                      <p className="text-micro text-text-muted">
+                        {busy === "trash"
+                          ? "This completed-update backup is being moved to OS Trash automatically."
+                          : "A displaced or interrupted tree was retained safely. Restore is available only while the active skill is absent, or move this retained tree to OS Trash."}
+                      </p>
+                      {busy === "trash" ? null : (
+                        <div className="mt-1 flex gap-1">
                           <ControlButton
                             ref={(element) => {
-                              const actionKey = `${repo.id}\0${name}\0mine`;
-                              if (element) conflictActionRefs.current.set(actionKey, element);
-                              else conflictActionRefs.current.delete(actionKey);
+                              if (element) recoveryActionRefs.current.set(recovery.token, element);
+                              else recoveryActionRefs.current.delete(recovery.token);
                             }}
-                            data-conflict-primary="true"
-                            data-testid={`skill-conflict-mine-${repo.id}-${name}`}
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                            aria-label={
-                              resolution === "mine"
-                                ? `Keeping mine for ${name}…`
-                                : `Keep mine for ${name}`
-                            }
-                            disabled={conflictBusy}
-                            onClick={() => void resolveConflict(repo.id, name, "mine")}
+                            disabled={busy !== undefined}
+                            onClick={() => void moveRecoveryToTrash(recovery)}
+                            data-testid={`skill-recovery-trash-${recovery.skillName}`}
                           >
-                            {resolution === "mine" ? "Keeping mine…" : "Keep mine"}
+                            Move to Trash
                           </ControlButton>
                           <ControlButton
                             ref={(element) => {
-                              const actionKey = `${repo.id}\0${name}\0remote`;
-                              if (element) conflictActionRefs.current.set(actionKey, element);
-                              else conflictActionRefs.current.delete(actionKey);
+                              const key = `${recovery.token}:restore`;
+                              if (element) recoveryActionRefs.current.set(key, element);
+                              else recoveryActionRefs.current.delete(key);
                             }}
-                            data-testid={`skill-conflict-remote-${repo.id}-${name}`}
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                            title="Replace or delete the entire local skill folder and all assets with the remote version"
-                            aria-label={
-                              resolution === "remote"
-                                ? `Taking remote folder for ${name}…`
-                                : `Take remote folder for ${name}; replaces or deletes the entire folder and all assets`
-                            }
-                            disabled={conflictBusy}
-                            onClick={() => void resolveConflict(repo.id, name, "remote")}
+                            disabled={busy !== undefined}
+                            onClick={() => void restoreRecovery(recovery)}
+                            data-testid={`skill-recovery-restore-${recovery.skillName}`}
                           >
-                            {resolution === "remote" ? "Taking remote…" : "Take remote folder"}
+                            {busy === "restore" ? "Restoring…" : "Restore"}
                           </ControlButton>
                         </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            ) : null}
+            {repos.length > 0 ? (
+              <div className="space-y-1" data-testid="skill-repos">
+                <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  Imported repositories
+                </div>
+                {repos.map((repo) => (
+                  <div key={repo.id}>
+                    <div
+                      data-testid={`skill-repo-${repo.id}`}
+                      className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
+                      aria-busy={repoBusy[repo.id] !== undefined}
+                    >
+                      <GitBranch size={12} className="shrink-0 text-text-secondary" />
+                      <span
+                        className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
+                        title={repo.remoteUrl}
+                      >
+                        {repo.remoteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "")}
+                      </span>
+                      {repo.available === false ? (
+                        <span
+                          data-testid={`skill-repo-unavailable-${repo.id}`}
+                          className="rounded-capsule border border-warning/55 bg-warning/10 px-1.5 py-0.5 text-micro font-medium text-warning"
+                        >
+                          Unavailable
+                        </span>
+                      ) : null}
+                      {repo.available !== false && updatable.has(repo.id) ? (
+                        <span
+                          data-testid={`skill-repo-updatable-${repo.id}`}
+                          className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
+                          style={{
+                            background: "var(--color-selection-fill)",
+                            color: "var(--color-brand-accent)",
+                          }}
+                        >
+                          Update available
+                        </span>
+                      ) : null}
+                      <ControlButton
+                        ref={(element) => {
+                          if (element) repoUpdateRefs.current.set(repo.id, element);
+                          else repoUpdateRefs.current.delete(repo.id);
+                        }}
+                        data-testid={`skill-repo-update-${repo.id}`}
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        disabled={repo.available === false || repoBusy[repo.id] !== undefined}
+                        onClick={() => void updateRepo(repo.id)}
+                      >
+                        {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
+                      </ControlButton>
+                      <ControlButton
+                        data-testid={`skill-repo-forget-${repo.id}`}
+                        className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
+                        title={
+                          repo.storageMode === "collection-v1"
+                            ? "Forget this repository and remove its managed skill collection"
+                            : "Forget this repository (keeps the imported skills)"
+                        }
+                        aria-label={
+                          repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
+                        }
+                        disabled={repo.available === false || repoBusy[repo.id] !== undefined}
+                        onClick={() => void forgetRepo(repo.id)}
+                      >
+                        <X size={12} />
+                      </ControlButton>
+                      {repo.available === false ? (
+                        <ControlButton
+                          ref={(element) => {
+                            if (element) repoRemoveRecordRefs.current.set(repo.id, element);
+                            else repoRemoveRecordRefs.current.delete(repo.id);
+                          }}
+                          data-testid={`skill-repo-remove-record-${repo.id}`}
+                          className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
+                          disabled={repoBusy[repo.id] !== undefined}
+                          onClick={() => void removeUnavailableRecord(repo)}
+                        >
+                          {repoBusy[repo.id] === "remove-record"
+                            ? "Removing…"
+                            : "Remove record only"}
+                        </ControlButton>
+                      ) : null}
+                    </div>
+                    {repo.available === false ? (
+                      <div
+                        data-testid={`skill-repo-unavailable-guidance-${repo.id}`}
+                        className="px-2.5 py-1 text-micro text-text-muted"
+                        role="status"
+                      >
+                        Restore the original managed repository folder, then restart Agent Deck to
+                        recover it. “Remove record only” leaves all clone files untouched.
+                      </div>
+                    ) : null}
+                    {(conflicts[repo.id] ?? []).length > 0 ? (
+                      <div
+                        data-testid={`skill-repo-conflicts-${repo.id}`}
+                        className="mt-1 space-y-1 rounded-lg border border-warning bg-surface px-2.5 py-1.5"
+                      >
+                        <div className="text-micro text-text-muted" role="status">
+                          Non-overlapping changes were merged. Review overlapping paths; Keep Mine
+                          is the default.
+                        </div>
+                        {conflicts[repo.id]!.map((conflict) => {
+                          const key = `${repo.id}\0${conflict.mergeId}`;
+                          const conflictBusy = resolvingConflicts[key] !== undefined;
+                          return (
+                            <div
+                              key={conflict.mergeId}
+                              className="space-y-1"
+                              aria-busy={conflictBusy}
+                            >
+                              <div
+                                className="truncate font-mono text-detail text-text-primary"
+                                title={conflict.name}
+                              >
+                                {conflict.name}
+                              </div>
+                              <div
+                                className="max-h-40 space-y-1 overflow-auto"
+                                role="group"
+                                aria-label={`Conflicting paths for ${conflict.name}`}
+                              >
+                                {conflict.paths.map((item) => {
+                                  const choiceKey = `${key}\0${item.path}`;
+                                  const choice = conflictChoices[choiceKey] ?? "mine";
+                                  return (
+                                    <fieldset
+                                      key={item.path}
+                                      className="flex min-w-0 items-center gap-2 text-micro"
+                                      disabled={conflictBusy}
+                                    >
+                                      <legend className="sr-only">
+                                        Resolution for {item.path}
+                                      </legend>
+                                      <span
+                                        className="min-w-0 flex-1 truncate font-mono"
+                                        title={item.path}
+                                      >
+                                        {item.path}
+                                      </span>
+                                      <span className="text-text-muted">
+                                        {item.local} → {item.remote}
+                                      </span>
+                                      {(["mine", "remote"] as const).map((value) => (
+                                        <label
+                                          key={value}
+                                          className="flex items-center gap-1 whitespace-nowrap"
+                                        >
+                                          <ControlInput
+                                            type="radio"
+                                            name={choiceKey}
+                                            checked={choice === value}
+                                            aria-label={`${value === "mine" ? "Keep Mine" : "Take Remote"} for ${item.path}`}
+                                            onChange={() =>
+                                              setConflictChoices((current) => ({
+                                                ...current,
+                                                [choiceKey]: value,
+                                              }))
+                                            }
+                                          />
+                                          {value === "mine" ? "Keep Mine" : "Take Remote"}
+                                        </label>
+                                      ))}
+                                    </fieldset>
+                                  );
+                                })}
+                              </div>
+                              {staleConflicts[key] ? (
+                                <ControlButton
+                                  data-testid={`skill-conflict-refresh-${repo.id}-${conflict.name}`}
+                                  disabled={conflictBusy}
+                                  onClick={() => void refreshConflict(repo.id, conflict)}
+                                >
+                                  {resolvingConflicts[key] === "refresh"
+                                    ? "Refreshing…"
+                                    : "Refresh review"}
+                                </ControlButton>
+                              ) : null}
+                              <ControlButton
+                                ref={(element) => {
+                                  if (element) conflictActionRefs.current.set(key, element);
+                                  else conflictActionRefs.current.delete(key);
+                                }}
+                                data-conflict-primary="true"
+                                data-testid={`skill-conflict-apply-${repo.id}-${conflict.name}`}
+                                className="sticky bottom-0 rounded-capsule border border-border-strong bg-surface px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                                disabled={conflictBusy}
+                                onClick={() => void resolveConflict(repo.id, conflict)}
+                              >
+                                {conflictBusy ? "Applying…" : "Apply choices"}
+                              </ControlButton>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
+        <div className="sr-only" role="status" aria-live="polite" data-testid="skill-merge-status">
+          {mergeAnnouncement}
+        </div>
         {checkedSkills.length > 0 ? (
           <div
             className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border-strong bg-surface-elevated px-2.5 py-1.5 text-xs"
