@@ -8,7 +8,6 @@ import {
   addResourceWatchPaths,
   appendSystemPromptPath,
   defaultRoots,
-  ensureDirs,
   projectWatchDirs,
   readMcpServers,
   removeResourceWatchPaths,
@@ -903,7 +902,10 @@ async function initServer(
     if (watchedProjects.has(projectPath)) return;
     watchedProjects.add(projectPath);
     const dirs = projectWatchDirs(projectPath);
-    if (dirs.length > 0) resourceWatcher.add(ensureDirs(dirs));
+    // Register through addResourceWatchPaths (not a bare watcher.add): it records
+    // the dirs as watch targets so the `ignored`/isRelevant predicate treats their
+    // events as relevant — a bare add would be silently filtered out.
+    if (dirs.length > 0) addResourceWatchPaths(resourceWatcher, dirs);
   };
   for (const project of projects.list()) watchProject(project.path);
 

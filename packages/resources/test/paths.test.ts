@@ -25,6 +25,7 @@ describe("native-compatible resource paths", () => {
     expect(
       agentCatalogDirs(roots).map(({ dir, scope, legacy }) => ({ dir, scope, legacy })),
     ).toEqual([
+      { dir: path.join(projectPath, ".pi", "agents"), scope: "project", legacy: undefined },
       { dir: path.join(home, ".agents"), scope: "global", legacy: true },
       { dir: path.join(home, ".pi", "agent", "agents"), scope: "global", legacy: undefined },
       {
@@ -35,10 +36,12 @@ describe("native-compatible resource paths", () => {
       expect.objectContaining({ scope: "builtin" }),
     ]);
     expect(skillCatalogDirs(roots)).toEqual([
+      { dir: path.join(projectPath, ".pi", "skills"), scope: "project" },
       { dir: path.join(home, ".pi", "agent", "skills"), scope: "global" },
       { dir: path.join(home, ".agents", "skills"), scope: "global", legacy: true },
     ]);
     expect(promptCatalogDirs(roots)).toEqual([
+      { dir: path.join(projectPath, ".pi", "prompts"), scope: "project" },
       { dir: path.join(home, ".pi", "agent", "prompts"), scope: "global" },
       { dir: path.join(home, ".pi", "agent", "prompt-library"), scope: "library" },
     ]);
@@ -54,7 +57,11 @@ describe("native-compatible resource paths", () => {
     ensureDirs(watchDirs({ home, projectPath }));
 
     expect(existsSync(path.join(home, ".agents"))).toBe(false);
-    expect(projectWatchDirs(projectPath)).toEqual([]);
+    expect(projectWatchDirs(projectPath)).toEqual([
+      path.join(projectPath, ".pi", "skills"),
+      path.join(projectPath, ".pi", "agents"),
+      path.join(projectPath, ".pi", "prompts"),
+    ]);
     expect(watchDirs({ home, projectPath })).not.toContain(
       path.join(projectPath, ".pi", "extensions"),
     );

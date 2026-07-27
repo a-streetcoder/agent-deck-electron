@@ -28,7 +28,7 @@ describe("scanAgents", () => {
     expect(names).toEqual(expect.arrayContaining(["coder", "explorer", "planner", "reviewer"]));
   });
 
-  it("scans only global catalogs and gives legacy same-name agents precedence", () => {
+  it("scans a selected project's agents plus global, with legacy same-name precedence", () => {
     const home = makeHome();
     const project = makeProject();
     writeAgent(path.join(home, ".agents"), "shared", "tools: read\n");
@@ -41,7 +41,9 @@ describe("scanAgents", () => {
     expect(shared).toHaveLength(2);
     expect(shared[0]).toMatchObject({ scope: "global", tools: ["read"], shadowed: false });
     expect(shared[1]).toMatchObject({ scope: "global", tools: ["grep"], shadowed: true });
-    expect(agents.some((a) => a.name === "project-pi")).toBe(false);
+    // A selected project's `.pi/agents` are scanned with scope "project" (native parity).
+    expect(agents.find((a) => a.name === "project-pi")).toMatchObject({ scope: "project" });
+    // The vendor-neutral `<project>/.agents` (legacy-project scope) is a follow-up.
     expect(agents.some((a) => a.name === "project-legacy")).toBe(false);
   });
 
@@ -98,7 +100,7 @@ describe("scanAgents", () => {
 });
 
 describe("scanSkills", () => {
-  it("discovers modern and legacy global skills but not project skills", () => {
+  it("discovers modern and legacy global skills plus a selected project's skills", () => {
     const home = makeHome();
     const project = makeProject();
     for (const [dir, name] of [
@@ -116,7 +118,8 @@ describe("scanSkills", () => {
     const skills = scanSkills({ home, projectPath: project });
     expect(skills.find((s) => s.name === "web-research")).toMatchObject({ scope: "global" });
     expect(skills.find((s) => s.name === "legacy-skill")).toMatchObject({ scope: "global" });
-    expect(skills.some((s) => s.name === "project-skill")).toBe(false);
+    // A selected project's `.pi/skills` are scanned with scope "project" (native parity).
+    expect(skills.find((s) => s.name === "project-skill")).toMatchObject({ scope: "project" });
   });
 
   it("excludes retained private deletion quarantines", () => {
@@ -236,7 +239,7 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     expect(scanPrompts({ home }).find((p) => p.name === "note")!.argumentHint).toBeUndefined();
   });
 
-  it("discovers prompt-library as library and ignores project prompts", () => {
+  it("discovers prompt-library as library plus a selected project's prompts", () => {
     const home = makeHome();
     const project = makeProject();
     writePrompt(
@@ -252,6 +255,7 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
 
     const prompts = scanPrompts({ home, projectPath: project });
     expect(prompts.find((p) => p.name === "catalog")).toMatchObject({ scope: "library" });
-    expect(prompts.some((p) => p.name === "project-only")).toBe(false);
+    // A selected project's `.pi/prompts` are scanned with scope "project" (native parity).
+    expect(prompts.find((p) => p.name === "project-only")).toMatchObject({ scope: "project" });
   });
 });

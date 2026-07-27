@@ -170,16 +170,22 @@ describe("agent/skill file writer", () => {
     );
   });
 
-  it("rejects project agent, skill, and prompt writes", () => {
+  it("scans project resources but leaves in-app project writes to the shared engine", () => {
+    // Display parity is restored (project skills/agents/prompts are SCANNED — see
+    // scanner.test), but in-app WRITES go through the native writable-catalog
+    // containment, which only recognizes home-based catalogs. Project writes are
+    // owned by the shared skill engine (ADR-0002 P3; Syncr materializes project
+    // `.agents/skills`), so agent-deck's soon-replaced native write path is
+    // deliberately NOT extended for project scope — it fails closed at the boundary.
     const roots = { home: makeHome(), projectPath: mkdtempSync(path.join(tmpdir(), "edit-proj-")) };
     expect(() => writeAgentFile(roots, "project", "agent", { body: "No." })).toThrow(
-      "no project agent directory",
+      "not in a writable catalog",
     );
     expect(() => writeSkillFile(roots, "project", "skill", { body: "No." })).toThrow(
-      "no project skill directory",
+      "not in a writable catalog",
     );
     expect(() => writePromptFile(roots, "project", "prompt", { body: "No." })).toThrow(
-      "no project prompt directory",
+      "not in a writable catalog",
     );
     expect(existsSync(path.join(roots.projectPath, ".pi"))).toBe(false);
   });

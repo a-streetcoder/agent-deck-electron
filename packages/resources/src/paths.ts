@@ -68,14 +68,19 @@ export interface AgentCatalogDir {
 }
 
 export function agentCatalogDirs(roots: ResourceRoots): AgentCatalogDir[] {
-  return [
-    // Native resolves the legacy global catalog before the modern one, so scan
-    // it first. Merely describing this path must never create it.
-    { dir: path.join(roots.home, ".agents"), scope: "global", legacy: true },
-    { dir: path.join(piAgentHome(roots), "agents"), scope: "global" },
-    { dir: path.join(piAgentHome(roots), "agent-library", "agents"), scope: "library" },
-    { dir: BUILTIN_AGENTS_DIR, scope: "builtin" },
-  ];
+  const dirs: AgentCatalogDir[] = [];
+  // A selected project's agents (`<project>/.pi/agents`) come first so a project
+  // agent shadows a same-named global one — native parity, restored.
+  if (roots.projectPath) {
+    dirs.push({ dir: path.join(roots.projectPath, ".pi", "agents"), scope: "project" });
+  }
+  // Native resolves the legacy global catalog before the modern one, so scan it
+  // first. Merely describing these paths must never create them.
+  dirs.push({ dir: path.join(roots.home, ".agents"), scope: "global", legacy: true });
+  dirs.push({ dir: path.join(piAgentHome(roots), "agents"), scope: "global" });
+  dirs.push({ dir: path.join(piAgentHome(roots), "agent-library", "agents"), scope: "library" });
+  dirs.push({ dir: BUILTIN_AGENTS_DIR, scope: "builtin" });
+  return dirs;
 }
 
 export interface SkillCatalogDir {
@@ -86,10 +91,16 @@ export interface SkillCatalogDir {
 }
 
 export function skillCatalogDirs(roots: ResourceRoots): SkillCatalogDir[] {
-  return [
-    { dir: path.join(piAgentHome(roots), "skills"), scope: "global" },
-    { dir: path.join(roots.home, ".agents", "skills"), scope: "global", legacy: true },
-  ];
+  const dirs: SkillCatalogDir[] = [];
+  // A selected project's skills (`<project>/.pi/skills`) come FIRST so a project
+  // skill shadows a same-named global one — native parity (agent-deck's `.project`
+  // scope); the electron refactor dropped this and it is being restored.
+  if (roots.projectPath) {
+    dirs.push({ dir: path.join(roots.projectPath, ".pi", "skills"), scope: "project" });
+  }
+  dirs.push({ dir: path.join(piAgentHome(roots), "skills"), scope: "global" });
+  dirs.push({ dir: path.join(roots.home, ".agents", "skills"), scope: "global", legacy: true });
+  return dirs;
 }
 
 export interface ExtensionCatalogDir {
@@ -118,10 +129,15 @@ export interface PromptCatalogDir {
 
 /** Prompt-template catalog dirs — single .md files, pi's `/prompt:<name>`. */
 export function promptCatalogDirs(roots: ResourceRoots): PromptCatalogDir[] {
-  return [
-    { dir: path.join(piAgentHome(roots), "prompts"), scope: "global" },
-    { dir: path.join(piAgentHome(roots), "prompt-library"), scope: "library" },
-  ];
+  const dirs: PromptCatalogDir[] = [];
+  // A selected project's prompts (`<project>/.pi/prompts`) come first — native
+  // parity, restored.
+  if (roots.projectPath) {
+    dirs.push({ dir: path.join(roots.projectPath, ".pi", "prompts"), scope: "project" });
+  }
+  dirs.push({ dir: path.join(piAgentHome(roots), "prompts"), scope: "global" });
+  dirs.push({ dir: path.join(piAgentHome(roots), "prompt-library"), scope: "library" });
+  return dirs;
 }
 
 /**
@@ -138,7 +154,15 @@ export function watchDirs(roots: ResourceRoots): string[] {
   ];
 }
 
-/** Native refresh watching has no project resource catalog directories. */
-export function projectWatchDirs(_projectPath: string): string[] {
-  return [];
+/** A selected project's resource catalog dirs the file watcher observes for
+ *  live-update (native parity: `AppRefreshService` watches these per project).
+ *  Missing targets are fine — chokidar observes their later creation without
+ *  creating them. */
+export function projectWatchDirs(projectPath: string): string[] {
+  const pi = path.join(projectPath, ".pi");
+  return [
+    path.join(pi, "skills"),
+    path.join(pi, "agents"),
+    path.join(pi, "prompts"),
+  ];
 }
