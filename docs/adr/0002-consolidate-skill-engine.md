@@ -92,6 +92,17 @@ Pi session* is agent-deck's and stays put.
    a legacy path, and Syncr's target). Feasible because agent-deck passes skills to
    Pi as **explicit `--skill <path>` flags**, so the physical location is free.
    *(Confirm Pi accepts skills handed by explicit path from outside `~/.pi/`.)*
+5. **Project scope, split display/write.** Skills/agents/prompts exist at *project*
+   scope too (`<project>/.pi/{skills,agents,prompts}`), not only global — native
+   parity that the electron refactor dropped and has since restored for **display**
+   (scan + watch, project shadows global; see the "Restore project-scoped … DISPLAY
+   parity" commit). Project **writes** stay deferred to the shared engine: agent-deck
+   keeps three home-only write gates (route validator, writer `catalogLocation`,
+   native containment) that P3 removes when the engine — which owns project writes —
+   takes over. The "one catalog path" convergence (#4) therefore extends to project
+   scope (`<project>/.pi/skills` vs Syncr's `<project>/.agents/skills`); pick it when
+   the engine lands. Tracked to Syncr as a separate request (their prompt already
+   shipped, so project-scope writes are a new ask, not a retro-edit).
 
 ### Where the shared engine is built
 
