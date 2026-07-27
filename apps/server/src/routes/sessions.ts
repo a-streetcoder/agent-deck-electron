@@ -66,7 +66,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     sessionWorktreeStore,
     broadcast,
     rootsFor,
-    scanSkillsFor,
+    skillStore,
     resolveNamedAgent,
     enabledExtensionPaths,
     dropDiffCache,
@@ -913,7 +913,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       if (names.length > 0) {
         // Combined discovery is already deterministic: standard catalogs win
         // same-name collisions over read-only in-place collections.
-        const skillsByName = new Map(scanSkillsFor(body.projectId).map((s) => [s.name, s]));
+        const skillsByName = new Map(skillStore.listSkills(body.projectId).map((s) => [s.name, s]));
         const missing = [...new Set(names)].filter((name) => !skillsByName.has(name));
         if (missing.length > 0) {
           fastify.log.warn({ missing }, "assigned skills not found in catalog");

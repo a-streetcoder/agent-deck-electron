@@ -1,22 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { SkillInfo } from "@agent-deck/domain";
 import {
-  acknowledgeResourceRecovery,
   BUILTIN_AGENTS_DIR,
   catalogSkillTreeFingerprint,
   computeBuiltinOverride,
@@ -24,11 +11,8 @@ import {
   discoverSkillRoots,
   deleteAgentFile,
   deletePromptFile,
-  deleteSkillDir,
-  importSkillFile,
   isSkillTreeFingerprint,
   durableMaterializeSkillTreeEntries,
-  listResourceRecoveries,
   mergeWithUnmanagedOverrideFields,
   MISSING_SKILL_TREE_FINGERPRINT,
   parseAgentFile,
@@ -36,11 +20,9 @@ import {
   renameAgentFile,
   ResourceCatalogCapabilityError,
   renamePromptFile,
-  renameSkillDir,
   replaceSkillTreeFromEntries,
   resourceRecoveryPath,
   rollbackResourceRecovery,
-  restoreResourceRecovery,
   resolveSkillSource,
   scanAgents,
   scanExtensions,
@@ -52,7 +34,6 @@ import {
   writeAgentFile,
   writeBuiltinAgentOverride,
   writePromptFile,
-  writeSkillFile,
   type ResourceRecovery,
   type ResourceRoots,
   type SkillTreeEntry,
@@ -76,6 +57,16 @@ import {
   sanitizedRepositoryFolder,
 } from "../skillRepositories.ts";
 import type { ServerContext } from "../context.ts";
+// Legacy copied-skill-repo migration (removable — ADR-0002 P1a).
+import {
+  durableSyncDirectory,
+  durableWriteJson,
+  legacyTransactionJournalPath,
+  legacyTransactionRoot,
+  readLegacyTransaction,
+  type LegacyTransactionJournal,
+  type LegacyTransactionStep,
+} from "../skills/legacySkillRepo.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
 const mergeIdFor = (merge: {
@@ -296,89 +287,6 @@ function chooseConflictEntries(
   );
 }
 
-type LegacyTransactionStep = {
-  name: string;
-  recoveryToken: string;
-  originalMissing: boolean;
-  originalFingerprint: string;
-  installedMissing: boolean;
-  installedFingerprint: string;
-  installedPath?: string;
-  state: "pending" | "applied" | "rolled-back";
-};
-
-type LegacyTransactionJournal = {
-  version: 1;
-  id: string;
-  repositoryId: string;
-  clonePath: string;
-  baseCommit: string;
-  targetCommit: string;
-  settingsSkillName?: string;
-  settingsFingerprint?: string;
-  settingsPendingMergeId?: string;
-  phase: "prepared" | "applying" | "settings" | "rolling-back";
-  workspace: string;
-  steps: LegacyTransactionStep[];
-};
-
-const legacyTransactionRoot = (skillReposRoot: string): string =>
-  nodePath.join(skillReposRoot, ".legacy-transactions");
-const legacyTransactionJournalPath = (skillReposRoot: string, repositoryId: string): string =>
-  nodePath.join(
-    legacyTransactionRoot(skillReposRoot),
-    `${createHash("sha256").update(repositoryId).digest("hex")}.json`,
-  );
-
-function durableSyncDirectory(directory: string): void {
-  if (process.platform === "win32") return;
-  const descriptor = openSync(directory, "r");
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function durableWriteJson(file: string, value: unknown): void {
-  mkdirSync(nodePath.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 });
-  const descriptor = openSync(temporary, "r");
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-  renameSync(temporary, file);
-  const directory = openSync(nodePath.dirname(file), "r");
-  try {
-    fsyncSync(directory);
-  } finally {
-    closeSync(directory);
-  }
-}
-
-function readLegacyTransaction(file: string): LegacyTransactionJournal {
-  const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<LegacyTransactionJournal>;
-  if (
-    parsed.version !== 1 ||
-    typeof parsed.id !== "string" ||
-    typeof parsed.repositoryId !== "string" ||
-    typeof parsed.clonePath !== "string" ||
-    typeof parsed.baseCommit !== "string" ||
-    typeof parsed.targetCommit !== "string" ||
-    typeof parsed.workspace !== "string" ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new ResourceCatalogCapabilityError(
-      "RESOURCE_RECONCILE_INCOMPLETE",
-      "A legacy skill transaction journal is invalid; retained evidence was not changed.",
-    );
-  }
-  return parsed as LegacyTransactionJournal;
-}
-
 /**
  * REST routes for the resource catalogs — agents, skills (incl. git-imported
  * skill repositories), prompt templates, extensions, and the app-bridge
@@ -396,7 +304,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     broadcast,
     resourceHome,
     rootsFor,
-    scanSkillsFor,
+    skillStore,
     collectionSnapshotRoots,
     rebuildCollectionSnapshot,
     removeCollectionSnapshot,
@@ -619,7 +527,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   fastify.get("/resources/skills", async (request) => {
     const { projectId } = request.query as { projectId?: string };
-    return { skills: enrichSkills(scanSkillsFor(projectId)) };
+    return { skills: enrichSkills(skillStore.listSkills(projectId)) };
   });
 
   // Delete a global/project skill (its SKILL.md dir) and forget it everywhere.
@@ -637,7 +545,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
     try {
-      deleteSkillDir(rootsFor(projectId), scope, name);
+      skillStore.deleteSkill(scope, name, projectId);
       settings.forgetSkill(name);
       for (const project of projects.list()) {
         if (project.assignedSkills?.includes(name)) {
@@ -673,7 +581,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
     try {
-      renameSkillDir(roots, scope, name, newName);
+      skillStore.renameSkill(scope, name, newName, projectId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "skill_exists") {
@@ -733,7 +641,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     let name: string;
     try {
-      name = importSkillFile(roots, scope, nodePath.resolve(sourcePath));
+      name = skillStore.importLocalSkill(scope, nodePath.resolve(sourcePath), projectId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "skill_exists") {
@@ -967,7 +875,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   fastify.get("/resources/skill-recoveries", async (_request, reply) => {
     try {
-      return { recoveries: listResourceRecoveries(resourceHome(), "global-skills") };
+      return { recoveries: skillStore.listRecoveries() };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }
@@ -977,7 +885,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = recoveryTokenParam.safeParse(request.params);
     if (!parsed.success) return reply.status(400).send({ error: "invalid recovery token" });
     try {
-      const recovery = restoreResourceRecovery(resourceHome(), "global-skills", parsed.data.token);
+      const recovery = skillStore.restoreRecovery(parsed.data.token);
       broadcast({ type: "resources_changed" });
       return { ok: true, recovery };
     } catch (error) {
@@ -1007,7 +915,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.status(400).send({ error: "invalid recovery token" });
     if (!expected || supplied !== expected) return reply.status(403).send({ error: "forbidden" });
     try {
-      acknowledgeResourceRecovery(resourceHome(), "global-skills", parsed.data.token);
+      skillStore.acknowledgeRecovery(parsed.data.token);
       return { ok: true };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
@@ -2492,7 +2400,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
     try {
-      writeSkillFile(roots, scope, name, edit);
+      skillStore.writeSkill(scope, name, edit, projectId);
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }

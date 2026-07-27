@@ -46,6 +46,7 @@ import {
   type ServerContext,
 } from "./context.ts";
 import { registerDeckBridgeTools } from "./bridgeTools.ts";
+import { NativeSkillStore } from "./skills/nativeSkillStore.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
 import { createEditorLauncher } from "./editorLauncher.ts";
 import { createScriptRunnerGateway } from "./scriptRunnerGateway.ts";
@@ -906,6 +907,11 @@ async function initServer(
   };
   for (const project of projects.list()) watchProject(project.path);
 
+  // The skill catalog/authoring/version seam (ADR-0002 P1b): a thin adapter over
+  // the resource functions, so consumers depend on the SkillStore interface and the
+  // shared Syncr engine can replace it later behind the same interface.
+  const skillStore = new NativeSkillStore({ rootsFor, scanSkillsFor, home: resourceHome() });
+
   // The shared context the route modules read (Slice 2 decomposition): one
   // object, assembled once, so every moved handler body reads exactly as it
   // did in the monolith.
@@ -940,6 +946,7 @@ async function initServer(
     resourceHome,
     rootsFor,
     scanSkillsFor,
+    skillStore,
     collectionSnapshotRoots,
     rebuildCollectionSnapshot,
     removeCollectionSnapshot,

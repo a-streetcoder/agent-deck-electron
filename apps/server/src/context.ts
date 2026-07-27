@@ -23,6 +23,7 @@ import type {
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { ManagedSkillRepositories } from "./skillRepositories.ts";
+import type { SkillStore } from "./skills/skillStore.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -134,6 +135,10 @@ export interface ServerContext {
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
   scanSkillsFor(projectId?: string): SkillInfo[];
+  /** The skill catalog/authoring/version seam (ADR-0002 P1b). Consumers should
+   *  prefer this over the raw scan/writer functions so the shared engine can later
+   *  replace it behind the same interface. */
+  skillStore: SkillStore;
   collectionSnapshotRoots(record: ImportedSkillRepository): string[] | undefined;
   rebuildCollectionSnapshot(record: ImportedSkillRepository): Promise<string[]>;
   removeCollectionSnapshot(repositoryId: string): void;
