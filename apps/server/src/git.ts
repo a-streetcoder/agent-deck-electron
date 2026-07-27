@@ -32,6 +32,17 @@ function gitBin(): string {
   return process.env.AGENT_DECK_GIT_BIN || "git";
 }
 
+// Pin line endings on the byte-exact git operations (persistent clone + patch
+// apply) so diffs and patches are byte-identical across platforms. Without this,
+// a Windows host with global core.autocrlf=true rewrites LF→CRLF on checkout and
+// apply, corrupting exact-patch operations and content hashes. These are
+// top-level `-c` options valid before any subcommand; explicit .gitattributes
+// rules in the repo still take precedence over core.autocrlf. Deliberately NOT
+// applied to the general runGit wrapper: some flows (legacy skill-repo hash
+// migration) must honour a repo's own core.autocrlf to reproduce a real
+// Windows checkout, and overriding it there changes their observed content.
+const GIT_EOL_ARGS = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"];
+
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(gitBin(), args, {
     cwd,
@@ -119,7 +130,10 @@ async function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): P
 /** Run Git without a shell while supplying plumbing input on stdin. */
 async function runGitInput(cwd: string, args: string[], input: string | Buffer): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(gitBin(), args, {
+    // Pin line endings (see GIT_EOL_ARGS): `git apply` otherwise rewrites patched
+    // files to CRLF on a Windows host with core.autocrlf=true, corrupting the
+    // exact bytes a loop worktree patch is meant to reproduce.
+    const child = spawn(gitBin(), [...GIT_EOL_ARGS, ...args], {
       cwd,
       env: process.env,
       shell: false,
@@ -202,6 +216,12 @@ export async function gitClonePersistent(
   ref?: string,
 ): Promise<void> {
   const branchArgs = ref ? ["--branch", ref, "--single-branch"] : [];
+  // Pin line endings so a cloned skill's working-tree bytes match the committed
+  // bytes on every platform. Skills are content-hashed for identity, so a
+  // Windows checkout with global core.autocrlf=true would otherwise produce
+  // CRLF content and a platform-dependent hash. This disables only AUTOMATIC
+  // conversion; explicit .gitattributes rules in the repo still apply.
+  const eolArgs = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"];
   const opts = {
     timeout: 180_000,
     maxBuffer: 8_000_000,
@@ -210,18 +230,26 @@ export async function gitClonePersistent(
   try {
     await execFileAsync(
       gitBin(),
-      ["clone", "--filter=blob:none", ...branchArgs, source, destDir],
+      [...eolArgs, "clone", "--filter=blob:none", ...branchArgs, source, destDir],
       opts,
     );
   } catch {
     // Partial-clone filter rejected (e.g. a local source) — retry a plain clone.
     await rm(destDir, { recursive: true, force: true }).catch(() => {});
     try {
-      await execFileAsync(gitBin(), ["clone", ...branchArgs, source, destDir], opts);
+      await execFileAsync(gitBin(), [...eolArgs, "clone", ...branchArgs, source, destDir], opts);
     } catch {
       throw new Error("clone_failed");
     }
   }
+  // Persist the EOL policy into the clone's OWN config: the clone-time `-c`
+  // overrides do not persist, so a later fetch + `reset --hard` (gitPullFfInto,
+  // gitResetHardTo) through the un-pinned runGit would otherwise re-apply a
+  // Windows host's global core.autocrlf=true and rewrite the tree to CRLF,
+  // drifting the content fingerprint. Config is deterministic and local-only.
+  await execFileAsync(gitBin(), ["-C", destDir, "config", "core.autocrlf", "false"], opts).catch(
+    () => {},
+  );
 }
 
 /** Restore a managed legacy clone to a validated persisted commit after a failed prepare/apply. */

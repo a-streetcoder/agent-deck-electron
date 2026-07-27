@@ -9,6 +9,22 @@ import {
   skillTreeFingerprint,
 } from "../src/skillTreeFingerprint.ts";
 
+// Symlink creation needs privilege on Windows (Developer Mode/admin). Probe once
+// so the symlink-rejection test still runs on POSIX and Windows-with-Dev-Mode,
+// and skips cleanly on a stock Windows host instead of failing on fixture setup.
+function symlinksAvailable(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), "symlink-probe-"));
+  try {
+    symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const SYMLINKS_AVAILABLE = symlinksAvailable();
+
 const roots: string[] = [];
 function tree(): string {
   const root = mkdtempSync(path.join(tmpdir(), "skill-tree-fingerprint-"));
@@ -104,7 +120,7 @@ describe("skillTreeFingerprint", () => {
     expect(skillTreeFingerprint(path.join(tree(), "missing"))).toBe(MISSING_SKILL_TREE_FINGERPRINT);
   });
 
-  it("fails closed on symbolic links", () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("fails closed on symbolic links", () => {
     const root = tree();
     writeFileSync(path.join(root, "target"), "content");
     symlinkSync(path.join(root, "target"), path.join(root, "link"));

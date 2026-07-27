@@ -1155,7 +1155,7 @@ describe("loop engine (single-agent)", () => {
       executeRole: async ({ phase }) =>
         phase === "evaluator" ? "SUCCESS\nCondition met." : "work",
     });
-    const command = `${process.execPath} -e "process.stdout.write('OUT');process.stderr.write('ERR');process.exit(7)"`;
+    const command = `"${process.execPath}" -e "process.stdout.write('OUT');process.stderr.write('ERR');process.exit(7)"`;
     const run = engine.start(makeLoop({ validationCommand: command, maxIterations: 1 }), cwd());
     await engine.settled(run.id);
     const result = run.iterations[0]?.validationResult;
@@ -1191,7 +1191,7 @@ describe("loop engine (single-agent)", () => {
   it("classifies validation timeout and cancellation without late success", async () => {
     const timeout = await runValidationCommand(
       cwd(),
-      `${process.execPath} -e "setTimeout(()=>{},5000)"`,
+      `"${process.execPath}" -e "setTimeout(()=>{},5000)"`,
       undefined,
       undefined,
       20,
@@ -1201,7 +1201,7 @@ describe("loop engine (single-agent)", () => {
     const controller = new AbortController();
     const pending = runValidationCommand(
       cwd(),
-      `${process.execPath} -e "setTimeout(()=>{},5000)"`,
+      `"${process.execPath}" -e "setTimeout(()=>{},5000)"`,
       controller.signal,
     );
     controller.abort();

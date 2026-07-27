@@ -544,7 +544,37 @@ fn rename_noreplace(from_dir: &Dir, from: &str, to_dir: &Dir, to: &str) -> std::
     // cap-std's Windows rename is descriptor-relative and does not request
     // replacement. A destination which appears after the check makes the
     // operation fail rather than being overwritten.
-    from_dir.rename(from, to_dir, to)
+    #[cfg(not(windows))]
+    {
+        from_dir.rename(from, to_dir, to)
+    }
+    #[cfg(windows)]
+    {
+        // Defence-in-depth for transient Windows rename failures: ACCESS_DENIED
+        // (5), SHARING_VIOLATION (32), or LOCK_VIOLATION (33) can occur when an
+        // antivirus scanner or the search indexer momentarily holds a
+        // just-written file. (The recurring case — the resource watcher pinning a
+        // directory handle — is fixed at the source by polling the watch on
+        // Windows; see packages/resources/src/watcher.ts.) A short bounded retry
+        // absorbs the remaining transient locks. The no-replace guarantee is
+        // unaffected: the destination is checked once above and never created by
+        // this function, so a retry cannot clobber it.
+        let mut attempt = 0u32;
+        loop {
+            match from_dir.rename(from, to_dir, to) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    let transient = matches!(error.raw_os_error(), Some(5 | 32 | 33));
+                    if transient && attempt < 10 {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
 }
 
 fn open_managed_repositories(data_dir: &str) -> Result<Dir> {

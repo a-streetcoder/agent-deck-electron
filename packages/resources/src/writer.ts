@@ -791,7 +791,11 @@ export function durableMaterializeSkillTreeEntries(
       parent = path.dirname(parent);
     }
     if (entry.type === "file") {
-      const descriptor = openSync(target, "r");
+      // Windows FlushFileBuffers needs a WRITE handle, so "r" fails fsync with
+      // EPERM there and we must open "r+". POSIX fsync works on a read-only
+      // handle — and opening a read-only file (restrictive umask, or a preserved
+      // 0444 source mode) with "r+" would fail EACCES — so keep "r" off Windows.
+      const descriptor = openSync(target, process.platform === "win32" ? "r+" : "r");
       try {
         fsyncSync(descriptor);
       } finally {

@@ -1,8 +1,25 @@
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { listProjectFiles } from "../src/files.ts";
+
+// Symlink creation needs privilege on Windows (Developer Mode/admin). Probe once
+// so these symlink-handling tests still run on POSIX and Windows-with-Dev-Mode,
+// and skip cleanly on a stock Windows host instead of failing on fixture setup.
+function symlinksAvailable(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), "symlink-probe-"));
+  try {
+    symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const SYMLINKS_AVAILABLE = symlinksAvailable();
 
 const roots: string[] = [];
 
@@ -72,7 +89,7 @@ describe("listProjectFiles", () => {
     ]);
   });
 
-  it("canonicalizes a symlink root while keeping returned paths relative", async () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("canonicalizes a symlink root while keeping returned paths relative", async () => {
     const target = await scratch();
     const container = await scratch();
     await file(target, "src/through-root-link.ts");
@@ -84,7 +101,7 @@ describe("listProjectFiles", () => {
     ]);
   });
 
-  it("does not escape when a queued child directory is replaced by a symlink", async () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("does not escape when a queued child directory is replaced by a symlink", async () => {
     const root = await scratch();
     const external = await scratch();
     await file(external, "escaped-target.ts");
@@ -108,7 +125,7 @@ describe("listProjectFiles", () => {
     await expect(pending).resolves.toEqual([]);
   });
 
-  it("skips hidden, pruned, and external symlink trees and returns slash paths", async () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("skips hidden, pruned, and external symlink trees and returns slash paths", async () => {
     const root = await scratch();
     const external = await scratch();
     await Promise.all([

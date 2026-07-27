@@ -12,6 +12,24 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionImageStore, syncDirectoryStrict } from "../src/sessionImages.ts";
 
+// Creating a symlink needs privilege on Windows (Developer Mode or admin).
+// These tests exercise symlink REJECTION, so they can only run where the test
+// harness can create a symlink in the first place; they still run on POSIX and
+// on Windows with Developer Mode enabled. Probe once rather than blanket-skip
+// Windows, so coverage is retained wherever symlinks are available.
+function symlinksAvailable(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), "symlink-probe-"));
+  try {
+    symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const SYMLINKS_AVAILABLE = symlinksAvailable();
+
 // 1x1 transparent PNG.
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -211,7 +229,7 @@ describe("SessionImageStore", () => {
     ).toEqual(two.images);
   });
 
-  it("does not follow linked blobs", () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("does not follow linked blobs", () => {
     const images = store();
     images.stage("s", "", [attachment]);
     const cell = images.attachToUserCell(
@@ -225,7 +243,7 @@ describe("SessionImageStore", () => {
     expect(images.read("s", cell.images![0]!.id)).toBeNull();
   });
 
-  it("fails closed if a managed directory is replaced with a symlink", () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("fails closed if a managed directory is replaced with a symlink", () => {
     const images = store();
     const blobs = path.join(images.root, "blobs");
     rmSync(blobs, { recursive: true });
@@ -404,7 +422,7 @@ describe("SessionImageStore", () => {
     expect(readdirSync(path.join(images.root, "blobs"))).toHaveLength(1);
   });
 
-  it("rejects a linked store root", () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("rejects a linked store root", () => {
     const data = mkdtempSync(path.join(tmpdir(), "deck-images-link-"));
     roots.push(data);
     symlinkSync(path.join(process.cwd(), "package.json"), path.join(data, "session-images"));

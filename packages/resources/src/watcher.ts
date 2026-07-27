@@ -97,6 +97,14 @@ export function watchResources(
   const watcher = watch(minimalRoots(targets), {
     ignored: (candidate) => !isRelevant(candidate, targets),
     ignoreInitial: true,
+    // On Windows, native fs.watch (ReadDirectoryChangesW) holds an open handle
+    // on every watched directory, opened WITHOUT FILE_SHARE_DELETE. That handle
+    // blocks the atomic catalog replace — renaming a watched skill directory
+    // fails with ACCESS_DENIED. Polling uses stat() and holds no directory
+    // handle, so the descriptor-relative rename in the native module succeeds.
+    // The resource catalog is small (skills/loops/prompts), so polling cost is
+    // negligible. POSIX keeps native watching (inotify/FSEvents don't lock).
+    usePolling: process.platform === "win32",
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
   });
   watcherTargets.set(watcher, targets);

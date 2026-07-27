@@ -31,6 +31,23 @@ function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+// Creating a symlink needs privilege on Windows (Developer Mode or admin). The
+// symlink-attack tests below can only set up their fixture where the harness can
+// create a symlink; probe once so they still run on POSIX and on Windows with
+// Developer Mode, and skip cleanly on a stock Windows host instead of failing.
+function symlinksAvailable(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), "symlink-probe-"));
+  try {
+    symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const SYMLINKS_AVAILABLE = symlinksAvailable();
+
 interface LegacyFixture {
   server: AgentDeckServer;
   clonePath: string;
@@ -60,7 +77,12 @@ async function legacyFixture(options: { localEdit?: boolean } = {}): Promise<Leg
   git(upstream, ["commit", "-m", "initial"]);
   const initialCommit = git(upstream, ["rev-parse", "HEAD"]);
   mkdirSync(path.dirname(clonePath), { recursive: true });
-  execFileSync("git", ["clone", upstream, clonePath]);
+  // Pin line endings (matching the product's gitClonePersistent) so the fixture
+  // clone's working-tree bytes are deterministic regardless of the host's global
+  // core.autocrlf — otherwise a Windows checkout yields CRLF and breaks exact
+  // content assertions.
+  execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "clone", upstream, clonePath]);
+  execFileSync("git", ["-C", clonePath, "config", "core.autocrlf", "false"]);
 
   mkdirSync(path.dirname(copiedSkill), { recursive: true });
   writeFileSync(copiedSkill, options.localEdit ? skill("legacy-skill", "Local edit.") : original);
@@ -888,7 +910,7 @@ describe("legacy copied skill repository compatibility", () => {
     }
   });
 
-  it("holds an unsafe catalog target as a conflict without following it", async () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("holds an unsafe catalog target as a conflict without following it", async () => {
     const fixture = await legacyFixture();
     try {
       const list = async (): Promise<{ repos: Array<{ lastSyncedCommit: string }> }> =>
@@ -921,7 +943,7 @@ describe("legacy copied skill repository compatibility", () => {
     }
   });
 
-  it("maps unsafe Take Remote deletion and retains the unresolved repository metadata", async () => {
+  it.skipIf(!SYMLINKS_AVAILABLE)("maps unsafe Take Remote deletion and retains the unresolved repository metadata", async () => {
     const fixture = await legacyFixture({ localEdit: true });
     try {
       rmSync(path.join(fixture.upstream, "SKILL.md"));

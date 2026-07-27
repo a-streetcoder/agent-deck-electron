@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   symlinkSync,
   writeFileSync,
@@ -818,7 +819,12 @@ describe("loop route honesty gate", () => {
       url: `/loops/runs/${run.id}/worktree-directory`,
     });
     expect(accepted.statusCode).toBe(200);
-    expect(accepted.json()).toEqual({ directory: canonicalCheckoutLockKey(worktreePath) });
+    // The route returns the real (realpath.native) worktree directory it drives
+    // git with — a usable path, deliberately NOT the case-folded lock key. On a
+    // case-insensitive Windows filesystem realpath restores the on-disk casing,
+    // so compare against that rather than canonicalCheckoutLockKey (which folds
+    // case on Windows and only coincided with the raw path on POSIX).
+    expect(accepted.json()).toEqual({ directory: realpathSync.native(worktreePath) });
 
     vi.mocked(gitWorktreeRegistrations).mockResolvedValue([]);
     const stale = await fastify.inject({

@@ -115,17 +115,23 @@ export async function runValidationCommand(
       ]
         .filter(Boolean)
         .join("\n\n");
+      // A process WE terminated (timeout / cancel) has no meaningful exit code:
+      // POSIX signal-kill surfaces `null`, but Windows `taskkill /f` reports `1`.
+      // Normalize to null so the result is platform-consistent — the
+      // classification, not the exit code, carries the real outcome.
+      const reportedExitCode =
+        classification === "timeout" || classification === "cancelled" ? null : exitCode;
       resolve({
         command,
         workingDirectory,
-        exitCode,
+        exitCode: reportedExitCode,
         durationMs: Date.now() - started,
         stdout,
         stderr,
         stdoutPath,
         stderrPath,
         classification,
-        passed: classification === "completed" && exitCode === 0,
+        passed: classification === "completed" && reportedExitCode === 0,
         evidence,
       });
     };
