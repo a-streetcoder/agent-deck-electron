@@ -52,7 +52,7 @@ describe("skill authored by agent-deck round-trips through pi's real loader", ()
     const { skills, diagnostics } = loadViaPi(roots, "editor");
     expect(skills).toHaveLength(1);
     expect(skills[0]!.description).toBe(description);
-    expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(diagnostics.filter((d) => d.type === "error")).toEqual([]);
   });
 
   it("a description with YAML-significant punctuation (colon, quotes, #) round-trips", () => {
