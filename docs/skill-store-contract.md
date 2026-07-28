@@ -23,9 +23,12 @@ agent-deck's scanner reads that catalog, so a created project skill is immediate
 - **Recovery** — *transitional* on the native `global-skills` store (see [Recovery](#recovery--native-transitional)).
 
 **Blocked — the wait:** retiring agent-deck's **git-repo importer** (`managedSkillRepositories`,
-`/resources/skill-repos/*`). The engine NAPI exposes only *local* import; git-repo import +
-upstream-sync + conflict resolution isn't on the surface yet. Request is out to Syncr:
-[skill-engine-git-import-request.md](skill-engine-git-import-request.md).
+`/resources/skill-repos/*`). The git-repo surface itself **shipped in 0.1.4**
+([skill-engine-git-import-request.md](skill-engine-git-import-request.md)), so import / sync /
+forget are ready. The remaining gap is granularity: the engine resolves a conflict per **skill**
+(`remote`/`local`), but agent-deck's UX is per **file**. Retiring the importer as-is would
+downgrade that, so P4 waits on per-file conflict resolution in the NAPI. Request is out to Syncr:
+[skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md).
 
 **Suites:** resources 136/0, server 538/0 (+1 known `scriptRunner` child-process flake, green in isolation).
 
@@ -38,7 +41,7 @@ upstream-sync + conflict resolution isn't on the surface yet. Request is out to 
 | Read / scan / render the catalog | **agent-deck** (pi scanner) — permanent |
 | Write / delete / rename / import-local; scoping; atomicity; version store; fan-out | **engine** |
 | Recovery (list / restore / acknowledge) | **agent-deck native store, transitional** → engine once sync lands |
-| Git-repo import + upstream sync + conflict resolution | **agent-deck** (legacy) → engine once the NAPI exposes it (blocked) |
+| Git-repo import + upstream sync + conflict resolution | **agent-deck** (legacy) → engine; import/sync shipped in 0.1.4, blocked only on per-file conflict resolution |
 | Assignment (default/project/disabled) → `--skill`; Loops; session worktrees | **agent-deck** — never belonged to storage |
 
 ## The contract — the shipped NAPI surface (0.1.3)
@@ -142,10 +145,13 @@ P4 = delete agent-deck's duplicate skill machinery.
 - **Kept, marked (4b):** the native skill-write fns (`writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/
   `importSkillFile`) are prod-dead — only resources tests call them — and marked `ponytail:` in
   `writer.ts`. Not deleted while P4 stays partial.
-- **Blocked:** retiring the git-repo importer needs git-import in the NAPI. When it lands: re-point
-  the seven `/resources/skill-repos/*` routes behind `SkillStore` (add git-import methods to the
-  interface), delete `skillRepositories.ts` + `legacySkillRepo.ts` + the native write fns + their
-  tests, and move recovery to the engine. That closes P4.
+- **Blocked on per-file conflict resolution.** The git-repo surface shipped in 0.1.4, but it
+  resolves conflicts per **skill** while agent-deck's UX is per **file**
+  ([skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md)). When
+  that lands: re-point the eight `/resources/skill-repos/*` routes behind `SkillStore` (add the git
+  methods to the interface), delete `skillRepositories.ts` + `legacySkillRepo.ts` + the native write
+  fns + their tests, drop the collection-snapshot machinery, and move recovery to the engine. That
+  closes P4. (The engine interface is otherwise mapped — 0.1.4 exports all six git methods.)
 
 ## Contributor rule
 
