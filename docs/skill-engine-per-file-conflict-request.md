@@ -13,7 +13,7 @@ existing conflict UX instead of downgrading it.
 ## Why this is the last blocker
 
 P4 (retire `managedSkillRepositories`, delete the native write family, move recovery to the
-engine) is otherwise fully unblocked by 0.1.4. The one thing that would be *lost* in the swap
+engine) is otherwise fully unblocked by 0.1.4. The one thing that would be _lost_ in the swap
 is granularity: agent-deck today resolves a merge conflict **per file within a skill**, and
 that granularity is hard-wired into both the wire protocol and the UI (`SkillsScreen.tsx`). The
 engine's `resolveGitConflict(collectionId, name, "remote"|"local")` settles the **whole skill**
@@ -24,7 +24,7 @@ for the per-path surface before we cut over.
 
 On `update`, non-overlapping changes auto-merge; only skills where **both sides moved the same
 path** surface as conflicts. For each such skill the UI renders a list of the overlapping
-**paths**, each with its own *Keep Mine / Take Remote* choice and a `local → remote` kind
+**paths**, each with its own _Keep Mine / Take Remote_ choice and a `local → remote` kind
 transition (e.g. `file → directory`). Current shapes:
 
 ```ts

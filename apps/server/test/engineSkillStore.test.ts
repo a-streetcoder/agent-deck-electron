@@ -49,7 +49,14 @@ describe("EngineSkillStore", () => {
 
     const path = store.writeSkill("global", "helper", { description: "d", body: "b" });
     expect(path).toBe("/canonical/.agents/skills/x/SKILL.md");
-    expect(engine.writeSkill).toHaveBeenCalledWith("/home", undefined, "global", "helper", "d", "b");
+    expect(engine.writeSkill).toHaveBeenCalledWith(
+      "/home",
+      undefined,
+      "global",
+      "helper",
+      "d",
+      "b",
+    );
     // fan-out projects the canonical skill into other tools, rooted at home for global.
     expect(engine.fanOut).toHaveBeenCalledWith("/home", "helper");
   });

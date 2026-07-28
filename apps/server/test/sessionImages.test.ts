@@ -243,14 +243,17 @@ describe("SessionImageStore", () => {
     expect(images.read("s", cell.images![0]!.id)).toBeNull();
   });
 
-  it.skipIf(!SYMLINKS_AVAILABLE)("fails closed if a managed directory is replaced with a symlink", () => {
-    const images = store();
-    const blobs = path.join(images.root, "blobs");
-    rmSync(blobs, { recursive: true });
-    symlinkSync(process.cwd(), blobs);
-    expect(() => images.stage("s", "", [attachment])).toThrow(/unsafe/);
-    expect(images.garbageCollect()).toBe(false);
-  });
+  it.skipIf(!SYMLINKS_AVAILABLE)(
+    "fails closed if a managed directory is replaced with a symlink",
+    () => {
+      const images = store();
+      const blobs = path.join(images.root, "blobs");
+      rmSync(blobs, { recursive: true });
+      symlinkSync(process.cwd(), blobs);
+      expect(() => images.stage("s", "", [attachment])).toThrow(/unsafe/);
+      expect(images.garbageCollect()).toBe(false);
+    },
+  );
 
   it("rejects signature-prefixed, malformed, and trailing polyglot bytes for every format", () => {
     const images = store();

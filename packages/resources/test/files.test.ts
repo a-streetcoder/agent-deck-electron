@@ -89,61 +89,72 @@ describe("listProjectFiles", () => {
     ]);
   });
 
-  it.skipIf(!SYMLINKS_AVAILABLE)("canonicalizes a symlink root while keeping returned paths relative", async () => {
-    const target = await scratch();
-    const container = await scratch();
-    await file(target, "src/through-root-link.ts");
-    const linkedRoot = path.join(container, "root-link");
-    await symlink(target, linkedRoot, "dir");
+  it.skipIf(!SYMLINKS_AVAILABLE)(
+    "canonicalizes a symlink root while keeping returned paths relative",
+    async () => {
+      const target = await scratch();
+      const container = await scratch();
+      await file(target, "src/through-root-link.ts");
+      const linkedRoot = path.join(container, "root-link");
+      await symlink(target, linkedRoot, "dir");
 
-    await expect(listProjectFiles(linkedRoot, "root-link", { limit: 5 })).resolves.toEqual([
-      "src/through-root-link.ts",
-    ]);
-  });
+      await expect(listProjectFiles(linkedRoot, "root-link", { limit: 5 })).resolves.toEqual([
+        "src/through-root-link.ts",
+      ]);
+    },
+  );
 
-  it.skipIf(!SYMLINKS_AVAILABLE)("does not escape when a queued child directory is replaced by a symlink", async () => {
-    const root = await scratch();
-    const external = await scratch();
-    await file(external, "escaped-target.ts");
-    await mkdir(path.join(root, "z-swap"));
-    await Promise.all(
-      Array.from({ length: 100 }, (_, index) => file(root, `a-blocker/child-${index}/ordinary.ts`)),
-    );
+  it.skipIf(!SYMLINKS_AVAILABLE)(
+    "does not escape when a queued child directory is replaced by a symlink",
+    async () => {
+      const root = await scratch();
+      const external = await scratch();
+      await file(external, "escaped-target.ts");
+      await mkdir(path.join(root, "z-swap"));
+      await Promise.all(
+        Array.from({ length: 100 }, (_, index) =>
+          file(root, `a-blocker/child-${index}/ordinary.ts`),
+        ),
+      );
 
-    const pending = listProjectFiles(root, "escaped-target", { limit: 5 });
-    // The blocker gives the walk async traversal work after the root Dirents
-    // were read, making this exercise the per-directory realpath gate rather
-    // than relying only on the initial isSymbolicLink check.
-    await new Promise<void>((resolve, reject) => {
-      setImmediate(() => {
-        void rm(path.join(root, "z-swap"), { recursive: true })
-          .then(() => symlink(external, path.join(root, "z-swap"), "dir"))
-          .then(() => resolve(), reject);
+      const pending = listProjectFiles(root, "escaped-target", { limit: 5 });
+      // The blocker gives the walk async traversal work after the root Dirents
+      // were read, making this exercise the per-directory realpath gate rather
+      // than relying only on the initial isSymbolicLink check.
+      await new Promise<void>((resolve, reject) => {
+        setImmediate(() => {
+          void rm(path.join(root, "z-swap"), { recursive: true })
+            .then(() => symlink(external, path.join(root, "z-swap"), "dir"))
+            .then(() => resolve(), reject);
+        });
       });
-    });
 
-    await expect(pending).resolves.toEqual([]);
-  });
+      await expect(pending).resolves.toEqual([]);
+    },
+  );
 
-  it.skipIf(!SYMLINKS_AVAILABLE)("skips hidden, pruned, and external symlink trees and returns slash paths", async () => {
-    const root = await scratch();
-    const external = await scratch();
-    await Promise.all([
-      file(root, "src/nested/visible.ts"),
-      file(root, ".hidden/secret.ts"),
-      file(root, "src/.hidden/secret.ts"),
-      file(root, "node_modules/pkg/index.ts"),
-      file(root, "coverage/report.ts"),
-      file(external, "outside.ts"),
-    ]);
-    // Models a directory that has been replaced by a link before its turn in
-    // the depth-first walk; neither the Dirent nor canonical containment gate follows it.
-    await symlink(external, path.join(root, "linked-external"), "dir");
+  it.skipIf(!SYMLINKS_AVAILABLE)(
+    "skips hidden, pruned, and external symlink trees and returns slash paths",
+    async () => {
+      const root = await scratch();
+      const external = await scratch();
+      await Promise.all([
+        file(root, "src/nested/visible.ts"),
+        file(root, ".hidden/secret.ts"),
+        file(root, "src/.hidden/secret.ts"),
+        file(root, "node_modules/pkg/index.ts"),
+        file(root, "coverage/report.ts"),
+        file(external, "outside.ts"),
+      ]);
+      // Models a directory that has been replaced by a link before its turn in
+      // the depth-first walk; neither the Dirent nor canonical containment gate follows it.
+      await symlink(external, path.join(root, "linked-external"), "dir");
 
-    const results = await listProjectFiles(root, "", { limit: 20 });
-    expect(results).toEqual(["src/nested/visible.ts"]);
-    expect(results[0]).not.toContain("\\");
-  });
+      const results = await listProjectFiles(root, "", { limit: 20 });
+      expect(results).toEqual(["src/nested/visible.ts"]);
+      expect(results[0]).not.toContain("\\");
+    },
+  );
 
   it("rejects before starting when already aborted", async () => {
     const root = await scratch();

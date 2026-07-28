@@ -59,21 +59,21 @@ AGENT-DECK keeps RUNTIME ONLY:
 ```
 
 Sync/store is one thing; runtime orchestration is another. Everything above the
-filesystem line is the shared engine's; deciding *which on-disk skill enters which
-Pi session* is agent-deck's and stays put.
+filesystem line is the shared engine's; deciding _which on-disk skill enters which
+Pi session_ is agent-deck's and stays put.
 
 ### Moves / Stays / Drops
 
-| Capability | Disposition |
-|---|---|
-| Untrusted GitHub-repo import + discovery + symlink/traversal **sanitization** | **MOVE** into the shared engine (not in Syncr today; genuinely needed) |
-| Content identity / fingerprint | **MOVE + unify** (one impl; converge on the shared history model) |
-| Conflict detection/resolution | **MOVE + unify** |
-| **Version store** + **transaction log / crash-safe writes** | **MOVE — preserved, works offline** (they are the source of truth when no cloud) |
-| Materialize | **MOVE**, as the simple atomic write+prune form |
+| Capability                                                                                                 | Disposition                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Untrusted GitHub-repo import + discovery + symlink/traversal **sanitization**                              | **MOVE** into the shared engine (not in Syncr today; genuinely needed)                                                      |
+| Content identity / fingerprint                                                                             | **MOVE + unify** (one impl; converge on the shared history model)                                                           |
+| Conflict detection/resolution                                                                              | **MOVE + unify**                                                                                                            |
+| **Version store** + **transaction log / crash-safe writes**                                                | **MOVE — preserved, works offline** (they are the source of truth when no cloud)                                            |
+| Materialize                                                                                                | **MOVE**, as the simple atomic write+prune form                                                                             |
 | Cap-std TOCTOU-on-every-write, Windows quarantine-rename dance, recovery-token exchange, managed snapshots | **DROP** — accidental complexity; safe-by-construction once input is sanitized at import (capability ≠ this implementation) |
-| Legacy skill-repo migration | **ISOLATE** into a small, standalone, **removable** package (one-time back-compat; delete once no old catalogs remain) |
-| Assignment → `--skill` to Pi; Loops; session worktrees | **STAY** in agent-deck (never belonged to sync) |
+| Legacy skill-repo migration                                                                                | **ISOLATE** into a small, standalone, **removable** package (one-time back-compat; delete once no old catalogs remain)      |
+| Assignment → `--skill` to Pi; Loops; session worktrees                                                     | **STAY** in agent-deck (never belonged to sync)                                                                             |
 
 ### Locked sub-decisions
 
@@ -92,8 +92,8 @@ Pi session* is agent-deck's and stays put.
    (`~/.agents/skills/<slug>/` — vendor-neutral, already scanned by agent-deck as
    a legacy path, and Syncr's target). Feasible because agent-deck passes skills to
    Pi as **explicit `--skill <path>` flags**, so the physical location is free.
-   *(Confirm Pi accepts skills handed by explicit path from outside `~/.pi/`.)*
-5. **Project scope, split display/write.** Skills/agents/prompts exist at *project*
+   _(Confirm Pi accepts skills handed by explicit path from outside `~/.pi/`.)_
+5. **Project scope, split display/write.** Skills/agents/prompts exist at _project_
    scope too (`<project>/.pi/{skills,agents,prompts}`), not only global — native
    parity that the electron refactor dropped and has since restored for **display**
    (scan + watch, project shadows global; see the "Restore project-scoped … DISPLAY
@@ -116,11 +116,11 @@ velocity; a strict API keeps the eventual repo split cheap.
 
 ## Why not the alternatives
 
-- *Keep both implementations and reconcile behavior* — perpetual drift and
+- _Keep both implementations and reconcile behavior_ — perpetual drift and
   double-maintenance; the reason we are consolidating.
-- *Make Syncr cloud a hard dependency of agent-deck* — violates offline-first; a
+- _Make Syncr cloud a hard dependency of agent-deck_ — violates offline-first; a
   single user must not need a Syncr account to manage skills.
-- *Delete agent-deck's import/containment as "redundant"* — wrong: Syncr can't
+- _Delete agent-deck's import/containment as "redundant"_ — wrong: Syncr can't
   import arbitrary untrusted repos. That capability moves, it doesn't vanish.
 
 ## Phased plan (sequencing matters)
@@ -177,7 +177,7 @@ What landed, and where reality diverged from the plan above. Full, current detai
 - **No migration (revises the migration expectation).** The plan and an earlier contract draft
   assumed a one-time `.pi → .agents` move. It's unnecessary: non-destructive dual-read, fan-out
   bridges global visibility, nothing moves on disk. The confusion was "canonical" meaning the
-  *creation target*, not the top-ranked *read* location.
+  _creation target_, not the top-ranked _read_ location.
 - **Recovery stays native, transitionally (revises sub-decision on recovery ownership).** In the
   no-sync scope the recovery producers are still native (legacy repo + displacement); recovery moves
   to the engine when sync lands. Routing it to the engine early was a real bug.

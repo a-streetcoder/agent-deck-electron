@@ -37,12 +37,12 @@ it was not gratuitous.
 
 ## What it costs (and why Windows hurts)
 
-The module's hardest operation — **atomic directory replacement** — has *no
-portable primitive*:
+The module's hardest operation — **atomic directory replacement** — has _no
+portable primitive_:
 
 - **Linux:** `renameat2(RENAME_EXCHANGE)` swaps old/new atomically in one call.
 - **Windows:** no equivalent; no directory `fsync`; and it refuses to rename a
-  directory that has *any* open handle (cap-std opens handles without
+  directory that has _any_ open handle (cap-std opens handles without
   `FILE_SHARE_DELETE`).
 
 So the module already carries hand-written `#[cfg(windows)]` branches that
@@ -94,7 +94,7 @@ If the native seam keeps costing us (more Windows breakage, toolchain/packaging
 friction), collapse it instead of maintaining a full native subsystem:
 
 1. **Keep native ONLY for what Node genuinely cannot do**: a symlink-safe,
-   descriptor-relative *open* (and, if needed, a no-follow `lstat`). Everything
+   descriptor-relative _open_ (and, if needed, a no-follow `lstat`). Everything
    else — staging, tree copy, atomic-swap orchestration, cleanup — moves to
    TypeScript.
 2. **Do the atomic replace in Node** with the portable pattern libuv already
@@ -105,7 +105,7 @@ friction), collapse it instead of maintaining a full native subsystem:
 3. **One code path across OSes** instead of `#[cfg(unix)]` / `#[cfg(windows)]`
    divergence; native prebuilds shrink to a tiny, rarely-changing helper.
 
-Trade-off: gives up crash-atomic directory *exchange* and the strongest
+Trade-off: gives up crash-atomic directory _exchange_ and the strongest
 TOCTOU-hardness in exchange for dramatically simpler, uniform cross-platform
 behaviour and far lower maintenance/debug cost. Revisit if Windows native
 maintenance exceeds the security value it buys.

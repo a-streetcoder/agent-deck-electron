@@ -12,7 +12,7 @@ its native single-skill write path.
 
 ## Why P4 is blocked without it
 
-P4 is "delete agent-deck's duplicate skill machinery." Everything the *single-skill* write path
+P4 is "delete agent-deck's duplicate skill machinery." Everything the _single-skill_ write path
 did is now the engine's, so `NativeSkillStore` is deleted and the native `writeSkillFile` family
 is prod-dead (kept only for resources tests, marked). But one live feature has **no engine
 replacement**: importing a whole **git repository** of skills as a managed, re-syncable
@@ -69,7 +69,7 @@ forgetGitRepo(collectionId, { removeSkills: boolean })
 Notes:
 
 - **Recoveries must land in the store `listRecoveries(root)` reads.** In P3 agent-deck kept
-  recovery on its *native* `global-skills` store precisely because the legacy importer produces
+  recovery on its _native_ `global-skills` store precisely because the legacy importer produces
   them there; when git import moves to the engine, its conflict displacements should surface
   through the engine's recovery API so agent-deck can consolidate recovery onto the engine in one
   step (it's already coded against the `*Recovery` methods on the contract).
@@ -82,7 +82,8 @@ Notes:
 
 Re-point the seven `/resources/skill-repos/*` routes at the new methods behind the `SkillStore`
 interface (add the git-import methods to it), delete `skillRepositories.ts` + `legacySkillRepo.ts`
-+ the native `writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/`importSkillFile` family and their
-resources tests, and move recovery from the native store to the engine. That closes P4.
+
+- the native `writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/`importSkillFile` family and their
+  resources tests, and move recovery from the native store to the engine. That closes P4.
 
 Happy to review the surface before you build it — same as last time.

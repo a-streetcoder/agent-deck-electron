@@ -132,9 +132,9 @@ describe("resource write scope compatibility", () => {
       edit: { description: "A project skill", body: "Do the thing." },
     });
     expect(response.status).toBe(200);
-    expect(
-      existsSync(path.join(projectDir, ".agents", "skills", "proj-skill", "SKILL.md")),
-    ).toBe(true);
+    expect(existsSync(path.join(projectDir, ".agents", "skills", "proj-skill", "SKILL.md"))).toBe(
+      true,
+    );
 
     // The regression this guards: the engine writes `.agents/skills` but the scanner used to
     // read only `.pi/skills`, so a created project skill was invisible. It must round-trip.
@@ -142,9 +142,7 @@ describe("resource write scope compatibility", () => {
       await fetch(`http://127.0.0.1:${server.port}/resources/skills?projectId=${projectId}`)
     ).json()) as { skills: Array<{ name: string; scope: string }> };
     expect(listed.skills).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "proj-skill", scope: "project" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ name: "proj-skill", scope: "project" })]),
     );
   });
 });

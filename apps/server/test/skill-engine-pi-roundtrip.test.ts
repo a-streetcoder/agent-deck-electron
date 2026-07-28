@@ -58,7 +58,14 @@ describe("a skill written by the engine round-trips through pi's real loader", (
     const description = "First line of guidance.\nSecond line with a — dash and 🚀 emoji.";
     engine.writeSkill(h, undefined, "global", "multi", description, "Body stays.");
     // The partial-edit defect class: a description-only edit must not destroy the body.
-    engine.writeSkill(h, undefined, "global", "multi", "First line of guidance.\nEdited 🚀.", undefined);
+    engine.writeSkill(
+      h,
+      undefined,
+      "global",
+      "multi",
+      "First line of guidance.\nEdited 🚀.",
+      undefined,
+    );
 
     const { skills } = loadViaPi(h, "multi");
     expect(skills).toHaveLength(1);
