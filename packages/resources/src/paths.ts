@@ -92,18 +92,18 @@ export interface SkillCatalogDir {
 
 export function skillCatalogDirs(roots: ResourceRoots): SkillCatalogDir[] {
   const dirs: SkillCatalogDir[] = [];
-  // A selected project's skills (`<project>/.pi/skills`) come FIRST so a project
-  // skill shadows a same-named global one — native parity (agent-deck's `.project`
-  // scope); the electron refactor dropped this and it is being restored.
-  //
-  // NB: agent-deck deliberately does NOT read `<project>/.agents/skills` yet, even
-  // though the engine's `default_catalogs` ranks it first at project scope. Per the
-  // P3 handover, engine fan-out projects a new canonical skill into the `.pi` catalogs
-  // agent-deck already reads (via a link engine discovery won't follow back), so a new
-  // skill is visible here without a re-rank. Ranking `.agents` above `.pi` is a
-  // deliberate lockstep change on BOTH sides, made in the same release pi's own default
-  // moves to `.agents/skills` — not a unilateral edit here.
+  // A selected project's skills come FIRST so a project skill shadows a same-named global
+  // one — native parity (agent-deck's `.project` scope). Within project scope, canonical
+  // `<project>/.agents/skills` — where the shared engine MATERIALIZES project skills —
+  // ranks above the legacy `<project>/.pi/skills`, matching the engine's `default_catalogs`
+  // (Syncr `skill-engine/src/store.rs`) and pi's own ancestor discovery. agent-deck MUST
+  // read `.agents/skills` here: a project skill it just authored through the engine lands
+  // there, and project fan-out does NOT bridge it to `.pi/skills` (that tool path is
+  // global-only), so without this entry a freshly-created project skill is invisible.
+  // (Global stays `.pi/agent/skills` first — there fan-out DOES bridge and both readers
+  // already agree; ranking `.agents` above `.pi` globally is a separate lockstep change.)
   if (roots.projectPath) {
+    dirs.push({ dir: path.join(roots.projectPath, ".agents", "skills"), scope: "project" });
     dirs.push({ dir: path.join(roots.projectPath, ".pi", "skills"), scope: "project" });
   }
   dirs.push({ dir: path.join(piAgentHome(roots), "skills"), scope: "global" });
@@ -169,6 +169,8 @@ export function watchDirs(roots: ResourceRoots): string[] {
 export function projectWatchDirs(projectPath: string): string[] {
   const pi = path.join(projectPath, ".pi");
   return [
+    // Canonical, where the engine materializes project skills (see skillCatalogDirs).
+    path.join(projectPath, ".agents", "skills"),
     path.join(pi, "skills"),
     path.join(pi, "agents"),
     path.join(pi, "prompts"),

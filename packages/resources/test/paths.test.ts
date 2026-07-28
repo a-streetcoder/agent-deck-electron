@@ -36,6 +36,8 @@ describe("native-compatible resource paths", () => {
       expect.objectContaining({ scope: "builtin" }),
     ]);
     expect(skillCatalogDirs(roots)).toEqual([
+      // Canonical project catalog (engine-materialized) ranks above the legacy `.pi/skills`.
+      { dir: path.join(projectPath, ".agents", "skills"), scope: "project" },
       { dir: path.join(projectPath, ".pi", "skills"), scope: "project" },
       { dir: path.join(home, ".pi", "agent", "skills"), scope: "global" },
       { dir: path.join(home, ".agents", "skills"), scope: "global", legacy: true },
@@ -58,6 +60,7 @@ describe("native-compatible resource paths", () => {
 
     expect(existsSync(path.join(home, ".agents"))).toBe(false);
     expect(projectWatchDirs(projectPath)).toEqual([
+      path.join(projectPath, ".agents", "skills"),
       path.join(projectPath, ".pi", "skills"),
       path.join(projectPath, ".pi", "agents"),
       path.join(projectPath, ".pi", "prompts"),

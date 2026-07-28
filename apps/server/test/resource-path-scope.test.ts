@@ -122,8 +122,9 @@ describe("resource write scope compatibility", () => {
   });
 
   // Project SKILL writes are supported now that the shared engine owns storage (P3):
-  // the engine materializes them in the canonical `<project>/.agents/skills` catalog.
-  it("creates a project skill through the shared engine", async () => {
+  // the engine materializes them in the canonical `<project>/.agents/skills` catalog, and
+  // agent-deck's scanner reads that catalog so the skill is immediately visible in-app.
+  it("creates a project skill through the engine AND reads it back (round-trip)", async () => {
     const response = await put("/resources/skills", {
       projectId,
       scope: "project",
@@ -134,5 +135,16 @@ describe("resource write scope compatibility", () => {
     expect(
       existsSync(path.join(projectDir, ".agents", "skills", "proj-skill", "SKILL.md")),
     ).toBe(true);
+
+    // The regression this guards: the engine writes `.agents/skills` but the scanner used to
+    // read only `.pi/skills`, so a created project skill was invisible. It must round-trip.
+    const listed = (await (
+      await fetch(`http://127.0.0.1:${server.port}/resources/skills?projectId=${projectId}`)
+    ).json()) as { skills: Array<{ name: string; scope: string }> };
+    expect(listed.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "proj-skill", scope: "project" }),
+      ]),
+    );
   });
 });
