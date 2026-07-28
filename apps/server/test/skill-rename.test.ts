@@ -104,8 +104,9 @@ describe("POST /resources/skills/rename", () => {
       newName: "shared2",
     });
 
-    expect(response.status).toBe(400);
-    expect(await response.text()).toContain("project resource catalogs are not supported");
+    // Project renames go to the engine now; "shared" lives only in the global catalog,
+    // so a project-scope rename can't resolve it (404) and leaves global state intact.
+    expect(response.status).toBe(404);
     expect(await assignedOf()).toEqual(assignmentsBefore);
     expect(await globalSkillNames()).toEqual(globalsBefore);
   });
@@ -123,7 +124,7 @@ describe("POST /resources/skills/rename", () => {
       newName: "dup2",
     });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
     expect(await defaultSkills()).toEqual(defaultsBefore);
     expect(await globalSkillNames()).toEqual(globalsBefore);
   });
@@ -141,7 +142,7 @@ describe("POST /resources/skills/rename", () => {
       newName: "solo2",
     });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
     expect(await defaultSkills()).toEqual(defaultsBefore);
     expect(await globalSkillNames()).toEqual(globalsBefore);
     expect(await globalSkillNames()).not.toContain("solo2");

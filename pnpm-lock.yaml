@@ -66,6 +66,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@a-streetcoder/skill-engine-native':
+        specifier: 0.1.3
+        version: 0.1.3
       '@agent-deck/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -268,7 +271,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: 3.7.4
-        version: 3.7.4(@emnapi/runtime@1.11.2)(@types/node@22.15.29)(node-addon-api@7.1.1)
+        version: 3.7.4(@emnapi/runtime@1.9.2)(@types/node@22.15.29)(node-addon-api@7.1.1)
       '@types/node':
         specifier: 22.15.29
         version: 22.15.29
@@ -369,6 +372,29 @@ importers:
         version: 22.15.29
 
 packages:
+
+  '@a-streetcoder/skill-engine-native-darwin-arm64@0.1.3':
+    resolution: {integrity: sha512-M/N4nruQlTVIhQ7I4zQwE+TY4iS1Fz6lZ73Kbl3EJEJIX1fN3gzh84YwLNarfyRqEJHZN4slw2Dpdj6BxwIeaA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-arm64/0.1.3/00a195624e43d10fa6c55a6f854a3998383bfccf}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@a-streetcoder/skill-engine-native-darwin-x64@0.1.3':
+    resolution: {integrity: sha512-w/7jJGheakWHnhi1K7jkouQVN6oQP3u/2YfaRWBwB8+2xnevRgKSboD0mssxMz0y8HlyAcCtZvmFruJMm31LKw==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-x64/0.1.3/5b02816df2567aa6d4ef92e798b244b690e3bc39}
+    cpu: [x64]
+    os: [darwin]
+
+  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.1.3':
+    resolution: {integrity: sha512-GlGoqUnthO5ejfWHLrh3kM7i5FHAaK0D561MQ7nwFfZWXkdslMnZLDYwmoD4E7Z6cn9tJ4gCGBee1gnpasowRQ==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-linux-x64-gnu/0.1.3/089b2d13f1a2188e3549272a0ceb01c0dca642aa}
+    cpu: [x64]
+    os: [linux]
+
+  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.1.3':
+    resolution: {integrity: sha512-saE5prggjMQ4teb7+P4Jw/VzJwJm5hjvnO+zfTY7v2lQK0D7szTNo1QQnchzicS4aQqp9ihlyUOu7H/yBtt+VA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-win32-x64-msvc/0.1.3/0d522b2aa2f559372f95c650003ff0c413d17519}
+    cpu: [x64]
+    os: [win32]
+
+  '@a-streetcoder/skill-engine-native@0.1.3':
+    resolution: {integrity: sha512-6bVYAhNuThHT+o+c93MNoc2UgWclaQ42dcYcpmb0/tQFIVVH3D8NJp5RsIE6zDBzvOKMvn9VjCSeDKppmeG58Q==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native/0.1.3/9c4b881e2fee7481c001bcea830b09aaa8aa8c0c}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -4912,6 +4938,25 @@ packages:
 
 snapshots:
 
+  '@a-streetcoder/skill-engine-native-darwin-arm64@0.1.3':
+    optional: true
+
+  '@a-streetcoder/skill-engine-native-darwin-x64@0.1.3':
+    optional: true
+
+  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.1.3':
+    optional: true
+
+  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.1.3':
+    optional: true
+
+  '@a-streetcoder/skill-engine-native@0.1.3':
+    optionalDependencies:
+      '@a-streetcoder/skill-engine-native-darwin-arm64': 0.1.3
+      '@a-streetcoder/skill-engine-native-darwin-x64': 0.1.3
+      '@a-streetcoder/skill-engine-native-linux-x64-gnu': 0.1.3
+      '@a-streetcoder/skill-engine-native-win32-x64-msvc': 0.1.3
+
   '@alloc/quick-lru@5.2.0': {}
 
   '@anthropic-ai/sdk@0.91.1(zod@3.25.67)':
@@ -6270,7 +6315,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@napi-rs/cli@3.7.4(@emnapi/runtime@1.11.2)(@types/node@22.15.29)(node-addon-api@7.1.1)':
+  '@napi-rs/cli@3.7.4(@emnapi/runtime@1.9.2)(@types/node@22.15.29)(node-addon-api@7.1.1)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@22.15.29)
       '@napi-rs/cross-toolchain': 1.0.3
@@ -6285,7 +6330,7 @@ snapshots:
       semver: 7.8.5
       typanion: 3.14.0
     optionalDependencies:
-      '@emnapi/runtime': 1.11.2
+      '@emnapi/runtime': 1.9.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'

@@ -45,7 +45,8 @@ import {
   type ServerContext,
 } from "./context.ts";
 import { registerDeckBridgeTools } from "./bridgeTools.ts";
-import { NativeSkillStore } from "./skills/nativeSkillStore.ts";
+import { EngineSkillStore } from "./skills/engineSkillStore.ts";
+import { loadSkillEngineNative } from "./skills/skillEngineNative.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
 import { createEditorLauncher } from "./editorLauncher.ts";
 import { createScriptRunnerGateway } from "./scriptRunnerGateway.ts";
@@ -909,10 +910,16 @@ async function initServer(
   };
   for (const project of projects.list()) watchProject(project.path);
 
-  // The skill catalog/authoring/version seam (ADR-0002 P1b): a thin adapter over
-  // the resource functions, so consumers depend on the SkillStore interface and the
-  // shared Syncr engine can replace it later behind the same interface.
-  const skillStore = new NativeSkillStore({ rootsFor, scanSkillsFor, home: resourceHome() });
+  // The skill catalog/authoring/version seam (ADR-0002 P3): reads stay agent-deck's
+  // pi-shaped scanner; writes/recovery go to the shared @a-streetcoder skill engine
+  // behind the same SkillStore interface. The engine owns storage now, so its addon is
+  // required — loadSkillEngineNative() surfaces a clear, actionable error if it can't load.
+  const skillStore = new EngineSkillStore({
+    engine: await loadSkillEngineNative(),
+    scanSkillsFor,
+    home: resourceHome(),
+    projectRootFor: (projectId) => rootsFor(projectId).projectPath,
+  });
 
   // The shared context the route modules read (Slice 2 decomposition): one
   // object, assembled once, so every moved handler body reads exactly as it

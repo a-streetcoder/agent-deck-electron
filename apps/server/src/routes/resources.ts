@@ -93,9 +93,10 @@ const agentEditFields = z.object({
   body: z.string().optional(),
 });
 
-const writableCatalogScope = z
-  .enum(["global", "project"])
-  .refine((scope): boolean => scope === "global", "project resource catalogs are not supported");
+// Skills are global or project. Project writes are supported now that the shared skill
+// engine owns storage (ADR-0002 P3) — the per-route guard below still rejects a project
+// scope with no project selected. Agents/prompts stay global-only (engine handles skills).
+const writableCatalogScope = z.enum(["global", "project"]);
 const writableLibraryScope = z
   .enum(["global", "library", "project"])
   .refine((scope): boolean => scope !== "project", "project resource catalogs are not supported");

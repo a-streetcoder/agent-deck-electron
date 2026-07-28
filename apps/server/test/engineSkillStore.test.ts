@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ResourceCatalogCapabilityError } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
@@ -125,15 +128,23 @@ describe("EngineSkillStore", () => {
     );
   });
 
-  it("routes recovery ops to the engine rooted at home", () => {
+  it("serves recovery from the native global-skills store, NOT the engine (transitional)", () => {
+    // Recovery producers in agent-deck's no-sync scope are the legacy skill-repo and native
+    // displacement, both writing the native store — so recovery must bypass the engine.
     const engine = fakeEngine();
-    const { store } = makeStore(engine);
+    const scanSkillsFor = vi.fn(() => [] as SkillInfo[]);
+    const home = mkdtempSync(path.join(tmpdir(), "engine-skill-store-recov-"));
+    const store = new EngineSkillStore({
+      engine,
+      scanSkillsFor,
+      home,
+      projectRootFor: () => undefined,
+    });
 
-    store.listRecoveries();
-    store.restoreRecovery("tok");
-    store.acknowledgeRecovery("tok");
-    expect(engine.listRecoveries).toHaveBeenCalledWith("/home");
-    expect(engine.restoreRecovery).toHaveBeenCalledWith("/home", "tok");
-    expect(engine.acknowledgeRecovery).toHaveBeenCalledWith("/home", "tok");
+    // A fresh home has no recoveries, and the engine's recovery methods are never touched.
+    expect(store.listRecoveries()).toEqual([]);
+    expect(engine.listRecoveries).not.toHaveBeenCalled();
+    expect(engine.restoreRecovery).not.toHaveBeenCalled();
+    expect(engine.acknowledgeRecovery).not.toHaveBeenCalled();
   });
 });

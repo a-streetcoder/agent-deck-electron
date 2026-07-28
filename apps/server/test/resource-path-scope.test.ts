@@ -107,16 +107,32 @@ describe("resource write scope compatibility", () => {
     expect(readFileSync(sentinel, "utf8")).toBe("outside-safe");
   });
 
+  // Agents and prompts stay global-only for in-app writes — the shared skill engine
+  // owns skills, not those. (Runs before the skill-success test below, so projectDir
+  // is still clean of `.agents` when these assert it.)
   it.each([
     ["agent", "/resources/agents", { edit: { body: "No." } }],
-    ["skill", "/resources/skills", { edit: { body: "No." } }],
     ["prompt", "/resources/prompts", { edit: { body: "No." } }],
   ])("rejects project %s creation without touching project files", async (name, url, extra) => {
     const response = await put(url, { projectId, scope: "project", name, ...extra });
     expect(response.status).toBe(400);
     expect(existsSync(path.join(projectDir, ".pi", "agents"))).toBe(false);
-    expect(existsSync(path.join(projectDir, ".pi", "skills"))).toBe(false);
     expect(existsSync(path.join(projectDir, ".pi", "prompts"))).toBe(false);
     expect(existsSync(path.join(projectDir, ".agents"))).toBe(false);
+  });
+
+  // Project SKILL writes are supported now that the shared engine owns storage (P3):
+  // the engine materializes them in the canonical `<project>/.agents/skills` catalog.
+  it("creates a project skill through the shared engine", async () => {
+    const response = await put("/resources/skills", {
+      projectId,
+      scope: "project",
+      name: "proj-skill",
+      edit: { description: "A project skill", body: "Do the thing." },
+    });
+    expect(response.status).toBe(200);
+    expect(
+      existsSync(path.join(projectDir, ".agents", "skills", "proj-skill", "SKILL.md")),
+    ).toBe(true);
   });
 });

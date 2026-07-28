@@ -14,11 +14,20 @@
  * REST routes keep their existing HTTP status mapping.
  */
 
-import { ResourceCatalogCapabilityError, type ResourceRecovery } from "@agent-deck/resources";
+import {
+  ResourceCatalogCapabilityError,
+  acknowledgeResourceRecovery,
+  listResourceRecoveries,
+  restoreResourceRecovery,
+  type ResourceRecovery,
+} from "@agent-deck/resources";
 import type { ResourceCatalogErrorCode } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
 import type { SkillEdit, SkillScope, SkillStore } from "./skillStore.ts";
 import type { SkillEngineNative } from "./skillEngineNative.ts";
+
+/** Catalog the native recovery API namespaces skill recoveries under. */
+const SKILL_RECOVERY_CATALOG = "global-skills";
 
 /** Host hooks + the engine addon the store needs. */
 export interface EngineSkillStoreDeps {
@@ -140,17 +149,23 @@ export class EngineSkillStore implements SkillStore {
     );
   }
 
-  // ── Recovery (the engine; rooted at home = the global-skills catalog) ─────────
+  // ── Recovery (native, transitional) ──────────────────────────────────────────
+  // Recovery stays on the native `global-skills` store, NOT the engine. In agent-deck's
+  // single-user, no-sync scope the recovery producers are the legacy skill-repo (its "Take
+  // Remote" displaces a local skill) and native displacement — both write here. The engine
+  // only produces recoveries during its sync/conflict path, which agent-deck doesn't drive
+  // yet. When P4 removes the legacy repo and sync lands, recovery moves to the engine
+  // (`this.deps.engine.*Recovery`, already on the contract).
   listRecoveries(): ResourceRecovery[] {
-    return fromEngine(() => this.deps.engine.listRecoveries(this.deps.home));
+    return listResourceRecoveries(this.deps.home, SKILL_RECOVERY_CATALOG);
   }
 
   restoreRecovery(token: string): ResourceRecovery {
-    return fromEngine(() => this.deps.engine.restoreRecovery(this.deps.home, token));
+    return restoreResourceRecovery(this.deps.home, SKILL_RECOVERY_CATALOG, token);
   }
 
   acknowledgeRecovery(token: string): void {
-    fromEngine(() => this.deps.engine.acknowledgeRecovery(this.deps.home, token));
+    acknowledgeResourceRecovery(this.deps.home, SKILL_RECOVERY_CATALOG, token);
   }
 
   /** Project the canonical skill into the machine's other installed tool dirs. Best-effort:
