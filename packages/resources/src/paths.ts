@@ -95,6 +95,14 @@ export function skillCatalogDirs(roots: ResourceRoots): SkillCatalogDir[] {
   // A selected project's skills (`<project>/.pi/skills`) come FIRST so a project
   // skill shadows a same-named global one — native parity (agent-deck's `.project`
   // scope); the electron refactor dropped this and it is being restored.
+  //
+  // NB: agent-deck deliberately does NOT read `<project>/.agents/skills` yet, even
+  // though the engine's `default_catalogs` ranks it first at project scope. Per the
+  // P3 handover, engine fan-out projects a new canonical skill into the `.pi` catalogs
+  // agent-deck already reads (via a link engine discovery won't follow back), so a new
+  // skill is visible here without a re-rank. Ranking `.agents` above `.pi` is a
+  // deliberate lockstep change on BOTH sides, made in the same release pi's own default
+  // moves to `.agents/skills` — not a unilateral edit here.
   if (roots.projectPath) {
     dirs.push({ dir: path.join(roots.projectPath, ".pi", "skills"), scope: "project" });
   }
