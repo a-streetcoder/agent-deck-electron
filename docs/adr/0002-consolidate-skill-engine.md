@@ -1,7 +1,8 @@
 # ADR 0002 — Consolidate skill sync/store into a shared, Syncr-owned engine
 
-- **Status:** Accepted (2026-07-27)
+- **Status:** Accepted (2026-07-27); P1–P3 landed, P4 partial — see [Progress](#progress-2026-07-28)
 - **Supersedes:** the skill/resource half of [ADR-0001](0001-native-containment-module.md)
+- **Live contract + status:** [skill-store-contract.md](../skill-store-contract.md)
 - **Context:** `agent-deck-electron` and `Syncr` (`../Syncr`) each independently
   implement local skill management. We are consolidating onto one.
 
@@ -154,3 +155,32 @@ break skills. Order:
   may itself slim per ADR-0001's Option 2.
 - New coupling: agent-deck depends on a Syncr-owned crate; managed via a pinned
   version and a strict API.
+
+## Progress (2026-07-28)
+
+What landed, and where reality diverged from the plan above. Full, current detail lives in
+[skill-store-contract.md](../skill-store-contract.md); this is the ADR-level record.
+
+- **P1a / P1b — done.** Legacy migration isolated (`legacySkillRepo.ts`); `SkillStore` seam +
+  routes/launch repointed through it.
+- **P2 — done (Syncr).** Shipped as `@a-streetcoder/skill-engine-native` (crate `skill-engine`).
+- **P3 — done.** `EngineSkillStore` replaced `NativeSkillStore`; all in-app skill writes go through
+  the engine (0.1.3). Project writes enabled and made visible (the reader now scans
+  `<project>/.agents/skills`, where the engine materializes them).
+- **P4 — partial.** Dead `NativeSkillStore` deleted; the real engine emitter is pi-round-trip
+  guarded. The native skill-write fns are prod-dead but **kept + marked**, not deleted, while P4 is
+  partial. Retiring the git-repo importer is **blocked** on the engine exposing git-import through
+  the NAPI — request out at [skill-engine-git-import-request.md](../skill-engine-git-import-request.md).
+
+**Divergences from the plan, recorded honestly:**
+
+- **No migration (revises the migration expectation).** The plan and an earlier contract draft
+  assumed a one-time `.pi → .agents` move. It's unnecessary: non-destructive dual-read, fan-out
+  bridges global visibility, nothing moves on disk. The confusion was "canonical" meaning the
+  *creation target*, not the top-ranked *read* location.
+- **Recovery stays native, transitionally (revises sub-decision on recovery ownership).** In the
+  no-sync scope the recovery producers are still native (legacy repo + displacement); recovery moves
+  to the engine when sync lands. Routing it to the engine early was a real bug.
+- **One write gate removed, not three (revises sub-decision #5).** Only the route-level project
+  refusal was removed; the writer/native gates are simply bypassed (the engine path doesn't use
+  them) and remain for agents/prompts, which are still global-only.

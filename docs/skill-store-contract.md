@@ -1,110 +1,165 @@
-# SkillStore ↔ engine NAPI contract
+# Skill engine integration & the Syncr contract
 
-Authoritative contract for the shared skill engine's NAPI surface that implements
-agent-deck's `SkillStore` (ADR-0002 P1b/P3; Syncr ADR-0004). agent-deck owns these
-domain shapes; the engine must reproduce them exactly. Source of truth:
-`packages/domain/src/resources.ts`, `packages/resources/src/scanner.ts`,
-`packages/resources/src/paths.ts`.
+How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
+the contract between the two. Decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md).
+Pending extension (git-repo import): [skill-engine-git-import-request.md](skill-engine-git-import-request.md).
 
-## 1. The output shape — `SkillInfo` (what `listSkills` returns)
+The engine ships as **`@a-streetcoder/skill-engine-native`** (private GitHub Packages, Syncr-owned).
+agent-deck consumes it for skill **storage**; it keeps the **reader** (pi's loader) and all
+**runtime** (assignment → `--skill`, Loops, worktrees).
 
-`packages/domain/src/resources.ts:49`. Every element:
+---
 
-| Field | Type | Derivation |
-|---|---|---|
-| `name` | string | parsed SKILL.md frontmatter `name`, else the folder name |
-| `description` | string | frontmatter `description` (empty string if absent) |
-| `scope` | `ResourceScope` | see §2 |
-| `filePath` | string | absolute path to `<skillDir>/SKILL.md` |
-| `baseDir` | string | absolute path to the skill **directory** (`<skillDir>`) |
-| `disableModelInvocation` | boolean | frontmatter flag (the skill is manual-only, not model-invoked) |
-| `body` | string | SKILL.md with the frontmatter block **stripped**, trimmed (`scanner.ts:160`) |
-| `disabled?` | boolean | **agent-deck sets this**, not the engine — app-level disable list. Omit it. |
+## Status (2026-07-28) — the engine is partially lifted in
 
-`ScopedSkill` (engine) must map 1:1 to this. Codex finding 5 (missing
-`name/description/filePath/baseDir/invocation flag/body`, no library scope) is exactly
-this table — close that gap.
+**Lifted onto the engine (P3, on `main`):** every in-app skill **write** — create / edit / delete /
+rename / import-local — goes through the engine addon via `EngineSkillStore` (`server.ts`).
+Project-scope writes are enabled: the engine materializes them in `<project>/.agents/skills` and
+agent-deck's scanner reads that catalog, so a created project skill is immediately visible.
 
-## 2. Scope + precedence
+**Deliberately NOT lifted:**
+- **Reading the catalog** — permanent. pi's loader is the authority on "what exists"; agent-deck's
+  pi-shaped scanner stays the reader. The engine's own `listSkills` is for Syncr's Tauri host.
+- **Recovery** — *transitional* on the native `global-skills` store (see [Recovery](#recovery--native-transitional)).
 
-`ResourceScope = "builtin" | "global" | "library" | "project"` — **there is no
-`legacyProject`.** The native `<project>/.agents` maps to `project`.
+**Blocked — the wait:** retiring agent-deck's **git-repo importer** (`managedSkillRepositories`,
+`/resources/skill-repos/*`). The engine NAPI exposes only *local* import; git-repo import +
+upstream-sync + conflict resolution isn't on the surface yet. Request is out to Syncr:
+[skill-engine-git-import-request.md](skill-engine-git-import-request.md).
 
-**Skill precedence (dedup on parsed frontmatter `name`, FIRST-in-scan-order wins —
-`scanner.ts:211`, `names.has(skill.name)`):**
+**Suites:** resources 136/0, server 538/0 (+1 known `scriptRunner` child-process flake, green in isolation).
+
+---
+
+## The split
+
+| Concern | Owner |
+|---|---|
+| Read / scan / render the catalog | **agent-deck** (pi scanner) — permanent |
+| Write / delete / rename / import-local; scoping; atomicity; version store; fan-out | **engine** |
+| Recovery (list / restore / acknowledge) | **agent-deck native store, transitional** → engine once sync lands |
+| Git-repo import + upstream sync + conflict resolution | **agent-deck** (legacy) → engine once the NAPI exposes it (blocked) |
+| Assignment (default/project/disabled) → `--skill`; Loops; session worktrees | **agent-deck** — never belonged to storage |
+
+## The contract — the shipped NAPI surface (0.1.3)
+
+Verified against the shipped binary via Syncr `crates/skill-engine-napi/scripts/smoke.mjs`.
+camelCase **named** exports; errors thrown as `Error` with a `RESOURCE_*` code prefix.
 
 ```
-project  →  global  →  legacy-global  →  library
+writeSkill(home, projectRoot?, scope, name, description?, body?) -> path to SKILL.md
+deleteSkill(home, projectRoot?, scope, name)
+renameSkill(home, projectRoot?, scope, name, newName)           -> path
+importLocalSkill(home, projectRoot?, scope, sourcePath)         -> path
+listSkills(home, projectRoot?, libraryRoots?)                   -> SkillInfo[]   // Tauri host; unused here
+fanOut(root, slug)                                              -> tool ids linked
+listRecoveries(root) / restoreRecovery(root, token) / acknowledgeRecovery(root, token)
 ```
 
-Concretely the scan order agent-deck uses (`skillCatalogDirs`, `paths.ts`):
-1. `<project>/.agents/skills`  (project — the engine's canonical; agent-deck adds this in P3)
-2. `<project>/.pi/skills`      (project — native/Pi; existing user skills, until migrated)
-3. `~/.pi/agent/skills`        (global — native/Pi primary; existing user skills)
-4. `~/.agents/skills`          (global — the engine's canonical global target)
-5. collection roots            (library)
+- **Mutations take the full root set (`home`, optional `projectRoot`) AND a `scope`** — not a single
+  target root. A write lands in the catalog the reader reads (possibly `.pi` during the migration
+  window); `scope` bounds which catalogs may be touched. `projectRoot` is required for `project` scope.
+- **`0.1.3` is the floor.** `0.1.2`'s meta package shipped without the generated NAPI loader
+  (`native/index.js`) — install succeeds, `require` fails; `0.1.0/0.1.1` had no verified entry.
 
-**Dedup keys on the parsed `name`, NOT the directory slug** (Codex finding 4). A skill
-whose frontmatter `name` differs from its folder name dedups by `name`. The engine's
-precedence must switch to name-based or it will disagree with agent-deck (double or
-mis-shadow). Skills have no `builtin` scope (that's agents only).
+**agent-deck's side of the contract** — `apps/server/src/skills/`:
+- `skillEngineNative.ts` — agent-deck's own `SkillEngineNative` interface + `loadSkillEngineNative()`
+  soft-loader over the raw `/native` binding. agent-deck consumes the raw binding through *this*
+  interface (not the package's typed surface) so the seam stays injectable for a fake in tests.
+- `engineSkillStore.ts` — `EngineSkillStore implements SkillStore`: reads → scanner, writes →
+  engine, `RESOURCE_*` message prefix → `ResourceCatalogCapabilityError` so routes keep their HTTP
+  mapping. Roots resolve once up front; fan-out is best-effort.
 
-## 3. Paths + discovery — NO Pi fan-out entry
+### Distribution
 
-- **Canonical:** `~/.agents/skills/<slug>/` (global) and `<project>/.agents/skills/<slug>/`
-  (project). The engine materializes here.
-- **Do NOT add a Pi tool-registry entry projecting to `.pi/skills`.** Verified against
-  the vendored pi: `@earendil-works/pi-coding-agent@0.82` auto-discovers `.agents/skills`
-  (`dist/core/package-manager.js:273` `collectAncestorAgentsSkillDirs` walks ancestors to
-  the git root pushing `<dir>/.agents/skills`, wired :1937; global `~/.agents/skills`). And
-  agent-deck launches pi with **`--no-skills`** (`packages/pi-host/src/launchPlan.ts:80`) +
-  explicit **`--skill <path>`** (:101/:127). So a `.pi/skills` projection is redundant for
-  agent-deck (it disables discovery) and *double-counts* for vanilla pi (it already finds
-  `.agents`, then follows the projection). Drop the entry — correct call.
-- **agent-deck consumes canonical directly:** it scans `.agents/skills`, and passes the
-  resolved `baseDir` to pi as `--skill`. No fan-out on agent-deck's critical path — the
-  engine can ship the canonical writer before fan-out is fixed on Windows.
+Private GitHub Packages, scope `@a-streetcoder` (must match repo owner). Project `.npmrc`:
 
-## 4. Method semantics (the seam — `apps/server/src/skills/skillStore.ts`)
+```
+@a-streetcoder:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
 
-- `listSkills(projectId?) → SkillInfo[]` — §1/§2. `projectId` resolves to a project root;
-  when set, project-scope dirs join the scan with the precedence above.
-- `writeSkill(scope, name, {description?, body?}, projectId?) → path` — materialize a skill;
-  project scope writes under `<project>/.agents/skills`.
-- `deleteSkill(scope, name, projectId?)`, `renameSkill(scope, name, newName, projectId?) → path`.
-- `importLocalSkill(scope, sourcePath, projectId?) → path`.
-- Recovery — see §6.
+Install needs a `GITHUB_TOKEN` with `read:packages` (`gh auth token`); **end users need none** — the
+`.node` is resolved via `optionalDependencies` (win32-x64, darwin-arm64/x64, linux-x64-gnu) and
+bundled at build. `pnpm add @a-streetcoder/skill-engine-native@0.1.3` into `apps/server`.
 
-Errors surface as `ResourceCatalogCapabilityError` with a code
-(`RESOURCE_INVALID_PATH`, `RESOURCE_NOT_FOUND`, `RESOURCE_ALREADY_EXISTS`, `RESOURCE_BUSY`,
-`RESOURCE_UNSAFE_COMPONENT`, `RESOURCE_RECONCILE_INCOMPLETE`, `RESOURCE_NATIVE_UNAVAILABLE`) —
-the routes map these to HTTP status; keep the codes.
+## Reference shapes
 
-## 5. Crash-safe write (resolves the recovery disagreement)
+**`SkillInfo`** (`packages/domain/src/resources.ts`) — what the scanner returns; the engine's
+`ScopedSkill` maps 1:1:
 
-Per-file atomicity is **not** enough — a multi-file skill written in a loop is still
-half-updated after a crash. Honest empty recovery requires **per-skill atomicity: stage
-the whole skill tree in a temp dir, fsync, then atomically swap the directory into place.**
-agent-deck's native module already does exactly this — `publish_staged_tree_with_identity`
-in `loop-catalog-native` (stage → fsync → atomic dir swap, retaining the displaced tree).
-Adopt that shape. Until it lands, **recovery ops stay non-empty** (see §6).
+| Field | Derivation |
+|---|---|
+| `name` | frontmatter `name`, else folder name |
+| `description` | frontmatter `description` (empty if absent) |
+| `scope` | `builtin \| global \| library \| project` (no `legacyProject`) |
+| `filePath` / `baseDir` | absolute path to `SKILL.md` / to the skill **directory** |
+| `disableModelInvocation` | frontmatter flag (manual-only) |
+| `body` | SKILL.md with frontmatter stripped, trimmed |
+| `disabled?` | **agent-deck** sets this (app-level list), not the engine |
 
-## 6. Recovery ops — non-empty until staged-swap ships
+**Scope + precedence** — dedup on parsed frontmatter `name`, FIRST-in-scan-order wins
+(`scanner.ts`). Actual scan order (`skillCatalogDirs`, `paths.ts`):
 
-`listRecoveries` / `restoreRecovery` / `acknowledgeRecovery` (catalog `global-skills`).
-The "return `[]` / no-op / error" plan is only honest once §5's staged-directory swap
-means there is no half-written state. Until then, keep them backed by the real recovery
-store. agent-deck's routes already handle both (empty and populated) gracefully.
+```
+1. <project>/.agents/skills   (project — engine-canonical; agent-deck reads it since the P3 fix)
+2. <project>/.pi/skills       (project — legacy/Pi)
+3. ~/.pi/agent/skills         (global — Pi primary; existing user skills)
+4. ~/.agents/skills           (global — engine-canonical; legacy entry, not created by discovery)
+5. collection roots           (library)
+```
 
-## 7. Migrations REQUIRED before the binding swap (or users lose data)
+Global reads keep `.pi/agent/skills` above `~/.agents/skills` — the engine's `default_catalogs`
+agrees, and fan-out bridges new global skills into `.pi/agent/skills`. Ranking `.agents` above `.pi`
+**globally** is a deliberate lockstep change for the release pi's own default moves — not done here.
 
-1. **Existing `.pi` skills → canonical `.agents`.** Users have skills in
-   `~/.pi/agent/skills` and `<project>/.pi/skills`. The engine reads `.agents/skills` only,
-   so on swap those vanish from the UI unless migrated. One-time move/copy (dedup by name)
-   `~/.pi/agent/skills/* → ~/.agents/skills/*` and `<project>/.pi/skills/* →
-   <project>/.agents/skills/*`, **or** the engine transitionally reads the `.pi` paths too.
-2. **Orphaned recovery wrappers.** `.agent-deck-resource-recovery-v1-*` entries become
-   permanently invisible once recovery answers `[]` — no surface restores or cleans them.
-   Sweep/surface them before recovery goes empty.
+## Recovery — native, transitional
 
-Both must be in the P3/P4 plan; recorded here so the swap can't silently drop them.
+`listRecoveries` / `restoreRecovery` / `acknowledgeRecovery` are served from the **native**
+`global-skills` store, NOT the engine. In agent-deck's single-user, no-sync scope the recovery
+*producers* are the legacy skill-repo (its "Take Remote" displaces a local skill) and native
+displacement — both write there. The engine only produces recoveries during its sync/conflict path,
+which agent-deck doesn't drive yet. When sync lands (with the git-import work), recovery moves to the
+engine's `*Recovery` methods — already on the contract. *(Routing recovery to the engine prematurely
+was a real bug: it blanked the legacy repo's recoveries. Guarded by `skill-repo-legacy`'s Take Remote test.)*
+
+## Migrations — none
+
+There is **no `.pi → .agents` migration**, and none is needed. The model is non-destructive
+dual-read: the engine writes new skills to canonical `.agents/skills`, fan-out bridges global ones
+into `.pi/agent/skills`, and both readers rank `.pi` first globally so nothing moves on disk. `.pi`
+stops being read only when pi's own default moves to `.agents/skills` — a one-line lockstep change on
+both sides, no data migration. *(An earlier draft of this contract called for a dedup-by-name
+migration; that was the "canonical = highest read rank" confusion — `canonical` means the creation
+target, not the top-ranked read. Cancelled.)*
+
+## The work remaining (P4)
+
+P4 = delete agent-deck's duplicate skill machinery.
+
+- **Done (4a):** deleted the dead `NativeSkillStore`; added the scar-tissue pi round-trip guard on
+  the real engine emitter (`apps/server/test/skill-engine-pi-roundtrip.test.ts`).
+- **Kept, marked (4b):** the native skill-write fns (`writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/
+  `importSkillFile`) are prod-dead — only resources tests call them — and marked `ponytail:` in
+  `writer.ts`. Not deleted while P4 stays partial.
+- **Blocked:** retiring the git-repo importer needs git-import in the NAPI. When it lands: re-point
+  the seven `/resources/skill-repos/*` routes behind `SkillStore` (add git-import methods to the
+  interface), delete `skillRepositories.ts` + `legacySkillRepo.ts` + the native write fns + their
+  tests, and move recovery to the engine. That closes P4.
+
+## Contributor rule
+
+**Consume `ctx.skillStore.*`, never the raw `@agent-deck/resources` skill functions**
+(`writeSkillFile`, `deleteSkillDir`, `renameSkillDir`, `importSkillFile`, the recovery fns). A route
+that reaches past the seam bypasses the engine.
+
+```ts
+// do
+ctx.skillStore.deleteSkill(scope, name, projectId);
+// not
+deleteSkillDir(rootsFor(projectId), scope, name);   // bypasses the engine
+```
+
+`scanSkills` (via the host's `scanSkillsFor`) stays the reader — that is the seam's one intentional
+direct-to-resources path. Runtime (assignment → `--skill` in `routes/sessions.ts`, Loops, worktrees)
+is not skill-store and stays put.
