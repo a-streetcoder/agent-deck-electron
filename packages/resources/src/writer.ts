@@ -418,6 +418,9 @@ export function writeAgentFile(
 }
 
 /** Create or update a skill's SKILL.md, preserving unknown frontmatter. */
+// ponytail: prod-dead since P3 — the engine (EngineSkillStore) owns skill writes. This and
+// its siblings (deleteSkillDir, renameSkillDir, importSkillFile) are kept only for
+// resources-test coverage until the legacy skill-repo retires. See docs/skill-engine-git-import-request.md.
 export function writeSkillFile(
   roots: ResourceRoots,
   scope: WritableScope,
@@ -491,6 +494,7 @@ export function setAgentDisabledFile(
 }
 
 /** Delete a global/project skill directory (its SKILL.md + contents). */
+// ponytail: prod-dead since P3 — see writeSkillFile.
 export function deleteSkillDir(roots: ResourceRoots, scope: WritableScope, name: string): void {
   secureRemove(roots, skillDirPath(roots, scope, name), true);
 }
@@ -511,6 +515,7 @@ function skillDirPath(roots: ResourceRoots, scope: WritableScope, name: string):
  * new directory name. Throws "skill_not_found" / "skill_exists" (→ 404 / 409);
  * the caller re-points any project assignments.
  */
+// ponytail: prod-dead since P3 — see writeSkillFile.
 export function renameSkillDir(
   roots: ResourceRoots,
   scope: WritableScope,
@@ -921,6 +926,8 @@ export function importSkillsFromClone(
   return { imported, skipped, hashes };
 }
 
+// ponytail: prod-dead since P3 — see writeSkillFile. The live import route calls the engine
+// (EngineSkillStore.importLocalSkill); this native path survives only in resources tests.
 export function importSkillFile(
   roots: ResourceRoots,
   scope: WritableScope,
