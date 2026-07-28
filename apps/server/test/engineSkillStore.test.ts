@@ -17,8 +17,16 @@ function fakeEngine(overrides: Partial<SkillEngineNative> = {}): SkillEngineNati
     importLocalSkill: vi.fn(() => "/canonical/.agents/skills/z/SKILL.md"),
     fanOut: vi.fn(() => ["claude-code", "codex"]),
     listRecoveries: vi.fn(() => []),
-    restoreRecovery: vi.fn(() => ({ token: "t", skillName: "s" })),
+    restoreRecovery: vi.fn(() => "/canonical/.agents/skills/s/SKILL.md"),
     acknowledgeRecovery: vi.fn(),
+    importGitRepo: vi.fn(() => ({ collectionId: "c1", skills: ["a", "b"] })),
+    checkGitRepo: vi.fn(() => []),
+    syncGitRepo: vi.fn(() => ({ applied: [], conflicts: [] })),
+    conflictPaths: vi.fn(() => ({ mergeId: "m1", paths: [] })),
+    resolveGitConflict: vi.fn(() => []),
+    resolveGitConflictPaths: vi.fn(() => []),
+    forgetGitRepo: vi.fn(),
+    listGitRepos: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -135,23 +143,85 @@ describe("EngineSkillStore", () => {
     );
   });
 
-  it("serves recovery from the native global-skills store, NOT the engine (transitional)", () => {
-    // Recovery producers in agent-deck's no-sync scope are the legacy skill-repo and native
-    // displacement, both writing the native store — so recovery must bypass the engine.
+  it("serves recovery from the native global-skills store, NOT the engine (until Phase C)", () => {
+    // Recovery stays native in P4-A (the legacy repo still produces native recoveries); it moves
+    // to the engine in Phase C. A fresh home has none, and the engine is never consulted.
     const engine = fakeEngine();
     const scanSkillsFor = vi.fn(() => [] as SkillInfo[]);
     const home = mkdtempSync(path.join(tmpdir(), "engine-skill-store-recov-"));
-    const store = new EngineSkillStore({
-      engine,
-      scanSkillsFor,
-      home,
-      projectRootFor: () => undefined,
-    });
+    const store = new EngineSkillStore({ engine, scanSkillsFor, home, projectRootFor: () => undefined });
 
-    // A fresh home has no recoveries, and the engine's recovery methods are never touched.
     expect(store.listRecoveries()).toEqual([]);
     expect(engine.listRecoveries).not.toHaveBeenCalled();
     expect(engine.restoreRecovery).not.toHaveBeenCalled();
-    expect(engine.acknowledgeRecovery).not.toHaveBeenCalled();
+  });
+
+  it("listGitRepos hides non-global collections the global-only seam can't operate on", () => {
+    const engine = fakeEngine({
+      listGitRepos: vi.fn(() => [
+        { collectionId: "g", url: "u", scope: "global", skills: [] },
+        { collectionId: "p", url: "u", scope: "project", skills: [] },
+      ]),
+    });
+    const { store } = makeStore(engine);
+    expect(store.listGitRepos().map((r) => r.collectionId)).toEqual(["g"]);
+  });
+
+  it("delegates git-repo ops to the engine at global scope", () => {
+    const engine = fakeEngine();
+    const { store } = makeStore(engine);
+
+    store.importGitRepo("https://x/y.git", "main", "sub");
+    expect(engine.importGitRepo).toHaveBeenCalledWith(
+      "/home",
+      undefined,
+      "global",
+      "https://x/y.git",
+      "main",
+      "sub",
+    );
+    store.syncGitRepo("c1");
+    expect(engine.syncGitRepo).toHaveBeenCalledWith("/home", undefined, "c1");
+    store.forgetGitRepo("c1", true);
+    expect(engine.forgetGitRepo).toHaveBeenCalledWith("/home", undefined, "c1", true);
+  });
+
+  it("maps git-conflict recoveries (both whole-skill and per-path) to ResourceRecovery", () => {
+    const engine = fakeEngine({
+      resolveGitConflict: vi.fn(() => [{ token: "t1", slug: "s1", path: "/d/s1" }]),
+      resolveGitConflictPaths: vi.fn(() => [{ token: "t2", slug: "s2", path: "/d/s2" }]),
+    });
+    const { store } = makeStore(engine);
+
+    expect(store.resolveGitConflict("c1", "s1", "remote")).toEqual([
+      { token: "t1", skillName: "s1" },
+    ]);
+    expect(
+      store.resolveGitConflictPaths("c1", "s2", "m1", [{ path: "a", resolution: "mine" }]),
+    ).toEqual([{ token: "t2", skillName: "s2" }]);
+    expect(engine.resolveGitConflictPaths).toHaveBeenCalledWith(
+      "/home",
+      undefined,
+      "c1",
+      "s2",
+      "m1",
+      [{ path: "a", resolution: "mine" }],
+    );
+  });
+
+  it("translates RESOURCE_STALE from a per-path resolve", () => {
+    const engine = fakeEngine({
+      resolveGitConflictPaths: vi.fn(() => {
+        throw new Error("RESOURCE_STALE: the conflict moved");
+      }),
+    });
+    const { store } = makeStore(engine);
+    try {
+      store.resolveGitConflictPaths("c1", "s", "stale", []);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ResourceCatalogCapabilityError);
+      expect((error as ResourceCatalogCapabilityError).code).toBe("RESOURCE_STALE");
+    }
   });
 });

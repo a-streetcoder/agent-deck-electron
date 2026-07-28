@@ -21,7 +21,11 @@ export type ResourceCatalogErrorCode =
   | "RESOURCE_INVALID_UTF8"
   | "RESOURCE_OUTPUT_LIMIT"
   | "RESOURCE_IO"
-  | "RESOURCE_NATIVE_UNAVAILABLE";
+  | "RESOURCE_NATIVE_UNAVAILABLE"
+  // Engine-originated (shared skill engine, ADR-0002 P4). The engine adopted this RESOURCE_*
+  // vocabulary; these two are raised by its git-collection surface, not loop-catalog-native.
+  | "RESOURCE_STALE"
+  | "RESOURCE_GIT";
 
 export class ResourceCatalogCapabilityError extends Error {
   constructor(

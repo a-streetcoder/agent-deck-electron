@@ -468,6 +468,17 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           "The resource change was refused because its catalog path is unsafe or linked. Remove the link or choose a portable resource name and try again.",
       };
     }
+    // Engine git-collection codes (shared skill engine): GIT is a permanent bad-repo/hostile-shape
+    // error (do not retry); STALE means the conflict moved and the caller should re-fetch it.
+    if (error.code === "RESOURCE_GIT") {
+      return { status: 400, error: error.message || "The git repository could not be processed." };
+    }
+    if (error.code === "RESOURCE_STALE") {
+      return {
+        status: 409,
+        error: "The conflict changed since it was loaded. Refresh the review and try again.",
+      };
+    }
     return { status: 500, error: "The resource catalog operation failed." };
   };
   const sendResourceMutationFailure = (

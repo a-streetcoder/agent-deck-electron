@@ -18,16 +18,32 @@ import {
   ResourceCatalogCapabilityError,
   acknowledgeResourceRecovery,
   listResourceRecoveries,
+  resourceRecoveryPath,
   restoreResourceRecovery,
   type ResourceRecovery,
 } from "@agent-deck/resources";
 import type { ResourceCatalogErrorCode } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
 import type { SkillEdit, SkillScope, SkillStore } from "./skillStore.ts";
-import type { SkillEngineNative } from "./skillEngineNative.ts";
+import type {
+  GitConflictDetail,
+  GitDelta,
+  GitImportResult,
+  GitPathChoice,
+  GitRepoInfo,
+  GitSyncResult,
+  RecoveryInfo,
+  SkillEngineNative,
+} from "./skillEngineNative.ts";
 
 /** Catalog the native recovery API namespaces skill recoveries under. */
 const SKILL_RECOVERY_CATALOG = "global-skills";
+
+/** Map the engine's `RecoveryInfo` (`{token, slug, path}`) to agent-deck's `ResourceRecovery`
+ *  — used for git-conflict recoveries the engine returns. */
+function toResourceRecovery(info: RecoveryInfo): ResourceRecovery {
+  return { token: info.token, skillName: info.slug };
+}
 
 /** Host hooks + the engine addon the store needs. */
 export interface EngineSkillStoreDeps {
@@ -51,7 +67,10 @@ const RESOURCE_CODES: ReadonlySet<string> = new Set<ResourceCatalogErrorCode>([
   "RESOURCE_RECONCILE_INCOMPLETE",
   "RESOURCE_NATIVE_UNAVAILABLE",
   "RESOURCE_INVALID_UTF8",
+  "RESOURCE_OUTPUT_LIMIT",
   "RESOURCE_IO",
+  "RESOURCE_STALE",
+  "RESOURCE_GIT",
 ]);
 
 /** Re-throw an engine error as ResourceCatalogCapabilityError when it carries a code prefix. */
@@ -149,13 +168,11 @@ export class EngineSkillStore implements SkillStore {
     );
   }
 
-  // ── Recovery (native, transitional) ──────────────────────────────────────────
-  // Recovery stays on the native `global-skills` store, NOT the engine. In agent-deck's
-  // single-user, no-sync scope the recovery producers are the legacy skill-repo (its "Take
-  // Remote" displaces a local skill) and native displacement — both write here. The engine
-  // only produces recoveries during its sync/conflict path, which agent-deck doesn't drive
-  // yet. When P4 removes the legacy repo and sync lands, recovery moves to the engine
-  // (`this.deps.engine.*Recovery`, already on the contract).
+  // ── Recovery (native `global-skills` store, for now) ─────────────────────────
+  // Recovery stays native until Phase C removes the legacy skill-repo + native write path; at
+  // that point the engine's displaced-tree store becomes the only producer and these repoint to
+  // `this.deps.engine.*Recovery` (git-conflict resolutions already return engine recoveries,
+  // mapped via `toResourceRecovery`). Kept native here so the additive P4-A step stays green.
   listRecoveries(): ResourceRecovery[] {
     return listResourceRecoveries(this.deps.home, SKILL_RECOVERY_CATALOG);
   }
@@ -166,6 +183,71 @@ export class EngineSkillStore implements SkillStore {
 
   acknowledgeRecovery(token: string): void {
     acknowledgeResourceRecovery(this.deps.home, SKILL_RECOVERY_CATALOG, token);
+  }
+
+  recoveryPath(token: string): string {
+    return resourceRecoveryPath(this.deps.home, SKILL_RECOVERY_CATALOG, token);
+  }
+
+  // ── Git-repo collections (global; the engine owns clone/discover/sanitize/materialize) ──
+  importGitRepo(url: string, ref?: string, subpath?: string): GitImportResult {
+    return fromEngine(() =>
+      this.deps.engine.importGitRepo(this.deps.home, undefined, "global", url, ref, subpath),
+    );
+  }
+
+  listGitRepos(): GitRepoInfo[] {
+    // Global-only seam: never surface a project-scoped collection the mutation ops (which pass
+    // projectRoot=undefined) couldn't operate on correctly (Codex #3). agent-deck only imports
+    // global collections, so in practice this filters nothing; it's defense-in-depth.
+    return fromEngine(() =>
+      this.deps.engine.listGitRepos(this.deps.home).filter((r) => r.scope === "global"),
+    );
+  }
+
+  checkGitRepo(collectionId: string): GitDelta[] {
+    return fromEngine(() => this.deps.engine.checkGitRepo(this.deps.home, collectionId));
+  }
+
+  syncGitRepo(collectionId: string): GitSyncResult {
+    return fromEngine(() => this.deps.engine.syncGitRepo(this.deps.home, undefined, collectionId));
+  }
+
+  conflictPaths(collectionId: string, name: string): GitConflictDetail {
+    return fromEngine(() =>
+      this.deps.engine.conflictPaths(this.deps.home, undefined, collectionId, name),
+    );
+  }
+
+  resolveGitConflict(
+    collectionId: string,
+    name: string,
+    resolution: "remote" | "local",
+  ): ResourceRecovery[] {
+    return fromEngine(() =>
+      this.deps.engine
+        .resolveGitConflict(this.deps.home, undefined, collectionId, name, resolution)
+        .map(toResourceRecovery),
+    );
+  }
+
+  resolveGitConflictPaths(
+    collectionId: string,
+    name: string,
+    mergeId: string,
+    choices: GitPathChoice[],
+  ): ResourceRecovery[] {
+    return fromEngine(() =>
+      this.deps.engine
+        .resolveGitConflictPaths(this.deps.home, undefined, collectionId, name, mergeId, choices)
+        .map(toResourceRecovery),
+    );
+  }
+
+  forgetGitRepo(collectionId: string, removeSkills: boolean): void {
+    fromEngine(() =>
+      this.deps.engine.forgetGitRepo(this.deps.home, undefined, collectionId, removeSkills),
+    );
   }
 
   /** Project the canonical skill into the machine's other installed tool dirs. Best-effort:

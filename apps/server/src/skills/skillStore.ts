@@ -28,6 +28,14 @@
 
 import type { ResourceRecovery } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
+import type {
+  GitConflictDetail,
+  GitDelta,
+  GitImportResult,
+  GitPathChoice,
+  GitRepoInfo,
+  GitSyncResult,
+} from "./skillEngineNative.ts";
 
 /** Writable catalog scope for a skill mutation (matches the resources
  *  `WritableScope`: skills are global or project; `library` is accepted for
@@ -60,8 +68,39 @@ export interface SkillStore {
   /** Import a single local `.md` skill file; returns its path. Maps: `importSkillFile`. */
   importLocalSkill(scope: SkillScope, sourcePath: string, projectId?: string): string;
 
-  // ── Recovery (crash-safe write fallout; preserved offline) ───────────────────
+  // ── Recovery (engine store — displaced trees from edits + git-conflict resolution) ──
   listRecoveries(): ResourceRecovery[];
   restoreRecovery(token: string): ResourceRecovery;
   acknowledgeRecovery(token: string): void;
+  /** Filesystem path of a recovery's displaced tree (desktop trash integration). */
+  recoveryPath(token: string): string;
+
+  // ── Git-repo collections (managed skill repositories) ────────────────────────
+  // The engine clones, discovers, sanitizes, and materializes into the ordinary catalogs.
+  // Collections are GLOBAL (the UI only imports at global scope); state lives engine-side.
+  /** Import a git repo as a managed collection. `url` is the resolved clone URL. */
+  importGitRepo(url: string, ref?: string, subpath?: string): GitImportResult;
+  /** Every imported collection. */
+  listGitRepos(): GitRepoInfo[];
+  /** Preview upstream drift; writes nothing. */
+  checkGitRepo(collectionId: string): GitDelta[];
+  /** Pull + apply one-sided changes; both-sides motion is reported in `conflicts`. */
+  syncGitRepo(collectionId: string): GitSyncResult;
+  /** Per-path detail for one conflicted skill; throws RESOURCE_NOT_FOUND if no base snapshot. */
+  conflictPaths(collectionId: string, name: string): GitConflictDetail;
+  /** Settle a whole conflicted skill in one direction. */
+  resolveGitConflict(
+    collectionId: string,
+    name: string,
+    resolution: "remote" | "local",
+  ): ResourceRecovery[];
+  /** Settle a conflicted skill per path; a stale `mergeId` throws RESOURCE_STALE. */
+  resolveGitConflictPaths(
+    collectionId: string,
+    name: string,
+    mergeId: string,
+    choices: GitPathChoice[],
+  ): ResourceRecovery[];
+  /** Forget a collection; `removeSkills` displaces (recoverable), never hard-deletes. */
+  forgetGitRepo(collectionId: string, removeSkills: boolean): void;
 }

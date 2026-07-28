@@ -24,11 +24,62 @@
  * addon once the dependency is installed into the workspace.
  */
 
-import type { ResourceRecovery } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
 
 /** Writable catalog scope, matching agent-deck's `SkillScope`. */
 export type EngineSkillScope = "global" | "library" | "project";
+
+/** A recoverable displaced tree (engine shape; maps to agent-deck's `ResourceRecovery`
+ *  as `{ token, skillName: slug }`). */
+export interface RecoveryInfo {
+  token: string;
+  slug: string;
+  path: string;
+}
+
+/** One skill's upstream drift. `kind` is `"added" | "changed" | "removed"`. */
+export interface GitDelta {
+  name: string;
+  kind: string;
+}
+
+export interface GitImportResult {
+  collectionId: string;
+  skills: string[];
+}
+
+export interface GitSyncResult {
+  applied: string[];
+  conflicts: string[];
+}
+
+export interface GitRepoInfo {
+  collectionId: string;
+  url: string;
+  gitRef?: string;
+  subpath?: string;
+  scope: string;
+  skills: string[];
+}
+
+/** One path both sides moved. Kinds are `"file" | "directory" | "missing"`. */
+export interface GitPathConflict {
+  path: string;
+  localKind: string;
+  remoteKind: string;
+}
+
+/** Per-path conflict detail for one skill, plus the `mergeId` that identifies this presentation. */
+export interface GitConflictDetail {
+  mergeId: string;
+  paths: GitPathConflict[];
+}
+
+/** One caller decision. `resolution` is `"mine" | "remote"`; omitted paths default to `"mine"`. */
+export interface GitPathChoice {
+  path: string;
+  resolution: "mine" | "remote";
+}
 
 /**
  * The engine addon surface. Errors are thrown as `Error` whose message is prefixed with
@@ -76,9 +127,62 @@ export interface SkillEngineNative {
   /** Project canonical `<root>/.agents/skills/<slug>` → the tool dirs it was linked into. */
   fanOut(root: string, slug: string): string[];
 
-  listRecoveries(root: string): ResourceRecovery[];
-  restoreRecovery(root: string, token: string): ResourceRecovery;
+  // ── Recovery (engine store; `RecoveryInfo`, not agent-deck's `ResourceRecovery`) ──
+  listRecoveries(root: string): RecoveryInfo[];
+  /** Restore a displaced tree; returns the restored path. */
+  restoreRecovery(root: string, token: string): string;
   acknowledgeRecovery(root: string, token: string): void;
+
+  // ── Git-repo collections (0.1.5; retires agent-deck's managedSkillRepositories) ──
+  /** Import a git repo as a managed, re-syncable collection; skills land in the ordinary
+   *  catalogs. All-or-nothing. */
+  importGitRepo(
+    home: string,
+    projectRoot: string | undefined,
+    scope: EngineSkillScope,
+    url: string,
+    gitRef: string | undefined,
+    subpath: string | undefined,
+  ): GitImportResult;
+  /** Preview upstream drift; fetches, writes nothing. */
+  checkGitRepo(home: string, collectionId: string): GitDelta[];
+  /** Pull + apply one-sided (three-way-merged) changes; both-sides motion → `conflicts`. */
+  syncGitRepo(home: string, projectRoot: string | undefined, collectionId: string): GitSyncResult;
+  /** Per-path conflict detail for one conflicted skill. Refuses RESOURCE_NOT_FOUND for a
+   *  collection with no base snapshot (a 0.1.4 import) — use the whole-skill form there. */
+  conflictPaths(
+    home: string,
+    projectRoot: string | undefined,
+    collectionId: string,
+    name: string,
+  ): GitConflictDetail;
+  /** Settle a whole conflicted skill in one direction; re-establishes a base snapshot. */
+  resolveGitConflict(
+    home: string,
+    projectRoot: string | undefined,
+    collectionId: string,
+    name: string,
+    resolution: "remote" | "local",
+  ): RecoveryInfo[];
+  /** Settle a conflicted skill per path. `mergeId` must be the one `conflictPaths` returned;
+   *  a stale mergeId refuses RESOURCE_STALE. */
+  resolveGitConflictPaths(
+    home: string,
+    projectRoot: string | undefined,
+    collectionId: string,
+    name: string,
+    mergeId: string,
+    choices: GitPathChoice[],
+  ): RecoveryInfo[];
+  /** Forget a collection; `removeSkills` displaces (recoverable), never hard-deletes. */
+  forgetGitRepo(
+    home: string,
+    projectRoot: string | undefined,
+    collectionId: string,
+    removeSkills: boolean,
+  ): void;
+  /** Every imported collection under `home`. */
+  listGitRepos(home: string): GitRepoInfo[];
 }
 
 /**
