@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  packages: read # pnpm install fetches the private @a-streetcoder skill engine
 
 concurrency:
   group: release-macos-${{ github.ref }}-${{ inputs.architecture }}
@@ -25,6 +26,8 @@ jobs:
     runs-on: ${{ inputs.architecture == 'x64' && 'macos-15-intel' || 'macos-latest' }}
     env:
       RELEASE_ARCH: ${{ inputs.architecture }}
+      # .npmrc reads GITHUB_TOKEN to fetch the private @a-streetcoder skill engine.
+      GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

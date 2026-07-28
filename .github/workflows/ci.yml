@@ -12,6 +12,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only token, plus package read so `pnpm install` can fetch the private
+# @a-streetcoder/skill-engine-native from GitHub Packages (the .npmrc reads GITHUB_TOKEN).
+# The built-in token works if the package grants this repo read access; otherwise set a
+# PACKAGES_READ_TOKEN secret (a PAT with read:packages) and it is preferred automatically.
+permissions:
+  contents: read
+  packages: read
+
+env:
+  GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+
 jobs:
   # Fast fail-fast feedback (~30s): static checks on one OS.
   lint:
