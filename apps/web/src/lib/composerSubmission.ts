@@ -18,11 +18,19 @@ export function createPendingImageId(): string {
 }
 
 /** Remove only the exact attachment objects carried by an acknowledged request. */
+export function retainUnsubmittedAttachments<T extends object>(
+  current: readonly T[],
+  submitted: readonly T[],
+): T[] {
+  return current.filter((attachment) => !submitted.includes(attachment));
+}
+
+/** Backward-compatible image-specific name used by existing callers/tests. */
 export function retainUnsubmittedImages<T extends object>(
   current: readonly T[],
   submitted: readonly T[],
 ): T[] {
-  return current.filter((image) => !submitted.includes(image));
+  return retainUnsubmittedAttachments(current, submitted);
 }
 
 /** Both session identity and request generation must still match before async cleanup. */

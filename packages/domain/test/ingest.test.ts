@@ -92,6 +92,35 @@ describe("ingest → reduce pipeline", () => {
     ]);
   });
 
+  it("reconstructs durable file chips from Pi history and hides canonical tags", () => {
+    const ingest = createIngestState();
+    const events = ingestPiEvent(ingest, {
+      type: "message_end",
+      entryId: "file-entry",
+      message: {
+        role: "user",
+        content:
+          'Please review\n\n<file name="/tmp/notes &amp; plans.txt"></file>\n<file name="C:\\Users\\Andrea\\report.txt"></file>',
+        timestamp: 1,
+      },
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_final",
+        cell: {
+          kind: "user",
+          id: "user-file-entry",
+          entryId: "file-entry",
+          text: "Please review",
+          files: [
+            { name: "notes & plans.txt", path: "/tmp/notes & plans.txt" },
+            { name: "report.txt", path: "C:\\Users\\Andrea\\report.txt" },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("streams deltas through (never coalesced into message_end)", () => {
     const { deltaCount } = runThrough(TURN);
     expect(deltaCount).toBe(2);

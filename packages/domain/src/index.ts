@@ -5,6 +5,7 @@
 // Pi types are imported type-only from the pinned package.
 export * from "./pi-types.ts";
 export * from "./transcript.ts";
+export * from "./fileAttachments.ts";
 export * from "./thinking.ts";
 export * from "./ingest.ts";
 export * from "./protocol.ts";

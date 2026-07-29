@@ -20,6 +20,12 @@ export interface UserImageRef {
   height: number;
 }
 
+/** Durable live-path reference selected by the user; file bytes are not copied. */
+export interface UserFileRef {
+  name: string;
+  path: string;
+}
+
 export interface UserCell {
   kind: "user";
   /** Stable Pi session-entry identity when available (resume/fork history). */
@@ -27,6 +33,7 @@ export interface UserCell {
   id: string;
   text: string;
   images?: UserImageRef[];
+  files?: UserFileRef[];
 }
 
 export interface AssistantCell {

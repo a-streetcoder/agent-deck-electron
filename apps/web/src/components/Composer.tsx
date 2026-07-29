@@ -4,12 +4,19 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Paperclip, Shrink, X } from "lucide-react";
+import { FilePlus2, Paperclip, Shrink, X } from "lucide-react";
 import TextareaAutosize from "react-textarea-autosize";
-import { openQuestion, thinkingLevelsForModel } from "@agent-deck/domain";
+import {
+  appendFileAttachmentTags,
+  fileAttachmentRefs,
+  MAX_FILE_ATTACHMENTS,
+  openQuestion,
+  thinkingLevelsForModel,
+} from "@agent-deck/domain";
 import {
   EMPTY_COMPOSER_DRAFT,
   pendingComposerTextForSession,
+  type ComposerDraftFile,
   type ComposerDraftImage,
   useAppStore,
 } from "../state/store.ts";
@@ -44,9 +51,11 @@ import { FileTagChips } from "./composer/FileTagChips.tsx";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { parseFileMentions, removeFileMention } from "../lib/fileMentions.ts";
 import { buildExpandedImagePreview } from "../lib/expandedImage.ts";
+import { chooseFiles as chooseNativeFiles, isElectron } from "../lib/native.ts";
 import {
   createPendingImageId,
   isCurrentComposerSubmission,
+  retainUnsubmittedAttachments,
   retainUnsubmittedImages,
   settleComposerImageBatch,
   statusAfterAgentTransition,
@@ -116,6 +125,7 @@ export function Composer() {
   const pruneEmptyComposerDraft = useAppStore((state) => state.pruneEmptyComposerDraft);
   const draft = composerDraft.text;
   const images = composerDraft.images;
+  const files = composerDraft.files;
   const setDraft = useCallback(
     (next: string | ((current: string) => string)): void => {
       if (!sessionId) return;
@@ -136,6 +146,20 @@ export function Composer() {
       updateComposerDraft(sessionId, (current) => ({
         ...current,
         images: typeof next === "function" ? next(current.images) : next,
+      }));
+    },
+    [sessionId, updateComposerDraft],
+  );
+  const setFiles = useCallback(
+    (
+      next:
+        | readonly ComposerDraftFile[]
+        | ((current: readonly ComposerDraftFile[]) => readonly ComposerDraftFile[]),
+    ): void => {
+      if (!sessionId) return;
+      updateComposerDraft(sessionId, (current) => ({
+        ...current,
+        files: typeof next === "function" ? next(current.files) : next,
       }));
     },
     [sessionId, updateComposerDraft],
@@ -436,6 +460,28 @@ export function Composer() {
     [images.length, sessionId],
   );
 
+  const pickPathFiles = useCallback(async (): Promise<void> => {
+    if (!sessionId) return;
+    const originatingSessionId = sessionId;
+    const selected = await chooseNativeFiles({
+      title: "Attach Files",
+      buttonLabel: "Attach",
+    });
+    if (selected.length === 0 || useAppStore.getState().session?.id !== originatingSessionId) {
+      return;
+    }
+    const picked = fileAttachmentRefs(selected);
+    if (picked.length === 0) return;
+    setSubmitStatus(null);
+    setFiles((current) => {
+      const seen = new Set(current.map((file) => file.path));
+      const added = picked
+        .filter((file) => !seen.has(file.path))
+        .map((file) => ({ ...file, id: crypto.randomUUID() }));
+      return [...current, ...added].slice(0, MAX_FILE_ATTACHMENTS);
+    });
+  }, [sessionId, setFiles]);
+
   const submit = (): void => {
     if (sendLockRef.current) return;
     const submittedDraft = draft;
@@ -443,6 +489,7 @@ export function Composer() {
     if (
       (!message &&
         images.length === 0 &&
+        files.length === 0 &&
         pendingComments.length === 0 &&
         pendingElementContexts.length === 0) ||
       !session ||
@@ -469,9 +516,13 @@ export function Composer() {
     const submittedComments = [...pendingComments];
     const submittedContexts = [...pendingElementContexts];
     const submittedImages = [...images];
-    const outgoing = appendElementContextsToPrompt(
-      appendReviewCommentsToPrompt(message, submittedComments),
-      submittedContexts,
+    const submittedFiles = [...files];
+    const outgoing = appendFileAttachmentTags(
+      appendElementContextsToPrompt(
+        appendReviewCommentsToPrompt(message, submittedComments),
+        submittedContexts,
+      ),
+      submittedFiles.map((file) => file.path),
     );
     sendLockRef.current = true;
     setSubmitting(true);
@@ -501,6 +552,7 @@ export function Composer() {
           }
         }
         setImages((current) => retainUnsubmittedImages(current, submittedImages));
+        setFiles((current) => retainUnsubmittedAttachments(current, submittedFiles));
         setSubmitStatus(
           running
             ? {
@@ -624,6 +676,32 @@ export function Composer() {
             requestAnimationFrame(() => textareaRef.current?.focus());
           }}
         />
+
+        {files.length > 0 ? (
+          <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="file-attachments">
+            {files.map((file) => (
+              <span
+                key={file.id}
+                data-testid={`file-attachment-${file.id}`}
+                title={file.path}
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+              >
+                <FilePlus2 size={14} aria-hidden="true" />
+                <span className="max-w-[20ch] truncate">{file.name}</span>
+                <ControlButton
+                  className="text-text-muted hover:text-danger"
+                  aria-label={`Remove ${file.name} attachment`}
+                  onClick={() => {
+                    setSubmitStatus(null);
+                    setFiles((current) => current.filter((candidate) => candidate !== file));
+                  }}
+                >
+                  <X size={12} />
+                </ControlButton>
+              </span>
+            ))}
+          </div>
+        ) : null}
 
         {images.length > 0 ? (
           <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="attachments">
@@ -839,6 +917,19 @@ export function Composer() {
             </label>
           ) : null}
           <div className="flex-1" />
+          {isElectron() ? (
+            <ControlButton
+              type="button"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              title="Attach files by path"
+              aria-label="Attach files"
+              data-testid="attach-file-button"
+              disabled={!sessionId}
+              onClick={() => void pickPathFiles()}
+            >
+              <FilePlus2 size={15} />
+            </ControlButton>
+          ) : null}
           <label
             className={`flex h-8 w-8 items-center justify-center rounded-full text-text-muted ${
               running || !sessionId
@@ -875,6 +966,7 @@ export function Composer() {
               submitting ||
               (!draft.trim() &&
                 images.length === 0 &&
+                files.length === 0 &&
                 pendingComments.length === 0 &&
                 pendingElementContexts.length === 0) ||
               !session ||

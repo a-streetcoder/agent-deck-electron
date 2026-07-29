@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createPendingImageId,
   isCurrentComposerSubmission,
+  retainUnsubmittedAttachments,
   retainUnsubmittedImages,
   settleComposerImageBatch,
   statusAfterAgentTransition,
@@ -56,5 +57,14 @@ describe("composer async identity guards", () => {
     const newlyAdded = { id: createPendingImageId(), name: "same.png", size: 4 };
     expect(newlyAdded.id).not.toBe(first.id);
     expect(retainUnsubmittedImages([first, newlyAdded], [first])).toEqual([newlyAdded]);
+  });
+
+  it("removes only acknowledged file references while preserving files added in flight", () => {
+    const submitted = { id: "file-1", name: "notes.txt", path: "/tmp/notes.txt" };
+    const addedWhileSending = { id: "file-2", name: "later.txt", path: "/tmp/later.txt" };
+
+    expect(retainUnsubmittedAttachments([submitted, addedWhileSending], [submitted])).toEqual([
+      addedWhileSending,
+    ]);
   });
 });

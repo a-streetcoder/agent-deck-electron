@@ -25,7 +25,7 @@ describe("composer drafts", () => {
     expect(pendingComposerTextForSession(pending, null)).toBeNull();
   });
 
-  it("keeps text and pending images scoped to their session for the store lifetime", () => {
+  it("keeps text and pending attachments scoped to their session for the store lifetime", () => {
     const store = useAppStore.getState();
     store.updateComposerDraft("first", () => ({
       text: "Unsent first message",
@@ -38,20 +38,24 @@ describe("composer drafts", () => {
           name: "first.png",
         },
       ],
+      files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
     }));
     store.updateComposerDraft("second", () => ({
       text: "Unsent second message",
       images: [],
+      files: [],
     }));
 
     expect(useAppStore.getState().composerDrafts).toMatchObject({
       first: {
         text: "Unsent first message",
         images: [{ id: "first-image", name: "first.png" }],
+        files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
       },
       second: {
         text: "Unsent second message",
         images: [],
+        files: [],
       },
     });
   });
@@ -59,12 +63,12 @@ describe("composer drafts", () => {
   it("clears only the empty draft and removes deleted session drafts", () => {
     const store = useAppStore.getState();
     store.setSessions([session("first"), session("second")]);
-    store.updateComposerDraft("first", () => ({ text: "First", images: [] }));
-    store.updateComposerDraft("second", () => ({ text: "Second", images: [] }));
+    store.updateComposerDraft("first", () => ({ text: "First", images: [], files: [] }));
+    store.updateComposerDraft("second", () => ({ text: "Second", images: [], files: [] }));
 
     store.updateComposerDraft("first", (current) => ({ ...current, text: "" }));
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [] },
+      second: { text: "Second", images: [], files: [] },
     });
 
     store.removeSession("second");
@@ -73,14 +77,14 @@ describe("composer drafts", () => {
 
   it("prunes whitespace-only text only after its composer is left", () => {
     const store = useAppStore.getState();
-    store.updateComposerDraft("first", () => ({ text: "   \n", images: [] }));
-    store.updateComposerDraft("second", () => ({ text: "Second", images: [] }));
+    store.updateComposerDraft("first", () => ({ text: "   \n", images: [], files: [] }));
+    store.updateComposerDraft("second", () => ({ text: "Second", images: [], files: [] }));
 
     expect(useAppStore.getState().composerDrafts.first?.text).toBe("   \n");
     store.pruneEmptyComposerDraft("first");
 
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [] },
+      second: { text: "Second", images: [], files: [] },
     });
   });
 });

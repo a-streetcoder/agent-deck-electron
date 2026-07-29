@@ -296,6 +296,65 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   expect(health).toBe(true);
 });
 
+test("the trusted file picker returns only bounded absolute selections", async () => {
+  const window = await app.firstWindow();
+  await app.evaluate(({ dialog }, selectedPath) => {
+    const state = globalThis as typeof globalThis & {
+      filePickerOptions?: Electron.OpenDialogOptions;
+    };
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      state.filePickerOptions = args.at(-1) as Electron.OpenDialogOptions;
+      return {
+        canceled: false,
+        filePaths: [selectedPath, "relative.txt", "/tmp/bad\nname.txt"],
+      };
+    }) as typeof dialog.showOpenDialog;
+  }, validPromptPath);
+
+  const selected = await window.evaluate(async () => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: {
+          chooseFiles?(options: { title: string; buttonLabel: string }): Promise<string[]>;
+        };
+      }
+    ).agentDeck;
+    return bridge?.chooseFiles?.({ title: "Attach Files", buttonLabel: "Attach" });
+  });
+  expect(selected).toEqual([validPromptPath]);
+  const pickerOptions = await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      filePickerOptions?: Electron.OpenDialogOptions;
+    };
+    return state.filePickerOptions;
+  });
+  expect(pickerOptions).toMatchObject({
+    title: "Attach Files",
+    buttonLabel: "Attach",
+    properties: ["openFile", "multiSelections"],
+  });
+
+  const appUrl = window.url();
+  await window.goto("data:text/html,<p>foreign origin</p>");
+  const foreignOriginRejected = await window.evaluate(async () => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: { chooseFiles?(): Promise<string[]> };
+      }
+    ).agentDeck;
+    if (!bridge?.chooseFiles) return false;
+    try {
+      await bridge.chooseFiles();
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  expect(foreignOriginRejected).toBe(true);
+  await window.goto(appUrl);
+  await expect(window.getByTestId("nav-projects")).toBeVisible({ timeout: 30_000 });
+});
+
 test("resource file bridges validate agent/prompt catalogs and reject unsafe identities", async () => {
   const window = await app.firstWindow();
   const catalog = await window.evaluate(async () => {

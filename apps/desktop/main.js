@@ -741,6 +741,47 @@ ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
   return result.filePaths;
 });
 
+ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
+  const expectedRendererOrigin = serverPort
+    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
+    : null;
+  let senderOrigin = null;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
+  } catch {
+    // Rejected below.
+  }
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    senderOrigin !== expectedRendererOrigin
+  ) {
+    throw new Error("File chooser is unavailable");
+  }
+  const pickerOptions = options && typeof options === "object" ? options : {};
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: typeof pickerOptions.title === "string" ? pickerOptions.title : "Choose Files",
+    message: typeof pickerOptions.message === "string" ? pickerOptions.message : undefined,
+    buttonLabel:
+      typeof pickerOptions.buttonLabel === "string" ? pickerOptions.buttonLabel : undefined,
+    properties: ["openFile", "multiSelections"],
+  });
+  if (result.canceled) return [];
+  return result.filePaths
+    .filter(
+      (file) =>
+        typeof file === "string" &&
+        path.isAbsolute(file) &&
+        file.length <= 4096 &&
+        ![...file].some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 0x1f || code === 0x7f;
+        }),
+    )
+    .slice(0, 16);
+});
+
 /** Open a renderer titlebar button's native menu directly below the top bar. */
 ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
   const name = String(menuName ?? "").toLowerCase();

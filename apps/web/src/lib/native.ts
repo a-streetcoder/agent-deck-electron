@@ -47,6 +47,11 @@ export interface AgentDeckBridge {
     buttonLabel?: string;
     multiple?: boolean;
   }): Promise<string[]>;
+  chooseFiles?(options?: {
+    title?: string;
+    message?: string;
+    buttonLabel?: string;
+  }): Promise<string[]>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
   trashSkillRecovery?(token: string): Promise<{ moved: boolean; acknowledgementPending: boolean }>;
@@ -190,6 +195,21 @@ export async function chooseDirectory(
     return (await bridge.chooseDirectory(options)) ?? [];
   } catch {
     // A failed IPC/dialog shouldn't become an unhandled rejection at call sites.
+    return [];
+  }
+}
+
+/** Open the trusted desktop multi-file chooser; no file read capability is exposed. */
+export async function chooseFiles(
+  options?: Parameters<NonNullable<AgentDeckBridge["chooseFiles"]>>[0],
+): Promise<string[]> {
+  const bridge = nativeBridge();
+  if (!bridge?.chooseFiles) return [];
+  try {
+    const result: unknown = await bridge.chooseFiles(options);
+    if (!Array.isArray(result)) return [];
+    return result.filter((value): value is string => typeof value === "string").slice(0, 16);
+  } catch {
     return [];
   }
 }

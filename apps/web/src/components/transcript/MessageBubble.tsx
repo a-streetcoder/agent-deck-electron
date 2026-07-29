@@ -32,6 +32,7 @@ export interface MessageBubbleAttachment {
   id: string;
   kind: "paste" | "file" | "folder" | "image" | "issue" | "skill" | "command";
   label: string;
+  title?: string;
 }
 
 export interface MessageBubbleProps {
@@ -150,6 +151,10 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
             <li
               key={attachment.id}
               data-kind={attachment.kind}
+              title={attachment.title}
+              aria-label={
+                attachment.title ? `${attachment.label}: ${attachment.title}` : attachment.label
+              }
               className={cn(
                 "inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-elevated",
                 "px-2 py-0.5 text-detail font-medium text-text-secondary",

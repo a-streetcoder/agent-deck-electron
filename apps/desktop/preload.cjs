@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld("agentDeck", {
    * @returns {Promise<string[]>}
    */
   chooseDirectory: (options) => ipcRenderer.invoke("dialog:openDirectory", options),
+  /**
+   * Open the native file chooser. Only paths explicitly selected by the user
+   * cross the bridge; reading/opening those paths is not exposed.
+   * @param {{ title?: string, message?: string, buttonLabel?: string }} [options]
+   * @returns {Promise<string[]>}
+   */
+  chooseFiles: (options) => ipcRenderer.invoke("dialog:openFiles", options),
   /** Open a native menu at a renderer-provided titlebar anchor. */
   openAppMenu: (name, anchor) => ipcRenderer.invoke("app-menu:open", name, anchor),
   /** Reveal a backend-validated Loop artifact directory by opaque run id. */

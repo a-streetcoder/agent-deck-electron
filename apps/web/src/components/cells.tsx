@@ -300,10 +300,25 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
     src: sessionImageUrl(sessionId, image.id),
     name: `Sent image ${index + 1}`,
   }));
+  const fileAttachments = (cell.files ?? []).map((file, index) => ({
+    id: `${cell.id}-file-${index}`,
+    kind: "file" as const,
+    label: file.name,
+    title: file.path,
+  }));
+  const visibleText =
+    cell.text ||
+    (fileAttachments.length === 1
+      ? "Attached a file."
+      : fileAttachments.length > 1
+        ? `Attached ${fileAttachments.length} files.`
+        : "");
   return (
     <div className="flex justify-end" data-testid="user-cell">
       <div className="max-w-[80%] space-y-2">
-        {cell.text ? <MessageBubble role="user" text={cell.text} /> : null}
+        {visibleText || fileAttachments.length > 0 ? (
+          <MessageBubble role="user" text={visibleText} attachments={fileAttachments} />
+        ) : null}
         {items.length ? (
           <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
             {items.map((item, index) => {
