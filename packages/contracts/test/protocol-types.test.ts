@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type * as domain from "@agent-deck/domain";
+import { Schema } from "effect";
 import type * as contracts from "../src/index.ts";
+import { SessionMeta } from "../src/index.ts";
 
 /**
  * Type-level parity: the Effect-derived types must be mutually assignable with
@@ -41,5 +43,16 @@ describe("contracts ⇄ domain type parity", () => {
       sessionPlanItem,
       planItemStatus,
     ]).toEqual([true, true, true, true, true, true, true, true]);
+  });
+
+  it("accepts an optional pin timestamp and rejects a non-string pin", () => {
+    const base = { id: "session", cwd: "/tmp", createdAt: "2026-07-29T12:00:00.000Z" };
+    expect(
+      Schema.decodeUnknownSync(SessionMeta)({
+        ...base,
+        pinnedAt: "2026-07-29T12:01:00.000Z",
+      }).pinnedAt,
+    ).toBe("2026-07-29T12:01:00.000Z");
+    expect(() => Schema.decodeUnknownSync(SessionMeta)({ ...base, pinnedAt: 1 })).toThrow();
   });
 });

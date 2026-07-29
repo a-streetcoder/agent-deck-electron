@@ -1,8 +1,19 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, GitFork, Pencil, Plus, Send, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronUp,
+  GitFork,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Send,
+  Trash2,
+} from "lucide-react";
 import type { SessionMeta } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
+import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrdering";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
 import { useAppStore } from "../state/store.ts";
 import {
@@ -10,6 +21,7 @@ import {
   forkSession,
   newChat,
   renameSession,
+  setSessionPinned,
   switchToSession,
 } from "../state/wsBridge.ts";
 
@@ -67,11 +79,23 @@ function SessionRow({
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(session.title ?? "");
+  const rowRef = useRef<HTMLDivElement>(null);
+  const pinControlRef = useRef<HTMLButtonElement>(null);
 
   const commitRename = (): void => {
     const title = draft.trim();
     setRenaming(false);
     if (title && title !== session.title) void renameSession(session.id, title);
+  };
+
+  const togglePinned = async (): Promise<void> => {
+    await setSessionPinned(session.id, !session.pinnedAt);
+    // Pinning can move a deep row to the top (and unpinning can move it back
+    // down). Wait for that keyed reorder, then preserve keyboard focus and
+    // bring the affected row back into the nearest visible edge.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    pinControlRef.current?.focus({ preventScroll: true });
+    rowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
 
   if (renaming) {
@@ -98,6 +122,7 @@ function SessionRow({
 
   return (
     <div
+      ref={rowRef}
       className={cn(
         "group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
@@ -111,6 +136,7 @@ function SessionRow({
       tabIndex={0}
       onClick={onSelect}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect();
@@ -141,8 +167,29 @@ function SessionRow({
         ) : null}
       </div>
       {running ? <TypingDots /> : null}
+      {session.pinnedAt ? (
+        <Pin
+          size={11}
+          className="shrink-0 text-accent"
+          aria-label="Pinned"
+          data-testid={`chat-pinned-${session.id}`}
+        />
+      ) : null}
       {/* Hover-reveal actions (native session row). */}
       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <ControlButton
+          ref={pinControlRef}
+          data-testid={`chat-pin-${session.id}`}
+          className="rounded p-0.5 text-text-muted hover:text-text-primary"
+          title={session.pinnedAt ? "Unpin session" : "Pin session"}
+          aria-label={session.pinnedAt ? "Unpin session" : "Pin session"}
+          onClick={(event) => {
+            event.stopPropagation();
+            void togglePinned();
+          }}
+        >
+          {session.pinnedAt ? <PinOff size={12} /> : <Pin size={12} />}
+        </ControlButton>
         <ControlButton
           data-testid={`chat-rename-${session.id}`}
           className="rounded p-0.5 text-text-muted hover:text-text-primary"
@@ -191,16 +238,9 @@ function useSessionsData() {
   const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   const setView = useAppStore((state) => state.setView);
 
-  // Most-recently-active first (native exact-updatedAt ordering); createdAt is
-  // the fallback for sessions persisted before updatedAt existed.
-  const activityAt = (s: SessionMeta): string => s.updatedAt ?? s.createdAt;
-  const byNewest = [...sessions].sort(
-    (a, b) =>
-      activityAt(b).localeCompare(activityAt(a)) ||
-      b.createdAt.localeCompare(a.createdAt) ||
-      // Final deterministic tiebreak so same-millisecond sessions never jitter.
-      a.id.localeCompare(b.id),
-  );
+  // Project section ordering remains activity-based. Pin promotion is applied
+  // only inside each project's session list, matching native.
+  const byNewest = sortSessionsByActivity(sessions);
   const projectName = (id?: string): string => projectDisplayName(projects, id);
 
   return { byNewest, currentProjectId, currentSession, agentStatus, setView, projectName };
@@ -210,7 +250,9 @@ function useSessionsData() {
 export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
   const { byNewest, currentProjectId, currentSession, agentStatus, setView, projectName } =
     useSessionsData();
-  const currentProjectSessions = byNewest.filter((s) => (s.projectId ?? null) === currentProjectId);
+  const currentProjectSessions = sortSessionsWithPins(
+    byNewest.filter((s) => (s.projectId ?? null) === currentProjectId),
+  );
 
   return (
     <div className="px-2 pb-2">
@@ -357,7 +399,7 @@ export function SessionsExpandedOverlay({
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto" data-testid="sessions-scroll">
           {filtered.length === 0 ? (
             <div
               className="py-6 text-center text-xs text-text-muted"
@@ -372,7 +414,7 @@ export function SessionsExpandedOverlay({
                 {group}
               </div>
               <div className="space-y-0.5">
-                {groupSessions.map((session) => (
+                {sortSessionsWithPins(groupSessions).map((session) => (
                   <SessionRow
                     key={session.id}
                     session={session}

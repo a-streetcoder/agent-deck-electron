@@ -846,6 +846,22 @@ export async function renameSession(sessionId: string, title: string): Promise<v
   }
 }
 
+export async function setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+  try {
+    const { session } = await fetchJson<{ session: SessionMeta }>(
+      `/sessions/${encodeURIComponent(sessionId)}/pin`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned }),
+      },
+    );
+    useAppStore.getState().upsertSessionMeta(session);
+  } catch (error) {
+    useAppStore.getState().setError(String(error));
+  }
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   try {
     const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}`, {

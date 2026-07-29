@@ -294,6 +294,32 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     return { session: next };
   });
 
+  // Pinning is a structural list action, not session activity. Preserve
+  // updatedAt, keep repeated pin requests idempotent, and order pins by the
+  // first timestamp at which each session became pinned.
+  fastify.patch("/sessions/:id/pin", async (request, reply) => {
+    const parsed = z.object({ pinned: z.boolean() }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const { id } = request.params as { id: string };
+    const live = sessions.get(id);
+    const current = live?.meta ?? index.find((session) => session.id === id);
+    if (!current) return reply.status(404).send({ error: "unknown session" });
+
+    const pinnedAt = parsed.data.pinned
+      ? (current.pinnedAt ?? new Date().toISOString())
+      : undefined;
+    if (pinnedAt === current.pinnedAt) return { session: current };
+
+    const next = { ...current, pinnedAt };
+    if (live) {
+      if (pinnedAt) live.meta.pinnedAt = pinnedAt;
+      else delete live.meta.pinnedAt;
+    }
+    index.upsert(next);
+    broadcast({ type: "session_meta", session: next });
+    return { session: next };
+  });
+
   // Delete: stop the live process, drop the index entry, remove the pi
   // session file. Session content is destroyed — this is the explicit delete.
   fastify.delete("/sessions/:id", async (request, reply) => {

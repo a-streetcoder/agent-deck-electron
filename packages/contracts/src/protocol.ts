@@ -286,6 +286,9 @@ export const SessionMeta = Schema.mutable(
      * session list's most-recently-active-first ordering. Optional: sessions
      * persisted before this field fall back to createdAt. */
     updatedAt: Schema.optional(Schema.String),
+    /** Nil/absent means unpinned. The timestamp orders multiple pins newest-first
+     * without changing the session's activity timestamp. */
+    pinnedAt: Schema.optional(Schema.String),
     projectId: Schema.optional(Schema.String),
     /** Set when the session is backed by a named agent (injected system prompt). */
     agentName: Schema.optional(Schema.String),

@@ -44,6 +44,18 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(new ProjectIndex(FIXTURE_DIR).list()).toEqual(expectedProjects);
   });
 
+  it("persists optional session pin state without rewriting activity time", () => {
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    const original = sessions.list()[0]!;
+    const pinnedAt = "2026-07-29T12:01:00.000Z";
+    sessions.upsert({ ...original, pinnedAt });
+
+    const reloaded = new SessionIndex(dir).find((session) => session.id === original.id);
+    expect(reloaded?.pinnedAt).toBe(pinnedAt);
+    expect(reloaded?.updatedAt).toBe(original.updatedAt);
+  });
+
   it("class facade loads the fixture settings identically (every field)", () => {
     const s = new SettingsStore(FIXTURE_DIR).get();
     expect(s.defaultSkills).toEqual(["diagnose", "tdd"]);
