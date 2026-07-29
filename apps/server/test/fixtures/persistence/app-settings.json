@@ -52,5 +52,13 @@
     }
   ],
   "preferredEditor": null,
+  "piAgentTranscriptVisibility": {
+    "showThinking": false,
+    "showWebActivity": true,
+    "showDiffs": false,
+    "showImages": true,
+    "showMemoryCards": true,
+    "showMCPCards": false
+  },
   "keybindings": []
 }

@@ -1,8 +1,18 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import envPaths from "env-paths";
-import type { KeybindingBinding, ProjectMeta, SessionMeta } from "@agent-deck/contracts";
-import { isKeybindingCommand, isValidChord } from "@agent-deck/contracts";
+import type {
+  KeybindingBinding,
+  ProjectMeta,
+  SessionMeta,
+  TranscriptVisibilitySettings,
+} from "@agent-deck/contracts";
+import {
+  coerceTranscriptVisibility,
+  DEFAULT_TRANSCRIPT_VISIBILITY,
+  isKeybindingCommand,
+  isValidChord,
+} from "@agent-deck/contracts";
 import { THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
 import { Context, Effect, Layer, Option } from "effect";
 
@@ -202,6 +212,11 @@ export interface AppSettings {
    * a command — the server only launches editors from its own detected list.
    */
   preferredEditor: string | null;
+  /**
+   * Global renderer-only transcript projection. Hidden categories remain in
+   * authoritative history and become visible again when re-enabled.
+   */
+  piAgentTranscriptVisibility: TranscriptVisibilitySettings;
   /**
    * User keybinding overrides (Slice 14): a `command -> chord` list layered over
    * the shipped `DEFAULT_KEYBINDINGS`. Empty = all defaults. Each entry is
@@ -412,6 +427,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       importedSkillRepositories: [],
       skillCollections: [],
       preferredEditor: null,
+      piAgentTranscriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
       keybindings: [],
     };
 
@@ -464,6 +480,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             : [],
           preferredEditor:
             typeof record.preferredEditor === "string" ? record.preferredEditor : null,
+          piAgentTranscriptVisibility: coerceTranscriptVisibility(
+            record.piAgentTranscriptVisibility,
+          ),
           keybindings: coerceKeybindings(record.keybindings),
         };
       }

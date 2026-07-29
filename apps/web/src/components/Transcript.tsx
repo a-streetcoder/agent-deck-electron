@@ -1,15 +1,26 @@
+import type { TranscriptVisibilitySettings } from "@agent-deck/contracts";
 import {
   isPendingQuestionNavigationCell,
   isQuestionNavigationCell,
   questionNavigationTarget,
   type QuestionNavigationCell,
 } from "@agent-deck/domain";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { isTranscriptCellVisible } from "../lib/transcriptVisibility.ts";
 import { useAppStore } from "../state/store.ts";
 import { CellView } from "./cells.tsx";
 import { SessionPlanPanel } from "./SessionPlanPanel.tsx";
 import { SessionStartupCard } from "./SessionStartupCard.tsx";
 import { useOpenInEditor } from "./diff/OpenInPicker.tsx";
+
+const HIDDEN_OPTIONAL_CATEGORIES: TranscriptVisibilitySettings = {
+  showThinking: false,
+  showWebActivity: false,
+  showDiffs: false,
+  showImages: false,
+  showMemoryCards: false,
+  showMCPCards: false,
+};
 
 function questionNavigationLabel(
   cell: QuestionNavigationCell,
@@ -27,6 +38,11 @@ function questionNavigationLabel(
 
 export function Transcript() {
   const cells = useAppStore((state) => state.transcript.cells);
+  const transcriptVisibility = useAppStore((state) => state.transcriptVisibility);
+  const transcriptVisibilityLoaded = useAppStore((state) => state.transcriptVisibilityLoaded);
+  const effectiveVisibility = transcriptVisibilityLoaded
+    ? transcriptVisibility
+    : HIDDEN_OPTIONAL_CATEGORIES;
   const session = useAppStore((state) => state.session);
   const navigationRequest = useAppStore((state) => state.questionNavigationRequest);
   const navigationAnchorId = useAppStore((state) => state.questionNavigationAnchorId);
@@ -38,7 +54,11 @@ export function Transcript() {
   // already has a piSessionFile (set on switch, before its history streams in),
   // so it never flashes the card during the brief empty-transcript load gap.
   const isNewSession = cells.length === 0 && !session?.piSessionFile;
-  const navigationCells = cells.filter(isQuestionNavigationCell);
+  const visibleCells = useMemo(
+    () => cells.filter((cell) => isTranscriptCellVisible(cell, effectiveVisibility)),
+    [cells, effectiveVisibility],
+  );
+  const navigationCells = visibleCells.filter(isQuestionNavigationCell);
   const navigationPosition = new Map(navigationCells.map((cell, index) => [cell.id, index]));
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,7 +78,7 @@ export function Transcript() {
     if (pinnedToBottom.current) {
       bottomRef.current?.scrollIntoView({ block: "end" });
     }
-  }, [cells]);
+  }, [visibleCells]);
 
   useEffect(() => {
     if (
@@ -69,7 +89,11 @@ export function Transcript() {
       return;
     }
     consumedNavigationToken.current = navigationRequest.token;
-    const target = questionNavigationTarget(cells, navigationRequest.direction, navigationAnchorId);
+    const target = questionNavigationTarget(
+      visibleCells,
+      navigationRequest.direction,
+      navigationAnchorId,
+    );
     if (!target) {
       completeQuestionNavigation(navigationRequest.token);
       setAnnouncement({
@@ -91,7 +115,13 @@ export function Transcript() {
       token: navigationRequest.token,
       text: `${target.pending ? "Pending question" : "Question"} ${target.index + 1} of ${target.total}.`,
     });
-  }, [cells, completeQuestionNavigation, navigationAnchorId, navigationRequest, session?.id]);
+  }, [
+    completeQuestionNavigation,
+    navigationAnchorId,
+    navigationRequest,
+    session?.id,
+    visibleCells,
+  ]);
 
   return (
     <div
@@ -110,7 +140,7 @@ export function Transcript() {
           <SessionStartupCard />
         ) : null
       ) : (
-        cells.map((cell) => {
+        visibleCells.map((cell) => {
           const navigable = isQuestionNavigationCell(cell);
           const position = navigationPosition.get(cell.id);
           return (
@@ -130,7 +160,11 @@ export function Transcript() {
               data-question-navigation-cell={navigable ? cell.id : undefined}
               className={navigable ? "question-navigation-target" : undefined}
             >
-              <CellView cell={cell} editorController={editorController} />
+              <CellView
+                cell={cell}
+                editorController={editorController}
+                transcriptVisibility={effectiveVisibility}
+              />
             </div>
           );
         })

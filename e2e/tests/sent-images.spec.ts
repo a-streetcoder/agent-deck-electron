@@ -73,6 +73,25 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   expect(sourceSrc).toBeTruthy();
   expect((await fetch(absoluteImageUrl(sourceSrc!))).status).toBe(200);
 
+  await page.getByRole("button", { name: "Transcript display" }).click();
+  const imagesSwitch = page.getByRole("switch", { name: "Images" });
+  await imagesSwitch.click();
+  await expect(gallery).toHaveCount(0);
+  await expect(
+    page.getByRole("listitem", { name: "1 image: Image previews hidden" }),
+  ).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByTestId("sent-image-gallery")).toHaveCount(0);
+  await expect(
+    page.getByRole("listitem", { name: "1 image: Image previews hidden" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Transcript display" }).click();
+  await page.getByRole("switch", { name: "Images" }).click();
+  await expect(
+    page.getByTestId("sent-image-gallery").getByRole("img", { name: "Sent image 1" }),
+  ).toBeVisible();
+
   await gallery.getByRole("button", { name: "Expand Sent image 1" }).click();
   await expect(page.getByRole("dialog").getByRole("img", { name: "Sent image 1" })).toBeVisible();
   await page.keyboard.press("Escape");

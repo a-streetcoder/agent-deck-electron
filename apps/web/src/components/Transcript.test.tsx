@@ -3,7 +3,13 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@agent-deck/contracts";
-import { emptyTranscript, type QuestionCell, type UserCell } from "@agent-deck/domain";
+import {
+  emptyTranscript,
+  type QuestionCell,
+  type ToolCell,
+  type UserCell,
+} from "@agent-deck/domain";
+import { DEFAULT_TRANSCRIPT_VISIBILITY } from "@agent-deck/contracts";
 import { useAppStore } from "../state/store.ts";
 import { Transcript } from "./Transcript.tsx";
 
@@ -29,6 +35,15 @@ const question: QuestionCell = {
   answered: false,
 };
 const streamedCell: UserCell = { kind: "user", id: "streamed-1", text: "new session content" };
+const webTool: ToolCell = {
+  kind: "tool",
+  id: "web-tool",
+  toolCallId: "call-web",
+  toolName: "web_search",
+  args: { query: "test" },
+  status: "done",
+  result: "result",
+};
 
 const scrollIntoView = vi.fn();
 
@@ -43,6 +58,8 @@ beforeEach(() => {
     lastSeq: 0,
     questionNavigationRequest: null,
     questionNavigationAnchorId: null,
+    transcriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
+    transcriptVisibilityLoaded: true,
   });
 });
 
@@ -55,10 +72,29 @@ afterEach(() => {
     lastSeq: 0,
     questionNavigationRequest: null,
     questionNavigationAnchorId: null,
+    transcriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
+    transcriptVisibilityLoaded: false,
   });
 });
 
 describe("Transcript question navigation", () => {
+  it("removes hidden category cells without changing question navigation", () => {
+    useAppStore.setState({
+      transcript: { ...emptyTranscript(), cells: [webTool, question] },
+      transcriptVisibility: {
+        ...DEFAULT_TRANSCRIPT_VISIBILITY,
+        showWebActivity: false,
+      },
+      transcriptVisibilityLoaded: true,
+    });
+
+    render(<Transcript />);
+
+    expect(screen.queryByText("cell web-tool")).toBeNull();
+    expect(screen.getByText("cell question-1")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Pending question, 1 of 1" })).toBeTruthy();
+  });
+
   it("restores bottom-follow when the session changes after programmatic navigation", async () => {
     render(<Transcript />);
     const target = screen.getByRole("group", { name: "Pending question, 1 of 1" });

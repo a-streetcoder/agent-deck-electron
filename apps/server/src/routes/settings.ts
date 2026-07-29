@@ -212,6 +212,19 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // The remembered open-in-editor choice (Slice 11). An id only — the
         // server maps it to its own detected editor list; never a command.
         preferredEditor: z.string().min(1).max(64).nullable().optional(),
+        // Global transcript projection. Nested fields are partial so future
+        // clients can update one category without racing unrelated preferences.
+        piAgentTranscriptVisibility: z
+          .object({
+            showThinking: z.boolean().optional(),
+            showWebActivity: z.boolean().optional(),
+            showDiffs: z.boolean().optional(),
+            showImages: z.boolean().optional(),
+            showMemoryCards: z.boolean().optional(),
+            showMCPCards: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         // User keybinding overrides (Slice 14): a whole-list replacement. Every
         // entry must name a known command and a chord with a real modifier —
         // the same validation the store applies on load, enforced here so a bad
@@ -256,6 +269,12 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (d.defaultThinking !== undefined) patch.defaultThinking = d.defaultThinking;
     if (d.extensionLoadingMode !== undefined) patch.extensionLoadingMode = d.extensionLoadingMode;
     if (d.preferredEditor !== undefined) patch.preferredEditor = d.preferredEditor;
+    if (d.piAgentTranscriptVisibility !== undefined) {
+      patch.piAgentTranscriptVisibility = {
+        ...settings.get().piAgentTranscriptVisibility,
+        ...d.piAgentTranscriptVisibility,
+      };
+    }
     // Refine above guarantees every command/chord is valid, so the plain
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];

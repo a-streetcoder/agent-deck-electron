@@ -9,6 +9,10 @@ import {
   type ToolCell,
   type TranscriptCell,
 } from "@agent-deck/domain";
+import {
+  DEFAULT_TRANSCRIPT_VISIBILITY,
+  type TranscriptVisibilitySettings,
+} from "@agent-deck/contracts";
 import { balance } from "@/design-system/markdown/balancer";
 import { MessageBubble } from "@/components/transcript/MessageBubble";
 import { ToolGroupCard, type ToolGroupStatus } from "@/components/transcript/ToolGroupCard";
@@ -30,6 +34,7 @@ import {
 } from "../lib/sessionImageUrl.ts";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
+import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -287,7 +292,13 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
   );
 }
 
-function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }> }) {
+function UserCellView({
+  cell,
+  showImages,
+}: {
+  cell: Extract<TranscriptCell, { kind: "user" }>;
+  showImages: boolean;
+}) {
   const sessionId = useAppStore((state) => state.session?.id ?? "");
   const imageReadToken = useSyncExternalStore(
     subscribeImageReadToken,
@@ -298,6 +309,9 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
   const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
   useEffect(() => setFailed(new Set()), [imageReadToken, sessionId]);
+  useEffect(() => {
+    if (!showImages) setExpanded(null);
+  }, [showImages]);
   const items = (cell.images ?? []).map((image, index) => ({
     src: sessionImageUrl(sessionId, image.id),
     name: `Sent image ${index + 1}`,
@@ -321,16 +335,34 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
     title: "Preview pasted text",
     onActivate: () => setExpandedPaste(index),
   }));
-  const attachments = [...fileAttachments, ...folderAttachments, ...pasteAttachments];
+  const hiddenImageAttachments =
+    !showImages && items.length > 0
+      ? [
+          {
+            id: `${cell.id}-images`,
+            kind: "image" as const,
+            label: items.length === 1 ? "1 image" : `${items.length} images`,
+            title: "Image previews hidden",
+          },
+        ]
+      : [];
+  const attachments = [
+    ...fileAttachments,
+    ...folderAttachments,
+    ...pasteAttachments,
+    ...hiddenImageAttachments,
+  ];
   const fileSummary = fileAttachments.length === 1 ? "1 file" : `${fileAttachments.length} files`;
   const folderSummary =
     folderAttachments.length === 1 ? "1 folder" : `${folderAttachments.length} folders`;
   const pasteSummary =
     pasteAttachments.length === 1 ? "1 paste" : `${pasteAttachments.length} pastes`;
+  const imageSummary = items.length === 1 ? "1 image" : `${items.length} images`;
   const summaryParts = [
     ...(fileAttachments.length > 0 ? [fileSummary] : []),
     ...(folderAttachments.length > 0 ? [folderSummary] : []),
     ...(pasteAttachments.length > 0 ? [pasteSummary] : []),
+    ...(!showImages && items.length > 0 ? [imageSummary] : []),
   ];
   const attachmentSummary =
     summaryParts.length === 1
@@ -340,11 +372,13 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
           ? "Attached a folder."
           : summaryParts[0] === "1 paste"
             ? "Attached a paste."
-            : `Attached ${summaryParts[0]}.`
+            : summaryParts[0] === "1 image"
+              ? "Attached an image."
+              : `Attached ${summaryParts[0]}.`
       : summaryParts.length === 2
         ? `Attached ${summaryParts[0]} and ${summaryParts[1]}.`
-        : summaryParts.length === 3
-          ? `Attached ${summaryParts[0]}, ${summaryParts[1]}, and ${summaryParts[2]}.`
+        : summaryParts.length > 2
+          ? `Attached ${summaryParts.slice(0, -1).join(", ")}, and ${summaryParts.at(-1)}.`
           : "";
   const visibleText = cell.text || attachmentSummary;
   return (
@@ -353,7 +387,7 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
         {visibleText || attachments.length > 0 ? (
           <MessageBubble role="user" text={visibleText} attachments={attachments} />
         ) : null}
-        {items.length ? (
+        {showImages && items.length ? (
           <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
             {items.map((item, index) => {
               const ref = cell.images![index]!;
@@ -389,7 +423,7 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
             })}
           </div>
         ) : null}
-        {expanded !== null ? (
+        {showImages && expanded !== null ? (
           <ExpandedImageDialog
             preview={{ images: items, index: expanded }}
             onClose={() => setExpanded(null)}
@@ -409,13 +443,15 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
 export function CellView({
   cell,
   editorController,
+  transcriptVisibility = DEFAULT_TRANSCRIPT_VISIBILITY,
 }: {
   cell: TranscriptCell;
   editorController?: OpenInEditorController;
+  transcriptVisibility?: TranscriptVisibilitySettings;
 }) {
   switch (cell.kind) {
     case "user":
-      return <UserCellView cell={cell} />;
+      return <UserCellView cell={cell} showImages={transcriptVisibility.showImages} />;
     case "assistant":
       return (
         <div
@@ -423,7 +459,7 @@ export function CellView({
           data-testid="assistant-cell"
           data-streaming={cell.streaming ? "true" : "false"}
         >
-          {cell.blocks.map((block) =>
+          {visibleAssistantBlocks(cell.blocks, transcriptVisibility).map((block) =>
             block.kind === "thinking" ? (
               <MessageBubble
                 key={block.contentIndex}

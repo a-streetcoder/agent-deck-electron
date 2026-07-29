@@ -8,7 +8,11 @@ import {
   MonitorPlay,
   SquareTerminal,
 } from "lucide-react";
-import type { KeybindingBinding } from "@agent-deck/contracts";
+import {
+  coerceTranscriptVisibility,
+  DEFAULT_TRANSCRIPT_VISIBILITY,
+  type KeybindingBinding,
+} from "@agent-deck/contracts";
 import { Composer } from "./components/Composer.tsx";
 import { AppTitleBar } from "./components/AppTitleBar.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -22,6 +26,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { TerminalDrawer } from "./components/TerminalDrawer.tsx";
 import { Toaster } from "./components/Toaster.tsx";
 import { Transcript } from "./components/Transcript.tsx";
+import { TranscriptDisplayMenu } from "./components/TranscriptDisplayMenu.tsx";
 import { PiAgentProcessingIndicatorBar } from "@/components/transcript/PiAgentProcessingIndicatorBar";
 import { AgentsScreen } from "./screens/AgentsScreen.tsx";
 import { ExtensionsScreen } from "./screens/ExtensionsScreen.tsx";
@@ -133,6 +138,11 @@ export function App() {
     ? sessionDisplayTitle(session.title, projectDisplayName(projects, session.projectId))
     : "Pi Agent";
   const setKeybindings = useAppStore((state) => state.setKeybindings);
+  const setTranscriptVisibility = useAppStore((state) => state.setTranscriptVisibility);
+  const setTranscriptVisibilityLoaded = useAppStore((state) => state.setTranscriptVisibilityLoaded);
+  const setTranscriptVisibilityLoadError = useAppStore(
+    (state) => state.setTranscriptVisibilityLoadError,
+  );
   useMenuCommands();
   useKeyboardShortcuts();
   // Slice 22a: forward turn-complete / approval-needed transitions on the active
@@ -145,15 +155,51 @@ export function App() {
   // the palette resolve chords against the persisted map (Slice 14). The editor
   // keeps the store in sync thereafter.
   useEffect(() => {
-    void fetch("/settings")
+    let active = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    void fetch("/settings", { signal: controller.signal })
       .then((response) => (response.ok ? response.json() : null))
-      .then((data: { settings?: { keybindings?: KeybindingBinding[] } } | null) => {
-        if (data?.settings?.keybindings) setKeybindings(data.settings.keybindings);
-      })
+      .then(
+        (
+          data: {
+            settings?: {
+              keybindings?: KeybindingBinding[];
+              piAgentTranscriptVisibility?: unknown;
+            };
+          } | null,
+        ) => {
+          if (!data) throw new Error("Settings request failed");
+          if (!active) return;
+          if (data?.settings?.keybindings) setKeybindings(data.settings.keybindings);
+          setTranscriptVisibility(
+            coerceTranscriptVisibility(data.settings?.piAgentTranscriptVisibility),
+          );
+          setTranscriptVisibilityLoadError(null);
+          setTranscriptVisibilityLoaded(true);
+        },
+      )
       .catch(() => {
-        // No overrides available — defaults apply.
+        if (!active) return;
+        // Keep the safe, all-visible defaults usable and let the display menu retry.
+        setTranscriptVisibility({ ...DEFAULT_TRANSCRIPT_VISIBILITY });
+        setTranscriptVisibilityLoadError("Transcript preferences could not be loaded.");
+        setTranscriptVisibilityLoaded(true);
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
       });
-  }, [setKeybindings]);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [
+    setKeybindings,
+    setTranscriptVisibility,
+    setTranscriptVisibilityLoaded,
+    setTranscriptVisibilityLoadError,
+  ]);
   // Slice 18b: refresh the checkpoint timeline whenever a turn settles back to
   // idle (a new checkpoint was captured) for the current session. The subscribe
   // path seeds the first list; this keeps it live turn-over-turn (and drives the
@@ -241,6 +287,7 @@ export function App() {
               ) : null}
             </div>
             <div className="flex items-center gap-3">
+              {isChat ? <TranscriptDisplayMenu /> : null}
               {/* Files toggle (Slice 13b): a lazy project-tree browser +
                   read-only preview. Ungated by git — shown for any chat
                   session (it browses the session cwd). */}

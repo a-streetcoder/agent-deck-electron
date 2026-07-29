@@ -5,7 +5,9 @@ import type {
   KeybindingBinding,
   ProjectMeta,
   SessionMeta,
+  TranscriptVisibilitySettings,
 } from "@agent-deck/contracts";
+import { DEFAULT_TRANSCRIPT_VISIBILITY } from "@agent-deck/contracts";
 import { emptyTranscript, type PasteAttachment, type TranscriptState } from "@agent-deck/domain";
 import { create } from "zustand";
 import type { PendingReviewComment, ReviewCommentSide } from "../lib/reviewComments.ts";
@@ -335,6 +337,12 @@ export interface AppState {
    * same breath.
    */
   keybindings: KeybindingBinding[];
+  /** Global display projection loaded from AppSettings; transcript data is never mutated. */
+  transcriptVisibility: TranscriptVisibilitySettings;
+  /** False until the persisted projection has loaded successfully. */
+  transcriptVisibilityLoaded: boolean;
+  /** Initial settings read failure; defaults stay usable and the menu can retry. */
+  transcriptVisibilityLoadError: string | null;
   /** Whether the command palette overlay is open (Ctrl/⌘+K). */
   commandPaletteOpen: boolean;
   /** Whether the keybindings editor sheet is open (from the palette). */
@@ -371,6 +379,9 @@ export interface AppState {
   /** Drop whitespace-only text once its composer is left or unmounted. */
   pruneEmptyComposerDraft(sessionId: string): void;
   setKeybindings(keybindings: KeybindingBinding[]): void;
+  setTranscriptVisibility(settings: TranscriptVisibilitySettings): void;
+  setTranscriptVisibilityLoaded(loaded: boolean): void;
+  setTranscriptVisibilityLoadError(error: string | null): void;
   setCommandPaletteOpen(open: boolean): void;
   setKeybindingsEditorOpen(open: boolean): void;
   setSelectedAgentFilePath(filePath: string | null): void;
@@ -481,6 +492,9 @@ export const useAppStore = create<AppState>((set) => ({
   pendingElementContexts: {},
   diffJumpRequest: null,
   keybindings: [],
+  transcriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
+  transcriptVisibilityLoaded: false,
+  transcriptVisibilityLoadError: null,
   commandPaletteOpen: false,
   keybindingsEditorOpen: false,
   selectedAgentFilePath: null,
@@ -570,6 +584,11 @@ export const useAppStore = create<AppState>((set) => ({
       return { composerDrafts };
     }),
   setKeybindings: (keybindings) => set({ keybindings }),
+  setTranscriptVisibility: (transcriptVisibility) => set({ transcriptVisibility }),
+  setTranscriptVisibilityLoaded: (transcriptVisibilityLoaded) =>
+    set({ transcriptVisibilityLoaded }),
+  setTranscriptVisibilityLoadError: (transcriptVisibilityLoadError) =>
+    set({ transcriptVisibilityLoadError }),
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   setKeybindingsEditorOpen: (keybindingsEditorOpen) => set({ keybindingsEditorOpen }),
   setSelectedAgentFilePath: (selectedAgentFilePath) => set({ selectedAgentFilePath }),

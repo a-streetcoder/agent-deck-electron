@@ -26,6 +26,14 @@ describe("SettingsStore onboarding preferences", () => {
     expect(s.defaultThinking).toBeNull();
     expect(s.extensionLoadingMode).toBe("useMyExtensions");
     expect(s.importedSkillRepositories).toEqual([]);
+    expect(s.piAgentTranscriptVisibility).toEqual({
+      showThinking: true,
+      showWebActivity: true,
+      showDiffs: true,
+      showImages: true,
+      showMemoryCards: true,
+      showMCPCards: true,
+    });
   });
 
   it("round-trips every field across a reload", () => {
@@ -38,6 +46,14 @@ describe("SettingsStore onboarding preferences", () => {
       defaultModel: "gpt-5.5",
       defaultThinking: "high",
       extensionLoadingMode: "agentDeckManaged",
+      piAgentTranscriptVisibility: {
+        showThinking: false,
+        showWebActivity: true,
+        showDiffs: false,
+        showImages: true,
+        showMemoryCards: false,
+        showMCPCards: true,
+      },
     });
     const reloaded = new SettingsStore(dir).get();
     expect(reloaded.autoTitle).toBe(false);
@@ -47,6 +63,14 @@ describe("SettingsStore onboarding preferences", () => {
     expect(reloaded.defaultModel).toBe("gpt-5.5");
     expect(reloaded.defaultThinking).toBe("high");
     expect(reloaded.extensionLoadingMode).toBe("agentDeckManaged");
+    expect(reloaded.piAgentTranscriptVisibility).toEqual({
+      showThinking: false,
+      showWebActivity: true,
+      showDiffs: false,
+      showImages: true,
+      showMemoryCards: false,
+      showMCPCards: true,
+    });
     // Untouched arrays are preserved (the patch never clobbers them).
     expect(reloaded.defaultSkills).toEqual([]);
   });
@@ -71,6 +95,11 @@ describe("SettingsStore onboarding preferences", () => {
         keepWorktreeAfterMerge: "no", // not a boolean → default true
         defaultModel: 42, // not a string → null
         defaultThinking: "bogus", // not a real level → null
+        piAgentTranscriptVisibility: {
+          showThinking: false,
+          showWebActivity: "yes",
+          showImages: false,
+        },
         defaultSkills: ["keep"], // a valid field is still read
       }),
     );
@@ -82,5 +111,13 @@ describe("SettingsStore onboarding preferences", () => {
     expect(s.defaultModel).toBeNull();
     expect(s.defaultThinking).toBeNull();
     expect(s.defaultSkills).toEqual(["keep"]);
+    expect(s.piAgentTranscriptVisibility).toEqual({
+      showThinking: false,
+      showWebActivity: true,
+      showDiffs: true,
+      showImages: false,
+      showMemoryCards: true,
+      showMCPCards: true,
+    });
   });
 });

@@ -72,6 +72,8 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(s.defaultModel).toBe("anthropic:claude-opus");
     expect(s.defaultThinking).toBe("high");
     expect(s.extensionLoadingMode).toBe("agentDeckManaged");
+    expect(s.piAgentTranscriptVisibility.showThinking).toBe(false);
+    expect(s.piAgentTranscriptVisibility.showImages).toBe(true);
     expect(s.importedSkillRepositories).toHaveLength(1);
     expect(s.importedSkillRepositories[0]).toMatchObject({
       id: "repo-1",
@@ -134,7 +136,9 @@ describe("persistence service — existing-data-dir round-trip", () => {
     // app-settings.json: an empty patch re-serializes the loaded settings.
     new SettingsStore(dir).update({});
     expect(readFileSync(path.join(dir, "app-settings.json"), "utf8")).toBe(
-      readFixture("app-settings.json"),
+      // JSON persistence deliberately has no terminal newline; the checked-in
+      // fixture retains the repository's normal text-file newline.
+      readFixture("app-settings.json").trimEnd(),
     );
   });
 
