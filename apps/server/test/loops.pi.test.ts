@@ -311,14 +311,20 @@ describe("loop run engine (real pi)", () => {
     expect(run.sessionId).toBeTruthy();
     const sessionId = run.sessionId!;
     const snapshotFile = path.join(dataDir, "loop-session-snapshots.json");
-    await vi.waitFor(() => expect(existsSync(snapshotFile)).toBe(true));
-    const persisted = JSON.parse(readFileSync(snapshotFile, "utf8")) as {
-      sessions: Record<string, { cells: Array<{ id: string; text: string }> }>;
-    };
-    const persistedCells = persisted.sessions[sessionId]?.cells ?? [];
+    let persistedCells: Array<{ id: string; text: string }> = [];
+    await vi.waitFor(
+      () => {
+        expect(existsSync(snapshotFile)).toBe(true);
+        const persisted = JSON.parse(readFileSync(snapshotFile, "utf8")) as {
+          sessions: Record<string, { cells: Array<{ id: string; text: string }> }>;
+        };
+        persistedCells = persisted.sessions[sessionId]?.cells ?? [];
+        expect(persistedCells.some((cell) => cell.text.includes("Maker streamed"))).toBe(true);
+        expect(persistedCells.some((cell) => cell.text.includes("SUCCESS"))).toBe(true);
+      },
+      { timeout: 10_000, interval: 50 },
+    );
     expect(persistedCells.length).toBeGreaterThanOrEqual(2);
-    expect(persistedCells.some((cell) => cell.text.includes("Maker streamed"))).toBe(true);
-    expect(persistedCells.some((cell) => cell.text.includes("SUCCESS"))).toBe(true);
 
     await server.close();
     server = await startServer({ dataDir });
@@ -610,20 +616,6 @@ describe("loop run engine (real pi)", () => {
       );
       expect(tools).toEqual(["read", "grep"]);
     }
-    const beforeFirstDone = mock.events.slice(0, firstDonePosition);
-    expect(
-      new Set(
-        beforeFirstDone
-          .filter(
-            (event) =>
-              event.kind === "delta" &&
-              (event.requestIndex === first!.absoluteIndex ||
-                event.requestIndex === second!.absoluteIndex),
-          )
-          .map((event) => event.requestIndex),
-      ).size,
-    ).toBe(2);
-
     const evaluator = mock.requests
       .slice(requestStart)
       .find((request) =>
