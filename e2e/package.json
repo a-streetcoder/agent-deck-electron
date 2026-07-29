@@ -13,7 +13,7 @@
     "@agent-deck/domain": "workspace:*",
     "@agent-deck/server": "workspace:*",
     "@agent-deck/testkit": "workspace:*",
-    "@playwright/test": "1.53.1",
+    "@playwright/test": "1.62.0",
     "@types/node": "22.15.29"
   }
 }
