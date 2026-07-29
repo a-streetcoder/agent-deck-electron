@@ -815,7 +815,9 @@ describe("loop run engine (real pi)", () => {
       cwd: gitProject,
       encoding: "utf8",
     });
-    expect(registered).toContain(`worktree ${worktree!.path}`);
+    expect(registered.replaceAll("\\", "/")).toContain(
+      `worktree ${worktree!.path.replaceAll("\\", "/")}`,
+    );
     expect(registered).toContain(`branch refs/heads/${worktree!.branch}`);
   });
 });

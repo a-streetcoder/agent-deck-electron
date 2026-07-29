@@ -127,34 +127,44 @@ describe("session worktree isolation", () => {
     expect((await patchSettings({ worktreeIsolation: true })).status).toBe(200);
 
     const session = await createSession(projectId);
-    // cwd is an isolated worktree under the data dir, NOT the project root.
-    expect(session.cwd).not.toBe(repoDir);
-    expect(session.cwd.startsWith(realpathSync(path.join(dataDir, "session-worktrees")))).toBe(
-      true,
-    );
-    expect(session.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
-    expect(session.worktreeBranch).toMatch(/^agent-deck\/session-/);
-    expect(session.worktreeSourceBranch).toBe("main");
-    expect(existsSync(session.cwd)).toBe(true);
-    // It's a real git worktree (the branch checked out there is the session branch).
-    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: session.cwd,
-    })
-      .toString()
-      .trim();
-    expect(branch).toBe(session.worktreeBranch);
+    try {
+      // cwd is an isolated worktree under the data dir, NOT the project root.
+      expect(session.cwd).not.toBe(repoDir);
+      const worktreeRoot = realpathSync.native(path.join(dataDir, "session-worktrees"));
+      const relativeCwd = path.relative(worktreeRoot, realpathSync.native(session.cwd));
+      expect(relativeCwd).not.toBe("");
+      expect(relativeCwd === ".." || relativeCwd.startsWith(`..${path.sep}`)).toBe(false);
+      expect(path.isAbsolute(relativeCwd)).toBe(false);
+      expect(session.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
+      expect(session.worktreeBranch).toMatch(/^agent-deck\/session-/);
+      expect(session.worktreeSourceBranch).toBe("main");
+      expect(existsSync(session.cwd)).toBe(true);
+      // It's a real git worktree (the branch checked out there is the session branch).
+      const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: session.cwd,
+      })
+        .toString()
+        .trim();
+      expect(branch).toBe(session.worktreeBranch);
 
-    // pi launched + responded inside the worktree.
-    const managed = server.sessions.get(session.id)!;
-    await managed.prompt("hello");
-    await server.receipts.waitFor("idle", session.id);
+      // pi launched + responded inside the worktree.
+      const managed = server.sessions.get(session.id)!;
+      await managed.prompt("hello");
+      await server.receipts.waitFor("idle", session.id);
 
-    // Deleting the session removes the worktree directory.
-    const del = await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}`, {
-      method: "DELETE",
-    });
-    expect(del.status).toBe(200);
-    expect(existsSync(session.cwd)).toBe(false);
+      // Deleting the session removes the worktree directory.
+      const del = await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}`, {
+        method: "DELETE",
+      });
+      expect(del.status).toBe(200);
+      expect(existsSync(session.cwd)).toBe(false);
+    } finally {
+      if (server.sessions.get(session.id)) {
+        await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}`, {
+          method: "DELETE",
+        });
+      }
+    }
   });
 
   it("fails closed from detached HEAD without a session, primary-checkout Pi, or target residue", async () => {

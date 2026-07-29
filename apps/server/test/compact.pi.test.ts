@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -28,6 +28,12 @@ const cwd = mkdtempSync(path.join(tmpdir(), "pi-compact-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
 
 beforeAll(async () => {
+  const piSettingsDir = path.join(tmpHome, ".pi", "agent");
+  mkdirSync(piSettingsDir, { recursive: true });
+  writeFileSync(
+    path.join(piSettingsDir, "settings.json"),
+    `${JSON.stringify({ compaction: { keepRecentTokens: 1_000 } }, null, 2)}\n`,
+  );
   mock = await startMockProvider({ reply: () => "Acknowledged." });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
   server = await startServer({ dataDir });
@@ -56,25 +62,24 @@ describe("manual compaction (native Compact context)", () => {
     const { session } = (await response.json()) as { session: { id: string } };
     const managed = server.sessions.get(session.id)!;
 
-    // pi only compacts history BEYOND its recent-token window (keepRecentTokens
-    // = 20000), so build several large-message turns to exceed it — otherwise pi
-    // rejects with "Nothing to compact (session too small)". Serialize the turns
-    // (the one-shot receipt bus can't gate a loop): a turn is DONE only when its
-    // assistant cell has appeared AND pi has returned to idle. Gating on the cell
-    // count alone races — the cell is created on the first text_delta while pi is
-    // still "running", so the next prompt could fire mid-turn and pi rejects with
-    // "Agent is already processing" (flaky on the slower CI runners).
+    // pi only compacts history BEYOND its recent-token window, so this test's
+    // temporary HOME lowers keepRecentTokens to 1,000 and builds three modest
+    // turns. That retains real Pi compaction without sending a 40k-word fixture
+    // through the Windows JSONL pipe. Serialize the turns (the one-shot receipt
+    // bus can't gate a loop): a turn is DONE only when its assistant cell has
+    // appeared AND pi has returned to idle. Gating on the cell count alone races
+    // — the cell is created on the first text_delta while pi is still "running",
+    // so the next prompt could fire mid-turn and pi rejects with "Agent is
+    // already processing" (flaky on the slower CI runners).
     const assistantCount = (): number =>
       managed.snapshot().state.cells.filter((c) => c.kind === "assistant").length;
     const turnSettled = (done: number): boolean => {
       const { state } = managed.snapshot();
       return assistantCount() > done && state.agentStatus === "idle";
     };
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const done = assistantCount();
-      await managed.prompt(`turn ${i}: ${`word `.repeat(8000)}`);
-      // Windows CI can take over 20 seconds to process the large payload while
-      // the full real-Pi suite is running; this gates correctness, not speed.
+      await managed.prompt(`turn ${i}: ${`word `.repeat(600)}`);
       await expect.poll(() => turnSettled(done), { timeout: 60_000 }).toBe(true);
     }
     const before = managed.snapshot().state.contextRevision;
