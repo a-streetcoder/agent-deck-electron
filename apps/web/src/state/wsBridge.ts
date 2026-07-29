@@ -1078,10 +1078,11 @@ export async function updateProject(
   patch: {
     assignedSkills?: string[];
     assignedPrompts?: string[];
+    assignedMcpServers?: string[];
     defaultAgentName?: string | null;
     enabled?: boolean;
   },
-): Promise<void> {
+): Promise<boolean> {
   const store = useAppStore.getState();
   // Optimistic: controlled inputs (assignment checkboxes) must flip
   // immediately; refreshProjects reconciles (or rolls back on error).
@@ -1093,6 +1094,9 @@ export async function updateProject(
             ...(patch.assignedSkills !== undefined ? { assignedSkills: patch.assignedSkills } : {}),
             ...(patch.assignedPrompts !== undefined
               ? { assignedPrompts: patch.assignedPrompts }
+              : {}),
+            ...(patch.assignedMcpServers !== undefined
+              ? { assignedMcpServers: patch.assignedMcpServers }
               : {}),
             ...(patch.defaultAgentName !== undefined
               ? { defaultAgentName: patch.defaultAgentName ?? undefined }
@@ -1109,8 +1113,10 @@ export async function updateProject(
       body: JSON.stringify(patch),
     });
     if (!response.ok) throw new Error(await response.text());
+    return true;
   } catch (error) {
     useAppStore.getState().setError(String(error));
+    return false;
   } finally {
     await refreshProjects();
   }

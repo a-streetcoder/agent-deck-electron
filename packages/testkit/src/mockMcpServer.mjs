@@ -1,3 +1,4 @@
+import process from "node:process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -12,7 +13,12 @@ import { z } from "zod";
 
 const server = new McpServer({ name: "mock-mcp-stdio", version: "0.0.1" });
 server.tool("echo", "Echo a message back", { message: z.string() }, ({ message }) => ({
-  content: [{ type: "text", text: `mcp stdio echo: ${message}` }],
+  content: [
+    {
+      type: "text",
+      text: `${process.env.AGENT_DECK_MOCK_MCP_LABEL ?? "mcp stdio echo"}: ${message}`,
+    },
+  ],
 }));
 
 await server.connect(new StdioServerTransport());

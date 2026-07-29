@@ -186,6 +186,7 @@ function makeRoute(
         },
       })),
     enabledExtensionPaths: () => [],
+    prepareProjectMcpSession: state.prepareProjectMcpSession,
     dropDiffCache: state.dropDiffCache,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
@@ -193,6 +194,7 @@ function makeRoute(
 }
 
 function makeState() {
+  const releaseMcpPreparation = vi.fn(async () => {});
   return {
     live: new Map<string, Meta>(),
     running: new Set<string>(),
@@ -204,6 +206,11 @@ function makeState() {
     reserveWorktree: vi.fn((_target: string) => "v1:0000000000000001:0000000000000002"),
     captureWorktreeIdentity: vi.fn(() => "v1:0000000000000001:0000000000000002"),
     deleteWorktree: vi.fn(async () => {}),
+    releaseMcpPreparation,
+    prepareProjectMcpSession: vi.fn(async () => ({
+      result: { ok: true as const, missing: [] },
+      release: releaseMcpPreparation,
+    })),
     dropDiffCache: vi.fn(),
   };
 }
@@ -495,6 +502,8 @@ describe("POST /sessions worktree transaction", () => {
     expect(response.json()).toMatchObject({
       session: { worktreeIdentity: "v1:0000000000000001:0000000000000002" },
     });
+    expect(state.prepareProjectMcpSession).toHaveBeenCalledWith("project-1", []);
+    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     await fastify.close();
   });
 
@@ -528,6 +537,7 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
+    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     expect(state.deleteWorktree).toHaveBeenCalledWith(
       WORKTREE_PATH,
       "v1:0000000000000001:0000000000000002",
@@ -581,6 +591,7 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
+    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     await fastify.close();
   });
 

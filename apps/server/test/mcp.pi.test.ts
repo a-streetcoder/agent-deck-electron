@@ -25,6 +25,7 @@ process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([mockMcpServerLaunch("mock")
 
 let mock: MockProviderServer;
 let server: AgentDeckServer;
+let projectId: string;
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-mcp-it-"));
@@ -39,6 +40,18 @@ beforeAll(async () => {
     reply: () => "The MCP tool answered.",
   });
   server = await startServer({ dataDir });
+  const added = await fetch(`http://127.0.0.1:${server.port}/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: cwd, name: "MCP integration" }),
+  });
+  projectId = ((await added.json()) as { project: { id: string } }).project.id;
+  const assigned = await fetch(`http://127.0.0.1:${server.port}/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ assignedMcpServers: ["mock"] }),
+  });
+  expect(assigned.status).toBe(200);
 });
 
 afterAll(async () => {
@@ -49,6 +62,11 @@ afterAll(async () => {
 
 describe("mcp: a configured server's tool is callable through the bridge", () => {
   it("registers the MCP tool and forwards a real pi call to the MCP server", async () => {
+    // The environment definition is identified without exposing its values.
+    const catalog = (await (
+      await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectId}`)
+    ).json()) as { servers: Array<{ id: string; source: string }> };
+    expect(catalog.servers.find((entry) => entry.id === "mock")?.source).toBe("environment");
     // The MCP tool is advertised on the bridge with the mcp__<server>__<tool> name.
     expect(server.bridge.specs().some((s) => s.name === "mcp__mock__echo")).toBe(true);
 
@@ -56,7 +74,7 @@ describe("mcp: a configured server's tool is callable through the bridge", () =>
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        cwd,
+        projectId,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,
         extensions: [writeMockProviderExtension(mock.baseUrl)],

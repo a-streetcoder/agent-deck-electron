@@ -26,6 +26,7 @@ process.env.AGENT_DECK_TEST = "1";
 let mock: MockProviderServer;
 let server: AgentDeckServer;
 let mcpHttp: MockHttpMcpServer;
+let projectId: string;
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-mcp-http-"));
@@ -45,6 +46,18 @@ beforeAll(async () => {
   mcpHttp = await startMockHttpMcpServer();
   process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([{ id: "mockhttp", url: mcpHttp.url }]);
   server = await startServer({ dataDir });
+  const added = await fetch(`http://127.0.0.1:${server.port}/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: cwd, name: "HTTP MCP integration" }),
+  });
+  projectId = ((await added.json()) as { project: { id: string } }).project.id;
+  const assigned = await fetch(`http://127.0.0.1:${server.port}/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ assignedMcpServers: ["mockhttp"] }),
+  });
+  expect(assigned.status).toBe(200);
 });
 
 afterAll(async () => {
@@ -58,7 +71,9 @@ describe("mcp http: a configured Streamable HTTP server's tool is callable throu
   it("registers the http MCP tool and forwards a real pi call to the remote server", async () => {
     expect(server.bridge.specs().some((s) => s.name === "mcp__mockhttp__echo")).toBe(true);
     // GET /mcp reports the http transport, connected, with the echo tool.
-    const mcpList = (await (await fetch(`http://127.0.0.1:${server.port}/mcp`)).json()) as {
+    const mcpList = (await (
+      await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectId}`)
+    ).json()) as {
       servers: Array<{ id: string; transport: string; connected: boolean; toolNames: string[] }>;
     };
     const entry = mcpList.servers.find((s) => s.id === "mockhttp");
@@ -70,7 +85,7 @@ describe("mcp http: a configured Streamable HTTP server's tool is callable throu
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        cwd,
+        projectId,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,
         extensions: [writeMockProviderExtension(mock.baseUrl)],

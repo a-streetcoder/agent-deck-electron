@@ -70,6 +70,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     resolveNamedAgent,
     enabledExtensionPaths,
     dropDiffCache,
+    prepareProjectMcpSession,
   } = ctx;
 
   let fileSearchSequence = 0;
@@ -1113,6 +1114,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
 
+    let namedMcpIds: string[] = [];
     let plan: LaunchPlan = {
       kind: "parent",
       provider,
@@ -1139,6 +1141,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         return reply.status(409).send({ error: `agent is disabled: ${body.agentName}` });
       }
       const { agent } = resolved;
+      const projectAssignments = new Set(project?.assignedMcpServers ?? []);
+      namedMcpIds = (agent.mcpServers ?? []).filter((id) => projectAssignments.has(id));
       plan = {
         kind: "agent",
         systemPrompt: { mode: agent.systemPromptMode, text: agent.body },
@@ -1210,6 +1214,24 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
 
+    const mcpPreparation = project
+      ? await prepareProjectMcpSession(project.id, namedMcpIds)
+      : undefined;
+    const mcpPreparationResult = mcpPreparation?.result;
+    if (mcpPreparationResult && !mcpPreparationResult.ok) {
+      await mcpPreparation.release();
+      return reply.status(422).send({ error: mcpPreparationResult.error });
+    }
+    const missingNamed = mcpPreparationResult?.ok
+      ? namedMcpIds.filter((id) => mcpPreparationResult.missing.includes(id))
+      : [];
+    if (missingNamed.length > 0) {
+      await mcpPreparation!.release();
+      return reply.status(409).send({
+        error: `Assigned MCP server definition missing: ${missingNamed.join(", ")}. Add it to global or project .pi/mcp.json, or remove it from the agent.`,
+      });
+    }
+
     let createdSession: ReturnType<typeof sessions.create> | undefined;
     let announcementAttempted = false;
     try {
@@ -1227,6 +1249,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       createdSession = session;
       announcementAttempted = true;
       sessions.announceCreated(session);
+      await mcpPreparation?.release();
       return reply.status(201).send({ session: session.meta });
     } catch (error) {
       const partialId =
@@ -1239,6 +1262,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       if (createdSession) await sessions.destroy(createdSession.meta.id).catch(() => {});
       else if (error instanceof SessionCreationError) await error.cleanup;
       if (partialId) bridgeTokens.delete(partialId);
+      await mcpPreparation?.release();
 
       // Only announcement can make this route own an index row. Never erase a
       // stale/unrelated collision on a pre-return launch failure.

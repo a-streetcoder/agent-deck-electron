@@ -30,6 +30,7 @@ const createProjectBody = z.object({
 const patchProjectBody = z.object({
   assignedSkills: z.array(RESOURCE_NAME).optional(),
   assignedPrompts: z.array(RESOURCE_NAME).optional(),
+  assignedMcpServers: z.array(RESOURCE_NAME).optional(),
   defaultAgentName: RESOURCE_NAME.nullable().optional(),
   enabled: z.boolean().optional(),
 });
@@ -40,7 +41,8 @@ const patchProjectBody = z.object({
  * server.ts.
  */
 export function registerProjectRoutes(ctx: ServerContext): void {
-  const { fastify, projects, sessions, settings, watchProject } = ctx;
+  const { fastify, projects, sessions, settings, watchProject, reconcileProjectMcp, broadcast } =
+    ctx;
 
   fastify.get("/projects", async () => ({
     projects: projects.list().filter((p) => !p.hidden),
@@ -123,6 +125,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       if (existing.hidden) {
         const restored = { ...existing, hidden: false };
         projects.upsert(restored);
+        await reconcileProjectMcp(restored.id);
         return reply.status(200).send({ project: restored });
       }
       return reply.status(200).send({ project: existing });
@@ -149,11 +152,23 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     if (parsed.data.assignedSkills !== undefined) next.assignedSkills = parsed.data.assignedSkills;
     if (parsed.data.assignedPrompts !== undefined)
       next.assignedPrompts = parsed.data.assignedPrompts;
+    if (parsed.data.assignedMcpServers !== undefined)
+      next.assignedMcpServers = [...new Set(parsed.data.assignedMcpServers)];
     if (parsed.data.defaultAgentName !== undefined) {
       next.defaultAgentName = parsed.data.defaultAgentName ?? undefined;
     }
     if (parsed.data.enabled !== undefined) next.enabled = parsed.data.enabled;
     projects.upsert(next);
+    if (parsed.data.assignedMcpServers !== undefined) {
+      const reconciled = await reconcileProjectMcp(id);
+      if (!reconciled.ok) {
+        // The assignment is still safely persisted; malformed config preserves
+        // already-live clients and the response gives the user an actionable state.
+        broadcast({ type: "resources_changed" });
+        return reply.status(422).send({ error: reconciled.error, project: next });
+      }
+    }
+    broadcast({ type: "resources_changed" });
     return { project: next };
   });
 
@@ -169,6 +184,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       return reply.status(409).send({ error: "project has a live session" });
     }
     projects.upsert({ ...project, hidden: true });
+    await ctx.mcp.reconcile([], id);
     return { ok: true };
   });
 

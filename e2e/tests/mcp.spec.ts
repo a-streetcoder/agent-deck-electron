@@ -1,7 +1,8 @@
 import { mockMcpServerLaunch } from "@agent-deck/testkit";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -12,14 +13,33 @@ import { startHarness, type E2eHarness } from "../helpers/env.ts";
  */
 
 let harness: E2eHarness;
+const project = mkdtempSync(path.join(tmpdir(), "mcp-e2e-project-"));
 
 test.beforeAll(async () => {
   harness = await startHarness({ chunkDelayMs: 20 });
+  const response = await fetch(`${harness.baseUrl}/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: project }),
+  });
+  if (!response.ok) throw new Error(await response.text());
 });
 
 test.afterAll(async () => {
   await harness.close();
 });
+
+async function openProjectMcp(page: Parameters<typeof selectProject>[0]) {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-mcp").click();
+}
+
+async function assignServer(page: Parameters<typeof selectProject>[0], id: string) {
+  const assignment = page.getByTestId(`mcp-assign-${id}`);
+  await assignment.check();
+  await expect(assignment).toBeChecked();
+}
 
 test("the empty state shows when no servers are configured", async ({ page }) => {
   await page.goto(harness.baseUrl);
@@ -37,8 +57,8 @@ test("lists a configured MCP server as connected and removes it", async ({ page 
   });
   expect(response.ok).toBe(true);
 
-  await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openProjectMcp(page);
+  await assignServer(page, "mock");
 
   const row = page.getByTestId("mcp-mock");
   await expect(row).toBeVisible();
@@ -47,7 +67,9 @@ test("lists a configured MCP server as connected and removes it", async ({ page 
   // The echo tool the mock server exposes is listed.
   await expect(row).toContainText("mcp__mock__echo");
 
-  // Remove it (confirm-gated, native parity) → the row disappears + empty state.
+  // Revoke project trust, then remove the global definition (confirm-gated,
+  // native parity) → the row disappears + empty state.
+  await page.getByTestId("mcp-assign-mock").uncheck();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId("mcp-remove-mock").click();
   await expect(page.getByTestId("mcp-mock")).toHaveCount(0);
@@ -67,9 +89,9 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
     }),
   );
 
-  await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openProjectMcp(page);
   await page.getByTestId("mcp-reload").click();
+  await assignServer(page, "external");
 
   const row = page.getByTestId("mcp-external");
   await expect(row).toBeVisible();
@@ -81,36 +103,46 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   writeFileSync(configPath, "{ not valid JSON");
   await page.getByTestId("mcp-reload").click();
   await expect(row).toHaveAttribute("data-connected", "true");
-  await expect(page.getByTestId("error-banner")).toContainText(
-    "current connections were preserved",
-  );
+  await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
 
   // Valid JSON with the wrong catalog shape is equally unsafe and must not be
   // mistaken for an authoritative empty snapshot.
   writeFileSync(configPath, JSON.stringify({ mcpServers: [] }));
   await page.getByTestId("mcp-reload").click();
   await expect(row).toHaveAttribute("data-connected", "true");
-  await expect(page.getByTestId("error-banner")).toContainText(
-    "current connections were preserved",
-  );
+  await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
 
   // An external deletion is authoritative too: reload tears down the live
-  // client and removes its registered tools without a server restart.
+  // client and removes its registered tools without a server restart. The
+  // persisted assignment remains visible as a missing definition until revoked.
   writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
   await page.getByTestId("mcp-reload").click();
   await expect(row).toHaveCount(0);
+  const missing = page.getByTestId("mcp-missing-external");
+  await expect(missing).toBeVisible();
+  await expect(missing).not.toContainText("mcp__external__echo");
+  await missing.getByRole("checkbox").click();
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 
 test("signs in to an OAuth http server: open link, paste code, becomes authorized", async ({
   page,
 }) => {
+  // Register the global definition first; selecting a project alone must not
+  // authorize it. The network exchange itself is intercepted below.
+  const response = await fetch(`${harness.baseUrl}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "authsrv", url: "http://127.0.0.1:9/mcp" }),
+  });
+  expect(response.ok).toBe(true);
+
   // Script the MCP endpoints so the OAuth flow (needs-auth → login URL → callback
   // → authorized) is exercised hermetically, without a real MCP provider.
   let authorized = false;
   let callbackBody: { code?: string; state?: string } | undefined;
 
-  await page.route("**/mcp", async (route) => {
+  await page.route(/\/mcp(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({
       status: 200,
@@ -127,7 +159,7 @@ test("signs in to an OAuth http server: open link, paste code, becomes authorize
       },
     });
   });
-  await page.route("**/mcp/*/login", async (route) => {
+  await page.route(/\/mcp\/[^/]+\/login(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     await route.fulfill({
       status: 200,
@@ -139,14 +171,14 @@ test("signs in to an OAuth http server: open link, paste code, becomes authorize
       },
     });
   });
-  await page.route("**/mcp/*/login/callback", async (route) => {
+  await page.route(/\/mcp\/[^/]+\/login\/callback(?:\?.*)?$/, async (route) => {
     callbackBody = route.request().postDataJSON() as { code?: string; state?: string };
     authorized = true;
     await route.fulfill({ status: 200, json: { auth: { status: "authorized" }, server: {} } });
   });
 
-  await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openProjectMcp(page);
+  await assignServer(page, "authsrv");
 
   // The http server shows sign-in required, and a Sign in button.
   await expect(page.getByTestId("mcp-auth-authsrv")).toHaveText("sign-in required");

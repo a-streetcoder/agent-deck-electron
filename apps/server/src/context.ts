@@ -11,7 +11,7 @@ import type { FastifyInstance } from "fastify";
 import type { AskUserCoordinator } from "./askUserCoordinator.ts";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
-import type { McpManager } from "./mcpTools.ts";
+import type { McpManager, McpServerConfig } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
@@ -80,6 +80,7 @@ export interface NamedAgentLaunch {
   /** Resolved skill base dirs, disabled skills removed. */
   skillDirs: string[];
   extensions: string[];
+  mcpServers?: string[];
 }
 
 /**
@@ -113,7 +114,22 @@ export interface ServerContext {
   providerLogin: ProviderLoginManager;
   mcp: McpManager;
   mcpOAuth: McpOAuthCoordinator;
-  reloadMcpConfig(): Promise<{ ok: true } | { ok: false; error: string }>;
+  reloadMcpConfig(projectId?: string): Promise<{ ok: true } | { ok: false; error: string }>;
+  reconcileProjectMcp(
+    projectId: string,
+    extraIds?: readonly string[],
+  ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }>;
+  prepareProjectMcpSession(
+    projectId: string,
+    serverIds: readonly string[],
+  ): Promise<{
+    result: { ok: true; missing: string[] } | { ok: false; error: string };
+    release(): Promise<void>;
+  }>;
+  effectiveMcpConfigs(projectId: string): { configs: McpServerConfig[]; valid: boolean };
+  globalMcpConfigs(): { configs: McpServerConfig[]; valid: boolean };
+  isMcpEnvOverride(id: string): boolean;
+  oauthKey(scope: string, id: string): string;
   memoryEnabled: boolean;
   memoryBaseDir: string;
   worktreesRoot: string;

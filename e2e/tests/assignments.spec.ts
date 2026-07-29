@@ -30,6 +30,10 @@ test.beforeAll(async () => {
     path.join(agentsDir, "syrup-bot.md"),
     "---\nname: syrup-bot\ndescription: Syrup specialist\n---\n\nYou are syrup-bot.\n",
   );
+  writeFileSync(
+    path.join(project, ".pi", "mcp.json"),
+    `${JSON.stringify({ mcpServers: { "repository-tools-with-a-long-name": { command: "/definitely/missing/mcp" } } }, null, 2)}\n`,
+  );
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -48,6 +52,40 @@ async function projectId(): Promise<string> {
   };
   return projects.find((p) => p.path === project)!.id;
 }
+
+test("project MCP assignment is explicit, accessible, persisted, and removable", async ({
+  page,
+}) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-mcp").click();
+
+  await expect(page.getByTestId("mcp-trust-copy")).toContainText("repository-controlled commands");
+  await expect(page.getByText("project config · read only")).toBeVisible();
+  const assignment = page.getByRole("checkbox", {
+    name: /assign repository-tools-with-a-long-name/i,
+  });
+  await expect(assignment).not.toBeChecked();
+  await assignment.focus();
+  await assignment.press("Space");
+  await expect(assignment).toBeChecked();
+
+  const id = await projectId();
+  await expect
+    .poll(async () => {
+      const { projects } = (await (await fetch(`${harness.baseUrl}/projects`)).json()) as {
+        projects: Array<{ id: string; assignedMcpServers?: string[] }>;
+      };
+      return projects.find((item) => item.id === id)?.assignedMcpServers ?? [];
+    })
+    .toContain("repository-tools-with-a-long-name");
+  // The PATCH broadcasts resources_changed; the mounted checkbox must survive
+  // that catalog refresh without losing keyboard focus.
+  await expect(assignment).toBeFocused();
+
+  await assignment.press("Space");
+  await expect(assignment).not.toBeChecked();
+});
 
 test("assigning a skill in the UI injects /skill:<name> into new sessions", async ({ page }) => {
   await page.goto(harness.baseUrl);

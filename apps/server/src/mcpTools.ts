@@ -174,17 +174,21 @@ function normalizeParameters(inputSchema: Record<string, unknown>): Record<strin
 }
 
 interface ServerState {
+  scope: string;
   config: McpServerConfig;
   client?: McpClient;
   /** Cancels an in-progress connect or tool-discovery operation during shutdown. */
   operationController?: AbortController;
-  /** Bridge names registered for this server (for unregister on teardown). */
+  /** Bridge names/specs registered for this server (for scoped advertisement and teardown). */
   toolNames: string[];
+  toolSpecs: ReturnType<BridgeRegistry["specs"]>;
   error?: string;
 }
 
 export class McpManager {
   private readonly servers = new Map<string, ServerState>();
+  /** Tool registrations are shared by name, but dispatch resolves the authenticated session scope. */
+  private readonly toolOwners = new Map<string, Set<string>>();
   /** Per-id operation chain so connect/refresh/remove for one id never interleave. */
   private readonly locks = new Map<string, Promise<unknown>>();
   /** Whole-catalog reloads are authoritative snapshots and must apply in request order. */
@@ -192,18 +196,30 @@ export class McpManager {
   /** Once shutdown starts, no route or queued reload may create another client. */
   private closing = false;
   /** Supplies the OAuth provider for an authed http server (undefined → none). */
-  private readonly httpAuthProvider?: (id: string) => McpOAuthProvider | undefined;
+  private readonly httpAuthProvider?: (scope: string, id: string) => McpOAuthProvider | undefined;
+  private readonly scopeForSession?: (sessionId: string) => string | undefined;
+  private readonly allowServerForSession?: (sessionId: string, serverId: string) => boolean;
 
   constructor(
     private readonly bridge: BridgeRegistry,
-    options: { httpAuthProvider?: (id: string) => McpOAuthProvider | undefined } = {},
+    options: {
+      httpAuthProvider?: (scope: string, id: string) => McpOAuthProvider | undefined;
+      scopeForSession?: (sessionId: string) => string | undefined;
+      allowServerForSession?: (sessionId: string, serverId: string) => boolean;
+    } = {},
   ) {
     this.httpAuthProvider = options.httpAuthProvider;
+    this.scopeForSession = options.scopeForSession;
+    this.allowServerForSession = options.allowServerForSession;
+  }
+
+  private key(scope: string, id: string): string {
+    return `${scope}\u0000${id}`;
   }
 
   /** The Streamable-HTTP url a configured server connects to (for OAuth), if any. */
-  httpUrlFor(id: string): string | undefined {
-    const config = this.servers.get(id)?.config;
+  httpUrlFor(id: string, scope = "global"): string | undefined {
+    const config = this.servers.get(this.key(scope, id))?.config;
     return config && isHttpConfig(config) ? config.url : undefined;
   }
 
@@ -223,27 +239,50 @@ export class McpManager {
   }
 
   /** Live state of every server the manager has attempted to connect. */
-  status(): McpServerStatus[] {
-    return [...this.servers.values()].map((state) => ({
-      id: state.config.id,
-      transport: isHttpConfig(state.config) ? "http" : "stdio",
-      connected: state.client !== undefined,
-      toolNames: [...state.toolNames],
-      error: state.error,
-    }));
+  status(scope = "global"): McpServerStatus[] {
+    return [...this.servers.values()]
+      .filter((state) => state.scope === scope)
+      .map((state) => ({
+        id: state.config.id,
+        transport: isHttpConfig(state.config) ? "http" : "stdio",
+        connected: state.client !== undefined,
+        toolNames: [...state.toolNames],
+        error: state.error,
+      }));
   }
 
-  has(id: string): boolean {
-    return this.servers.has(id);
+  /** MCP specs available to one authenticated project scope. */
+  specs(scope: string): ReturnType<BridgeRegistry["specs"]> {
+    return [...this.servers.values()]
+      .filter((state) => state.scope === scope)
+      .flatMap((state) => state.toolSpecs);
+  }
+
+  has(id: string, scope = "global"): boolean {
+    return this.servers.has(this.key(scope, id));
+  }
+
+  scopesFor(id: string): string[] {
+    return [...this.servers.values()]
+      .filter((state) => state.config.id === id)
+      .map((state) => state.scope);
   }
 
   /** Unregister a server's tools, close its client, and drop it. */
-  private async teardown(id: string): Promise<void> {
-    const state = this.servers.get(id);
+  private async teardown(id: string, scope = "global"): Promise<void> {
+    const key = this.key(scope, id);
+    const state = this.servers.get(key);
     if (!state) return;
-    for (const name of state.toolNames) this.bridge.unregister(name);
+    for (const name of state.toolNames) {
+      const owners = this.toolOwners.get(name);
+      owners?.delete(key);
+      if (!owners || owners.size === 0) {
+        this.toolOwners.delete(name);
+        this.bridge.unregister(name);
+      }
+    }
     await state.client?.close().catch(() => {});
-    this.servers.delete(id);
+    this.servers.delete(key);
   }
 
   /**
@@ -251,18 +290,19 @@ export class McpManager {
    * down first. A connect/list failure is recorded on the state (not thrown), so
    * one bad server never breaks the others or startup.
    */
-  connect(config: McpServerConfig): Promise<McpServerStatus> {
+  connect(config: McpServerConfig, scope = "global"): Promise<McpServerStatus> {
     if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
-    return this.serialize(config.id, () => this.connectInner(config));
+    return this.serialize(this.key(scope, config.id), () => this.connectInner(config, scope));
   }
 
-  private async connectInner(config: McpServerConfig): Promise<McpServerStatus> {
+  private async connectInner(config: McpServerConfig, scope: string): Promise<McpServerStatus> {
     if (this.closing) throw new Error("MCP manager is closing");
-    await this.teardown(config.id);
+    await this.teardown(config.id, scope);
     if (this.closing) throw new Error("MCP manager is closing");
     const operationController = new AbortController();
-    const state: ServerState = { config, operationController, toolNames: [] };
-    this.servers.set(config.id, state);
+    const key = this.key(scope, config.id);
+    const state: ServerState = { scope, config, operationController, toolNames: [], toolSpecs: [] };
+    this.servers.set(key, state);
     let client: McpClient | undefined;
     try {
       client = await connectWithTimeout(
@@ -271,7 +311,7 @@ export class McpManager {
           return isHttpConfig(config)
             ? McpClient.connectHttp(config, {
                 ...connectOptions,
-                authProvider: this.httpAuthProvider?.(config.id),
+                authProvider: this.httpAuthProvider?.(scope, config.id),
               })
             : McpClient.connectStdio(config, connectOptions);
         },
@@ -293,53 +333,84 @@ export class McpManager {
         const name = bridgeToolName(config.id, tool.name);
         // Skip empty-segment or already-claimed names (memory tools, other
         // servers) rather than silently clobber the bridge registry.
-        if (!safeId || !sanitize(tool.name) || this.bridge.specs().some((s) => s.name === name)) {
+        const existingOwners = this.toolOwners.get(name);
+        const collidesInScope = [...(existingOwners ?? [])].some(
+          (ownerKey) => ownerKey.startsWith(`${scope}\u0000`) && ownerKey !== key,
+        );
+        if (
+          !safeId ||
+          !sanitize(tool.name) ||
+          collidesInScope ||
+          (this.bridge.specs().some((s) => s.name === name) && !existingOwners)
+        ) {
           continue;
         }
+        const spec = {
+          name,
+          label: `${config.id}: ${tool.name}`,
+          description: tool.description,
+          parameters: normalizeParameters(tool.inputSchema),
+        };
         state.toolNames.push(name);
-        this.bridge.register(
-          {
-            name,
-            label: `${config.id}: ${tool.name}`,
-            description: tool.description,
-            parameters: normalizeParameters(tool.inputSchema),
-          },
-          async (params) => {
-            const result = await connectedClient.callTool(tool.name, params);
-            return { content: result.content, isError: result.isError };
-          },
-        );
+        state.toolSpecs.push(spec);
+        const owners = this.toolOwners.get(name) ?? new Set<string>();
+        owners.add(key);
+        this.toolOwners.set(name, owners);
+        this.bridge.register(spec, async (params, ctx) => {
+          const callScope = this.scopeForSession?.(ctx.sessionId) ?? "global";
+          const owner = this.servers.get(this.key(callScope, config.id));
+          if (
+            !this.allowServerForSession?.(ctx.sessionId, config.id) ||
+            !owner?.client ||
+            !owner.toolNames.includes(name)
+          ) {
+            return {
+              content: `MCP server "${config.id}" is not assigned to this session`,
+              isError: true,
+            };
+          }
+          const result = await owner.client.callTool(tool.name, params);
+          return { content: result.content, isError: result.isError };
+        });
       }
     } catch (error) {
-      for (const name of state.toolNames) this.bridge.unregister(name);
+      for (const name of state.toolNames) {
+        const owners = this.toolOwners.get(name);
+        owners?.delete(key);
+        if (!owners || owners.size === 0) {
+          this.toolOwners.delete(name);
+          this.bridge.unregister(name);
+        }
+      }
       state.toolNames = [];
+      state.toolSpecs = [];
       await client?.close().catch(() => {});
       state.client = undefined;
       state.error = error instanceof Error ? error.message : String(error);
     } finally {
       state.operationController = undefined;
     }
-    return this.status().find((s) => s.id === config.id)!;
+    return this.status(scope).find((s) => s.id === config.id)!;
   }
 
   /** Connect many servers in parallel (startup). Best-effort per server. */
-  async connectAll(configs: McpServerConfig[]): Promise<void> {
+  async connectAll(configs: McpServerConfig[], scope = "global"): Promise<void> {
     const seen = new Set<string>();
     const unique = configs.filter((config) => {
       if (seen.has(config.id)) return false;
       seen.add(config.id);
       return true;
     });
-    await Promise.allSettled(unique.map((config) => this.connect(config)));
+    await Promise.allSettled(unique.map((config) => this.connect(config, scope)));
   }
 
   /** Apply an authoritative config snapshot without disturbing unchanged live clients. */
-  reconcile(configs: McpServerConfig[]): Promise<void> {
+  reconcile(configs: McpServerConfig[], scope = "global"): Promise<void> {
     if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
     const snapshot = configs.map((config) => ({ ...config }));
     const next = this.reconcileTail.then(
-      () => this.reconcileSnapshot(snapshot),
-      () => this.reconcileSnapshot(snapshot),
+      () => this.reconcileSnapshot(snapshot, scope),
+      () => this.reconcileSnapshot(snapshot, scope),
     );
     this.reconcileTail = next.then(
       () => undefined,
@@ -348,36 +419,45 @@ export class McpManager {
     return next;
   }
 
-  private async reconcileSnapshot(configs: McpServerConfig[]): Promise<void> {
+  private async reconcileSnapshot(configs: McpServerConfig[], scope: string): Promise<void> {
     const desired = new Map(configs.map((config) => [config.id, config]));
-    const removals = [...this.servers.keys()]
-      .filter((id) => !desired.has(id))
-      .map((id) => this.remove(id));
+    const removals = [...this.servers.values()]
+      .filter((state) => state.scope === scope && !desired.has(state.config.id))
+      .map((state) => this.remove(state.config.id, scope));
     const connections = [...desired.values()]
       .filter((config) => {
-        const current = this.servers.get(config.id)?.config;
+        const current = this.servers.get(this.key(scope, config.id))?.config;
         return current === undefined || !mcpServerConfigsEqual(current, config);
       })
-      .map((config) => this.connect(config));
+      .map((config) => this.connect(config, scope));
     await Promise.allSettled([...removals, ...connections]);
   }
 
+  /** Remove clients in a scope that are no longer authorized without needing to parse config. */
+  async retain(scope: string, serverIds: ReadonlySet<string>): Promise<void> {
+    await Promise.allSettled(
+      [...this.servers.values()]
+        .filter((state) => state.scope === scope && !serverIds.has(state.config.id))
+        .map((state) => this.remove(state.config.id, scope)),
+    );
+  }
+
   /** Reconnect a known server using its stored config. */
-  refresh(id: string): Promise<McpServerStatus | null> {
+  refresh(id: string, scope = "global"): Promise<McpServerStatus | null> {
     if (this.closing) return Promise.resolve(null);
-    return this.serialize(id, async () => {
-      const config = this.servers.get(id)?.config;
+    return this.serialize(this.key(scope, id), async () => {
+      const config = this.servers.get(this.key(scope, id))?.config;
       // connectInner (not connect) — we already hold this id's lock.
-      return config ? await this.connectInner(config) : null;
+      return config ? await this.connectInner(config, scope) : null;
     });
   }
 
   /** Remove a server: unregister its tools and close its client. */
-  remove(id: string): Promise<boolean> {
+  remove(id: string, scope = "global"): Promise<boolean> {
     if (this.closing) return Promise.resolve(false);
-    return this.serialize(id, async () => {
-      if (!this.servers.has(id)) return false;
-      await this.teardown(id);
+    return this.serialize(this.key(scope, id), async () => {
+      if (!this.servers.has(this.key(scope, id))) return false;
+      await this.teardown(id, scope);
       return true;
     });
   }
@@ -393,7 +473,9 @@ export class McpManager {
     // then drain every per-id tail before tearing down the final owned clients.
     await this.reconcileTail;
     await Promise.allSettled([...this.locks.values()]);
-    await Promise.all([...this.servers.keys()].map((id) => this.teardown(id)));
+    await Promise.all(
+      [...this.servers.values()].map((state) => this.teardown(state.config.id, state.scope)),
+    );
     this.locks.clear();
   }
 }

@@ -172,6 +172,57 @@ describe("McpManager reconciliation", () => {
     expect(restored.close).toHaveBeenCalledTimes(1);
   });
 
+  it("routes same-id tools by authenticated session scope and cleans only the owning scope", async () => {
+    const first = fakeClient();
+    const second = fakeClient();
+    first.listTools.mockResolvedValue([
+      { name: "echo", description: "echo", inputSchema: { type: "object" } },
+    ]);
+    second.listTools.mockResolvedValue([
+      { name: "echo", description: "echo", inputSchema: { type: "object" } },
+    ]);
+    first.callTool.mockResolvedValue({ content: "from-a" });
+    second.callTool.mockResolvedValue({ content: "from-b" });
+    vi.mocked(McpClient.connectStdio)
+      .mockResolvedValueOnce(first as unknown as McpClient)
+      .mockResolvedValueOnce(second as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: (sessionId) =>
+        sessionId === "session-a" || sessionId === "unassigned-a" ? "project-a" : "project-b",
+      allowServerForSession: (sessionId, serverId) =>
+        sessionId !== "unassigned-a" && serverId === "shared",
+    });
+
+    await manager.connect({ id: "shared", command: "command-a" }, "project-a");
+    await manager.connect({ id: "shared", command: "command-b" }, "project-b");
+    expect(manager.specs("project-a").map((spec) => spec.name)).toEqual(["mcp__shared__echo"]);
+    const call = (sessionId: string) =>
+      bridge.dispatch(
+        {
+          sessionId,
+          toolCallId: "call",
+          tool: "mcp__shared__echo",
+          params: {},
+          token: "authenticated",
+        },
+        { token: "authenticated" },
+      );
+    await expect(call("session-a")).resolves.toMatchObject({ content: "from-a" });
+    await expect(call("session-b")).resolves.toMatchObject({ content: "from-b" });
+    await expect(call("unassigned-a")).resolves.toMatchObject({
+      content: expect.stringContaining("not assigned"),
+      isError: true,
+    });
+
+    await manager.reconcile([], "project-a");
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(second.close).not.toHaveBeenCalled();
+    await expect(call("session-b")).resolves.toMatchObject({ content: "from-b" });
+    await manager.close();
+    expect(second.close).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels an in-flight connection immediately and closes a late client during shutdown", async () => {
     const client = fakeClient();
     let resolveConnect!: (value: McpClient) => void;

@@ -251,6 +251,8 @@ export const ProjectMeta = Schema.mutable(
      * the app-level defaultPromptTemplates at launch.
      */
     assignedPrompts: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+    /** MCP server ids explicitly enabled for ordinary sessions in this project. */
+    assignedMcpServers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
     /** Agent preselected when switching to this project. */
     defaultAgentName: Schema.optional(Schema.String),
     /** Disabled projects are hidden from the sidebar and session creation. */

@@ -305,7 +305,7 @@ async function initServer(
     fastify.log.warn({ err: error }, message),
   );
 
-  const sessions = new SessionManager(
+  const sessions: SessionManager = new SessionManager(
     effectRuntime,
     receipts,
     (meta) => {
@@ -317,7 +317,10 @@ async function initServer(
       index.upsert(meta);
       // An ended session's changed-file cache is stale by definition — drop it
       // (a resume recomputes at the next turn boundary).
-      if (meta.endedAt) diffs.drop(meta.id);
+      if (meta.endedAt) {
+        diffs.drop(meta.id);
+        if (meta.projectId && mcp) void reconcileProjectMcp(meta.projectId);
+      }
       // `broadcast` is initialized during startServer, before any meta changes.
       broadcast({ type: "session_meta", session: meta });
     },
@@ -326,12 +329,14 @@ async function initServer(
       if (bridge.size === 0 || !bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
       bridgeTokens.set(meta.id, token);
-      // Per-session MCP scoping: an agent that DECLARES mcpServers sees only those
-      // servers' MCP tools; a plain session (no agent) or an agent that declares
-      // none sees all configured MCP tools. Non-MCP tools are always exposed.
-      let tools = bridge.specs();
+      // Per-session MCP scoping: project assignment is the execution trust grant.
+      // Plain sessions see assigned servers; named-agent policy can only narrow that set.
+      // Non-MCP bridge tools remain independently available.
+      const scope = meta.projectId;
+      const nonMcpTools = bridge.specs().filter((spec) => !spec.name.startsWith("mcp__"));
+      let tools = scope ? [...nonMcpTools, ...mcp.specs(scope)] : nonMcpTools;
       const allow = mcpAllowlistForSession(meta);
-      if (allow) tools = scopeMcpBridgeSpecs(tools, allow);
+      tools = scopeMcpBridgeSpecs(tools, allow);
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
@@ -536,6 +541,7 @@ async function initServer(
         tools: agent.tools?.filter((tool) => !BRIDGE_ONLY_TOOLS.has(tool)),
         skillDirs,
         extensions: agent.extensions ?? [],
+        mcpServers: agent.mcpServers ?? [],
       },
     };
   }
@@ -599,35 +605,15 @@ async function initServer(
     return piEnv?.HOME ?? homedir();
   };
 
-  // Proxy configured MCP servers' tools onto the bridge (best-effort — a server
-  // that fails to connect is skipped). Registered before listen so the tools are
-  // available to the first session launch. AGENT_DECK_MCP_SERVERS is a JSON array
-  // of stdio server configs { id, command, args?, env?, cwd? }.
-  // Source MCP servers from the global mcp.json (~/.pi/agent/mcp.json), with
-  // AGENT_DECK_MCP_SERVERS overriding/adding by id (used by tests and as an
-  // escape hatch). Both stdio (command) and http (url, Streamable HTTP) entries
-  // are supported. Skip the real-home read under AGENT_DECK_TEST so tests stay
-  // hermetic (they configure servers via the env override, never the real mcp.json).
+  const rootsFor = (projectId?: string): ResourceRoots => ({
+    home: resourceHome(),
+    projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
+  });
+  const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId));
+
+  // Catalog definitions are inert until a project or named agent explicitly
+  // assigns their id. Per-project catalogs merge global < project < environment.
   const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS);
-  const loadMcpConfigs = (): { configs: McpServerConfig[]; valid: boolean } => {
-    const catalog = readMcpServerCatalog({ home: resourceHome() });
-    const fromFile = catalog.servers.map((entry): McpServerConfig | null => {
-      if (entry.transport === "http" && entry.url) return { id: entry.id, url: entry.url };
-      if (entry.command) {
-        return { id: entry.id, command: entry.command, args: entry.args, env: entry.env };
-      }
-      return null;
-    });
-    return {
-      configs: mergeMcpServerConfigs(
-        fromFile.filter((config): config is McpServerConfig => config !== null),
-        mcpEnvConfigs,
-      ),
-      valid: catalog.valid,
-    };
-  };
-  const initialMcpConfigs =
-    process.env.AGENT_DECK_TEST === "1" ? mcpEnvConfigs : loadMcpConfigs().configs;
   // MCP OAuth (native MCPOAuthService): authed http servers get a per-server
   // OAuth provider whose tokens persist under the app data dir. The redirect
   // target is where the browser lands after authorization; the loopback capture
@@ -637,20 +623,123 @@ async function initServer(
     redirectUrl:
       process.env.AGENT_DECK_MCP_OAUTH_REDIRECT ?? "http://127.0.0.1:33418/mcp/oauth/callback",
   });
-  const mcp = new McpManager(bridge, {
-    httpAuthProvider: (id) => mcpOAuth.providerFor(id),
+  const oauthKey = (scope: string, id: string): string => `${scope}::${id}`;
+  const mcp: McpManager = new McpManager(bridge, {
+    httpAuthProvider: (scope, id) => mcpOAuth.providerFor(oauthKey(scope, id)),
+    scopeForSession: (sessionId) => sessions.get(sessionId)?.meta.projectId,
+    allowServerForSession: (sessionId, serverId) => {
+      const meta = sessions.get(sessionId)?.meta;
+      return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
+    },
   });
-  await mcp.connectAll(initialMcpConfigs);
-  const reloadMcpConfig = async (): Promise<{ ok: true } | { ok: false; error: string }> => {
-    const snapshot = loadMcpConfigs();
+
+  const globalMcpConfigs = (): { configs: McpServerConfig[]; valid: boolean } => {
+    const catalog = readMcpServerCatalog(rootsFor());
+    const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
+      if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
+      if (entry.command)
+        return [{ id: entry.id, command: entry.command, args: entry.args, env: entry.env }];
+      return [];
+    });
+    return { configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs), valid: catalog.valid };
+  };
+
+  const effectiveMcpConfigs = (
+    projectId: string,
+  ): { configs: McpServerConfig[]; valid: boolean } => {
+    const catalog = readMcpServerCatalog(rootsFor(projectId));
+    const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
+      if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
+      if (entry.command)
+        return [{ id: entry.id, command: entry.command, args: entry.args, env: entry.env }];
+      return [];
+    });
+    return {
+      configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs),
+      valid: catalog.valid,
+    };
+  };
+
+  const pendingMcpSessionStarts = new Map<string, Map<string, number>>();
+  const namedMcpIdsForLiveProject = (projectId: string): string[] => [
+    ...sessions
+      .list()
+      .filter((meta) => meta.projectId === projectId && !meta.endedAt && meta.agentName)
+      .flatMap((meta) => mcpAllowlistForSession(meta)),
+    ...[...(pendingMcpSessionStarts.get(projectId)?.keys() ?? [])],
+  ];
+
+  const reconcileProjectMcp = async (
+    projectId: string,
+    extraIds: readonly string[] = [],
+  ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }> => {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) {
+      await mcp.reconcile([], projectId);
+      return { ok: true, missing: [] };
+    }
+    const wanted = new Set([
+      ...(project.assignedMcpServers ?? []),
+      ...namedMcpIdsForLiveProject(projectId),
+      ...extraIds,
+    ]);
+    const snapshot = effectiveMcpConfigs(projectId);
     if (!snapshot.valid) {
+      // Parsing failure cannot authorize anything new. Keep only already-live
+      // clients that remain explicitly assigned, so unassignment still tears
+      // down deterministically without disturbing this scope's other clients.
+      await mcp.retain(projectId, wanted);
       return {
         ok: false,
-        error: "MCP configuration is not valid JSON; current connections were preserved.",
+        error:
+          "Global or project .pi/mcp.json is not valid JSON; assigned live connections were preserved and no new server was executed.",
       };
     }
-    await mcp.reconcile(snapshot.configs);
-    return { ok: true };
+    const byId = new Map(snapshot.configs.map((config) => [config.id, config]));
+    const missing = [...wanted].filter((id) => !byId.has(id));
+    await mcp.reconcile(
+      [...wanted].flatMap((id) => {
+        const config = byId.get(id);
+        return config ? [config] : [];
+      }),
+      projectId,
+    );
+    return { ok: true, missing };
+  };
+
+  const prepareProjectMcpSession = async (projectId: string, serverIds: readonly string[]) => {
+    const counts = pendingMcpSessionStarts.get(projectId) ?? new Map<string, number>();
+    pendingMcpSessionStarts.set(projectId, counts);
+    for (const id of new Set(serverIds)) counts.set(id, (counts.get(id) ?? 0) + 1);
+    let released = false;
+    const release = async (): Promise<void> => {
+      if (released) return;
+      released = true;
+      for (const id of new Set(serverIds)) {
+        const next = (counts.get(id) ?? 1) - 1;
+        if (next > 0) counts.set(id, next);
+        else counts.delete(id);
+      }
+      if (counts.size === 0) pendingMcpSessionStarts.delete(projectId);
+      await reconcileProjectMcp(projectId);
+    };
+    return { result: await reconcileProjectMcp(projectId), release };
+  };
+
+  // Missing assignment fields intentionally mean no servers. Repository config
+  // is parsed but never connected until an explicit project/agent assignment exists.
+  for (const project of projects.list()) await reconcileProjectMcp(project.id);
+
+  const reloadMcpConfig = async (
+    projectId?: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const targets = projectId ? [projectId] : projects.list().map((project) => project.id);
+    const errors: string[] = [];
+    for (const id of targets) {
+      const result = await reconcileProjectMcp(id);
+      if (!result.ok) errors.push(result.error);
+    }
+    return errors.length > 0 ? { ok: false, error: [...new Set(errors)].join(" ") } : { ok: true };
   };
 
   const fastify = Fastify({ logger: false });
@@ -695,26 +784,21 @@ async function initServer(
       .send(image.data);
   });
 
-  // Resource scanning uses the same HOME as MCP configuration and Pi.
-  const rootsFor = (projectId?: string): ResourceRoots => ({
-    home: resourceHome(),
-    projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
-  });
-  const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId));
-
-  // The MCP-server allowlist for a session (native explicit-assignment model):
-  // a PLAIN session (no agent) is unrestricted — undefined → all configured
-  // servers. An AGENT session is opt-in: it gets ONLY the servers it declares, so
-  // an agent that declares none, or one that was deleted/renamed since (no longer
-  // resolves), gets [] → no MCP tools (never silently widened to all). Function
-  // declaration so the bridge-extension factory (defined earlier) can call it —
-  // it only runs at launch time, after rootsFor is assigned.
-  function mcpAllowlistForSession(meta: SessionMeta): string[] | undefined {
-    if (!meta.agentName) return undefined;
+  // The MCP-server allowlist for a session: project assignment grants execution.
+  // A plain session gets that assignment set; a named agent intersects its declared
+  // mcpServers with the same set and can therefore narrow, never widen, trust.
+  // Function declaration lets the earlier bridge-extension factory call it.
+  function mcpAllowlistForSession(meta: SessionMeta): string[] {
+    if (!meta.projectId) return [];
+    const assigned = new Set(
+      projects.find((project) => project.id === meta.projectId)?.assignedMcpServers ?? [],
+    );
+    if (!meta.agentName) return [...assigned];
     const agent = scanAgents(rootsFor(meta.projectId)).find(
       (a) => a.name === meta.agentName && !a.shadowed,
     );
-    return agent?.mcpServers ?? [];
+    // Agent policy can narrow project-granted MCP capability, never grant it.
+    return (agent?.mcpServers ?? []).filter((id) => assigned.has(id));
   }
 
   // WebSocket layer (wsHandler.ts): socket accept, subscribe/replay,
@@ -824,6 +908,12 @@ async function initServer(
     mcp,
     mcpOAuth,
     reloadMcpConfig,
+    reconcileProjectMcp,
+    prepareProjectMcpSession,
+    effectiveMcpConfigs,
+    globalMcpConfigs,
+    isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
+    oauthKey,
     memoryEnabled,
     memoryBaseDir,
     worktreesRoot,

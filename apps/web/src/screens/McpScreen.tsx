@@ -4,6 +4,7 @@ import { LogIn, LogOut, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
+import { updateProject } from "../state/wsBridge.ts";
 
 /**
  * MCP screen (native Runtime → MCP): the configured MCP servers whose tools are
@@ -26,6 +27,8 @@ interface McpServer {
   toolNames: string[];
   error?: string;
   auth?: McpAuth;
+  source?: "global" | "project" | "environment";
+  editable?: boolean;
 }
 
 /** In-progress sign-in: the server + the authorization URL to open, and the
@@ -57,7 +60,14 @@ export function McpScreen() {
   const setError = useAppStore((state) => state.setError);
   const pushToast = useAppStore((state) => state.pushToast);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
+  const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const projects = useAppStore((state) => state.projects);
+  const selectedProject = projects.find((project) => project.id === currentProjectId);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [assignedServerIds, setAssignedServerIds] = useState<string[]>([]);
+  const [missingAssignedServerIds, setMissingAssignedServerIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingAssignments, setSavingAssignments] = useState<Set<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [name, setName] = useState("");
@@ -65,34 +75,60 @@ export function McpScreen() {
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
+  const loadedProject = useRef<string | null | undefined>(undefined);
+  const assignmentSaving = useRef(false);
+  const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
   const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
   // server can't clobber a newer flow the user has since started for another.
   const loginSeq = useRef(0);
 
-  const load = useCallback((): Promise<CatalogLoadResult> => {
-    const seq = ++loadSeq.current;
-    const pending = (async (): Promise<CatalogLoadResult> => {
-      try {
-        const response = await fetch("/mcp");
-        if (!response.ok) throw new Error(await response.text());
-        const data = (await response.json()) as { servers: McpServer[] };
-        if (seq !== loadSeq.current) return "superseded";
-        setServers(data.servers);
-        return "applied";
-      } catch (err) {
-        if (seq !== loadSeq.current) return "superseded";
-        setError(String(err));
-        return "failed";
-      }
-    })();
-    latestLoad.current = pending;
-    return pending;
-  }, [setError]);
+  const load = useCallback(
+    (preserveRows = false): Promise<CatalogLoadResult> => {
+      const seq = ++loadSeq.current;
+      const pending = (async (): Promise<CatalogLoadResult> => {
+        try {
+          if (!preserveRows) setLoading(true);
+          const query = currentProjectId
+            ? `?projectId=${encodeURIComponent(currentProjectId)}`
+            : "";
+          const response = await fetch(`/mcp${query}`);
+          if (!response.ok) throw new Error(await response.text());
+          const data = (await response.json()) as {
+            servers: McpServer[];
+            assignedServerIds?: string[];
+            missingAssignedServerIds?: string[];
+          };
+          if (seq !== loadSeq.current) return "superseded";
+          setServers((current) => {
+            if (!preserveRows) return data.servers;
+            const incoming = new Map(data.servers.map((server) => [server.id, server]));
+            return current.map((server) => incoming.get(server.id) ?? server);
+          });
+          setAssignedServerIds(data.assignedServerIds ?? []);
+          setMissingAssignedServerIds(data.missingAssignedServerIds ?? []);
+          return "applied";
+        } catch (err) {
+          if (seq !== loadSeq.current) return "superseded";
+          setError(String(err));
+          return "failed";
+        } finally {
+          // A silent assignment refresh may supersede a broadcast-triggered full
+          // load; the winning request must always settle its loading indicator.
+          if (seq === loadSeq.current) setLoading(false);
+        }
+      })();
+      latestLoad.current = pending;
+      return pending;
+    },
+    [currentProjectId, setError],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load, resourcesVersion]);
+    const preserveRows = loadedProject.current === currentProjectId;
+    loadedProject.current = currentProjectId;
+    void load(preserveRows);
+  }, [currentProjectId, load, resourcesVersion]);
 
   const add = async (): Promise<void> => {
     const trimmedName = name.trim();
@@ -117,7 +153,10 @@ export function McpScreen() {
 
   const refresh = async (id: string): Promise<void> => {
     try {
-      const response = await fetch(`/mcp/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+      const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+      const response = await fetch(`/mcp/${encodeURIComponent(id)}/refresh${query}`, {
+        method: "POST",
+      });
       if (!response.ok) throw new Error(await response.text());
     } catch (err) {
       setError(String(err));
@@ -130,7 +169,8 @@ export function McpScreen() {
     setReloading(true);
     setError(null);
     try {
-      const response = await fetch("/mcp/reload", { method: "POST" });
+      const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+      const response = await fetch(`/mcp/reload${query}`, { method: "POST" });
       if (!response.ok) throw new Error(await responseErrorMessage(response));
       let pending = load();
       for (;;) {
@@ -146,6 +186,37 @@ export function McpScreen() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setReloading(false);
+    }
+  };
+
+  const assign = async (id: string, enabled: boolean): Promise<void> => {
+    if (!currentProjectId || assignmentSaving.current) return;
+    assignmentSaving.current = true;
+    const restoreFocus = assignmentInputs.current.get(id) === document.activeElement;
+    const next = new Set(assignedServerIds);
+    if (enabled) next.add(id);
+    else next.delete(id);
+    // Immediate controlled-state feedback; the id lock prevents stale rapid toggles.
+    setAssignedServerIds([...next]);
+    setSavingAssignments((current) => new Set(current).add(id));
+    try {
+      await updateProject(currentProjectId, { assignedMcpServers: [...next] });
+      const authoritative = useAppStore
+        .getState()
+        .projects.find((project) => project.id === currentProjectId)?.assignedMcpServers;
+      setAssignedServerIds(authoritative ?? []);
+      // Refresh connection/error state without unmounting rows or stealing focus.
+      await load(true);
+    } finally {
+      assignmentSaving.current = false;
+      setSavingAssignments((current) => {
+        const updated = new Set(current);
+        updated.delete(id);
+        return updated;
+      });
+      if (restoreFocus) {
+        setTimeout(() => assignmentInputs.current.get(id)?.focus(), 0);
+      }
     }
   };
 
@@ -166,7 +237,10 @@ export function McpScreen() {
     const seq = ++loginSeq.current;
     setCode("");
     try {
-      const response = await fetch(`/mcp/${encodeURIComponent(id)}/login`, { method: "POST" });
+      const response = await fetch(
+        `/mcp/${encodeURIComponent(id)}/login?projectId=${encodeURIComponent(currentProjectId ?? "")}`,
+        { method: "POST" },
+      );
       if (!response.ok) throw new Error(await response.text());
       const { auth } = (await response.json()) as { auth: McpAuth };
       if (!auth.authUrl) throw new Error("no authorization URL returned");
@@ -187,11 +261,14 @@ export function McpScreen() {
     const { code: parsedCode, state } = parseCallback(code, flow.state);
     if (!parsedCode) return;
     try {
-      const response = await fetch(`/mcp/${encodeURIComponent(flow.id)}/login/callback`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: parsedCode, state }),
-      });
+      const response = await fetch(
+        `/mcp/${encodeURIComponent(flow.id)}/login/callback?projectId=${encodeURIComponent(currentProjectId ?? "")}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code: parsedCode, state }),
+        },
+      );
       if (!response.ok) throw new Error(await response.text());
       pushToast({ kind: "success", message: `Signed in to ${flow.id}` });
       // Only close/clear the panel if the user hasn't since started another flow.
@@ -207,7 +284,10 @@ export function McpScreen() {
 
   const logout = async (id: string): Promise<void> => {
     try {
-      const response = await fetch(`/mcp/${encodeURIComponent(id)}/logout`, { method: "POST" });
+      const response = await fetch(
+        `/mcp/${encodeURIComponent(id)}/logout?projectId=${encodeURIComponent(currentProjectId ?? "")}`,
+        { method: "POST" },
+      );
       if (!response.ok) throw new Error(await response.text());
     } catch (err) {
       setError(String(err));
@@ -231,9 +311,10 @@ export function McpScreen() {
           <div className="flex items-center gap-2">
             <ControlButton
               data-testid="mcp-reload"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium text-text-muted hover:text-accent disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40"
               disabled={reloading}
               title="Reload mcp.json and apply added, changed, or removed servers"
+              aria-label="Reload MCP configuration"
               onClick={() => void reloadFromDisk()}
             >
               <RefreshCw size={13} className={reloading ? "animate-spin" : undefined} />
@@ -241,21 +322,23 @@ export function McpScreen() {
             </ControlButton>
             <ControlButton
               data-testid="mcp-add"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               style={{
                 background:
                   "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                 color: "var(--color-accent-foreground)",
               }}
+              aria-label={adding ? "Close add MCP server form" : "Add MCP server"}
               onClick={() => setAdding((v) => !v)}
             >
               <Plus size={13} /> Add server
             </ControlButton>
           </div>
         </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Model Context Protocol servers whose tools are proxied into every session as{" "}
-          <code className="font-mono">mcp__&lt;server&gt;__&lt;tool&gt;</code>. Stdio transport.
+        <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
+          {selectedProject
+            ? `Only servers you assign here are connected for ordinary ${selectedProject.name} sessions. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
+            : "Select a project to assign servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog; project definitions stay read-only."}
         </p>
 
         {adding ? (
@@ -297,169 +380,270 @@ export function McpScreen() {
           </div>
         ) : null}
 
-        <div className="space-y-1.5" data-testid="mcp-list">
-          {servers.map((server) => (
-            <div key={server.id}>
-              <div
-                data-testid={`mcp-${server.id}`}
-                data-connected={server.connected ? "true" : "false"}
-                className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="truncate text-sm font-medium text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
-                      {server.id}
-                    </span>
-                    <span
-                      data-testid={`mcp-status-${server.id}`}
-                      className={cn(
-                        "rounded-capsule border px-1.5 text-micro",
-                        server.connected
-                          ? "border-success text-success"
-                          : "border-danger text-danger",
-                      )}
-                    >
-                      {server.connected ? "connected" : "disconnected"}
-                    </span>
-                    <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
-                      {server.transport}
-                    </span>
-                    {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
+        <div
+          className="space-y-1.5"
+          data-testid="mcp-list"
+          aria-busy={loading || savingAssignments.size > 0}
+        >
+          {loading ? (
+            <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-loading">
+              Loading MCP servers…
+            </div>
+          ) : null}
+          {!loading &&
+            servers.map((server) => (
+              <div key={server.id}>
+                <div
+                  data-testid={`mcp-${server.id}`}
+                  data-connected={server.connected ? "true" : "false"}
+                  data-assigned={assignedServerIds.includes(server.id) ? "true" : "false"}
+                  className="flex min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+                  aria-busy={savingAssignments.has(server.id)}
+                >
+                  {currentProjectId ? (
+                    <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                      <ControlInput
+                        type="checkbox"
+                        className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        ref={(element) => {
+                          if (element) assignmentInputs.current.set(server.id, element);
+                          else assignmentInputs.current.delete(server.id);
+                        }}
+                        data-testid={`mcp-assign-${server.id}`}
+                        aria-label={`Assign ${server.id} to ${selectedProject?.name ?? "project"}`}
+                        checked={assignedServerIds.includes(server.id)}
+                        disabled={savingAssignments.size > 0}
+                        onChange={(event) => void assign(server.id, event.target.checked)}
+                      />
+                      <span>
+                        {savingAssignments.has(server.id)
+                          ? "Saving…"
+                          : assignedServerIds.includes(server.id)
+                            ? "Assigned"
+                            : "Assign"}
+                      </span>
+                    </label>
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                       <span
-                        data-testid={`mcp-auth-${server.id}`}
-                        data-auth={server.auth.status}
+                        className="truncate text-sm font-medium text-text-primary"
+                        style={{ fontStretch: "expanded" }}
+                      >
+                        {server.id}
+                      </span>
+                      <span
+                        data-testid={`mcp-status-${server.id}`}
                         className={cn(
                           "rounded-capsule border px-1.5 text-micro",
-                          server.auth.status === "authorized"
+                          server.connected
                             ? "border-success text-success"
-                            : "border-border-subtle text-text-muted",
+                            : currentProjectId && !assignedServerIds.includes(server.id)
+                              ? "border-border-subtle text-text-muted"
+                              : "border-danger text-danger",
                         )}
                       >
-                        {server.auth.status === "authorized" ? "signed in" : "sign-in required"}
+                        {server.connected
+                          ? "connected"
+                          : currentProjectId && !assignedServerIds.includes(server.id)
+                            ? "available"
+                            : "disconnected"}
                       </span>
-                    ) : null}
-                    <span className="text-detail text-text-muted">
-                      {server.toolNames.length} tool{server.toolNames.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  {server.error ? (
-                    <div className="truncate text-detail text-danger">{server.error}</div>
-                  ) : server.toolNames.length > 0 ? (
-                    <div className="truncate font-mono text-detail text-text-muted">
-                      {server.toolNames.join(", ")}
+                      <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                        {server.transport}
+                      </span>
+                      {server.source ? (
+                        <span
+                          className="truncate text-detail text-text-muted"
+                          title={server.source}
+                        >
+                          {server.source === "project"
+                            ? "project config · read only"
+                            : server.source}
+                        </span>
+                      ) : null}
+                      {server.transport === "http" &&
+                      server.auth &&
+                      server.auth.status !== "none" ? (
+                        <span
+                          data-testid={`mcp-auth-${server.id}`}
+                          data-auth={server.auth.status}
+                          className={cn(
+                            "rounded-capsule border px-1.5 text-micro",
+                            server.auth.status === "authorized"
+                              ? "border-success text-success"
+                              : "border-border-subtle text-text-muted",
+                          )}
+                        >
+                          {server.auth.status === "authorized" ? "signed in" : "sign-in required"}
+                        </span>
+                      ) : null}
+                      <span className="text-detail text-text-muted">
+                        {server.toolNames.length} tool{server.toolNames.length === 1 ? "" : "s"}
+                      </span>
                     </div>
+                    {server.error ? (
+                      <div
+                        className="truncate text-detail text-danger"
+                        title="Connection failed. Review this server definition and reconnect."
+                      >
+                        {server.error}
+                      </div>
+                    ) : server.toolNames.length > 0 ? (
+                      <div className="truncate font-mono text-detail text-text-muted">
+                        {server.toolNames.join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                  {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
+                    server.auth.status === "authorized" ? (
+                      <ControlButton
+                        data-testid={`mcp-logout-${server.id}`}
+                        className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        title="Sign out"
+                        aria-label={`Sign out of ${server.id}`}
+                        onClick={() => void logout(server.id)}
+                      >
+                        <LogOut size={13} />
+                      </ControlButton>
+                    ) : (
+                      <ControlButton
+                        data-testid={`mcp-login-${server.id}`}
+                        className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        title="Sign in"
+                        aria-label={`Sign in to ${server.id}`}
+                        onClick={() => void beginLogin(server.id)}
+                      >
+                        <LogIn size={12} /> Sign in
+                      </ControlButton>
+                    )
+                  ) : null}
+                  <ControlButton
+                    data-testid={`mcp-refresh-${server.id}`}
+                    className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    title="Reconnect"
+                    aria-label={`Reconnect ${server.id}`}
+                    onClick={() => void refresh(server.id)}
+                  >
+                    <RefreshCw size={13} />
+                  </ControlButton>
+                  {server.editable !== false ? (
+                    <ControlButton
+                      data-testid={`mcp-remove-${server.id}`}
+                      className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      title="Remove global definition"
+                      aria-label={`Remove global MCP definition ${server.id}`}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Remove global MCP definition "${server.id}"? Existing assignments will show as missing unless another effective definition exists.`,
+                          )
+                        ) {
+                          void remove(server.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </ControlButton>
                   ) : null}
                 </div>
-                {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
-                  server.auth.status === "authorized" ? (
-                    <ControlButton
-                      data-testid={`mcp-logout-${server.id}`}
-                      className="rounded p-1 text-text-muted hover:text-danger"
-                      title="Sign out"
-                      onClick={() => void logout(server.id)}
-                    >
-                      <LogOut size={13} />
-                    </ControlButton>
-                  ) : (
-                    <ControlButton
-                      data-testid={`mcp-login-${server.id}`}
-                      className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover"
-                      title="Sign in"
-                      onClick={() => void beginLogin(server.id)}
-                    >
-                      <LogIn size={12} /> Sign in
-                    </ControlButton>
-                  )
-                ) : null}
-                <ControlButton
-                  data-testid={`mcp-refresh-${server.id}`}
-                  className="rounded p-1 text-text-muted hover:text-accent"
-                  title="Reconnect"
-                  onClick={() => void refresh(server.id)}
-                >
-                  <RefreshCw size={13} />
-                </ControlButton>
-                <ControlButton
-                  data-testid={`mcp-remove-${server.id}`}
-                  className="rounded p-1 text-text-muted hover:text-danger"
-                  title="Remove"
-                  onClick={() => {
-                    if (
-                      confirm(
-                        `Remove MCP server "${server.id}"? This clears its project and agent assignments.`,
-                      )
-                    ) {
-                      void remove(server.id);
-                    }
-                  }}
-                >
-                  <Trash2 size={13} />
-                </ControlButton>
-              </div>
-              {login?.id === server.id ? (
-                <div
-                  data-testid={`mcp-login-panel-${server.id}`}
-                  className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
-                >
-                  <div className="text-detail text-text-muted">
-                    1. Open the authorization page and approve access:
-                  </div>
-                  <a
-                    data-testid={`mcp-login-url-${server.id}`}
-                    href={login.authUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="truncate font-mono text-detail text-accent underline"
+                {login?.id === server.id ? (
+                  <div
+                    data-testid={`mcp-login-panel-${server.id}`}
+                    className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
                   >
-                    {login.authUrl}
-                  </a>
-                  <div className="text-detail text-text-muted">
-                    2. Paste the code you were shown (or the full redirect URL):
+                    <div className="text-detail text-text-muted">
+                      1. Open the authorization page and approve access:
+                    </div>
+                    <a
+                      data-testid={`mcp-login-url-${server.id}`}
+                      href={login.authUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="truncate font-mono text-detail text-accent underline"
+                    >
+                      {login.authUrl}
+                    </a>
+                    <div className="text-detail text-text-muted">
+                      2. Paste the code you were shown (or the full redirect URL):
+                    </div>
+                    <div className="flex gap-2">
+                      <ControlInput
+                        autoFocus
+                        data-testid={`mcp-login-code-${server.id}`}
+                        className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                        placeholder="authorization code"
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void submitCode();
+                          if (e.key === "Escape") setLogin(null);
+                        }}
+                      />
+                      <ControlButton
+                        data-testid={`mcp-login-submit-${server.id}`}
+                        className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                        style={{
+                          background:
+                            "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                          color: "var(--color-accent-foreground)",
+                        }}
+                        disabled={!code.trim()}
+                        onClick={() => void submitCode()}
+                      >
+                        Connect
+                      </ControlButton>
+                      <ControlButton
+                        data-testid={`mcp-login-cancel-${server.id}`}
+                        className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary"
+                        onClick={() => setLogin(null)}
+                      >
+                        Cancel
+                      </ControlButton>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <ControlInput
-                      autoFocus
-                      data-testid={`mcp-login-code-${server.id}`}
-                      className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                      placeholder="authorization code"
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void submitCode();
-                        if (e.key === "Escape") setLogin(null);
-                      }}
-                    />
-                    <ControlButton
-                      data-testid={`mcp-login-submit-${server.id}`}
-                      className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-                      style={{
-                        background:
-                          "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                        color: "var(--color-accent-foreground)",
-                      }}
-                      disabled={!code.trim()}
-                      onClick={() => void submitCode()}
-                    >
-                      Connect
-                    </ControlButton>
-                    <ControlButton
-                      data-testid={`mcp-login-cancel-${server.id}`}
-                      className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary"
-                      onClick={() => setLogin(null)}
-                    >
-                      Cancel
-                    </ControlButton>
+                ) : null}
+              </div>
+            ))}
+          {!loading &&
+            missingAssignedServerIds.map((id) => (
+              <div
+                key={`missing-${id}`}
+                className="flex items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
+                data-testid={`mcp-missing-${id}`}
+                aria-busy={savingAssignments.has(id)}
+              >
+                <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                  <ControlInput
+                    type="checkbox"
+                    checked
+                    ref={(element) => {
+                      if (element) assignmentInputs.current.set(id, element);
+                      else assignmentInputs.current.delete(id);
+                    }}
+                    disabled={savingAssignments.size > 0}
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    aria-label={`Remove missing MCP assignment ${id}`}
+                    onChange={() => void assign(id, false)}
+                  />
+                  <span>{savingAssignments.has(id) ? "Saving…" : "Assigned"}</span>
+                </label>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                    {id}
+                  </div>
+                  <div className="text-detail text-danger">
+                    Assigned definition is missing. Add it to global or project .pi/mcp.json, or
+                    unassign it.
                   </div>
                 </div>
-              ) : null}
-            </div>
-          ))}
-          {servers.length === 0 && !adding ? (
+              </div>
+            ))}
+          {!loading && servers.length === 0 && missingAssignedServerIds.length === 0 && !adding ? (
             <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-empty">
-              No MCP servers. Add one to proxy its tools into your sessions.
+              {currentProjectId
+                ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
+                : "No global MCP servers. Add one to make it available for explicit project assignment."}
             </div>
           ) : null}
         </div>
