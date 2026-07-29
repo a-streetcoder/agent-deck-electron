@@ -85,7 +85,9 @@ test.beforeAll(async () => {
   // Electron parses it as an option; packaged/local launches retain the sandbox.
   const launchArgs =
     process.env.CI && (process.platform === "linux" || process.platform === "win32")
-      ? ["--no-sandbox", DESKTOP_DIR]
+      ? process.platform === "win32"
+        ? ["--no-sandbox", "--enable-logging=stderr", "--v=1", DESKTOP_DIR]
+        : ["--no-sandbox", DESKTOP_DIR]
       : [DESKTOP_DIR];
   // Keep the Electron-owned server independent from ambient test seams as well
   // as browser harness defaults. The desktop Playwright project has its own
@@ -112,6 +114,9 @@ test.beforeAll(async () => {
       ...desktopEnv,
       HOME: resourceHome,
       USERPROFILE: resourceHome,
+      AGENT_DECK_E2E_STARTUP_TRACE: "1",
+      ELECTRON_ENABLE_LOGGING: process.platform === "win32" ? "1" : "",
+      ELECTRON_ENABLE_STACK_DUMPING: process.platform === "win32" ? "1" : "",
       PI_SKIP_VERSION_CHECK: "1",
       // Other specs set this process-level override for their own harnesses.
       // Pin the Electron-owned backend to this app's fixture HOME as well so

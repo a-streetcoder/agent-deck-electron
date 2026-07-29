@@ -25,6 +25,14 @@ import {
   shell,
 } from "electron";
 
+const startupTrace = (phase) => {
+  if (process.env.AGENT_DECK_E2E_STARTUP_TRACE === "1") {
+    console.error(`[agent-deck startup] ${phase}`);
+  }
+};
+
+startupTrace("module loaded");
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -41,6 +49,7 @@ const engineSkillRecoveryTokenPattern = /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.displace
 // About panel) instead of the package/Electron default.
 app.setName("Agent Deck");
 if (process.platform === "win32") app.setAppUserModelId("com.streetcoding.agentdeck");
+startupTrace("application identity configured");
 
 /** Match the window chrome to the operating system before the renderer paints. */
 const windowColors = () =>
@@ -793,10 +802,13 @@ ipcMain.on("attention", (_event, payload) => {
 });
 
 async function bootstrap() {
+  startupTrace("bootstrap started");
   try {
     const configuredPort = externalServerPort();
     serverPort = configuredPort ?? (await startServer());
+    startupTrace("server port acquired");
     await waitForHealth(serverPort);
+    startupTrace("server health confirmed");
   } catch (error) {
     dialog.showErrorBox("agent-deck failed to start", String(error));
     app.quit();
@@ -808,7 +820,9 @@ async function bootstrap() {
     credits: "A native harness for the pi coding agent.",
   });
   Menu.setApplicationMenu(buildAppMenu());
+  startupTrace("creating main window");
   createWindow(serverPort);
+  startupTrace("main window created");
 }
 
 // Slice L2 — the general-purpose browser mounts a REAL Chromium <webview> guest.
@@ -893,6 +907,7 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 app.whenReady().then(() => {
+  startupTrace("electron ready");
   // `pnpm dev` runs Electron's generic executable rather than a packaged app
   // bundle, so macOS otherwise displays Electron's icon in the Dock. Packaged
   // builds get the same artwork from electron-builder's bundle metadata.
