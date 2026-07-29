@@ -64,7 +64,11 @@ describe("native-compatible resource paths", () => {
       path.join(projectPath, ".pi", "skills"),
       path.join(projectPath, ".pi", "agents"),
       path.join(projectPath, ".pi", "prompts"),
+      path.join(projectPath, ".pi", "settings.json"),
     ]);
+    expect(watchDirs({ home, projectPath })).toContain(
+      path.join(home, ".pi", "agent", "settings.json"),
+    );
     expect(watchDirs({ home, projectPath })).not.toContain(
       path.join(projectPath, ".pi", "extensions"),
     );

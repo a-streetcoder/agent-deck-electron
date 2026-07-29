@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, selectProject, test } from "../helpers/fixtures.ts";
@@ -70,6 +78,43 @@ test("agents screen lists builtins and live-updates when files appear on disk", 
   // unit + resources-integration tested).
   await page.getByTestId("agent-filter-overridden").click();
   await expect(page.getByTestId("agent-row")).toHaveCount(0);
+
+  // Global Pi settings are an exact watch target even when the file did not
+  // exist at startup. An editor-style atomic replacement refreshes the open
+  // catalog without a page reload.
+  const settingsFile = path.join(harness.piHome, ".pi", "agent", "settings.json");
+  const settingsTmp = `${settingsFile}.external-edit`;
+  mkdirSync(path.dirname(settingsFile), { recursive: true });
+  writeFileSync(
+    settingsTmp,
+    JSON.stringify({
+      subagents: {
+        agentOverrides: {
+          coder: { description: "Externally customized coder" },
+        },
+      },
+    }),
+  );
+  renameSync(settingsTmp, settingsFile);
+  await expect(page.locator('[data-agent-name="coder"]')).toBeVisible({ timeout: 15_000 });
+
+  // A malformed manual edit fails closed to pristine builtins; it neither
+  // crashes the resource scan nor destroys the user's file.
+  writeFileSync(settingsTmp, "{ incomplete json");
+  renameSync(settingsTmp, settingsFile);
+  await expect(page.getByTestId("agent-row")).toHaveCount(0, { timeout: 15_000 });
+  expect(readFileSync(settingsFile, "utf8")).toBe("{ incomplete json");
+
+  writeFileSync(
+    settingsTmp,
+    JSON.stringify({
+      subagents: { agentOverrides: { coder: { description: "Recovered override" } } },
+    }),
+  );
+  renameSync(settingsTmp, settingsFile);
+  await expect(page.locator('[data-agent-name="coder"]')).toBeVisible({ timeout: 15_000 });
+  unlinkSync(settingsFile);
+  await expect(page.getByTestId("agent-row")).toHaveCount(0, { timeout: 15_000 });
 });
 
 test("skills screen live-updates when a SKILL.md appears on disk", async ({ page }) => {

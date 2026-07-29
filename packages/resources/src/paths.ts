@@ -149,8 +149,9 @@ export function promptCatalogDirs(roots: ResourceRoots): PromptCatalogDir[] {
 }
 
 /**
- * Directories the file watcher observes. Builtins never change; missing targets
- * are passed to chokidar so their later creation is observed without creating them.
+ * Paths the file watcher observes. Builtins never change; missing directories
+ * and exact settings files are passed to chokidar so their later creation is
+ * observed without creating them.
  */
 export function watchDirs(roots: ResourceRoots): string[] {
   return [
@@ -159,13 +160,16 @@ export function watchDirs(roots: ResourceRoots): string[] {
       .map((d) => d.dir),
     ...skillCatalogDirs(roots).map((d) => d.dir),
     ...promptCatalogDirs(roots).map((d) => d.dir),
+    // Native watches this exact file even before it exists. It can change
+    // builtin-agent overrides and other Pi-discovered resource configuration.
+    path.join(piAgentHome(roots), "settings.json"),
   ];
 }
 
-/** A selected project's resource catalog dirs the file watcher observes for
- *  live-update (native parity: `AppRefreshService` watches these per project).
- *  Missing targets are fine — chokidar observes their later creation without
- *  creating them. */
+/** A selected project's resource catalog dirs and exact settings file observed
+ * for live-update (native parity: `AppRefreshService` watches these per project).
+ * Missing targets are fine — chokidar observes their later creation without
+ * creating them. */
 export function projectWatchDirs(projectPath: string): string[] {
   const pi = path.join(projectPath, ".pi");
   return [
@@ -174,5 +178,6 @@ export function projectWatchDirs(projectPath: string): string[] {
     path.join(pi, "skills"),
     path.join(pi, "agents"),
     path.join(pi, "prompts"),
+    path.join(pi, "settings.json"),
   ];
 }

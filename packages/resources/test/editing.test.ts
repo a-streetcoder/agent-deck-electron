@@ -91,6 +91,12 @@ describe("builtin override edit safety", () => {
     expect(() => writeBuiltinAgentOverride({ home }, "coder", { description: "x" })).toThrow();
     // The broken file is untouched for the user to repair.
     expect(readFileSync(settingsFile, "utf8")).toBe("{ this is not json");
+    // Read-only catalog refresh fails closed to pristine builtins instead of
+    // taking the Agents screen down while the user repairs the file.
+    expect(
+      scanAgents({ home }).find((agent) => agent.name === "coder" && agent.scope === "builtin")
+        ?.overridden,
+    ).not.toBe(true);
   });
 
   it("diffing equal values yields no override; body edits become systemPrompt", () => {

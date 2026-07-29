@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { watchDirs } from "../src/paths.ts";
+import { projectWatchDirs, watchDirs } from "../src/paths.ts";
 import { scanAgents } from "../src/scanner.ts";
 import { addResourceWatchPaths, ensureDirs, watchResources } from "../src/watcher.ts";
 
@@ -16,6 +16,48 @@ describe("resource watcher", () => {
     const dirs = watchDirs({ home: root, projectPath: path.join(root, "project") });
     expect(ensureDirs(dirs)).toEqual(dirs);
     for (const dir of dirs) expect(existsSync(dir)).toBe(false);
+  });
+
+  it("watches an exact project settings file without reacting to sibling files", async () => {
+    const root = home();
+    const project = path.join(root, "project");
+    mkdirSync(project);
+    const settingsFile = path.join(project, ".pi", "settings.json");
+    let changes = 0;
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        if (existsSync(settingsFile)) resolveChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      addResourceWatchPaths(watcher, projectWatchDirs(project));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      mkdirSync(path.dirname(settingsFile), { recursive: true });
+      writeFileSync(settingsFile, JSON.stringify({ prompts: ["review"] }));
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher missed project settings creation")), 5_000),
+        ),
+      ]);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      changes = 0;
+      writeFileSync(path.join(project, ".pi", ".env"), "IRRELEVANT=1\n");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
   });
 
   it("watches an exact persisted collection root without creating it", async () => {
