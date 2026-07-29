@@ -1,0 +1,4 @@
+interface:
+  display_name: "Parity Loop"
+  short_description: "Resolve Electron/native parity gaps safely"
+  default_prompt: "Use $parity-loop to resolve the next active Agent Deck Electron parity gap."
