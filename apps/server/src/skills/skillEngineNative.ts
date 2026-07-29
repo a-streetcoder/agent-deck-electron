@@ -186,21 +186,47 @@ export interface SkillEngineNative {
 }
 
 /**
- * Resolve the native addon from `@a-streetcoder/skill-engine-native/native` (the raw ESM
- * binding; the package's own loader handles the `.node` candidate ladder). Kept as a soft
- * dynamic import so this workspace still builds before the dependency is installed — a
- * missing package throws a clear, actionable error rather than a hard module-not-found at
- * load time. Wired into `EngineSkillStore` in `server.ts` once the dependency is added.
+ * Resolve the native addon, mirroring how `loop-catalog-native` is loaded:
+ *
+ * 1. **Packaged Electron** — the platform `.node` is staged into `resources/skill-engine-native/`
+ *    by `build-backend.mjs` + electron-builder `extraResources`; require it directly via
+ *    `process.resourcesPath`. The bundled server can't resolve the private package from inside
+ *    app.asar, so a bare import fails there.
+ * 2. **Env override** — `AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` for hermetic/dev runs.
+ * 3. **Dev / tests** — resolve `@a-streetcoder/skill-engine-native/native` from node_modules (the
+ *    widened specifier keeps `tsc` from statically resolving it before the dep is installed).
+ *
+ * A missing addon throws a clear, actionable error rather than a raw module-not-found.
  */
 export async function loadSkillEngineNative(): Promise<SkillEngineNative> {
+  const { existsSync, readdirSync } = await import("node:fs");
+  const nodePath = (await import("node:path")).default;
+  const { createRequire } = await import("node:module");
+  const req = createRequire(import.meta.url);
+
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const stagedDir = resourcesPath ? nodePath.join(resourcesPath, "skill-engine-native") : undefined;
+  const stagedBinary =
+    stagedDir && existsSync(stagedDir)
+      ? readdirSync(stagedDir)
+          .map((entry) => nodePath.join(stagedDir, entry))
+          .find((candidate) => candidate.endsWith(".node"))
+      : undefined;
+  const override = process.env.AGENT_DECK_SKILL_ENGINE_NATIVE_PATH?.trim() || undefined;
+
+  for (const candidate of [override, stagedBinary]) {
+    if (candidate && existsSync(candidate)) {
+      // A NAPI `.node` exports the surface directly (the meta package's loader only picks the
+      // right binary, which we've already done).
+      return req(candidate) as SkillEngineNative;
+    }
+  }
+
   try {
-    // A widened (`: string`) specifier keeps `tsc` from statically resolving the module,
-    // so the workspace still builds before the optional dependency is installed.
     const specifier: string = "@a-streetcoder/skill-engine-native/native";
     const mod = (await import(specifier)) as {
       default?: SkillEngineNative;
     } & Partial<SkillEngineNative>;
-    // The binding may expose the surface as the default export or as named exports.
     return (mod.default ?? (mod as unknown as SkillEngineNative)) satisfies SkillEngineNative;
   } catch (cause) {
     throw new Error(

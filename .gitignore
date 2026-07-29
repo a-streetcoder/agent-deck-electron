@@ -12,3 +12,6 @@ test-results/
 .cargo-local/
 .rustup-local/
 .node22-local/
+
+# Staged shared skill engine .node (build artifact, copied by build-backend.mjs)
+build/skill-engine-native/

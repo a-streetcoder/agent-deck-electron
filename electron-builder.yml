@@ -22,6 +22,10 @@ extraResources:
     to: loop-catalog-native
     filter:
       - "*.node"
+  - from: build/skill-engine-native
+    to: skill-engine-native
+    filter:
+      - "*.node"
   - from: packages/resources/builtin-agents
     to: builtin-agents
   - from: build/pi-runtime/node_modules

@@ -164,6 +164,22 @@ P4 = delete agent-deck's duplicate skill machinery.
 - **Follow-ups:** the upgrade caveat above (re-import old collections); the base-less whole-skill
   conflict card in `SkillsScreen.tsx` (only reachable for pre-0.1.5 imports); a replacement
   route-level integration test for the git flows (the old suites tested deleted code).
+- **Question out to Syncr — symlinked skill-tree mutation.** agent-deck's old native rename REFUSED
+  a skill whose `SKILL.md` is a symlink (409 "unsafe"); the engine renames it (200). Safe in
+  practice (the rename never dereferences the link; engine discovery doesn't follow symlinks), so
+  the old refusal was agent-deck-side belt-and-suspenders — but confirm the engine should either
+  refuse or knowingly allow symlinked skill trees on mutation. The unix-only regression test is
+  `it.skip`-ped pending that answer (`apps/server/test/skill-rename.test.ts`).
+
+## Packaging (Electron)
+
+The engine addon is **external to `app.asar`**, mirroring `loop-catalog-native`: `build-backend.mjs`
+stages the platform `.node` into `build/skill-engine-native/`, electron-builder copies it to
+`resources/skill-engine-native/` (`extraResources`), and `loadSkillEngineNative()` requires it via
+`process.resourcesPath`. A bare package import can't resolve from inside the bundled asar — that was
+the cause of the packaged-app "skill engine addon unavailable" boot failure. The env override
+`AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` short-circuits the ladder for hermetic runs; dev/tests fall
+back to resolving the package from `node_modules`.
 
 ## Contributor rule
 

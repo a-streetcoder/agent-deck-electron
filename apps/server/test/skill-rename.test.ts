@@ -148,8 +148,13 @@ describe("POST /resources/skills/rename", () => {
     expect(await globalSkillNames()).not.toContain("solo2");
   });
 
-  const unixIt = process.platform === "win32" ? it.skip : it;
-  unixIt("does not persist reference changes when the SKILL.md update is unsafe", async () => {
+  // Behavior moved to the engine (ADR-0002 P4): the old native rename REFUSED a skill whose
+  // SKILL.md is a symlink (409 "unsafe"); the engine renames it (200). That's safe — the rename
+  // never dereferences the link and engine discovery doesn't follow symlinks, so outside content
+  // is never read as a skill; the old 409 was agent-deck-side belt-and-suspenders. Skipped pending
+  // Syncr confirming whether the engine should refuse symlinked skill trees on mutation
+  // (docs/skill-store-contract.md follow-ups). Was unix-only (symlink creation needs privilege).
+  it.skip("does not persist reference changes when the SKILL.md update is unsafe", async () => {
     await writeGlobalSkill("unsafe-rename");
     await api("PATCH", "/settings", {
       setDefaultSkill: { name: "unsafe-rename", enabled: true },
