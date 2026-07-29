@@ -1,12 +1,12 @@
 # VISION_IDENTITY — every action chains to a human
 
-*Decision of record: Syncr #121 (M.21 owner-attested delegation chains), #122 (M.22 ADR — the
-gate before any signing code), `Syncr/docs/research-nostr.md`. 2026-07-29.*
+_Decision of record: Syncr #121 (M.21 owner-attested delegation chains), #122 (M.22 ADR — the
+gate before any signing code), `Syncr/docs/research-nostr.md`. 2026-07-29._
 
 ## The principle
 
 Identity is **conferred, not self-sovereign**: the directory (Syncr's Better Auth/SCIM) is the
-trust root, and cryptographic keys are credentials *under* it — the Sigstore/Matrix pattern,
+trust root, and cryptographic keys are credentials _under_ it — the Sigstore/Matrix pattern,
 not the Nostr pattern. What we lifted from Nostr/Buzz is the **signed-event spine** and Buzz's
 owner-attestation model (their draft NIP-OA/NIP-AA), both PKI-portable, neither requiring any
 Nostr dependency.

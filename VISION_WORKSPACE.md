@@ -1,13 +1,13 @@
 # VISION_WORKSPACE — projects where humans and agents collaborate
 
-*Decision of record: Syncr #123 (M.23 conversation layer), #124 (M.24 job lifecycle), #125
-(M.25 north star). Inspired by block/buzz; governed variant. 2026-07-29.*
+_Decision of record: Syncr #123 (M.23 conversation layer), #124 (M.24 job lifecycle), #125
+(M.25 north star). Inspired by block/buzz; governed variant. 2026-07-29._
 
 ## The shape
 
-A **Project** is the unit of collaboration: members (humans *and* agents), assigned assets
+A **Project** is the unit of collaboration: members (humans _and_ agents), assigned assets
 (skills/prompts/loops via the Syncr catalog), entitled tools, channels, and jobs. The project
-channel is *where governance binds*: an agent in the channel operates under project-scoped
+channel is _where governance binds_: an agent in the channel operates under project-scoped
 entitlement intersections, and every action carries its owner-attested chain. Chat is the UX
 wrapper around the governance engine — not a separate product bolted on.
 

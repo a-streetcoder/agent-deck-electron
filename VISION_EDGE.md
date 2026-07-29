@@ -1,6 +1,6 @@
 # VISION_EDGE — execution at the edge, coordination in the cloud
 
-*Decision of record: Syncr #125 (M.25 execution model) + #122 ADR notes. 2026-07-29.*
+_Decision of record: Syncr #125 (M.25 execution model) + #122 ADR notes. 2026-07-29._
 
 **Agents run on their owner's machine. Period — including in the multiuser future.**
 
@@ -18,7 +18,7 @@ claims it (Syncr M.24). Presence makes this legible, never embarrassing:
 `@release-agent — owner offline, 2 jobs queued`.
 
 **Shared headless project hosts are explicitly not committed.** The client/server split
-(React ⇄ WS ⇄ `apps/server`) means the same server binary *could* run detached — we know that,
+(React ⇄ WS ⇄ `apps/server`) means the same server binary _could_ run detached — we know that,
 and we are still not designing for it. If it is ever revisited, it is an ADR-level decision
 (Syncr #122): a host holding agent keys for a project is a new attestation subject class, and
 per-user-machine execution must remain first-class regardless.
@@ -33,7 +33,7 @@ Agent Deck must run fully offline for a user when collaboration isn't needed:
   own agents) accumulate in a local outbound queue and sync on reconnect. Event ids are
   client-generated and content-addressed, so they are stable without a server round-trip;
   ordering authority is ingest order at the coordination plane, never client clocks (Syncr #123).
-- Device-side signing (VISION_IDENTITY) is what makes offline work *verifiable*: events signed
+- Device-side signing (VISION*IDENTITY) is what makes offline work \_verifiable*: events signed
   while offline validate at upload. The compensating control is verification-at-upload — a
   deprovisioned user's offline backlog is rejected at sync and surfaced to admins (Syncr #122).
 - The guarantee, stated as product truth: **collaboration features degrade offline; personal
