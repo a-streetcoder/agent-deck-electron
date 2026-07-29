@@ -10,12 +10,10 @@ import {
   defaultRoots,
   projectWatchDirs,
   readMcpServers,
-  removeResourceWatchPaths,
   scanAgents,
   scanExtensions,
   scanSkills,
   watchResources,
-  ManagedSkillRepositoryStore,
   ProviderLoginManager,
   SessionWorktreeStore,
   type ResourceRoots,
@@ -62,13 +60,7 @@ import {
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
-import {
-  defaultDataDir,
-  ProjectIndex,
-  SessionIndex,
-  SettingsStore,
-  type ImportedSkillRepository,
-} from "./persistence.ts";
+import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
@@ -245,11 +237,6 @@ async function initServer(
   // child, which the ordinary-session leaf policy can never select.
   const sessionWorktreeStore = new SessionWorktreeStore(dataDir);
   const worktreesRoot = sessionWorktreeStore.rootPath;
-  const skillReposRoot = managedSkillRepositories.root;
-  const managedSkillRepositoryStore = new ManagedSkillRepositoryStore(
-    managedSkillRepositories.dataDir,
-    managedSkillRepositories.nativeIdentity(),
-  );
 
   // Recall engine. Lexical+fuzzy is the always-on default; SEMANTIC recall is
   // opt-in — an injected embedder (tests) or AGENT_DECK_SEMANTIC_MEMORY=1 (which
@@ -685,105 +672,7 @@ async function initServer(
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
-  // collection-v1 discovery and Pi injection consume only native materialized
-  // snapshots. Persisted absolute roots remain migration/display data and are
-  // never treated as authority.
-  const snapshotRootsByRepository = new Map<string, string[]>();
-  const unavailableCollectionRepositories = new Set<string>();
-  const repositoryOperations = new Set<string>();
-  const repositoryWatcherOperations = new Set<string>();
-  const withRepositoryLock = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    // Notification rebuilds are internal serialization, not a user-visible
-    // conflict. Wait for that bounded native copy to finish; still reject a
-    // genuinely concurrent API mutation exactly as before.
-    while (repositoryOperations.has(key) && repositoryWatcherOperations.has(key)) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    if (repositoryOperations.has(key)) throw new Error("repository_busy");
-    repositoryOperations.add(key);
-    try {
-      return await operation();
-    } finally {
-      repositoryOperations.delete(key);
-    }
-  };
-  const collectionSnapshotRoots = (record: ImportedSkillRepository): string[] | undefined => {
-    if (
-      record.storageMode !== "collection-v1" ||
-      unavailableCollectionRepositories.has(record.id)
-    ) {
-      return undefined;
-    }
-    const expected = snapshotRootsByRepository.get(record.id);
-    if (!expected) return undefined;
-    try {
-      // JS scanners and Pi receive path strings, so revalidate the held native
-      // capability and stable leaf identity immediately before deriving either.
-      const validated = managedSkillRepositoryStore.validateSnapshot(record.id).skillRoots;
-      if (
-        validated.length !== expected.length ||
-        validated.some((root, index) => root !== expected[index])
-      ) {
-        throw new Error("snapshot roots changed");
-      }
-      return validated;
-    } catch {
-      removeCollectionSnapshot(record.id);
-      return undefined;
-    }
-  };
-  const removeCollectionSnapshot = (repositoryId: string): void => {
-    snapshotRootsByRepository.delete(repositoryId);
-    unavailableCollectionRepositories.add(repositoryId);
-  };
-  const rebuildCollectionSnapshot = async (record: ImportedSkillRepository): Promise<string[]> => {
-    if (record.storageMode !== "collection-v1") return [];
-    try {
-      const clone = managedSkillRepositories.validateRepository(record.clonePath);
-      const relativeRoots =
-        record.syncedSkillRelativePaths ?? record.selectedSkillRelativePaths ?? [];
-      const components = relativeRoots.map((relative) => {
-        if (nodePath.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) {
-          throw new Error("unsafe selected skill root");
-        }
-        return relative === "" ? [] : relative.split(/[\\/]/).filter(Boolean);
-      });
-      const snapshot = await managedSkillRepositoryStore.materializeSnapshot(
-        nodePath.basename(clone),
-        record.id,
-        components,
-      );
-      snapshotRootsByRepository.set(record.id, snapshot.skillRoots);
-      unavailableCollectionRepositories.delete(record.id);
-      return snapshot.skillRoots;
-    } catch (error) {
-      removeCollectionSnapshot(record.id);
-      throw error;
-    }
-  };
-  for (const record of settings.get().importedSkillRepositories) {
-    if (record.storageMode !== "collection-v1") continue;
-    try {
-      await rebuildCollectionSnapshot(record);
-    } catch {
-      // Persist and list quarantined records; startup never follows their paths.
-    }
-  }
-  const collectionSkillRootsForScan = (): string[] =>
-    settings
-      .get()
-      .importedSkillRepositories.flatMap((record) => collectionSnapshotRoots(record) ?? []);
-  const collectionSkillRootsForWatch = (): string[] =>
-    settings.get().importedSkillRepositories.flatMap((record) => {
-      if (record.storageMode !== "collection-v1" || !collectionSnapshotRoots(record)) return [];
-      try {
-        return managedSkillRepositories.deriveSkillRoots(record);
-      } catch {
-        return [];
-      }
-    });
-  const scanSkillsFor = (projectId?: string) =>
-    scanSkills(rootsFor(projectId), collectionSkillRootsForScan());
+  const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId));
 
   // The MCP-server allowlist for a session (native explicit-assignment model):
   // a PLAIN session (no agent) is unrestricted — undefined → all configured
@@ -857,47 +746,10 @@ async function initServer(
   broadcast = wsBroadcast;
   broadcastDiff = wsBroadcastDiff;
 
-  // Watchers are notifications only. Every event rebuilds snapshots under the
-  // same repository lock as mutations; event paths are never scan authority.
-  let watcherRefreshRunning = false;
-  const initialCollectionWatchRoots = collectionSkillRootsForWatch();
-  const watchedCollectionRoots = new Set(initialCollectionWatchRoots);
+  // Resource watcher: any change under the resource catalogs re-broadcasts so the UI refreshes.
   const resourceWatcher = watchResources({ home: resourceHome() }, () => {
-    if (watcherRefreshRunning) return;
-    watcherRefreshRunning = true;
-    void (async () => {
-      for (const record of settings.get().importedSkillRepositories) {
-        if (record.storageMode !== "collection-v1") continue;
-        if (repositoryOperations.has(record.id)) continue;
-        try {
-          repositoryWatcherOperations.add(record.id);
-          await withRepositoryLock(record.id, () => rebuildCollectionSnapshot(record));
-        } catch (error) {
-          if (error instanceof Error && error.message === "repository_busy") return;
-          removeCollectionSnapshot(record.id);
-        } finally {
-          repositoryWatcherOperations.delete(record.id);
-        }
-      }
-      const desired = new Set(collectionSkillRootsForWatch());
-      await removeResourceWatchPaths(
-        resourceWatcher,
-        [...watchedCollectionRoots].filter((root) => !desired.has(root)),
-      );
-      addResourceWatchPaths(
-        resourceWatcher,
-        [...desired].filter((root) => !watchedCollectionRoots.has(root)),
-      );
-      watchedCollectionRoots.clear();
-      for (const root of desired) watchedCollectionRoots.add(root);
-      broadcast({ type: "resources_changed" });
-    })()
-      .catch(() => {})
-      .finally(() => {
-        watcherRefreshRunning = false;
-      });
+    broadcast({ type: "resources_changed" });
   });
-  addResourceWatchPaths(resourceWatcher, initialCollectionWatchRoots);
   const watchedProjects = new Set<string>();
   const watchProject = (projectPath: string): void => {
     if (watchedProjects.has(projectPath)) return;
@@ -945,9 +797,6 @@ async function initServer(
     memoryBaseDir,
     worktreesRoot,
     sessionWorktreeStore,
-    skillReposRoot,
-    managedSkillRepositories,
-    managedSkillRepositoryStore,
     recallMemories,
     resolveNamedAgent,
     extensionBridgeConflictAt,
@@ -956,12 +805,6 @@ async function initServer(
     rootsFor,
     scanSkillsFor,
     skillStore,
-    collectionSnapshotRoots,
-    rebuildCollectionSnapshot,
-    removeCollectionSnapshot,
-    withRepositoryLock,
-    watchSkillRoots: (paths) => addResourceWatchPaths(resourceWatcher, paths),
-    unwatchSkillRoots: (paths) => removeResourceWatchPaths(resourceWatcher, paths),
     broadcast,
     watchProject,
     dropDiffCache: (sessionId) => diffs.drop(sessionId),

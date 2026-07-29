@@ -3,7 +3,6 @@ import type { ServerMessage } from "@agent-deck/contracts";
 import type { SkillInfo } from "@agent-deck/domain";
 import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
 import type {
-  ManagedSkillRepositoryStore,
   ProviderLoginManager,
   ResourceRoots,
   SessionWorktreeStore,
@@ -14,15 +13,9 @@ import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
-import type {
-  ImportedSkillRepository,
-  ProjectIndex,
-  SessionIndex,
-  SettingsStore,
-} from "./persistence.ts";
+import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
-import type { ManagedSkillRepositories } from "./skillRepositories.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
@@ -122,9 +115,6 @@ export interface ServerContext {
   memoryBaseDir: string;
   worktreesRoot: string;
   sessionWorktreeStore: SessionWorktreeStore;
-  skillReposRoot: string;
-  managedSkillRepositories: ManagedSkillRepositories;
-  managedSkillRepositoryStore: ManagedSkillRepositoryStore;
   recallMemories(store: MemoryStore, query: string, limit?: number): Promise<MemorySearchHit[]>;
   resolveNamedAgent(
     name: string,
@@ -139,12 +129,6 @@ export interface ServerContext {
    *  prefer this over the raw scan/writer functions so the shared engine can later
    *  replace it behind the same interface. */
   skillStore: SkillStore;
-  collectionSnapshotRoots(record: ImportedSkillRepository): string[] | undefined;
-  rebuildCollectionSnapshot(record: ImportedSkillRepository): Promise<string[]>;
-  removeCollectionSnapshot(repositoryId: string): void;
-  withRepositoryLock<T>(key: string, operation: () => Promise<T>): Promise<T>;
-  watchSkillRoots(paths: readonly string[]): void;
-  unwatchSkillRoots(paths: readonly string[]): Promise<void>;
   broadcast(message: ServerMessage): void;
   watchProject(projectPath: string): void;
   /**

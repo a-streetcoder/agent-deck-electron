@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ResourceCatalogCapabilityError } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
@@ -143,17 +140,29 @@ describe("EngineSkillStore", () => {
     );
   });
 
-  it("serves recovery from the native global-skills store, NOT the engine (until Phase C)", () => {
-    // Recovery stays native in P4-A (the legacy repo still produces native recoveries); it moves
-    // to the engine in Phase C. A fresh home has none, and the engine is never consulted.
-    const engine = fakeEngine();
-    const scanSkillsFor = vi.fn(() => [] as SkillInfo[]);
-    const home = mkdtempSync(path.join(tmpdir(), "engine-skill-store-recov-"));
-    const store = new EngineSkillStore({ engine, scanSkillsFor, home, projectRootFor: () => undefined });
+  it("serves recovery from the engine, mapping RecoveryInfo slug -> skillName", () => {
+    const engine = fakeEngine({
+      listRecoveries: vi.fn(() => [{ token: "tok", slug: "linter", path: "/displaced/linter" }]),
+    });
+    const { store } = makeStore(engine);
 
-    expect(store.listRecoveries()).toEqual([]);
-    expect(engine.listRecoveries).not.toHaveBeenCalled();
-    expect(engine.restoreRecovery).not.toHaveBeenCalled();
+    expect(store.listRecoveries()).toEqual([{ token: "tok", skillName: "linter" }]);
+    expect(engine.listRecoveries).toHaveBeenCalledWith("/home");
+    expect(store.recoveryPath("tok")).toBe("/displaced/linter");
+  });
+
+  it("restoreRecovery recovers the slug from the listing, then restores; throws for unknown token", () => {
+    const engine = fakeEngine({
+      listRecoveries: vi.fn(() => [{ token: "tok", slug: "fmt", path: "/d/fmt" }]),
+    });
+    const { store } = makeStore(engine);
+    expect(store.restoreRecovery("tok")).toEqual({ token: "tok", skillName: "fmt" });
+    expect(engine.restoreRecovery).toHaveBeenCalledWith("/home", "tok");
+
+    const empty = fakeEngine({ listRecoveries: vi.fn(() => []) });
+    const { store: store2 } = makeStore(empty);
+    expect(() => store2.restoreRecovery("ghost")).toThrow(ResourceCatalogCapabilityError);
+    expect(empty.restoreRecovery).not.toHaveBeenCalled();
   });
 
   it("listGitRepos hides non-global collections the global-only seam can't operate on", () => {

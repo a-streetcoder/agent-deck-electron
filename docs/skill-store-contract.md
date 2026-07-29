@@ -17,21 +17,27 @@ rename / import-local — goes through the engine addon via `EngineSkillStore` (
 Project-scope writes are enabled: the engine materializes them in `<project>/.agents/skills` and
 agent-deck's scanner reads that catalog, so a created project skill is immediately visible.
 
+**Lifted onto the engine (P4, on `main`):** the **git-repo collections** feature. All eight
+`/resources/skill-repos/*` + `import-git` routes are thin wrappers over `ctx.skillStore` (which
+calls the engine's git surface, shipped in 0.1.5 with per-file conflict resolution). The engine
+clones, discovers, sanitizes, and materializes imported skills into the ordinary catalog — so the
+pi-shaped scanner reads them like any other skill; agent-deck's collection-snapshot machinery is
+gone. **Recovery** also moved onto the engine (its displaced-tree store is the only producer now).
+
 **Deliberately NOT lifted:**
 
 - **Reading the catalog** — permanent. pi's loader is the authority on "what exists"; agent-deck's
   pi-shaped scanner stays the reader. The engine's own `listSkills` is for Syncr's Tauri host.
-- **Recovery** — _transitional_ on the native `global-skills` store (see [Recovery](#recovery--native-transitional)).
 
-**Blocked — the wait:** retiring agent-deck's **git-repo importer** (`managedSkillRepositories`,
-`/resources/skill-repos/*`). The git-repo surface itself **shipped in 0.1.4**
-([skill-engine-git-import-request.md](skill-engine-git-import-request.md)), so import / sync /
-forget are ready. The remaining gap is granularity: the engine resolves a conflict per **skill**
-(`remote`/`local`), but agent-deck's UX is per **file**. Retiring the importer as-is would
-downgrade that, so P4 waits on per-file conflict resolution in the NAPI. Request is out to Syncr:
-[skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md).
+**One upgrade caveat (documented, not auto-migrated):** existing `collection-v1` records in
+`app-settings.json` (imported by the OLD native path, skills held in private snapshots) and any
+pre-existing native `global-skills` recovery entries are NOT migrated on first upgraded startup —
+the old snapshot skills stop being scanned and the old recoveries stop being listed. **Re-import
+the collection** (Syncr-endorsed; a fresh import materializes into the canonical catalog and gets
+a base snapshot for per-file conflicts). This matters only for installs that used the pre-engine
+importer; fresh installs are unaffected.
 
-**Suites:** resources 136/0, server 538/0 (+1 known `scriptRunner` child-process flake, green in isolation).
+**Suites:** resources 136/0, server 503/0.
 
 ---
 
@@ -138,22 +144,26 @@ both sides, no data migration. _(An earlier draft of this contract called for a 
 migration; that was the "canonical = highest read rank" confusion — `canonical` means the creation
 target, not the top-ranked read. Cancelled.)_
 
-## The work remaining (P4)
+## P4 — closed
 
 P4 = delete agent-deck's duplicate skill machinery.
 
-- **Done (4a):** deleted the dead `NativeSkillStore`; added the scar-tissue pi round-trip guard on
-  the real engine emitter (`apps/server/test/skill-engine-pi-roundtrip.test.ts`).
-- **Kept, marked (4b):** the native skill-write fns (`writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/
-  `importSkillFile`) are prod-dead — only resources tests call them — and marked `ponytail:` in
-  `writer.ts`. Not deleted while P4 stays partial.
-- **Blocked on per-file conflict resolution.** The git-repo surface shipped in 0.1.4, but it
-  resolves conflicts per **skill** while agent-deck's UX is per **file**
-  ([skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md)). When
-  that lands: re-point the eight `/resources/skill-repos/*` routes behind `SkillStore` (add the git
-  methods to the interface), delete `skillRepositories.ts` + `legacySkillRepo.ts` + the native write
-  fns + their tests, drop the collection-snapshot machinery, and move recovery to the engine. That
-  closes P4. (The engine interface is otherwise mapped — 0.1.4 exports all six git methods.)
+- **4a:** deleted the dead `NativeSkillStore`; added the pi round-trip guard on the real engine
+  emitter (`apps/server/test/skill-engine-pi-roundtrip.test.ts`).
+- **4b (done):** re-pointed all eight `/resources/skill-repos/*` + `import-git` routes onto
+  `ctx.skillStore` (net −4,441 lines); removed the collection-snapshot machinery from `server.ts`;
+  deleted `legacySkillRepo.ts` and the legacy skill-repo test suites; moved recovery onto the
+  engine. Two Codex passes (blind, second model); findings fixed (restore-before-lookup, list
+  `storageMode`, XOR resolve body, project-import rejection, non-fatal conflict detail, no raw
+  git-error leak). resources 136/0, server 503/0.
+- **Kept, still marked dead (not deleted):** `ManagedSkillRepositories` (it's the app-data
+  `dataDir` TRUST GATE, not just skill-repo machinery — `server.ts:203/207`); the native skill-write
+  family in `writer.ts` (`writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/`importSkillFile`, prod-
+  dead, back only resources tests); and the native `ManagedSkillRepositoryStore` (Rust). Removing
+  the native Rust is a separate follow-up.
+- **Follow-ups:** the upgrade caveat above (re-import old collections); the base-less whole-skill
+  conflict card in `SkillsScreen.tsx` (only reachable for pre-0.1.5 imports); a replacement
+  route-level integration test for the git flows (the old suites tested deleted code).
 
 ## Contributor rule
 

@@ -14,14 +14,7 @@
  * REST routes keep their existing HTTP status mapping.
  */
 
-import {
-  ResourceCatalogCapabilityError,
-  acknowledgeResourceRecovery,
-  listResourceRecoveries,
-  resourceRecoveryPath,
-  restoreResourceRecovery,
-  type ResourceRecovery,
-} from "@agent-deck/resources";
+import { ResourceCatalogCapabilityError, type ResourceRecovery } from "@agent-deck/resources";
 import type { ResourceCatalogErrorCode } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
 import type { SkillEdit, SkillScope, SkillStore } from "./skillStore.ts";
@@ -36,11 +29,7 @@ import type {
   SkillEngineNative,
 } from "./skillEngineNative.ts";
 
-/** Catalog the native recovery API namespaces skill recoveries under. */
-const SKILL_RECOVERY_CATALOG = "global-skills";
-
-/** Map the engine's `RecoveryInfo` (`{token, slug, path}`) to agent-deck's `ResourceRecovery`
- *  — used for git-conflict recoveries the engine returns. */
+/** Map the engine's `RecoveryInfo` (`{token, slug, path}`) to agent-deck's `ResourceRecovery`. */
 function toResourceRecovery(info: RecoveryInfo): ResourceRecovery {
   return { token: info.token, skillName: info.slug };
 }
@@ -168,25 +157,43 @@ export class EngineSkillStore implements SkillStore {
     );
   }
 
-  // ── Recovery (native `global-skills` store, for now) ─────────────────────────
-  // Recovery stays native until Phase C removes the legacy skill-repo + native write path; at
-  // that point the engine's displaced-tree store becomes the only producer and these repoint to
-  // `this.deps.engine.*Recovery` (git-conflict resolutions already return engine recoveries,
-  // mapped via `toResourceRecovery`). Kept native here so the additive P4-A step stays green.
+  // ── Recovery (the engine — displaced trees from edits + git-conflict resolution) ──
+  // P4 moved recovery onto the engine: with the legacy skill-repo and native write path retired,
+  // the engine's displaced-tree store is the only producer. `RecoveryInfo{token,slug,path}` maps
+  // to `ResourceRecovery{token,skillName:slug}`.
   listRecoveries(): ResourceRecovery[] {
-    return listResourceRecoveries(this.deps.home, SKILL_RECOVERY_CATALOG);
+    return fromEngine(() =>
+      this.deps.engine.listRecoveries(this.deps.home).map(toResourceRecovery),
+    );
   }
 
   restoreRecovery(token: string): ResourceRecovery {
-    return restoreResourceRecovery(this.deps.home, SKILL_RECOVERY_CATALOG, token);
+    return fromEngine(() => {
+      // The engine's restore returns a path, not the slug — recover the slug from the listing
+      // FIRST so the response can name the skill. Require a real entry before restoring: an
+      // unknown token (or empty slug) throws rather than restoring and returning a false
+      // `skillName: ""` (Codex #2).
+      const info = this.deps.engine.listRecoveries(this.deps.home).find((r) => r.token === token);
+      if (!info || !info.slug) {
+        throw new ResourceCatalogCapabilityError("RESOURCE_NOT_FOUND", "unknown recovery token");
+      }
+      this.deps.engine.restoreRecovery(this.deps.home, token);
+      return { token, skillName: info.slug };
+    });
   }
 
   acknowledgeRecovery(token: string): void {
-    acknowledgeResourceRecovery(this.deps.home, SKILL_RECOVERY_CATALOG, token);
+    fromEngine(() => this.deps.engine.acknowledgeRecovery(this.deps.home, token));
   }
 
   recoveryPath(token: string): string {
-    return resourceRecoveryPath(this.deps.home, SKILL_RECOVERY_CATALOG, token);
+    return fromEngine(() => {
+      const info = this.deps.engine.listRecoveries(this.deps.home).find((r) => r.token === token);
+      if (!info) {
+        throw new ResourceCatalogCapabilityError("RESOURCE_NOT_FOUND", "unknown recovery token");
+      }
+      return info.path;
+    });
   }
 
   // ── Git-repo collections (global; the engine owns clone/discover/sanitize/materialize) ──
