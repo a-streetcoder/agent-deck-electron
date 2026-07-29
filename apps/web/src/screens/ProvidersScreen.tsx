@@ -1,6 +1,14 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronRight, KeyRound, Search, ShieldCheck, UserRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CheckCircle2,
+  ChevronRight,
+  KeyRound,
+  LogOut,
+  Search,
+  ShieldCheck,
+  UserRound,
+} from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
 import { AppScrollView } from "../design-system/components/AppScrollView.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
@@ -30,17 +38,22 @@ export function ProvidersScreen({
   const [search, setSearch] = useState("");
   const [methodProvider, setMethodProvider] = useState<ProviderEntry | null>(null);
   const [login, setLogin] = useState<{ provider: ProviderEntry; authType: AuthType } | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  const loadGenerationRef = useRef(0);
 
   const load = useCallback(async (): Promise<void> => {
+    const generation = ++loadGenerationRef.current;
     try {
       const response = await fetch("/runtime/providers");
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as { providers: ProviderEntry[] };
+      if (generation !== loadGenerationRef.current) return;
       setProviders(data.providers);
     } catch (error) {
+      if (generation !== loadGenerationRef.current) return;
       setError(String(error));
     } finally {
-      setLoaded(true);
+      if (generation === loadGenerationRef.current) setLoaded(true);
     }
   }, [setError]);
 
@@ -61,6 +74,23 @@ export function ProvidersScreen({
   const selectProvider = (provider: ProviderEntry): void => {
     if (provider.supportsOAuth && provider.supportsAPIKey) setMethodProvider(provider);
     else setLogin({ provider, authType: provider.supportsOAuth ? "oauth" : "api_key" });
+  };
+
+  const signOutProvider = async (provider: ProviderEntry): Promise<void> => {
+    if (!provider.signedIn || disconnectingId) return;
+    setDisconnectingId(provider.id);
+    setError(null);
+    try {
+      const response = await fetch(`/runtime/providers/${encodeURIComponent(provider.id)}/logout`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await load();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setDisconnectingId(null);
+    }
   };
 
   return (
@@ -90,8 +120,16 @@ export function ProvidersScreen({
             title="Subscriptions"
             providers={subscriptions}
             onSelect={selectProvider}
+            onSignOut={(provider) => void signOutProvider(provider)}
+            disconnectingId={disconnectingId}
           />
-          <ProviderGroup title="API key" providers={apiKeyOnly} onSelect={selectProvider} />
+          <ProviderGroup
+            title="API key"
+            providers={apiKeyOnly}
+            onSelect={selectProvider}
+            onSignOut={(provider) => void signOutProvider(provider)}
+            disconnectingId={disconnectingId}
+          />
           {loaded && visible.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
           ) : null}
@@ -166,10 +204,14 @@ function ProviderGroup({
   title,
   providers,
   onSelect,
+  onSignOut,
+  disconnectingId,
 }: {
   title: string;
   providers: ProviderEntry[];
   onSelect: (provider: ProviderEntry) => void;
+  onSignOut: (provider: ProviderEntry) => void;
+  disconnectingId: string | null;
 }) {
   if (providers.length === 0) return null;
   return (
@@ -179,23 +221,39 @@ function ProviderGroup({
       </h3>
       <div className="space-y-1" data-testid="provider-list">
         {providers.map((provider) => (
-          <ControlButton
-            key={provider.id}
-            data-provider-id={provider.id}
-            data-configured={provider.configured ? "true" : "false"}
-            className="flex w-full items-center gap-3 rounded-xl py-2.5 pl-3 text-left hover:bg-surface-subtle"
-            onClick={() => onSelect(provider)}
-          >
-            <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-              {provider.name}
-            </span>
-            {provider.configured ? (
-              <CheckCircle2 size={15} className="text-success" />
-            ) : (
-              <ChevronRight size={14} className="text-text-muted" />
-            )}
-          </ControlButton>
+          <div key={provider.id} className="flex items-center rounded-xl hover:bg-surface-subtle">
+            <ControlButton
+              data-provider-id={provider.id}
+              data-configured={provider.configured ? "true" : "false"}
+              className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-2.5 pl-3 text-left"
+              disabled={disconnectingId !== null}
+              onClick={() => onSelect(provider)}
+            >
+              <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                {provider.name}
+              </span>
+              {provider.configured ? (
+                <CheckCircle2 size={15} className="shrink-0 text-success" aria-label="Connected" />
+              ) : (
+                <ChevronRight size={14} className="shrink-0 text-text-muted" />
+              )}
+            </ControlButton>
+            {provider.signedIn ? (
+              <ControlButton
+                type="button"
+                data-testid={`provider-signout-${provider.id}`}
+                className="mr-2 flex shrink-0 items-center gap-1 rounded-capsule bg-primary/20 px-2.5 py-1 text-xs font-medium text-accent hover:bg-primary/30 disabled:cursor-wait disabled:opacity-50"
+                aria-label={`Sign out of ${provider.name}`}
+                title={`Sign out of ${provider.name} and remove its stored credentials`}
+                disabled={disconnectingId !== null}
+                onClick={() => onSignOut(provider)}
+              >
+                <LogOut size={12} aria-hidden />
+                {disconnectingId === provider.id ? "Signing out…" : "Sign out"}
+              </ControlButton>
+            ) : null}
+          </div>
         ))}
       </div>
     </section>

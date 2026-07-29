@@ -31,7 +31,7 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("lists providers and reflects a seeded credential", async ({ page }) => {
+test("lists providers and can explicitly sign out of a seeded credential", async ({ page }) => {
   // Discover a real provider id from the running server (built-ins are stable,
   // but don't hard-code the set).
   const res = await fetch(`${harness.baseUrl}/runtime/providers`);
@@ -52,6 +52,14 @@ test("lists providers and reflects a seeded credential", async ({ page }) => {
   await page.getByTestId("nav-environment").click(); // leave + return to force a reload
   await page.getByTestId("nav-providers").click();
   await expect(row).toHaveAttribute("data-configured", "true");
+  const signOut = page.getByTestId(`provider-signout-${id}`);
+  await expect(signOut).toBeVisible();
+
+  // Native sign-out is direct (no confirmation): Pi removes the stored
+  // credential, the provider list refreshes, and the action disappears.
+  await signOut.click();
+  await expect(row).toHaveAttribute("data-configured", "false");
+  await expect(signOut).toHaveCount(0);
 
   rmSync(authPath(), { force: true });
 });
@@ -116,4 +124,42 @@ test("renders native provider logos (and a monogram fallback for unknowns)", asy
     "data-logo",
     "fallback",
   );
+  // A provider configured only by environment/default resolution has no stored
+  // auth.json credential for logout to remove.
+  await expect(
+    page.getByTestId("provider-list").getByRole("button", { name: /Sign out/ }),
+  ).toHaveCount(0);
+});
+
+test("keeps a stored provider connected and reports a logout failure", async ({ page }) => {
+  await page.route("**/runtime/providers", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        providers: [
+          {
+            id: "failure-provider",
+            name: "Failure Provider",
+            signedIn: true,
+            configured: true,
+            supportsOAuth: true,
+            supportsAPIKey: false,
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/runtime/providers/*/logout", async (route) => {
+    await route.fulfill({ status: 503, body: "credential store unavailable" });
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-providers").click();
+  const row = page.locator('[data-provider-id="failure-provider"]');
+  const signOut = page.getByTestId("provider-signout-failure-provider");
+  await signOut.click();
+
+  await expect(page.getByTestId("error-banner")).toContainText("credential store unavailable");
+  await expect(row).toHaveAttribute("data-configured", "true");
+  await expect(signOut).toBeEnabled();
 });
