@@ -39,11 +39,13 @@ describe("composer drafts", () => {
         },
       ],
       files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
+      folders: [{ id: "first-folder", name: "project", path: "/tmp/project" }],
     }));
     store.updateComposerDraft("second", () => ({
       text: "Unsent second message",
       images: [],
       files: [],
+      folders: [],
     }));
 
     expect(useAppStore.getState().composerDrafts).toMatchObject({
@@ -51,11 +53,13 @@ describe("composer drafts", () => {
         text: "Unsent first message",
         images: [{ id: "first-image", name: "first.png" }],
         files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
+        folders: [{ id: "first-folder", name: "project", path: "/tmp/project" }],
       },
       second: {
         text: "Unsent second message",
         images: [],
         files: [],
+        folders: [],
       },
     });
   });
@@ -63,28 +67,62 @@ describe("composer drafts", () => {
   it("clears only the empty draft and removes deleted session drafts", () => {
     const store = useAppStore.getState();
     store.setSessions([session("first"), session("second")]);
-    store.updateComposerDraft("first", () => ({ text: "First", images: [], files: [] }));
-    store.updateComposerDraft("second", () => ({ text: "Second", images: [], files: [] }));
+    store.updateComposerDraft("first", () => ({
+      text: "First",
+      images: [],
+      files: [],
+      folders: [],
+    }));
+    store.updateComposerDraft("second", () => ({
+      text: "Second",
+      images: [],
+      files: [],
+      folders: [],
+    }));
 
     store.updateComposerDraft("first", (current) => ({ ...current, text: "" }));
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [], files: [] },
+      second: { text: "Second", images: [], files: [], folders: [] },
     });
 
     store.removeSession("second");
     expect(useAppStore.getState().composerDrafts).toEqual({});
   });
 
+  it("keeps a folder-only draft until that folder is removed", () => {
+    const store = useAppStore.getState();
+    store.updateComposerDraft("first", () => ({
+      text: "",
+      images: [],
+      files: [],
+      folders: [{ id: "folder", name: "project", path: "/tmp/project" }],
+    }));
+    expect(useAppStore.getState().composerDrafts.first?.folders).toHaveLength(1);
+
+    store.updateComposerDraft("first", (current) => ({ ...current, folders: [] }));
+    expect(useAppStore.getState().composerDrafts.first).toBeUndefined();
+  });
+
   it("prunes whitespace-only text only after its composer is left", () => {
     const store = useAppStore.getState();
-    store.updateComposerDraft("first", () => ({ text: "   \n", images: [], files: [] }));
-    store.updateComposerDraft("second", () => ({ text: "Second", images: [], files: [] }));
+    store.updateComposerDraft("first", () => ({
+      text: "   \n",
+      images: [],
+      files: [],
+      folders: [],
+    }));
+    store.updateComposerDraft("second", () => ({
+      text: "Second",
+      images: [],
+      files: [],
+      folders: [],
+    }));
 
     expect(useAppStore.getState().composerDrafts.first?.text).toBe("   \n");
     store.pruneEmptyComposerDraft("first");
 
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [], files: [] },
+      second: { text: "Second", images: [], files: [], folders: [] },
     });
   });
 });

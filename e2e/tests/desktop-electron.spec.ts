@@ -296,20 +296,31 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   expect(health).toBe(true);
 });
 
-test("the trusted file picker returns only bounded absolute selections", async () => {
+test("trusted attachment pickers return only bounded absolute selections", async () => {
   const window = await app.firstWindow();
-  await app.evaluate(({ dialog }, selectedPath) => {
-    const state = globalThis as typeof globalThis & {
-      filePickerOptions?: Electron.OpenDialogOptions;
-    };
-    dialog.showOpenDialog = (async (...args: unknown[]) => {
-      state.filePickerOptions = args.at(-1) as Electron.OpenDialogOptions;
-      return {
-        canceled: false,
-        filePaths: [selectedPath, "relative.txt", "/tmp/bad\nname.txt"],
+  await app.evaluate(
+    ({ dialog }, selections) => {
+      const state = globalThis as typeof globalThis & {
+        filePickerOptions?: Electron.OpenDialogOptions;
+        folderPickerOptions?: Electron.OpenDialogOptions;
       };
-    }) as typeof dialog.showOpenDialog;
-  }, validPromptPath);
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        const options = args.at(-1) as Electron.OpenDialogOptions;
+        const isFolder = options.properties?.includes("openDirectory");
+        if (isFolder) state.folderPickerOptions = options;
+        else state.filePickerOptions = options;
+        return {
+          canceled: false,
+          filePaths: [
+            isFolder ? selections.folderPath : selections.filePath,
+            "relative.txt",
+            "/tmp/bad\nname.txt",
+          ],
+        };
+      }) as typeof dialog.showOpenDialog;
+    },
+    { filePath: validPromptPath, folderPath: projectDir },
+  );
 
   const selected = await window.evaluate(async () => {
     const bridge = (
@@ -334,17 +345,57 @@ test("the trusted file picker returns only bounded absolute selections", async (
     properties: ["openFile", "multiSelections"],
   });
 
+  const selectedFolders = await window.evaluate(async () => {
+    const bridge = (
+      globalThis as typeof globalThis & {
+        agentDeck?: {
+          chooseDirectory?(options: {
+            title: string;
+            buttonLabel: string;
+            multiple: boolean;
+          }): Promise<string[]>;
+        };
+      }
+    ).agentDeck;
+    return bridge?.chooseDirectory?.({
+      title: "Attach Folders",
+      buttonLabel: "Attach",
+      multiple: true,
+    });
+  });
+  expect(selectedFolders).toEqual([projectDir]);
+  const folderPickerOptions = await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      folderPickerOptions?: Electron.OpenDialogOptions;
+    };
+    return state.folderPickerOptions;
+  });
+  expect(folderPickerOptions).toMatchObject({
+    title: "Attach Folders",
+    buttonLabel: "Attach",
+    properties: ["openDirectory", "createDirectory", "multiSelections"],
+  });
+
   const appUrl = window.url();
   await window.goto("data:text/html,<p>foreign origin</p>");
   const foreignOriginRejected = await window.evaluate(async () => {
     const bridge = (
       globalThis as typeof globalThis & {
-        agentDeck?: { chooseFiles?(): Promise<string[]> };
+        agentDeck?: {
+          chooseFiles?(): Promise<string[]>;
+          chooseDirectory?(): Promise<string[]>;
+        };
       }
     ).agentDeck;
-    if (!bridge?.chooseFiles) return false;
+    if (!bridge?.chooseFiles || !bridge.chooseDirectory) return false;
     try {
       await bridge.chooseFiles();
+      return false;
+    } catch {
+      // Expected; verify the directory bridge has the same boundary.
+    }
+    try {
+      await bridge.chooseDirectory();
       return false;
     } catch {
       return true;

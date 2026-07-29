@@ -4,12 +4,15 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FilePlus2, Paperclip, Shrink, X } from "lucide-react";
+import { FilePlus2, FolderPlus, Paperclip, Shrink, X } from "lucide-react";
 import TextareaAutosize from "react-textarea-autosize";
 import {
-  appendFileAttachmentTags,
+  appendPathAttachmentPayload,
   fileAttachmentRefs,
+  folderAttachmentRefs,
+  isFolderAttachmentPath,
   MAX_FILE_ATTACHMENTS,
+  MAX_FOLDER_ATTACHMENTS,
   openQuestion,
   thinkingLevelsForModel,
 } from "@agent-deck/domain";
@@ -17,6 +20,7 @@ import {
   EMPTY_COMPOSER_DRAFT,
   pendingComposerTextForSession,
   type ComposerDraftFile,
+  type ComposerDraftFolder,
   type ComposerDraftImage,
   useAppStore,
 } from "../state/store.ts";
@@ -51,7 +55,11 @@ import { FileTagChips } from "./composer/FileTagChips.tsx";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { parseFileMentions, removeFileMention } from "../lib/fileMentions.ts";
 import { buildExpandedImagePreview } from "../lib/expandedImage.ts";
-import { chooseFiles as chooseNativeFiles, isElectron } from "../lib/native.ts";
+import {
+  chooseDirectory as chooseNativeFolders,
+  chooseFiles as chooseNativeFiles,
+  isElectron,
+} from "../lib/native.ts";
 import {
   createPendingImageId,
   isCurrentComposerSubmission,
@@ -126,6 +134,7 @@ export function Composer() {
   const draft = composerDraft.text;
   const images = composerDraft.images;
   const files = composerDraft.files;
+  const folders = composerDraft.folders;
   const setDraft = useCallback(
     (next: string | ((current: string) => string)): void => {
       if (!sessionId) return;
@@ -160,6 +169,20 @@ export function Composer() {
       updateComposerDraft(sessionId, (current) => ({
         ...current,
         files: typeof next === "function" ? next(current.files) : next,
+      }));
+    },
+    [sessionId, updateComposerDraft],
+  );
+  const setFolders = useCallback(
+    (
+      next:
+        | readonly ComposerDraftFolder[]
+        | ((current: readonly ComposerDraftFolder[]) => readonly ComposerDraftFolder[]),
+    ): void => {
+      if (!sessionId) return;
+      updateComposerDraft(sessionId, (current) => ({
+        ...current,
+        folders: typeof next === "function" ? next(current.folders) : next,
       }));
     },
     [sessionId, updateComposerDraft],
@@ -482,6 +505,45 @@ export function Composer() {
     });
   }, [sessionId, setFiles]);
 
+  const pickPathFolders = useCallback(async (): Promise<void> => {
+    if (!sessionId) return;
+    const originatingSessionId = sessionId;
+    const selected = await chooseNativeFolders({
+      title: "Attach Folders",
+      buttonLabel: "Attach",
+      multiple: true,
+    });
+    if (selected.length === 0 || useAppStore.getState().session?.id !== originatingSessionId) {
+      return;
+    }
+    const picked = folderAttachmentRefs(selected);
+    const hasUnrepresentablePath = selected.some((path) => !isFolderAttachmentPath(path));
+    if (picked.length === 0) {
+      setSubmitStatus({
+        kind: "rejection",
+        message:
+          "The selected folder cannot be attached. Choose an absolute path that does not contain a backtick (`).",
+      });
+      return;
+    }
+    setSubmitStatus(
+      hasUnrepresentablePath
+        ? {
+            kind: "info",
+            message:
+              "Some folders were not attached because their paths are relative or contain a backtick (`).",
+          }
+        : null,
+    );
+    setFolders((current) => {
+      const seen = new Set(current.map((folder) => folder.path));
+      const added = picked
+        .filter((folder) => !seen.has(folder.path))
+        .map((folder) => ({ ...folder, id: crypto.randomUUID() }));
+      return [...current, ...added].slice(0, MAX_FOLDER_ATTACHMENTS);
+    });
+  }, [sessionId, setFolders]);
+
   const submit = (): void => {
     if (sendLockRef.current) return;
     const submittedDraft = draft;
@@ -490,6 +552,7 @@ export function Composer() {
       (!message &&
         images.length === 0 &&
         files.length === 0 &&
+        folders.length === 0 &&
         pendingComments.length === 0 &&
         pendingElementContexts.length === 0) ||
       !session ||
@@ -517,12 +580,14 @@ export function Composer() {
     const submittedContexts = [...pendingElementContexts];
     const submittedImages = [...images];
     const submittedFiles = [...files];
-    const outgoing = appendFileAttachmentTags(
+    const submittedFolders = [...folders];
+    const outgoing = appendPathAttachmentPayload(
       appendElementContextsToPrompt(
         appendReviewCommentsToPrompt(message, submittedComments),
         submittedContexts,
       ),
       submittedFiles.map((file) => file.path),
+      submittedFolders.map((folder) => folder.path),
     );
     sendLockRef.current = true;
     setSubmitting(true);
@@ -553,6 +618,7 @@ export function Composer() {
         }
         setImages((current) => retainUnsubmittedImages(current, submittedImages));
         setFiles((current) => retainUnsubmittedAttachments(current, submittedFiles));
+        setFolders((current) => retainUnsubmittedAttachments(current, submittedFolders));
         setSubmitStatus(
           running
             ? {
@@ -694,6 +760,32 @@ export function Composer() {
                   onClick={() => {
                     setSubmitStatus(null);
                     setFiles((current) => current.filter((candidate) => candidate !== file));
+                  }}
+                >
+                  <X size={12} />
+                </ControlButton>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {folders.length > 0 ? (
+          <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="folder-attachments">
+            {folders.map((folder) => (
+              <span
+                key={folder.id}
+                data-testid={`folder-attachment-${folder.id}`}
+                title={folder.path}
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+              >
+                <FolderPlus size={14} aria-hidden="true" />
+                <span className="max-w-[20ch] truncate">{folder.name}</span>
+                <ControlButton
+                  className="text-text-muted hover:text-danger"
+                  aria-label={`Remove ${folder.name} folder attachment`}
+                  onClick={() => {
+                    setSubmitStatus(null);
+                    setFolders((current) => current.filter((candidate) => candidate !== folder));
                   }}
                 >
                   <X size={12} />
@@ -918,17 +1010,30 @@ export function Composer() {
           ) : null}
           <div className="flex-1" />
           {isElectron() ? (
-            <ControlButton
-              type="button"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-              title="Attach files by path"
-              aria-label="Attach files"
-              data-testid="attach-file-button"
-              disabled={!sessionId}
-              onClick={() => void pickPathFiles()}
-            >
-              <FilePlus2 size={15} />
-            </ControlButton>
+            <>
+              <ControlButton
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                title="Attach files by path"
+                aria-label="Attach files"
+                data-testid="attach-file-button"
+                disabled={!sessionId}
+                onClick={() => void pickPathFiles()}
+              >
+                <FilePlus2 size={15} />
+              </ControlButton>
+              <ControlButton
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-text-muted hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                title="Attach folders by path"
+                aria-label="Attach folders"
+                data-testid="attach-folder-button"
+                disabled={!sessionId}
+                onClick={() => void pickPathFolders()}
+              >
+                <FolderPlus size={15} />
+              </ControlButton>
+            </>
           ) : null}
           <label
             className={`flex h-8 w-8 items-center justify-center rounded-full text-text-muted ${
@@ -967,6 +1072,7 @@ export function Composer() {
               (!draft.trim() &&
                 images.length === 0 &&
                 files.length === 0 &&
+                folders.length === 0 &&
                 pendingComments.length === 0 &&
                 pendingElementContexts.length === 0) ||
               !session ||

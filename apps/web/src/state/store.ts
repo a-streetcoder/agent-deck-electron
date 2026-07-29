@@ -73,13 +73,25 @@ export interface ComposerDraftFile {
   path: string;
 }
 
+export interface ComposerDraftFolder {
+  id: string;
+  name: string;
+  path: string;
+}
+
 export interface ComposerDraft {
   text: string;
   images: readonly ComposerDraftImage[];
   files: readonly ComposerDraftFile[];
+  folders: readonly ComposerDraftFolder[];
 }
 
-export const EMPTY_COMPOSER_DRAFT: ComposerDraft = { text: "", images: [], files: [] };
+export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
+  text: "",
+  images: [],
+  files: [],
+  folders: [],
+};
 
 export interface PendingComposerText {
   sessionId: string;
@@ -517,7 +529,12 @@ export const useAppStore = create<AppState>((set) => ({
       const current = state.composerDrafts[sessionId] ?? EMPTY_COMPOSER_DRAFT;
       const next = update(current);
       if (next === current) return {};
-      if (next.text.length === 0 && next.images.length === 0 && next.files.length === 0) {
+      if (
+        next.text.length === 0 &&
+        next.images.length === 0 &&
+        next.files.length === 0 &&
+        next.folders.length === 0
+      ) {
         if (!(sessionId in state.composerDrafts)) return {};
         const { [sessionId]: _removed, ...composerDrafts } = state.composerDrafts;
         return { composerDrafts };
@@ -536,7 +553,8 @@ export const useAppStore = create<AppState>((set) => ({
         current === undefined ||
         current.text.trim().length > 0 ||
         current.images.length > 0 ||
-        current.files.length > 0
+        current.files.length > 0 ||
+        current.folders.length > 0
       ) {
         return {};
       }

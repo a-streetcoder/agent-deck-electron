@@ -8,6 +8,7 @@ import type {
   TranscriptCell,
 } from "./transcript.ts";
 import { extractFileAttachments } from "./fileAttachments.ts";
+import { extractFolderAttachments } from "./folderAttachments.ts";
 
 /** pi's streaming event union, derived from the exported listener type. */
 export type PiAgentEvent = Parameters<RpcEventListener>[0];
@@ -235,7 +236,8 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
       if (message.role === "user") {
         const entryId = (event as unknown as { entryId?: unknown }).entryId;
         const stableEntryId = typeof entryId === "string" && entryId ? entryId : undefined;
-        const { text, files } = extractFileAttachments(userText(message.content));
+        const folderContent = extractFolderAttachments(userText(message.content));
+        const { text, files } = extractFileAttachments(folderContent.text);
         return [
           {
             type: "cell_final",
@@ -245,6 +247,7 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
               ...(stableEntryId ? { entryId: stableEntryId } : {}),
               text,
               ...(files.length > 0 ? { files } : {}),
+              ...(folderContent.folders.length > 0 ? { folders: folderContent.folders } : {}),
             },
           },
         ];

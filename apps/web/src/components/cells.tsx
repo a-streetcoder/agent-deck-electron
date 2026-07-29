@@ -306,18 +306,34 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
     label: file.name,
     title: file.path,
   }));
-  const visibleText =
-    cell.text ||
-    (fileAttachments.length === 1
-      ? "Attached a file."
-      : fileAttachments.length > 1
-        ? `Attached ${fileAttachments.length} files.`
-        : "");
+  const folderAttachments = (cell.folders ?? []).map((folder, index) => ({
+    id: `${cell.id}-folder-${index}`,
+    kind: "folder" as const,
+    label: folder.name,
+    title: folder.path,
+  }));
+  const pathAttachments = [...fileAttachments, ...folderAttachments];
+  const fileSummary = fileAttachments.length === 1 ? "1 file" : `${fileAttachments.length} files`;
+  const folderSummary =
+    folderAttachments.length === 1 ? "1 folder" : `${folderAttachments.length} folders`;
+  const attachmentSummary =
+    fileAttachments.length > 0 && folderAttachments.length > 0
+      ? `Attached ${fileSummary} and ${folderSummary}.`
+      : fileAttachments.length > 0
+        ? fileAttachments.length === 1
+          ? "Attached a file."
+          : `Attached ${fileAttachments.length} files.`
+        : folderAttachments.length === 1
+          ? "Attached a folder."
+          : folderAttachments.length > 1
+            ? `Attached ${folderAttachments.length} folders.`
+            : "";
+  const visibleText = cell.text || attachmentSummary;
   return (
     <div className="flex justify-end" data-testid="user-cell">
       <div className="max-w-[80%] space-y-2">
-        {visibleText || fileAttachments.length > 0 ? (
-          <MessageBubble role="user" text={visibleText} attachments={fileAttachments} />
+        {visibleText || pathAttachments.length > 0 ? (
+          <MessageBubble role="user" text={visibleText} attachments={pathAttachments} />
         ) : null}
         {items.length ? (
           <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">

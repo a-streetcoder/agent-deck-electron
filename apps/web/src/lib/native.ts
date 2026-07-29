@@ -192,7 +192,9 @@ export async function chooseDirectory(
   const bridge = nativeBridge();
   if (!bridge?.chooseDirectory) return [];
   try {
-    return (await bridge.chooseDirectory(options)) ?? [];
+    const result: unknown = await bridge.chooseDirectory(options);
+    if (!Array.isArray(result)) return [];
+    return result.filter((value): value is string => typeof value === "string").slice(0, 16);
   } catch {
     // A failed IPC/dialog shouldn't become an unhandled rejection at call sites.
     return [];

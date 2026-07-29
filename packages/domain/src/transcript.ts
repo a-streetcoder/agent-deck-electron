@@ -26,6 +26,12 @@ export interface UserFileRef {
   path: string;
 }
 
+/** Durable live-path directory reference selected by the user. */
+export interface UserFolderRef {
+  name: string;
+  path: string;
+}
+
 export interface UserCell {
   kind: "user";
   /** Stable Pi session-entry identity when available (resume/fork history). */
@@ -34,6 +40,7 @@ export interface UserCell {
   text: string;
   images?: UserImageRef[];
   files?: UserFileRef[];
+  folders?: UserFolderRef[];
 }
 
 export interface AssistantCell {

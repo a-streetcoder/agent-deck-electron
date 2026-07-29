@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chooseFiles, signalAttention } from "./native.ts";
+import { chooseDirectory, chooseFiles, signalAttention } from "./native.ts";
 
 const stubBridge = (bridge: unknown): void => {
   vi.stubGlobal("window", { agentDeck: bridge });
@@ -67,5 +67,29 @@ describe("chooseFiles", () => {
 
     stubBridge({ chooseFiles: vi.fn().mockRejectedValue(new Error("cancelled")) });
     await expect(chooseFiles()).resolves.toEqual([]);
+  });
+});
+
+describe("chooseDirectory", () => {
+  it("delegates to the trusted bridge and keeps only bounded string paths", async () => {
+    const choose = vi.fn().mockResolvedValue(["/tmp/project", 42, "C:\\work\\project"]);
+    stubBridge({ isElectron: true, chooseDirectory: choose });
+
+    await expect(chooseDirectory({ title: "Attach Folders", multiple: true })).resolves.toEqual([
+      "/tmp/project",
+      "C:\\work\\project",
+    ]);
+    expect(choose).toHaveBeenCalledWith({ title: "Attach Folders", multiple: true });
+  });
+
+  it("returns an empty selection when unavailable, malformed, or rejected", async () => {
+    stubBridge(undefined);
+    await expect(chooseDirectory()).resolves.toEqual([]);
+
+    stubBridge({ chooseDirectory: vi.fn().mockResolvedValue({ path: "/tmp/project" }) });
+    await expect(chooseDirectory()).resolves.toEqual([]);
+
+    stubBridge({ chooseDirectory: vi.fn().mockRejectedValue(new Error("cancelled")) });
+    await expect(chooseDirectory()).resolves.toEqual([]);
   });
 });

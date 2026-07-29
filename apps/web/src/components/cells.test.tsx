@@ -30,4 +30,44 @@ describe("user file attachments", () => {
     expect(chip.getAttribute("title")).toBe(path);
     expect(document.body.textContent).not.toContain("<file");
   });
+
+  it("renders a missing folder as a distinct durable chip without exposing its reference", async () => {
+    const path = "/definitely-missing/ses-07/project folder";
+    const cell: UserCell = {
+      kind: "user",
+      id: "user-folder-entry",
+      text: "",
+      folders: [{ name: "project folder", path }],
+    };
+
+    render(<CellView cell={cell} />);
+
+    expect(await screen.findByText("Attached a folder.")).toBeTruthy();
+    const chip = screen.getByRole("listitem", {
+      name: `project folder: ${path}`,
+    });
+    expect(chip.getAttribute("title")).toBe(path);
+    expect(chip.getAttribute("data-kind")).toBe("folder");
+    expect(document.body.textContent).not.toContain("folder:");
+  });
+
+  it("summarizes mixed file and folder history without changing their chip kinds", async () => {
+    const cell: UserCell = {
+      kind: "user",
+      id: "user-mixed-entry",
+      text: "",
+      files: [{ name: "notes.txt", path: "/tmp/notes.txt" }],
+      folders: [{ name: "project", path: "/tmp/project" }],
+    };
+
+    render(<CellView cell={cell} />);
+
+    expect(await screen.findByText("Attached 1 file and 1 folder.")).toBeTruthy();
+    expect(
+      screen.getByRole("listitem", { name: "notes.txt: /tmp/notes.txt" }).getAttribute("data-kind"),
+    ).toBe("file");
+    expect(
+      screen.getByRole("listitem", { name: "project: /tmp/project" }).getAttribute("data-kind"),
+    ).toBe("folder");
+  });
 });

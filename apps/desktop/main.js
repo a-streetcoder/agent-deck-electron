@@ -728,20 +728,7 @@ ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
   return true;
 });
 
-ipcMain.handle("dialog:openDirectory", async (_event, options = {}) => {
-  const properties = ["openDirectory", "createDirectory"];
-  if (options.multiple) properties.push("multiSelections");
-  const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
-    title: options.title ?? "Choose Folder",
-    message: options.message,
-    buttonLabel: options.buttonLabel,
-    properties,
-  });
-  if (result.canceled) return [];
-  return result.filePaths;
-});
-
-ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
+function assertTrustedPickerSender(event, errorMessage) {
   const expectedRendererOrigin = serverPort
     ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
     : null;
@@ -757,18 +744,12 @@ ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
     event.senderFrame !== mainWindow.webContents.mainFrame ||
     senderOrigin !== expectedRendererOrigin
   ) {
-    throw new Error("File chooser is unavailable");
+    throw new Error(errorMessage);
   }
-  const pickerOptions = options && typeof options === "object" ? options : {};
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: typeof pickerOptions.title === "string" ? pickerOptions.title : "Choose Files",
-    message: typeof pickerOptions.message === "string" ? pickerOptions.message : undefined,
-    buttonLabel:
-      typeof pickerOptions.buttonLabel === "string" ? pickerOptions.buttonLabel : undefined,
-    properties: ["openFile", "multiSelections"],
-  });
-  if (result.canceled) return [];
-  return result.filePaths
+}
+
+function boundedPickerPaths(filePaths) {
+  return filePaths
     .filter(
       (file) =>
         typeof file === "string" &&
@@ -780,6 +761,36 @@ ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
         }),
     )
     .slice(0, 16);
+}
+
+ipcMain.handle("dialog:openDirectory", async (event, options = {}) => {
+  assertTrustedPickerSender(event, "Folder chooser is unavailable");
+  const pickerOptions = options && typeof options === "object" ? options : {};
+  const properties = ["openDirectory", "createDirectory"];
+  if (pickerOptions.multiple === true) properties.push("multiSelections");
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: typeof pickerOptions.title === "string" ? pickerOptions.title : "Choose Folder",
+    message: typeof pickerOptions.message === "string" ? pickerOptions.message : undefined,
+    buttonLabel:
+      typeof pickerOptions.buttonLabel === "string" ? pickerOptions.buttonLabel : undefined,
+    properties,
+  });
+  if (result.canceled) return [];
+  return boundedPickerPaths(result.filePaths);
+});
+
+ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
+  assertTrustedPickerSender(event, "File chooser is unavailable");
+  const pickerOptions = options && typeof options === "object" ? options : {};
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: typeof pickerOptions.title === "string" ? pickerOptions.title : "Choose Files",
+    message: typeof pickerOptions.message === "string" ? pickerOptions.message : undefined,
+    buttonLabel:
+      typeof pickerOptions.buttonLabel === "string" ? pickerOptions.buttonLabel : undefined,
+    properties: ["openFile", "multiSelections"],
+  });
+  if (result.canceled) return [];
+  return boundedPickerPaths(result.filePaths);
 });
 
 /** Open a renderer titlebar button's native menu directly below the top bar. */

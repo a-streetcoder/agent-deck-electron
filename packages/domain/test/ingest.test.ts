@@ -121,6 +121,62 @@ describe("ingest → reduce pipeline", () => {
     ]);
   });
 
+  it("reconstructs durable folder chips from Pi history and hides canonical references", () => {
+    const ingest = createIngestState();
+    const events = ingestPiEvent(ingest, {
+      type: "message_end",
+      entryId: "folder-entry",
+      message: {
+        role: "user",
+        content: "Inspect this\n\nfolder: `/definitely-missing/ses-07/project folder`",
+        timestamp: 1,
+      },
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_final",
+        cell: {
+          kind: "user",
+          id: "user-folder-entry",
+          entryId: "folder-entry",
+          text: "Inspect this",
+          folders: [
+            {
+              name: "project folder",
+              path: "/definitely-missing/ses-07/project folder",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("reconstructs mixed file and folder history in their distinct attachment fields", () => {
+    const ingest = createIngestState();
+    const events = ingestPiEvent(ingest, {
+      type: "message_end",
+      entryId: "mixed-entry",
+      message: {
+        role: "user",
+        content: 'Review both\n\n<file name="/tmp/notes.txt"></file>\nfolder: `/tmp/project`',
+        timestamp: 1,
+      },
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_final",
+        cell: {
+          kind: "user",
+          id: "user-mixed-entry",
+          entryId: "mixed-entry",
+          text: "Review both",
+          files: [{ name: "notes.txt", path: "/tmp/notes.txt" }],
+          folders: [{ name: "project", path: "/tmp/project" }],
+        },
+      },
+    ]);
+  });
+
   it("streams deltas through (never coalesced into message_end)", () => {
     const { deltaCount } = runThrough(TURN);
     expect(deltaCount).toBe(2);
