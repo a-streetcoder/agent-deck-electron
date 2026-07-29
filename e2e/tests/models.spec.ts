@@ -114,7 +114,9 @@ test("the Models screen lists the provider catalog and marks the active model", 
   // Send a message so a session exists with a resolved model.
   await page.getByTestId("composer-input").fill("hi");
   await page.getByTestId("send-button").click();
-  await expect(page.getByTestId("assistant-text")).toContainText("hi", { timeout: 30_000 });
+  await expect(page.getByTestId("assistant-text").last()).toContainText("hi", {
+    timeout: 30_000,
+  });
 
   await page.getByTestId("nav-models").click();
   await expect(page.getByTestId("models-screen")).toBeVisible();
@@ -135,7 +137,9 @@ test("the Models catalog search filters by name/id/provider", async ({ page }) =
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   await page.getByTestId("composer-input").fill("hi");
   await page.getByTestId("send-button").click();
-  await expect(page.getByTestId("assistant-text")).toContainText("hi", { timeout: 30_000 });
+  await expect(page.getByTestId("assistant-text").last()).toContainText("hi", {
+    timeout: 30_000,
+  });
   await page.getByTestId("nav-models").click();
 
   const model = page.getByTestId("model-mock-model");

@@ -70,21 +70,6 @@ test("agents screen lists builtins and live-updates when files appear on disk", 
   // unit + resources-integration tested).
   await page.getByTestId("agent-filter-overridden").click();
   await expect(page.getByTestId("agent-row")).toHaveCount(0);
-
-  // Rename the project agent via the detail view: the file moves on disk and
-  // the row follows the new name.
-  await page.getByTestId("agent-filter-project").click();
-  await page.locator('[data-agent-name="tester"]').click();
-  await expect(page.getByTestId("agent-detail")).toBeVisible();
-  await page.getByTestId("agent-rename").click();
-  await page.getByTestId("agent-rename-input").fill("tester2");
-  await page.getByTestId("agent-rename-confirm").click();
-
-  await expect(page.locator('[data-agent-name="tester2"]')).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator('[data-agent-name="tester"]')).toHaveCount(0);
-  const renamedFile = path.join(project, ".pi", "agents", "tester2.md");
-  await expect.poll(() => existsSync(renamedFile)).toBe(true);
-  expect(existsSync(path.join(project, ".pi", "agents", "tester.md"))).toBe(false);
 });
 
 test("skills screen live-updates when a SKILL.md appears on disk", async ({ page }) => {
@@ -179,14 +164,7 @@ test("imports a local .md file as a skill (7.3)", async ({ page }) => {
 
   // The imported (global) skill appears, written into the global catalog.
   await expect(page.locator('[data-skill-name="imported-skill"]')).toBeVisible({ timeout: 15_000 });
-  const imported = path.join(
-    harness.piHome,
-    ".pi",
-    "agent",
-    "skills",
-    "imported-skill",
-    "SKILL.md",
-  );
+  const imported = path.join(harness.piHome, ".agents", "skills", "imported-skill", "SKILL.md");
   await expect.poll(() => existsSync(imported)).toBe(true);
   expect(readFileSync(imported, "utf8")).toContain("Do the thing.");
 });
@@ -233,10 +211,6 @@ test("skill detail flags disable-model-invocation as 'manual only' (native 7.6)"
 
 test("renaming keeps the detail on the renamed skill in a multi-skill list", async ({ page }) => {
   await registerProject();
-  await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
-  await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-skills").click();
 
   // Two skills; select the one that is NOT alphabetically first, so a
   // filePath-keyed selection that fell back to visible[0] would show the wrong
@@ -249,6 +223,12 @@ test("renaming keeps the detail on the renamed skill in a multi-skill list", asy
       `---\nname: ${name}\ndescription: A rename-selection test skill\n---\n\nbody\n`,
     );
   }
+  // Seed before opening the screen so no watcher refresh can replace the inline
+  // rename form while Playwright is typing (notably on Windows).
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await expect(page.getByTestId("session-cwd")).toHaveText(project);
+  await page.getByTestId("nav-skills").click();
   await expect(page.locator('[data-skill-name="zeta-skill"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-skill-name="zeta-skill"]').click();
   await expect(page.getByTestId("skill-invocation")).toHaveText("/skill:zeta-skill");

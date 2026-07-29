@@ -182,6 +182,7 @@ function ProviderGroup({
           <ControlButton
             key={provider.id}
             data-provider-id={provider.id}
+            data-configured={provider.configured ? "true" : "false"}
             className="flex w-full items-center gap-3 rounded-xl py-2.5 pl-3 text-left hover:bg-surface-subtle"
             onClick={() => onSelect(provider)}
           >

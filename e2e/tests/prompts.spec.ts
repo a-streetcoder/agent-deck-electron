@@ -6,7 +6,7 @@ import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
  * Tier-3 gate (Prompts screen): a prompt template created through the screen
- * lands on disk as a .pi/prompts/<name>.md file (pi's /<name> slash command),
+ * lands on disk as a library .pi/agent/prompt-library/<name>.md file (pi's /<name> slash command),
  * edits persist, and delete removes it.
  */
 
@@ -27,7 +27,7 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("create, edit, and delete a project prompt template", async ({ page }) => {
+test("create, edit, and delete a library prompt template", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
@@ -43,21 +43,20 @@ test("create, edit, and delete a project prompt template", async ({ page }) => {
   const row = page.locator('[data-prompt-name="review"]');
   await expect(row).toBeVisible();
   await expect(row.getByTestId("prompt-invocation")).toHaveText("/review");
-  await expect(row.getByTestId("scope-chip")).toHaveAttribute("data-scope", "project");
-  // "All Projects" default is a global-only concept — a project prompt has no toggle.
+  await expect(row.getByTestId("scope-chip")).toHaveAttribute("data-scope", "library");
   await expect(row.getByTestId("prompt-default-review")).toHaveCount(0);
 
   // On disk where pi loads it.
-  const file = path.join(project, ".pi", "prompts", "review.md");
+  const file = path.join(harness.piHome, ".pi", "agent", "prompt-library", "review.md");
   expect(existsSync(file)).toBe(true);
   expect(readFileSync(file, "utf8")).toContain("Please review the diff for bugs.");
 
   // Edit the body.
   await row.getByTestId("prompt-invocation").click();
   // The editor surfaces the on-disk path (native "File" metadata row); path
-  // separators follow the OS, so match the .pi/prompts/review.md suffix.
+  // separators follow the OS, so match the prompt-library/review.md suffix.
   await expect(page.getByTestId("prompt-file-path")).toContainText(
-    path.join(".pi", "prompts", "review.md"),
+    path.join("prompt-library", "review.md"),
   );
   await page.getByTestId("prompt-body").fill("Please review the diff for security issues.");
   await page.getByTestId("prompt-save").click();
@@ -73,7 +72,7 @@ test("create, edit, and delete a project prompt template", async ({ page }) => {
   const renamed = page.locator('[data-prompt-name="audit"]');
   await expect(renamed.getByTestId("prompt-invocation")).toHaveText("/audit");
   await expect(page.locator('[data-prompt-name="review"]')).toHaveCount(0);
-  const auditFile = path.join(project, ".pi", "prompts", "audit.md");
+  const auditFile = path.join(harness.piHome, ".pi", "agent", "prompt-library", "audit.md");
   await expect.poll(() => existsSync(auditFile)).toBe(true);
   expect(existsSync(file)).toBe(false);
   // Body carried across the rename.

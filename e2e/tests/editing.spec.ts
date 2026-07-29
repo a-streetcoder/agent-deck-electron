@@ -7,7 +7,7 @@ import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
  * Slice-9 gate: editing through the UI is edit-safe. A builtin edit becomes a
- * settings.json override (builtin file bytes NEVER change) and a new project
+ * settings.json override (builtin file bytes NEVER change) and a new global
  * agent created in the editor lands on disk and becomes pickable.
  */
 
@@ -111,7 +111,7 @@ test("editing an agent's fallback models persists and round-trips through the ed
   );
 });
 
-test("creating a project agent in the editor lands on disk and is pickable", async ({ page }) => {
+test("creating a global agent in the editor lands on disk and is pickable", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
@@ -119,7 +119,7 @@ test("creating a project agent in the editor lands on disk and is pickable", asy
   await page.getByTestId("nav-agents").click();
   await page.getByTestId("new-agent").click();
   await page.getByTestId("editor-name").fill("waffle-bot");
-  await page.getByTestId("editor-scope").selectOption("project");
+  await page.getByTestId("editor-scope").selectOption("global");
   await page.getByTestId("editor-description").fill("Waffles only");
   // The system prompt lives on the Prompt tab of the sheet.
   await page.getByTestId("editor-tab-prompt").click();
@@ -129,10 +129,13 @@ test("creating a project agent in the editor lands on disk and is pickable", asy
 
   const row = page.locator('[data-agent-name="waffle-bot"]');
   await expect(row).toBeVisible();
-  await expect(row.getByTestId("scope-chip")).toHaveAttribute("data-scope", "project");
+  await expect(row.getByTestId("scope-chip")).toHaveAttribute("data-scope", "global");
 
   // On disk where pi expects it…
-  const content = readFileSync(path.join(project, ".pi", "agents", "waffle-bot.md"), "utf8");
+  const content = readFileSync(
+    path.join(harness.piHome, ".pi", "agent", "agents", "waffle-bot.md"),
+    "utf8",
+  );
   expect(content).toContain("You are waffle-bot.");
 
   // …and pickable in the composer.
@@ -169,7 +172,7 @@ test("editing a skill updates its SKILL.md without losing the body", async ({ pa
   await expect(page.getByTestId("skill-editor")).toHaveCount(0);
 
   const content = readFileSync(
-    path.join(project, ".pi", "skills", "changelog", "SKILL.md"),
+    path.join(project, ".agents", "skills", "changelog", "SKILL.md"),
     "utf8",
   );
   expect(content).toContain("Write excellent changelogs");

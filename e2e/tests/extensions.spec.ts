@@ -248,6 +248,7 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
   let mutationPhase: "individual" | "bulk" = "individual";
   let individualRequests = 0;
   let releaseIndividual: (() => void) | undefined;
+  let releaseBulk: (() => void) | undefined;
   await page.route("**/resources/extensions/disabled", async (route) => {
     const body = route.request().postDataJSON() as { path: string; disabled: boolean };
     if (mutationPhase === "individual") {
@@ -257,6 +258,7 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
       return;
     }
     if (body.path.endsWith("overlap-a.ts")) {
+      await new Promise<void>((resolve) => (releaseBulk = resolve));
       entries[0]!.disabled = body.disabled;
       await route.fulfill({ status: 200, json: { ok: true } });
     } else {
@@ -292,6 +294,7 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
   await page.getByTestId("extension-disable-all").click();
   await expect(page.getByTestId("extension-disable-all")).toHaveAccessibleName("Disabling all…");
   await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toBeDisabled();
+  releaseBulk!();
   await expect(page.getByTestId("error-banner")).toHaveText("Error: One extension stayed enabled.");
   await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toHaveText("Enable");
   await expect(page.getByTestId("extension-toggle-overlap-b.ts")).toHaveText("Disable");

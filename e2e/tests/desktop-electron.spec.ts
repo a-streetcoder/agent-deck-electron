@@ -67,14 +67,30 @@ test.beforeAll(async () => {
   execSync('git config user.name "Desktop E2E"', { cwd: projectDir });
   writeFileSync(path.join(projectDir, "README.md"), "# Desktop E2E\n");
   execSync("git add README.md && git commit -m initial", { cwd: projectDir });
-  // CI runs as root in a container where Chromium's setuid sandbox can't start,
-  // so Electron needs --no-sandbox there (harmless locally, gated on CI).
-  const launchArgs = process.env.CI ? [DESKTOP_DIR, "--no-sandbox"] : [DESKTOP_DIR];
+  // Linux CI runs as root in a container where Chromium's setuid sandbox can't
+  // start. Windows and macOS must use their normal launch arguments.
+  const launchArgs =
+    process.env.CI && process.platform === "linux" ? [DESKTOP_DIR, "--no-sandbox"] : [DESKTOP_DIR];
+  // Playwright reuses its lone worker across spec files. Browser harnesses set
+  // process-wide Agent Deck defaults, so do not leak their now-closed mock
+  // provider or test-mode settings into the independent Electron process.
+  const desktopEnv = { ...process.env };
+  for (const key of [
+    "AGENT_DECK_TEST",
+    "AGENT_DECK_DEFAULT_CWD",
+    "AGENT_DECK_DEFAULT_PROVIDER",
+    "AGENT_DECK_DEFAULT_MODEL",
+    "AGENT_DECK_DEFAULT_EXTENSIONS",
+    "AGENT_DECK_PROVIDER_EXTENSIONS",
+    "ELECTRON_RUN_AS_NODE",
+  ]) {
+    delete desktopEnv[key];
+  }
   app = await electron.launch({
     executablePath: electronPath,
     args: launchArgs,
     env: {
-      ...process.env,
+      ...desktopEnv,
       HOME: resourceHome,
       USERPROFILE: resourceHome,
       PI_SKIP_VERSION_CHECK: "1",
@@ -220,7 +236,8 @@ test("the desktop shell boots the server and mounts the UI", async () => {
       workspaceTopRightRadius: "0px",
       workspaceInset: "0px",
       cornerBackgroundMatchesSidebar: true,
-      scrollbarWidth: "8px",
+      // Chromium reports overlay scrollbars as zero-width on Linux.
+      scrollbarWidth: platform === "linux" ? "0px" : "8px",
       menuBridge: true,
       menuMinWidth: "0px",
       menuOverflowX: "auto",
@@ -429,8 +446,8 @@ test("skill Trash bridge rejects arbitrary renderer paths", async () => {
 });
 
 test("moves a validated skill recovery through Electron OS Trash", async () => {
-  const token = ".agent-deck-resource-recovery-v1-10-trash-test-0123456789abcdef0123456789abcdef";
-  const recovery = path.join(resourceHome, ".pi", "agent", "skills", token);
+  const token = ".trash-test.displaced.123.1";
+  const recovery = path.join(resourceHome, ".agents", "skills", token);
   mkdirSync(recovery, { recursive: true });
   writeFileSync(
     path.join(recovery, "SKILL.md"),
@@ -446,8 +463,8 @@ test("moves a validated skill recovery through Electron OS Trash", async () => {
 });
 
 test("treats OS Trash as successful when backend acknowledgement transport fails", async () => {
-  const token = ".agent-deck-resource-recovery-v1-9-ack-fails-fedcba9876543210fedcba9876543210";
-  const recovery = path.join(resourceHome, ".pi", "agent", "skills", token);
+  const token = ".ack-fails.displaced.123.2";
+  const recovery = path.join(resourceHome, ".agents", "skills", token);
   mkdirSync(recovery, { recursive: true });
   writeFileSync(
     path.join(recovery, "SKILL.md"),

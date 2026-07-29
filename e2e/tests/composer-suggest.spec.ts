@@ -94,7 +94,7 @@ test("an @-mention surfaces a removable file tag chip (Slice 17)", async ({ page
 test("a pending image expands to a full-size preview (Slice 17)", async ({ page }) => {
   await openProject(page);
   const pngBase64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
   await page.getByTestId("attach-input").setInputFiles({
     name: "pixel.png",
     mimeType: "image/png",
@@ -116,7 +116,7 @@ test("an attached image reaches the model as image content", async ({ page }) =>
 
   // A 1x1 transparent PNG.
   const pngBase64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
   const requestsBefore = harness.mock.requests.length;
 
   await page.getByTestId("attach-input").setInputFiles({

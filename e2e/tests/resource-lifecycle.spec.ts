@@ -27,7 +27,7 @@ const project = mkdtempSync(path.join(tmpdir(), "proj-lifecycle-"));
 
 test.beforeAll(async () => {
   harness = await startHarness({ chunkDelayMs: 20 });
-  const agentsDir = path.join(project, ".pi", "agents");
+  const agentsDir = path.join(harness.piHome, ".pi", "agent", "agents");
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "toaster.md"),
@@ -90,8 +90,8 @@ test("a disabled agent disappears from the composer picker", async ({ page }) =>
   await expect(page.getByTestId("agent-picker").locator('option[value="toaster"]')).toHaveCount(0);
 });
 
-test("deleting a project agent removes its file", async ({ page }) => {
-  const agentFile = path.join(project, ".pi", "agents", "toaster.md");
+test("deleting a global agent removes its file", async ({ page }) => {
+  const agentFile = path.join(harness.piHome, ".pi", "agent", "agents", "toaster.md");
   expect(existsSync(agentFile)).toBe(true);
 
   await page.goto(harness.baseUrl);

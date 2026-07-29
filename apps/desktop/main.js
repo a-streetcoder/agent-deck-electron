@@ -29,8 +29,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
 const repoRoot = path.resolve(__dirname, "..", "..");
 const desktopRecoveryToken = randomUUID();
-const skillRecoveryTokenPattern =
+const legacySkillRecoveryTokenPattern =
   /^\.agent-deck-resource-recovery-v1-[1-9][0-9]{0,2}-[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$/;
+// The shared skill engine names retained trees `.<slug>.displaced.<pid>.<sequence>`.
+// Keep this check deliberately narrower than the backend's opaque-token lookup; the
+// backend still resolves the supplied token against its authoritative recovery list
+// before Electron receives a filesystem path.
+const engineSkillRecoveryTokenPattern = /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.displaced\.[0-9]+\.[0-9]+$/;
 
 // Present as "Agent Deck" everywhere the OS shows the app name (menu bar,
 // About panel) instead of the package/Electron default.
@@ -648,7 +653,7 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
     !serverPort ||
     token.length < 1 ||
     token.length > 512 ||
-    !skillRecoveryTokenPattern.test(token)
+    (!legacySkillRecoveryTokenPattern.test(token) && !engineSkillRecoveryTokenPattern.test(token))
   ) {
     throw new Error("Skill recovery is unavailable");
   }
