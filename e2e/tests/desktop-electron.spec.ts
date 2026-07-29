@@ -71,9 +71,9 @@ test.beforeAll(async () => {
   // start. Windows and macOS must use their normal launch arguments.
   const launchArgs =
     process.env.CI && process.platform === "linux" ? [DESKTOP_DIR, "--no-sandbox"] : [DESKTOP_DIR];
-  // Playwright reuses its lone worker across spec files. Browser harnesses set
-  // process-wide Agent Deck defaults, so do not leak their now-closed mock
-  // provider or test-mode settings into the independent Electron process.
+  // Keep the Electron-owned server independent from ambient test seams as well
+  // as browser harness defaults. The desktop Playwright project has its own
+  // worker, but callers can still provide any of these process-wide variables.
   const desktopEnv = { ...process.env };
   for (const key of [
     "AGENT_DECK_TEST",
@@ -82,6 +82,9 @@ test.beforeAll(async () => {
     "AGENT_DECK_DEFAULT_MODEL",
     "AGENT_DECK_DEFAULT_EXTENSIONS",
     "AGENT_DECK_PROVIDER_EXTENSIONS",
+    "AGENT_DECK_TERMINAL_SHELL",
+    "PROMPT",
+    "PS1",
     "ELECTRON_RUN_AS_NODE",
   ]) {
     delete desktopEnv[key];

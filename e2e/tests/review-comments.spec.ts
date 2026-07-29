@@ -111,6 +111,13 @@ test("comments on diff lines become pending cards and ride the next prompt to pi
   // The pending set is cleared by the send.
   await expect(page.getByTestId("pending-comment-card")).toHaveCount(0);
 
+  // The UI can return to idle just before the mock provider's request observer
+  // appends the completed request under load. Wait for that independent signal
+  // before taking the immutable request slice below.
+  await expect
+    .poll(() => harness.mock.requests.length, { timeout: 15_000 })
+    .toBeGreaterThan(requestsBefore);
+
   // The prompt pi received (captured by the mock provider) carries the
   // serialized <review_comment> blocks for both lines, verbatim.
   const newRequests = harness.mock.requests.slice(requestsBefore);
