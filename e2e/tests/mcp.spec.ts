@@ -1,4 +1,6 @@
 import { mockMcpServerLaunch } from "@agent-deck/testkit";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -49,6 +51,54 @@ test("lists a configured MCP server as connected and removes it", async ({ page 
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId("mcp-remove-mock").click();
   await expect(page.getByTestId("mcp-mock")).toHaveCount(0);
+  await expect(page.getByTestId("mcp-empty")).toBeVisible();
+});
+
+test("reloads externally edited mcp.json without restarting", async ({ page }) => {
+  const launch = mockMcpServerLaunch("external");
+  const configPath = path.join(harness.piHome, ".pi", "agent", "mcp.json");
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      mcpServers: {
+        external: { command: launch.command, args: launch.args },
+      },
+    }),
+  );
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await page.getByTestId("mcp-reload").click();
+
+  const row = page.getByTestId("mcp-external");
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-connected", "true");
+  await expect(row).toContainText("mcp__external__echo");
+
+  // A partial/broken external save fails closed: the useful connection remains
+  // active and the user gets an actionable error instead of losing all tools.
+  writeFileSync(configPath, "{ not valid JSON");
+  await page.getByTestId("mcp-reload").click();
+  await expect(row).toHaveAttribute("data-connected", "true");
+  await expect(page.getByTestId("error-banner")).toContainText(
+    "current connections were preserved",
+  );
+
+  // Valid JSON with the wrong catalog shape is equally unsafe and must not be
+  // mistaken for an authoritative empty snapshot.
+  writeFileSync(configPath, JSON.stringify({ mcpServers: [] }));
+  await page.getByTestId("mcp-reload").click();
+  await expect(row).toHaveAttribute("data-connected", "true");
+  await expect(page.getByTestId("error-banner")).toContainText(
+    "current connections were preserved",
+  );
+
+  // An external deletion is authoritative too: reload tears down the live
+  // client and removes its registered tools without a server restart.
+  writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+  await page.getByTestId("mcp-reload").click();
+  await expect(row).toHaveCount(0);
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 

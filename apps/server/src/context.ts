@@ -113,6 +113,7 @@ export interface ServerContext {
   providerLogin: ProviderLoginManager;
   mcp: McpManager;
   mcpOAuth: McpOAuthCoordinator;
+  reloadMcpConfig(): Promise<{ ok: true } | { ok: false; error: string }>;
   memoryEnabled: boolean;
   memoryBaseDir: string;
   worktreesRoot: string;

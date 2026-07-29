@@ -7,9 +7,8 @@ import { extensionBridgeConflict } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
   appendSystemPromptPath,
-  defaultRoots,
   projectWatchDirs,
-  readMcpServers,
+  readMcpServerCatalog,
   scanAgents,
   scanExtensions,
   scanSkills,
@@ -54,6 +53,7 @@ import { createFileService } from "./services/files.ts";
 import { LoopEngine } from "./loopEngine.ts";
 import {
   McpManager,
+  mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
   scopeMcpBridgeSpecs,
   type McpServerConfig,
@@ -592,6 +592,13 @@ async function initServer(
   // every parent session gets (moved verbatim to bridgeTools.ts).
   registerDeckBridgeTools(bridge, sessions);
 
+  // Resource scanning follows the Pi subprocess HOME override so scanners,
+  // configuration reloads, and Pi all observe the same user-owned files.
+  const resourceHome = (): string => {
+    const piEnv = envDefaults().env;
+    return piEnv?.HOME ?? homedir();
+  };
+
   // Proxy configured MCP servers' tools onto the bridge (best-effort — a server
   // that fails to connect is skipped). Registered before listen so the tools are
   // available to the first session launch. AGENT_DECK_MCP_SERVERS is a JSON array
@@ -601,22 +608,26 @@ async function initServer(
   // escape hatch). Both stdio (command) and http (url, Streamable HTTP) entries
   // are supported. Skip the real-home read under AGENT_DECK_TEST so tests stay
   // hermetic (they configure servers via the env override, never the real mcp.json).
-  const mcpFromConfig = (process.env.AGENT_DECK_TEST === "1" ? [] : readMcpServers(defaultRoots()))
-    .map((entry): McpServerConfig | null => {
+  const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS);
+  const loadMcpConfigs = (): { configs: McpServerConfig[]; valid: boolean } => {
+    const catalog = readMcpServerCatalog({ home: resourceHome() });
+    const fromFile = catalog.servers.map((entry): McpServerConfig | null => {
       if (entry.transport === "http" && entry.url) return { id: entry.id, url: entry.url };
       if (entry.command) {
         return { id: entry.id, command: entry.command, args: entry.args, env: entry.env };
       }
       return null;
-    })
-    .filter((c): c is McpServerConfig => c !== null);
-  const mcpConfigs = [
-    ...new Map(
-      [...mcpFromConfig, ...mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS)].map(
-        (config) => [config.id, config],
+    });
+    return {
+      configs: mergeMcpServerConfigs(
+        fromFile.filter((config): config is McpServerConfig => config !== null),
+        mcpEnvConfigs,
       ),
-    ).values(),
-  ];
+      valid: catalog.valid,
+    };
+  };
+  const initialMcpConfigs =
+    process.env.AGENT_DECK_TEST === "1" ? mcpEnvConfigs : loadMcpConfigs().configs;
   // MCP OAuth (native MCPOAuthService): authed http servers get a per-server
   // OAuth provider whose tokens persist under the app data dir. The redirect
   // target is where the browser lands after authorization; the loopback capture
@@ -629,7 +640,18 @@ async function initServer(
   const mcp = new McpManager(bridge, {
     httpAuthProvider: (id) => mcpOAuth.providerFor(id),
   });
-  await mcp.connectAll(mcpConfigs);
+  await mcp.connectAll(initialMcpConfigs);
+  const reloadMcpConfig = async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const snapshot = loadMcpConfigs();
+    if (!snapshot.valid) {
+      return {
+        ok: false,
+        error: "MCP configuration is not valid JSON; current connections were preserved.",
+      };
+    }
+    await mcp.reconcile(snapshot.configs);
+    return { ok: true };
+  };
 
   const fastify = Fastify({ logger: false });
 
@@ -673,12 +695,7 @@ async function initServer(
       .send(image.data);
   });
 
-  // Resource scanning. `home` follows the pi subprocess HOME override (set via
-  // AGENT_DECK_PI_ENV in tests) so the scanner and pi see the same catalogs.
-  const resourceHome = (): string => {
-    const piEnv = envDefaults().env;
-    return piEnv?.HOME ?? homedir();
-  };
+  // Resource scanning uses the same HOME as MCP configuration and Pi.
   const rootsFor = (projectId?: string): ResourceRoots => ({
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
@@ -806,6 +823,7 @@ async function initServer(
     providerLogin,
     mcp,
     mcpOAuth,
+    reloadMcpConfig,
     memoryEnabled,
     memoryBaseDir,
     worktreesRoot,

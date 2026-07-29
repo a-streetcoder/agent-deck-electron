@@ -7,6 +7,7 @@ import {
   isValidMcpServerName,
   mcpConfigPath,
   McpConfigError,
+  readMcpServerCatalog,
   readMcpServers,
   writeMcpServer,
   type ResourceRoots,
@@ -67,13 +68,23 @@ describe("readMcpServers", () => {
     expect(byId.extra).toMatchObject({ command: "x", scope: "project" });
   });
 
-  it("ignores malformed json and non-object mcpServers", () => {
+  it("rejects malformed JSON and structurally invalid catalog documents", () => {
     const file = mcpConfigPath(roots, "global")!;
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "{ not valid json");
     expect(readMcpServers(roots)).toEqual([]);
-    writeGlobal({ mcpServers: "nope" });
-    expect(readMcpServers(roots)).toEqual([]);
+    expect(readMcpServerCatalog(roots).valid).toBe(false);
+    for (const invalid of [null, [], { mcpServers: "nope" }, { mcpServers: [] }]) {
+      writeGlobal(invalid);
+      expect(readMcpServers(roots)).toEqual([]);
+      expect(readMcpServerCatalog(roots).valid).toBe(false);
+    }
+  });
+
+  it("treats missing files and documents without mcpServers as valid empty catalogs", () => {
+    expect(readMcpServerCatalog(roots)).toEqual({ servers: [], valid: true });
+    writeGlobal({ untouched: true });
+    expect(readMcpServerCatalog(roots)).toEqual({ servers: [], valid: true });
   });
 });
 

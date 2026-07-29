@@ -46,6 +46,13 @@ export interface HttpServerConfig {
   headers?: Record<string, string>;
 }
 
+export interface McpConnectOptions {
+  /** Cancels transport startup or the MCP initialize handshake. */
+  signal?: AbortSignal;
+  /** Bounds the SDK initialize request after transport startup. */
+  timeoutMs?: number;
+}
+
 function flattenContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
@@ -61,14 +68,51 @@ export class McpClient {
   private constructor(private readonly client: Client) {}
 
   /** Connect to an already-constructed transport (used by tests via in-memory). */
-  static async connect(transport: Transport, name = "agent-deck"): Promise<McpClient> {
+  static async connect(
+    transport: Transport,
+    name = "agent-deck",
+    options: McpConnectOptions = {},
+  ): Promise<McpClient> {
     const client = new Client({ name, version: "0.0.1" });
-    await client.connect(transport);
-    return new McpClient(client);
+    const abortError = (): Error =>
+      options.signal?.reason instanceof Error
+        ? options.signal.reason
+        : new Error("MCP connection aborted");
+    if (options.signal?.aborted) {
+      await transport.close().catch(() => {});
+      throw abortError();
+    }
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        void client.close().catch(() => {});
+        reject(abortError());
+      };
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([
+        client.connect(transport, {
+          signal: options.signal,
+          timeout: options.timeoutMs,
+          maxTotalTimeout: options.timeoutMs,
+        }),
+        aborted,
+      ]);
+      return new McpClient(client);
+    } catch (error) {
+      await client.close().catch(() => {});
+      throw error;
+    } finally {
+      if (onAbort) options.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   /** Spawn and connect to a stdio MCP server. */
-  static async connectStdio(config: StdioServerConfig): Promise<McpClient> {
+  static async connectStdio(
+    config: StdioServerConfig,
+    options: McpConnectOptions = {},
+  ): Promise<McpClient> {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args,
@@ -77,7 +121,7 @@ export class McpClient {
       env: config.env ? { ...getDefaultEnvironment(), ...config.env } : undefined,
       cwd: config.cwd,
     });
-    return await McpClient.connect(transport);
+    return await McpClient.connect(transport, "agent-deck", options);
   }
 
   /**
@@ -89,13 +133,13 @@ export class McpClient {
    */
   static async connectHttp(
     config: HttpServerConfig,
-    options: { authProvider?: OAuthClientProvider } = {},
+    options: McpConnectOptions & { authProvider?: OAuthClientProvider } = {},
   ): Promise<McpClient> {
     const transport = new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: config.headers ? { headers: config.headers } : undefined,
       authProvider: options.authProvider,
     });
-    return await McpClient.connect(transport);
+    return await McpClient.connect(transport, "agent-deck", options);
   }
 
   /** List the server's tools as plain JSON-Schema-carrying descriptors. */

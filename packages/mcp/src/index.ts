@@ -2,6 +2,7 @@ export {
   McpClient,
   type HttpServerConfig,
   type McpCallResult,
+  type McpConnectOptions,
   type McpToolInfo,
   type StdioServerConfig,
 } from "./client.ts";

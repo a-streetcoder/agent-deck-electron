@@ -12,7 +12,7 @@ import type { ServerContext } from "../context.ts";
  * sign-in flow for authed http servers. Moved verbatim from server.ts.
  */
 export function registerMcpRoutes(ctx: ServerContext): void {
-  const { fastify, mcp, mcpOAuth, broadcast, rootsFor } = ctx;
+  const { fastify, mcp, mcpOAuth, reloadMcpConfig, broadcast, rootsFor } = ctx;
 
   // MCP servers: list live connection state, add/remove/refresh. Adds/removes
   // are written to the app-owned global mcp.json and reflected on the bridge.
@@ -39,6 +39,13 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         auth: server.transport === "http" ? mcpOAuth.state(server.id) : { status: "none" },
       })),
     };
+  });
+
+  fastify.post("/mcp/reload", async (_request, reply) => {
+    const result = await reloadMcpConfig();
+    if (!result.ok) return reply.code(422).send({ error: result.error });
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
   });
 
   // Begin OAuth for an authed http server: returns the authorization URL to open.

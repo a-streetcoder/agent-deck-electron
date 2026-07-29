@@ -65,15 +65,26 @@ function asStringRecord(value: unknown): Record<string, string> | undefined {
 }
 
 /** Parse one mcp.json file's entries into normalized configs (invalid → skipped). */
-function parseMcpFile(file: string, scope: McpConfigScope): McpServerEntry[] {
+interface ParsedMcpFile {
+  entries: McpServerEntry[];
+  valid: boolean;
+}
+
+function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
   let data: unknown;
   try {
     data = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    return [];
+  } catch (error) {
+    return { entries: [], valid: (error as NodeJS.ErrnoException).code === "ENOENT" };
   }
-  const servers = (data as { mcpServers?: unknown })?.mcpServers;
-  if (typeof servers !== "object" || servers === null) return [];
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return { entries: [], valid: false };
+  }
+  const servers = (data as { mcpServers?: unknown }).mcpServers;
+  if (servers === undefined) return { entries: [], valid: true };
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
+    return { entries: [], valid: false };
+  }
   const entries: McpServerEntry[] = [];
   for (const [id, raw] of Object.entries(servers as Record<string, unknown>)) {
     if (typeof raw !== "object" || raw === null) continue;
@@ -94,21 +105,38 @@ function parseMcpFile(file: string, scope: McpConfigScope): McpServerEntry[] {
     }
     // Neither a command nor a valid http(s) url → not a usable server; skip.
   }
-  return entries;
+  return { entries, valid: true };
+}
+
+export interface McpServerCatalog {
+  servers: McpServerEntry[];
+  valid: boolean;
 }
 
 /**
  * All configured MCP servers, project entries overriding global ones by id.
  * Missing files are simply absent.
  */
-export function readMcpServers(roots: ResourceRoots): McpServerEntry[] {
+export function readMcpServerCatalog(roots: ResourceRoots): McpServerCatalog {
   const byId = new Map<string, McpServerEntry>();
+  let valid = true;
   const globalPath = mcpConfigPath(roots, "global");
-  if (globalPath) for (const entry of parseMcpFile(globalPath, "global")) byId.set(entry.id, entry);
+  if (globalPath) {
+    const parsed = parseMcpFile(globalPath, "global");
+    valid &&= parsed.valid;
+    for (const entry of parsed.entries) byId.set(entry.id, entry);
+  }
   const projectPath = mcpConfigPath(roots, "project");
-  if (projectPath)
-    for (const entry of parseMcpFile(projectPath, "project")) byId.set(entry.id, entry);
-  return [...byId.values()];
+  if (projectPath) {
+    const parsed = parseMcpFile(projectPath, "project");
+    valid &&= parsed.valid;
+    for (const entry of parsed.entries) byId.set(entry.id, entry);
+  }
+  return { servers: [...byId.values()], valid };
+}
+
+export function readMcpServers(roots: ResourceRoots): McpServerEntry[] {
+  return readMcpServerCatalog(roots).servers;
 }
 
 /** A server name is an object key, not a path — reject prototype/empty/odd names. */

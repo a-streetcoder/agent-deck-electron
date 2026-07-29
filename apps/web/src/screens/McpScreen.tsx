@@ -2,6 +2,7 @@ import { ControlButton, ControlInput } from "@/design-system/components/NativeCo
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, LogOut, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
 
 /**
@@ -35,6 +36,8 @@ interface LoginFlow {
   state: string;
 }
 
+type CatalogLoadResult = "applied" | "failed" | "superseded";
+
 /** Extract the `code` (+ `state`) the user pastes back — either a bare code or
  *  the full redirect URL they landed on. Falls back to the flow's own state. */
 function parseCallback(input: string, fallbackState: string): { code: string; state: string } {
@@ -56,25 +59,35 @@ export function McpScreen() {
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [adding, setAdding] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
+  const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
   // server can't clobber a newer flow the user has since started for another.
   const loginSeq = useRef(0);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback((): Promise<CatalogLoadResult> => {
     const seq = ++loadSeq.current;
-    try {
-      const response = await fetch("/mcp");
-      if (!response.ok) throw new Error(await response.text());
-      const data = (await response.json()) as { servers: McpServer[] };
-      if (seq === loadSeq.current) setServers(data.servers);
-    } catch (err) {
-      if (seq === loadSeq.current) setError(String(err));
-    }
+    const pending = (async (): Promise<CatalogLoadResult> => {
+      try {
+        const response = await fetch("/mcp");
+        if (!response.ok) throw new Error(await response.text());
+        const data = (await response.json()) as { servers: McpServer[] };
+        if (seq !== loadSeq.current) return "superseded";
+        setServers(data.servers);
+        return "applied";
+      } catch (err) {
+        if (seq !== loadSeq.current) return "superseded";
+        setError(String(err));
+        return "failed";
+      }
+    })();
+    latestLoad.current = pending;
+    return pending;
   }, [setError]);
 
   useEffect(() => {
@@ -110,6 +123,30 @@ export function McpScreen() {
       setError(String(err));
     }
     await load();
+  };
+
+  const reloadFromDisk = async (): Promise<void> => {
+    if (reloading) return;
+    setReloading(true);
+    setError(null);
+    try {
+      const response = await fetch("/mcp/reload", { method: "POST" });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      let pending = load();
+      for (;;) {
+        const result = await pending;
+        if (result === "failed") return;
+        if (result === "applied") break;
+        const winner = latestLoad.current;
+        if (!winner || winner === pending) return;
+        pending = winner;
+      }
+      pushToast({ kind: "success", message: "Reloaded MCP configuration" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReloading(false);
+    }
   };
 
   const remove = async (id: string): Promise<void> => {
@@ -191,18 +228,30 @@ export function McpScreen() {
               MCP servers
             </h2>
           </div>
-          <ControlButton
-            data-testid="mcp-add"
-            className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
-            onClick={() => setAdding((v) => !v)}
-          >
-            <Plus size={13} /> Add server
-          </ControlButton>
+          <div className="flex items-center gap-2">
+            <ControlButton
+              data-testid="mcp-reload"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium text-text-muted hover:text-accent disabled:opacity-40"
+              disabled={reloading}
+              title="Reload mcp.json and apply added, changed, or removed servers"
+              onClick={() => void reloadFromDisk()}
+            >
+              <RefreshCw size={13} className={reloading ? "animate-spin" : undefined} />
+              {reloading ? "Reloading…" : "Reload config"}
+            </ControlButton>
+            <ControlButton
+              data-testid="mcp-add"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
+              }}
+              onClick={() => setAdding((v) => !v)}
+            >
+              <Plus size={13} /> Add server
+            </ControlButton>
+          </div>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           Model Context Protocol servers whose tools are proxied into every session as{" "}

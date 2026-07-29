@@ -25,6 +25,34 @@ function isHttpConfig(config: McpServerConfig): config is { id: string } & HttpS
   return "url" in config && typeof config.url === "string";
 }
 
+function stringRecordEqual(
+  left: Record<string, string> | undefined,
+  right: Record<string, string> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const rightEntries = Object.entries(right ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
+export function mcpServerConfigsEqual(left: McpServerConfig, right: McpServerConfig): boolean {
+  if (left.id !== right.id || isHttpConfig(left) !== isHttpConfig(right)) return false;
+  if (isHttpConfig(left) && isHttpConfig(right)) {
+    return left.url === right.url && stringRecordEqual(left.headers, right.headers);
+  }
+  if (isHttpConfig(left) || isHttpConfig(right)) return false;
+  return (
+    left.command === right.command &&
+    JSON.stringify(left.args ?? []) === JSON.stringify(right.args ?? []) &&
+    left.cwd === right.cwd &&
+    stringRecordEqual(left.env, right.env)
+  );
+}
+
+/** Merge config sources by id; entries in later sources are authoritative. */
+export function mergeMcpServerConfigs(...sources: McpServerConfig[][]): McpServerConfig[] {
+  return [...new Map(sources.flat().map((config) => [config.id, config] as const)).values()];
+}
+
 /** Live state of one configured MCP server (for GET /mcp). */
 export interface McpServerStatus {
   id: string;
@@ -69,21 +97,72 @@ export function scopeMcpBridgeSpecs<T extends { name: string }>(
   );
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const settle = (callback: () => void) => {
+      cleanup();
+      callback();
+    };
+    const onAbort = () =>
+      settle(() =>
+        reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new Error(signal?.reason ? String(signal.reason) : `${label} aborted`),
+        ),
+      );
+    const timer = setTimeout(
+      () => settle(() => reject(new Error(`${label} timed out after ${ms}ms`))),
+      ms,
+    );
     timer.unref();
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
     promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
+      (value) => settle(() => resolve(value)),
       (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
       },
     );
   });
+}
+
+/**
+ * A timed-out connect promise cannot be cancelled by the MCP SDK. Retain a
+ * completion handler so a client that resolves after our timeout is closed
+ * immediately instead of becoming an unowned stdio process.
+ */
+async function connectWithTimeout(
+  connect: (signal: AbortSignal) => Promise<McpClient>,
+  label: string,
+  controller: AbortController,
+): Promise<McpClient> {
+  const promise = connect(controller.signal);
+  let accepted = false;
+  try {
+    const client = await withTimeout(promise, MCP_CONNECT_TIMEOUT_MS, label, controller.signal);
+    accepted = true;
+    return client;
+  } finally {
+    if (!accepted) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error(`${label} timed out after ${MCP_CONNECT_TIMEOUT_MS}ms`));
+      }
+      void promise.then((client) => client.close()).catch(() => {});
+    }
+  }
 }
 
 /** Ensure the advertised parameters are a valid object JSON-Schema for pi. */
@@ -97,6 +176,8 @@ function normalizeParameters(inputSchema: Record<string, unknown>): Record<strin
 interface ServerState {
   config: McpServerConfig;
   client?: McpClient;
+  /** Cancels an in-progress connect or tool-discovery operation during shutdown. */
+  operationController?: AbortController;
   /** Bridge names registered for this server (for unregister on teardown). */
   toolNames: string[];
   error?: string;
@@ -106,6 +187,10 @@ export class McpManager {
   private readonly servers = new Map<string, ServerState>();
   /** Per-id operation chain so connect/refresh/remove for one id never interleave. */
   private readonly locks = new Map<string, Promise<unknown>>();
+  /** Whole-catalog reloads are authoritative snapshots and must apply in request order. */
+  private reconcileTail: Promise<void> = Promise.resolve();
+  /** Once shutdown starts, no route or queued reload may create another client. */
+  private closing = false;
   /** Supplies the OAuth provider for an authed http server (undefined → none). */
   private readonly httpAuthProvider?: (id: string) => McpOAuthProvider | undefined;
 
@@ -167,27 +252,42 @@ export class McpManager {
    * one bad server never breaks the others or startup.
    */
   connect(config: McpServerConfig): Promise<McpServerStatus> {
+    if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
     return this.serialize(config.id, () => this.connectInner(config));
   }
 
   private async connectInner(config: McpServerConfig): Promise<McpServerStatus> {
+    if (this.closing) throw new Error("MCP manager is closing");
     await this.teardown(config.id);
-    const state: ServerState = { config, toolNames: [] };
+    if (this.closing) throw new Error("MCP manager is closing");
+    const operationController = new AbortController();
+    const state: ServerState = { config, operationController, toolNames: [] };
     this.servers.set(config.id, state);
+    let client: McpClient | undefined;
     try {
-      const client = await withTimeout(
-        isHttpConfig(config)
-          ? McpClient.connectHttp(config, { authProvider: this.httpAuthProvider?.(config.id) })
-          : McpClient.connectStdio(config),
-        MCP_CONNECT_TIMEOUT_MS,
+      client = await connectWithTimeout(
+        (signal) => {
+          const connectOptions = { signal, timeoutMs: MCP_CONNECT_TIMEOUT_MS };
+          return isHttpConfig(config)
+            ? McpClient.connectHttp(config, {
+                ...connectOptions,
+                authProvider: this.httpAuthProvider?.(config.id),
+              })
+            : McpClient.connectStdio(config, connectOptions);
+        },
         `MCP connect "${config.id}"`,
+        operationController,
       );
+      const connectedClient = client;
+      // Own the client as soon as it connects. Tool discovery can still fail or
+      // time out, and shutdown must be able to find and close it in that window.
+      state.client = connectedClient;
       const tools = await withTimeout(
-        client.listTools(),
+        connectedClient.listTools(),
         MCP_CONNECT_TIMEOUT_MS,
         `MCP listTools "${config.id}"`,
+        operationController.signal,
       );
-      state.client = client;
       const safeId = sanitize(config.id);
       for (const tool of tools) {
         const name = bridgeToolName(config.id, tool.name);
@@ -205,13 +305,19 @@ export class McpManager {
             parameters: normalizeParameters(tool.inputSchema),
           },
           async (params) => {
-            const result = await client.callTool(tool.name, params);
+            const result = await connectedClient.callTool(tool.name, params);
             return { content: result.content, isError: result.isError };
           },
         );
       }
     } catch (error) {
+      for (const name of state.toolNames) this.bridge.unregister(name);
+      state.toolNames = [];
+      await client?.close().catch(() => {});
+      state.client = undefined;
       state.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      state.operationController = undefined;
     }
     return this.status().find((s) => s.id === config.id)!;
   }
@@ -227,8 +333,38 @@ export class McpManager {
     await Promise.allSettled(unique.map((config) => this.connect(config)));
   }
 
+  /** Apply an authoritative config snapshot without disturbing unchanged live clients. */
+  reconcile(configs: McpServerConfig[]): Promise<void> {
+    if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
+    const snapshot = configs.map((config) => ({ ...config }));
+    const next = this.reconcileTail.then(
+      () => this.reconcileSnapshot(snapshot),
+      () => this.reconcileSnapshot(snapshot),
+    );
+    this.reconcileTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private async reconcileSnapshot(configs: McpServerConfig[]): Promise<void> {
+    const desired = new Map(configs.map((config) => [config.id, config]));
+    const removals = [...this.servers.keys()]
+      .filter((id) => !desired.has(id))
+      .map((id) => this.remove(id));
+    const connections = [...desired.values()]
+      .filter((config) => {
+        const current = this.servers.get(config.id)?.config;
+        return current === undefined || !mcpServerConfigsEqual(current, config);
+      })
+      .map((config) => this.connect(config));
+    await Promise.allSettled([...removals, ...connections]);
+  }
+
   /** Reconnect a known server using its stored config. */
   refresh(id: string): Promise<McpServerStatus | null> {
+    if (this.closing) return Promise.resolve(null);
     return this.serialize(id, async () => {
       const config = this.servers.get(id)?.config;
       // connectInner (not connect) — we already hold this id's lock.
@@ -238,6 +374,7 @@ export class McpManager {
 
   /** Remove a server: unregister its tools and close its client. */
   remove(id: string): Promise<boolean> {
+    if (this.closing) return Promise.resolve(false);
     return this.serialize(id, async () => {
       if (!this.servers.has(id)) return false;
       await this.teardown(id);
@@ -246,7 +383,18 @@ export class McpManager {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    // Reject in-progress connect/tool-discovery waits immediately. Their
+    // connectInner catch paths own closing any connected or late clients.
+    for (const state of this.servers.values()) {
+      state.operationController?.abort(new Error("MCP manager is closing"));
+    }
+    // A queued catalog snapshot can enqueue per-id work, so drain it first;
+    // then drain every per-id tail before tearing down the final owned clients.
+    await this.reconcileTail;
+    await Promise.allSettled([...this.locks.values()]);
     await Promise.all([...this.servers.keys()].map((id) => this.teardown(id)));
+    this.locks.clear();
   }
 }
 

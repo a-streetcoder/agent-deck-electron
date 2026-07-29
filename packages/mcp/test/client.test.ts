@@ -1,7 +1,8 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpClient } from "../src/index.ts";
 
 /**
@@ -55,5 +56,31 @@ describe("McpClient", () => {
     const result = await client.callTool("boom", {});
     expect(result.isError).toBe(true);
     expect(result.content).toContain("kaboom");
+  });
+
+  it("aborts and closes a transport whose startup never settles", async () => {
+    let started = false;
+    let closed = false;
+    const transport: Transport = {
+      start: () => {
+        started = true;
+        return new Promise<void>(() => {});
+      },
+      send: async () => {},
+      close: async () => {
+        closed = true;
+        transport.onclose?.();
+      },
+    };
+    const controller = new AbortController();
+    const connecting = McpClient.connect(transport, "abort-test", {
+      signal: controller.signal,
+      timeoutMs: 100,
+    });
+    await vi.waitFor(() => expect(started).toBe(true));
+
+    controller.abort(new Error("cancelled"));
+    await expect(connecting).rejects.toThrow("cancelled");
+    expect(closed).toBe(true);
   });
 });
