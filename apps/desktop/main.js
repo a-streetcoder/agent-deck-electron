@@ -48,8 +48,7 @@ const engineSkillRecoveryTokenPattern = /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.displace
 // Present as "Agent Deck" everywhere the OS shows the app name (menu bar,
 // About panel) instead of the package/Electron default.
 app.setName("Agent Deck");
-if (process.platform === "win32") app.setAppUserModelId("com.streetcoding.agentdeck");
-startupTrace("application identity configured");
+startupTrace("application name configured");
 
 /** Match the window chrome to the operating system before the renderer paints. */
 const windowColors = () =>
@@ -908,6 +907,10 @@ app.on("web-contents-created", (_event, contents) => {
 
 app.whenReady().then(() => {
   startupTrace("electron ready");
+  if (process.platform === "win32") {
+    app.setAppUserModelId("com.streetcoding.agentdeck");
+    startupTrace("Windows application identity configured");
+  }
   // `pnpm dev` runs Electron's generic executable rather than a packaged app
   // bundle, so macOS otherwise displays Electron's icon in the Dock. Packaged
   // builds get the same artwork from electron-builder's bundle metadata.
