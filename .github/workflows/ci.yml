@@ -159,13 +159,17 @@ jobs:
       - run: pnpm -r --filter '!@agent-deck/e2e' test:pi
 
   # Playwright e2e — the streaming UI and the Electron desktop shell. Runs on
-  # Linux (under xvfb) and Windows, since both are ship targets.
+  # Linux (under xvfb) and Windows, since both are ship targets. Keep the headed
+  # Electron job on Server 2022: windows-latest moved to Server 2025 in June 2026,
+  # whose hosted desktop terminates Electron's Playwright inspector process with
+  # EXCEPTION_BREAKPOINT before the app can open. Unit/native Windows coverage
+  # above stays on windows-latest.
   e2e:
     needs: lint
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -67,18 +67,14 @@ test.beforeAll(async () => {
   execSync('git config user.name "Desktop E2E"', { cwd: projectDir });
   writeFileSync(path.join(projectDir, "README.md"), "# Desktop E2E\n");
   execSync("git add README.md && git commit -m initial", { cwd: projectDir });
-  // Linux CI runs as root, while hosted Windows Server 2025 runners can terminate
-  // Electron's GPU/renderer children with EXCEPTION_BREAKPOINT during sandbox
-  // initialization. Keep these runner-only switches before the app path so
-  // Electron parses them as options; packaged/local launches retain the sandbox
-  // and hardware acceleration.
-  const launchArgs = process.env.CI
-    ? process.platform === "win32"
-      ? ["--no-sandbox", "--disable-gpu-sandbox", "--disable-gpu", DESKTOP_DIR]
-      : process.platform === "linux"
-        ? ["--no-sandbox", DESKTOP_DIR]
-        : [DESKTOP_DIR]
-    : [DESKTOP_DIR];
+  // Linux CI runs as root, while the Windows runner checks the workspace out
+  // without the AppContainer ACLs Chromium's sandbox requires to read Electron
+  // child-process files. Keep this runner-only switch before the app path so
+  // Electron parses it as an option; packaged/local launches retain the sandbox.
+  const launchArgs =
+    process.env.CI && (process.platform === "linux" || process.platform === "win32")
+      ? ["--no-sandbox", DESKTOP_DIR]
+      : [DESKTOP_DIR];
   // Keep the Electron-owned server independent from ambient test seams as well
   // as browser harness defaults. The desktop Playwright project has its own
   // worker, but callers can still provide any of these process-wide variables.
