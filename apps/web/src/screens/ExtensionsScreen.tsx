@@ -1,6 +1,6 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Plug, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Plug, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
@@ -33,13 +33,17 @@ interface AppBridge {
   active: boolean;
 }
 
+type CatalogLoadResult = "applied" | "failed" | "superseded";
+
 export function ExtensionsScreen() {
   const setError = useAppStore((state) => state.setError);
+  const pushToast = useAppStore((state) => state.pushToast);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const [extensions, setExtensions] = useState<ExtensionEntry[]>([]);
   const [bridges, setBridges] = useState<AppBridge[]>([]);
   const [adding, setAdding] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [draft, setDraft] = useState("");
   const [modeBusy, setModeBusy] = useState(false);
   const modeBusyRef = useRef(false);
@@ -47,25 +51,59 @@ export function ExtensionsScreen() {
   const bulkBusyRef = useRef(false);
   const [extensionBusy, setExtensionBusy] = useState<Record<string, "toggle" | "remove">>({});
   const extensionBusyRef = useRef(new Set<string>());
+  const refreshingRef = useRef(false);
+  const loadSeq = useRef(0);
+  const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      // Pass the current project so project-scoped extensions are discovered too.
-      const url = currentProjectId
-        ? `/resources/extensions?projectId=${encodeURIComponent(currentProjectId)}`
-        : "/resources/extensions";
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      const data = (await response.json()) as { extensions: ExtensionEntry[] };
-      setExtensions(data.extensions);
-    } catch (err) {
-      setError(String(err));
-    }
+  const load = useCallback((): Promise<CatalogLoadResult> => {
+    const seq = ++loadSeq.current;
+    const pending = (async (): Promise<CatalogLoadResult> => {
+      try {
+        // Pass the current project so project-scoped extensions are discovered too.
+        const url = currentProjectId
+          ? `/resources/extensions?projectId=${encodeURIComponent(currentProjectId)}`
+          : "/resources/extensions";
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const data = (await response.json()) as { extensions: ExtensionEntry[] };
+        if (seq !== loadSeq.current) return "superseded";
+        setExtensions(data.extensions);
+        return "applied";
+      } catch (err) {
+        if (seq !== loadSeq.current) return "superseded";
+        setError(String(err));
+        return "failed";
+      }
+    })();
+    latestLoad.current = pending;
+    return pending;
   }, [setError, currentProjectId]);
 
   useEffect(() => {
     void load();
   }, [load, resourcesVersion]);
+
+  const refreshFromDisk = async (): Promise<void> => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    setError(null);
+    try {
+      let pending = load();
+      for (;;) {
+        const result = await pending;
+        if (result === "failed") return;
+        if (result === "applied") break;
+        const winner = latestLoad.current;
+        if (!winner || winner === pending) return;
+        pending = winner;
+      }
+      pushToast({ kind: "success", message: "Refreshed extensions" });
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  };
 
   // Extension loading mode (native PiAgentExtensionLoadingMode): whether the
   // user's own extensions load alongside Agent Deck's bridges, or only the
@@ -227,18 +265,29 @@ export function ExtensionsScreen() {
               Extensions
             </h2>
           </div>
-          <ControlButton
-            data-testid="extension-add"
-            className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
-            onClick={() => setAdding((v) => !v)}
-          >
-            <Plus size={13} /> Add extension
-          </ControlButton>
+          <div className="flex items-center gap-2">
+            <ControlButton
+              data-testid="extension-refresh"
+              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-xs font-medium text-text-secondary hover:text-text-primary disabled:opacity-40"
+              disabled={refreshing}
+              onClick={() => void refreshFromDisk()}
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : undefined} />
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </ControlButton>
+            <ControlButton
+              data-testid="extension-add"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
+              }}
+              onClick={() => setAdding((v) => !v)}
+            >
+              <Plus size={13} /> Add extension
+            </ControlButton>
+          </div>
         </div>
         <p className="pb-3 text-xs text-text-muted">
           pi extension files loaded into every new session. Disabled ones stay listed but don&apos;t

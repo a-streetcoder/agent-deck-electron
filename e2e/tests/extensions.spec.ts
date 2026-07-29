@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "../helpers/fixtures.ts";
@@ -94,6 +94,36 @@ test("flags two enabled extensions that share a filename (§16.2)", async ({ pag
   // Disabling one resolves the conflict for both (only one is loaded now).
   await page.getByTestId(`extension-toggle-${dupName}`).first().click();
   await expect(page.getByTestId("extension-conflict")).toHaveCount(0);
+});
+
+test("refreshes externally added, changed, and deleted extension files in place", async ({
+  page,
+}) => {
+  const extensionDir = path.join(harness.piHome, ".pi", "agent", "extensions");
+  const extensionName = "external-refresh.ts";
+  const extensionPath = path.join(extensionDir, extensionName);
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-extensions").click();
+  await expect(page.locator(`[data-extension-name="${extensionName}"]`)).toHaveCount(0);
+
+  mkdirSync(extensionDir, { recursive: true });
+  writeFileSync(extensionPath, "export default {};\n");
+  await page.getByTestId("extension-refresh").click();
+  const row = page.locator(`[data-extension-name="${extensionName}"]`);
+  await expect(row).toBeVisible();
+  await expect(page.getByTestId(`extension-source-${extensionName}`)).toHaveText(
+    "global · discovered",
+  );
+
+  // The same explicit refresh also rereads content-derived conflict metadata.
+  writeFileSync(extensionPath, 'const tool = "agent_deck_memory_write";\nexport default tool;\n');
+  await page.getByTestId("extension-refresh").click();
+  await expect(page.getByTestId(`extension-bridge-conflict-${extensionName}`)).toBeVisible();
+
+  unlinkSync(extensionPath);
+  await page.getByTestId("extension-refresh").click();
+  await expect(row).toHaveCount(0);
 });
 
 test("shows a discovered extension with its source label + a bridge-conflict warning", async ({
