@@ -770,7 +770,7 @@ async function initServer(
     // Register through addResourceWatchPaths (not a bare watcher.add): it records
     // the dirs as watch targets so the `ignored`/isRelevant predicate treats their
     // events as relevant — a bare add would be silently filtered out.
-    if (dirs.length > 0) addResourceWatchPaths(resourceWatcher, dirs);
+    if (dirs.length > 0) addResourceWatchPaths(resourceWatcher, dirs, projectPath);
   };
   for (const project of projects.list()) watchProject(project.path);
 

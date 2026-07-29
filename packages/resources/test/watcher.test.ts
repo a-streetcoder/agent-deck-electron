@@ -1,21 +1,469 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { projectWatchDirs, watchDirs } from "../src/paths.ts";
 import { scanAgents } from "../src/scanner.ts";
-import { addResourceWatchPaths, ensureDirs, watchResources } from "../src/watcher.ts";
+import {
+  addResourceWatchPaths,
+  ensureDirs,
+  isWatchPathContained,
+  removeResourceWatchPaths,
+  watchResources,
+} from "../src/watcher.ts";
 
 function home(): string {
   return mkdtempSync(path.join(tmpdir(), "watcher-home-"));
 }
 
+function linkDirectory(target: string, link: string): void {
+  symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("resource watcher", () => {
+  it("rejects Windows cross-volume and cross-share containment", () => {
+    expect(isWatchPathContained("C:\\home", "C:\\home\\project", path.win32)).toBe(true);
+    expect(isWatchPathContained("C:\\home", "D:\\outside", path.win32)).toBe(false);
+    expect(
+      isWatchPathContained(
+        "\\\\server\\home\\andrea",
+        "\\\\other-server\\share\\outside",
+        path.win32,
+      ),
+    ).toBe(false);
+  });
+
   it("does not create absent catalogs", () => {
     const root = home();
     const dirs = watchDirs({ home: root, projectPath: path.join(root, "project") });
     expect(ensureDirs(dirs)).toEqual(dirs);
     for (const dir of dirs) expect(existsSync(dir)).toBe(false);
+  });
+
+  it("does not observe a catalog through an escaping linked ancestor", async () => {
+    const root = home();
+    const outside = home();
+    const outsideAgents = path.join(outside, "agent", "agents");
+    mkdirSync(outsideAgents, { recursive: true });
+    linkDirectory(outside, path.join(root, ".pi"));
+
+    let changes = 0;
+    let resolveLocalChange!: () => void;
+    const localChanged = new Promise<void>((resolve) => {
+      resolveLocalChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveLocalChange();
+      },
+      10,
+    );
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => watcher.on("ready", resolve)),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher did not become ready")), 5_000),
+        ),
+      ]);
+
+      writeFileSync(path.join(outsideAgents, "outside.md"), "outside");
+      await delay(800);
+      expect(changes).toBe(0);
+      expect(
+        Object.keys(watcher.getWatched()).some((watched) =>
+          watched.startsWith(path.join(root, ".pi")),
+        ),
+      ).toBe(false);
+
+      rmSync(path.join(root, ".pi"), { force: true });
+      const localCatalog = path.join(root, ".pi", "agent", "agents");
+      mkdirSync(localCatalog, { recursive: true });
+      writeFileSync(path.join(localCatalog, "local.md"), "local");
+      await Promise.race([
+        localChanged,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher missed contained catalog creation")), 5_000),
+        ),
+      ]);
+      expect(changes).toBe(1);
+    } finally {
+      await watcher.close();
+    }
+  });
+
+  it("contains dynamically added project targets inside the project boundary", async () => {
+    const root = home();
+    const project = path.join(root, "project");
+    const outside = home();
+    mkdirSync(project);
+    mkdirSync(outside, { recursive: true });
+    linkDirectory(outside, path.join(project, ".pi"));
+
+    let changes = 0;
+    let resolveContainedChange!: () => void;
+    const containedChanged = new Promise<void>((resolve) => {
+      resolveContainedChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveContainedChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      addResourceWatchPaths(watcher, projectWatchDirs(project), project);
+      await delay(500);
+
+      const containedCatalog = path.join(project, ".agents", "skills");
+      mkdirSync(containedCatalog, { recursive: true });
+      writeFileSync(path.join(containedCatalog, "local.md"), "local");
+      await Promise.race([
+        containedChanged,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("dynamic project watcher was not active")), 5_000),
+        ),
+      ]);
+      await delay(300);
+      changes = 0;
+
+      writeFileSync(path.join(outside, "settings.json"), "{}");
+      await delay(800);
+      expect(changes).toBe(0);
+      expect(
+        Object.keys(watcher.getWatched()).some((watched) =>
+          watched.startsWith(path.join(project, ".pi")),
+        ),
+      ).toBe(false);
+    } finally {
+      await watcher.close();
+    }
+  }, 15_000);
+
+  it("observes missing targets beneath an explicitly trusted linked boundary", async () => {
+    const container = home();
+    const physicalHome = home();
+    const linkedHome = path.join(container, "home-link");
+    linkDirectory(physicalHome, linkedHome);
+
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources({ home: linkedHome }, resolveChange, 10);
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      const catalog = path.join(physicalHome, ".pi", "agent", "agents");
+      mkdirSync(catalog, { recursive: true });
+      writeFileSync(path.join(catalog, "later.md"), "later");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher missed a trusted linked boundary")), 5_000),
+        ),
+      ]);
+    } finally {
+      await watcher.close();
+    }
+  }, 15_000);
+
+  it("fails closed when a contained catalog ancestor is replaced by an escaping link", async () => {
+    const root = home();
+    const outside = home();
+    const catalog = path.join(root, ".pi", "agent", "agents");
+    const outsideCatalog = path.join(outside, "agent", "agents");
+    mkdirSync(catalog, { recursive: true });
+    mkdirSync(outsideCatalog, { recursive: true });
+
+    let changes = 0;
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      await delay(100);
+      writeFileSync(path.join(catalog, "before.md"), "before");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher was not active before link swap")), 5_000),
+        ),
+      ]);
+      await delay(300);
+
+      rmSync(path.join(root, ".pi"), { recursive: true, force: true });
+      linkDirectory(outside, path.join(root, ".pi"));
+      await delay(800);
+      changes = 0;
+
+      writeFileSync(path.join(outsideCatalog, "outside.md"), "outside");
+      await delay(800);
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
+  });
+
+  it("treats a linked descendant as a leaf and still observes local siblings", async () => {
+    const root = home();
+    const outside = home();
+    const catalog = path.join(root, ".pi", "agent", "agents");
+    mkdirSync(catalog, { recursive: true });
+    linkDirectory(outside, path.join(catalog, "escape"));
+
+    let changes = 0;
+    let resolveLocalChange!: () => void;
+    const localChanged = new Promise<void>((resolve) => {
+      resolveLocalChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveLocalChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      writeFileSync(path.join(outside, "outside.md"), "outside");
+      await delay(800);
+      expect(changes).toBe(0);
+
+      writeFileSync(path.join(catalog, "local.md"), "local");
+      await Promise.race([
+        localChanged,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher missed contained sibling edit")), 5_000),
+        ),
+      ]);
+      expect(changes).toBe(1);
+    } finally {
+      await watcher.close();
+    }
+  });
+
+  it("releases the effective project root when dynamic targets are removed", async () => {
+    const root = home();
+    const project = home();
+    const projectTargets = projectWatchDirs(project);
+    const settingsFile = path.join(project, ".pi", "settings.json");
+    let changes = 0;
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      addResourceWatchPaths(watcher, projectTargets, project);
+      await delay(500);
+      mkdirSync(path.dirname(settingsFile), { recursive: true });
+      writeFileSync(settingsFile, "{}");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("dynamic project watcher was not active")), 5_000),
+        ),
+      ]);
+
+      const canonicalProject = realpathSync.native(project);
+      expect(
+        Object.keys(watcher.getWatched()).some((watched) => watched.startsWith(canonicalProject)),
+      ).toBe(true);
+      const unwatch = vi.spyOn(watcher, "unwatch");
+      await removeResourceWatchPaths(watcher, projectTargets);
+      expect(unwatch).toHaveBeenCalledWith(expect.arrayContaining([canonicalProject]));
+      await delay(300);
+      changes = 0;
+      writeFileSync(settingsFile, '{"changed":true}');
+      await delay(800);
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
+  }, 15_000);
+
+  it("keeps overlapping dynamic roots active when one registration is removed", async () => {
+    const root = home();
+    const project = home();
+    const firstTarget = path.join(project, "a", "first");
+    const secondTarget = path.join(project, "a", "b", "second");
+    let changes = 0;
+    let resolveChange!: () => void;
+    let changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveChange();
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      addResourceWatchPaths(watcher, [firstTarget], project);
+      await delay(500);
+      mkdirSync(firstTarget, { recursive: true });
+      writeFileSync(path.join(firstTarget, "first.md"), "first");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("first dynamic root was not active")), 5_000),
+        ),
+      ]);
+
+      addResourceWatchPaths(watcher, [secondTarget], project);
+      await delay(500);
+      await removeResourceWatchPaths(watcher, [firstTarget]);
+
+      changed = new Promise<void>((resolve) => {
+        resolveChange = resolve;
+      });
+      mkdirSync(secondTarget, { recursive: true });
+      writeFileSync(path.join(secondTarget, "second.md"), "second");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("overlapping dynamic root was disabled by removal")),
+            5_000,
+          ),
+        ),
+      ]);
+
+      const canonicalProject = realpathSync.native(project);
+      expect(
+        Object.keys(watcher.getWatched()).some((watched) => watched.startsWith(canonicalProject)),
+      ).toBe(true);
+      const unwatch = vi.spyOn(watcher, "unwatch");
+      await removeResourceWatchPaths(watcher, [secondTarget]);
+      expect(unwatch).toHaveBeenCalledWith(expect.arrayContaining([canonicalProject]));
+      await delay(300);
+      changes = 0;
+      writeFileSync(path.join(secondTarget, "after-removal.md"), "after removal");
+      await delay(800);
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
+  }, 15_000);
+
+  it("revives a released ancestor when a dynamic target is re-added", async () => {
+    const root = home();
+    const project = home();
+    const target = path.join(project, "a", "b", "target");
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources({ home: root }, resolveChange, 10);
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      addResourceWatchPaths(watcher, [target], project);
+      await delay(500);
+      await removeResourceWatchPaths(watcher, [target]);
+
+      mkdirSync(path.dirname(target), { recursive: true });
+      addResourceWatchPaths(watcher, [target], project);
+      await delay(500);
+      mkdirSync(target);
+      writeFileSync(path.join(target, "after-readd.md"), "after re-add");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("re-added dynamic target remained ignored")), 5_000),
+        ),
+      ]);
+    } finally {
+      await watcher.close();
+    }
+  }, 15_000);
+
+  it("does not expand a linked directory loop or repeat a contained change", async () => {
+    const root = home();
+    const catalog = path.join(root, ".pi", "agent", "agents");
+    const nested = path.join(catalog, "nested");
+    mkdirSync(nested, { recursive: true });
+    linkDirectory(catalog, path.join(nested, "loop"));
+
+    let changes = 0;
+    let errors = 0;
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+        resolveChange();
+      },
+      10,
+    );
+    watcher.on("error", () => {
+      errors += 1;
+    });
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => watcher.on("ready", resolve)),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("linked loop prevented watcher readiness")), 5_000),
+        ),
+      ]);
+      expect(
+        Object.keys(watcher.getWatched()).filter((watched) =>
+          watched.split(path.sep).includes("loop"),
+        ),
+      ).toHaveLength(0);
+
+      writeFileSync(path.join(catalog, "local.md"), "local");
+      await Promise.race([
+        changed,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("watcher missed contained loop sibling")), 5_000),
+        ),
+      ]);
+      await delay(100);
+      expect(changes).toBe(1);
+      expect(errors).toBe(0);
+    } finally {
+      await watcher.close();
+    }
   });
 
   it("watches an exact project settings file without reacting to sibling files", async () => {
@@ -38,7 +486,7 @@ describe("resource watcher", () => {
     );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      addResourceWatchPaths(watcher, projectWatchDirs(project));
+      addResourceWatchPaths(watcher, projectWatchDirs(project), project);
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       mkdirSync(path.dirname(settingsFile), { recursive: true });
@@ -73,7 +521,7 @@ describe("resource watcher", () => {
     const watcher = watchResources({ home: root }, resolveChange, 10);
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      addResourceWatchPaths(watcher, [collectionRoot]);
+      addResourceWatchPaths(watcher, [collectionRoot], collectionRoot);
       await new Promise((resolve) => setTimeout(resolve, 100));
       writeFileSync(skillFile, "---\nname: selected\n---\n\nAfter.\n");
       await Promise.race([
