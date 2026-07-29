@@ -197,6 +197,15 @@ jobs:
           ELECTRON_DIR=$(node -e "console.log(require('path').dirname(require.resolve('electron/package.json', { paths: [require('path').resolve('apps/desktop')] })))")
           node "$ELECTRON_DIR/install.js"
       - run: pnpm --filter @agent-deck/web build
+      # Keep the Windows Electron launch independent from Chromium installation
+      # and browser specs. Playwright otherwise suppresses the child stderr when
+      # Electron exits before its debugger handshake, so retain its launch log.
+      - name: Run Electron e2e — Windows
+        if: runner.os == 'Windows'
+        run: pnpm exec playwright test --project=desktop
+        working-directory: e2e
+        env:
+          DEBUG: pw:browser*
       - name: Install Playwright browsers + system deps
         run: pnpm exec playwright install --with-deps chromium
         working-directory: e2e
@@ -204,7 +213,7 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a pnpm exec playwright test
         working-directory: e2e
-      - name: Run Playwright e2e — Windows
+      - name: Run browser e2e — Windows
         if: runner.os == 'Windows'
-        run: pnpm exec playwright test
+        run: pnpm exec playwright test --project=browser --no-deps
         working-directory: e2e
