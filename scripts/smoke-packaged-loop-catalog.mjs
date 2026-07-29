@@ -51,6 +51,16 @@ const asarPath = asars[0];
 const resourcesPath = path.dirname(asarPath);
 const addonPath = path.join(resourcesPath, "loop-catalog-native", addonName);
 if (!existsSync(addonPath)) throw new Error(`packaged addon is missing: ${addonPath}`);
+// The shared skill engine addon is staged as an extraResource too — validate the copy landed and
+// point the server's loader at it explicitly (like the loop-catalog addon).
+const skillEngineDir = path.join(resourcesPath, "skill-engine-native");
+const skillEngineBinary = existsSync(skillEngineDir)
+  ? readdirSync(skillEngineDir).find((entry) => entry.endsWith(".node"))
+  : undefined;
+if (!skillEngineBinary) {
+  throw new Error(`packaged skill engine addon is missing under ${skillEngineDir}`);
+}
+const skillEnginePath = path.join(skillEngineDir, skillEngineBinary);
 const packagedAddons = readdirSync(path.dirname(addonPath)).filter((entry) =>
   entry.endsWith(".node"),
 );
@@ -128,7 +138,7 @@ const resourceSmoke = spawnSync(
   executable,
   [
     "-e",
-    `const fs=require("node:fs"),path=require("node:path"),b=require(process.argv[1]),home=process.argv[2],src=path.join(home,"source");fs.mkdirSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"SKILL.md"),"one");fs.writeFileSync(path.join(src,"asset","stale"),"stale");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,false);fs.rmSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"asset"),"now-file");fs.writeFileSync(path.join(src,"SKILL.md"),"two");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,true);if(b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","asset"])!=="now-file"||b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","SKILL.md"])!=="two")throw new Error("existing resource replacement failed");const repos=path.join(home,"SkillRepositories"),skill=path.join(repos,"packaged-repo","skill");fs.mkdirSync(skill,{recursive:true});fs.writeFileSync(path.join(skill,"SKILL.md"),"snapshot");const rs=fs.statSync(repos,{bigint:true}),store=new b.ManagedSkillRepositoryStore(home,fs.realpathSync(repos),rs.dev.toString(),rs.ino.toString());store.materializeSnapshot("packaged-repo","packaged-repo",[["skill"]]).then(s=>{if(fs.readFileSync(path.join(s.skillRoots[0],"SKILL.md"),"utf8")!=="snapshot")throw new Error("managed snapshot failed");store.deleteRepository("packaged-repo");if(fs.existsSync(path.join(repos,"packaged-repo")))throw new Error("managed repository delete failed")}).catch(e=>{console.error(e);process.exitCode=1});`,
+    `const fs=require("node:fs"),path=require("node:path"),b=require(process.argv[1]),home=process.argv[2],src=path.join(home,"source");fs.mkdirSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"SKILL.md"),"one");fs.writeFileSync(path.join(src,"asset","stale"),"stale");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,false);fs.rmSync(path.join(src,"asset"),{recursive:true});fs.writeFileSync(path.join(src,"asset"),"now-file");fs.writeFileSync(path.join(src,"SKILL.md"),"two");b.copyResourceTree(home,"global-skills",["packaged-smoke"],src,true);if(b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","asset"])!=="now-file"||b.readResourceCatalogFile(home,"global-skills",["packaged-smoke","SKILL.md"])!=="two")throw new Error("existing resource replacement failed");`,
     addonPath,
     sandbox,
   ],
@@ -151,6 +161,7 @@ const serverEnvironment = {
   AGENT_DECK_WEB_DIST: path.join(asarPath, "apps", "web", "dist"),
   AGENT_DECK_BUILTIN_AGENTS_DIR: path.join(resourcesPath, "builtin-agents"),
   AGENT_DECK_LOOP_CATALOG_NATIVE_PATH: addonPath,
+  AGENT_DECK_SKILL_ENGINE_NATIVE_PATH: skillEnginePath,
 };
 let activeServer;
 
