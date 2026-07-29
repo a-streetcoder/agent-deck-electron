@@ -64,18 +64,20 @@ let mainWindow = null;
 // reset to 0 once the window is focused (the user has "seen" it).
 let attentionCount = 0;
 
-nativeTheme.on("updated", () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const colors = windowColors();
-  mainWindow.setBackgroundColor(colors.background);
-  if (process.platform !== "darwin") {
-    mainWindow.setTitleBarOverlay({
-      color: colors.titlebar,
-      symbolColor: colors.symbol,
-      height: 40,
-    });
-  }
-});
+const registerNativeThemeUpdates = () => {
+  nativeTheme.on("updated", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const colors = windowColors();
+    mainWindow.setBackgroundColor(colors.background);
+    if (process.platform !== "darwin") {
+      mainWindow.setTitleBarOverlay({
+        color: colors.titlebar,
+        symbolColor: colors.symbol,
+        height: 40,
+      });
+    }
+  });
+};
 
 /** Resolve pnpm's executable name per platform (dev PATH is inherited). */
 function pnpmCommand() {
@@ -907,6 +909,7 @@ app.on("web-contents-created", (_event, contents) => {
 
 app.whenReady().then(() => {
   startupTrace("electron ready");
+  registerNativeThemeUpdates();
   if (process.platform === "win32") {
     app.setAppUserModelId("com.streetcoding.agentdeck");
     startupTrace("Windows application identity configured");
