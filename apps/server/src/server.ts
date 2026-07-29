@@ -74,6 +74,8 @@ import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
 import { SessionImageStore } from "./sessionImages.ts";
+import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
+import { SessionPasteStore } from "./sessionPastes.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
@@ -193,6 +195,7 @@ async function initServer(
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const sessionImages = new SessionImageStore(dataDir);
+  const sessionPastes = new SessionPasteStore(dataDir);
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -447,20 +450,25 @@ async function initServer(
     },
     loopSnapshots,
     (sessionId, cell, rawContent) => {
+      let decorated = cell;
       try {
-        return sessionImages.attachToUserCell(sessionId, cell, rawContent);
+        decorated = sessionImages.attachToUserCell(sessionId, decorated, rawContent);
       } catch {
-        return cell;
-      } // corrupt/missing image metadata never drops user text
+        // Corrupt/missing image metadata never drops user text or later metadata.
+      }
+      try {
+        decorated = sessionPastes.attachToUserCell(sessionId, decorated, rawContent);
+      } catch {
+        // Corrupt/missing paste metadata never drops user text or image metadata.
+      }
+      return decorated;
     },
     (sourceSessionId, targetSessionId) => {
-      try {
-        sessionImages.fork(sourceSessionId, targetSessionId);
-        return () => sessionImages.deleteSession(targetSessionId);
-      } catch {
-        // A damaged optional manifest must not prevent the text session from forking.
-        return () => {};
-      }
+      return forkSessionAttachmentStores(
+        [sessionImages, sessionPastes],
+        sourceSessionId,
+        targetSessionId,
+      );
     },
     (sessionId, users) => {
       try {
@@ -468,12 +476,22 @@ async function initServer(
       } catch {
         // Image cleanup is conservative and must not make an otherwise valid resume fail.
       }
+      try {
+        sessionPastes.reconcileHistory(sessionId, users);
+      } catch {
+        // Paste cleanup is conservative and must not make an otherwise valid resume fail.
+      }
     },
     (sessionId) => {
       try {
         sessionImages.expirePending(sessionId);
       } catch {
         // Image cleanup must not perturb session failure or shutdown.
+      }
+      try {
+        sessionPastes.expirePending(sessionId);
+      } catch {
+        // Paste cleanup must not perturb session failure or shutdown.
       }
     },
   );
@@ -735,6 +753,7 @@ async function initServer(
     checkpoints,
     rollback,
     sessionImages,
+    sessionPastes,
   });
   broadcast = wsBroadcast;
   broadcastDiff = wsBroadcastDiff;
@@ -773,6 +792,7 @@ async function initServer(
     fastify,
     sessions,
     sessionImages,
+    sessionPastes,
     index,
     projects,
     settings,

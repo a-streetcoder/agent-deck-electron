@@ -1109,6 +1109,10 @@ export function sendPrompt(
   message: string,
   images?: ImageAttachment[],
   streamingBehavior?: "steer" | "followUp",
+  pasteProjection?: {
+    transcriptText: string;
+    pastes: Array<{ id: number; marker: string; text: string }>;
+  },
 ): Promise<void> {
   // The caller captures the originating session. Never retarget an in-flight
   // composer submission merely because the user switched sessions.
@@ -1119,6 +1123,9 @@ export function sendPrompt(
     message,
     ...(images && images.length > 0 ? { images } : {}),
     ...(streamingBehavior ? { streamingBehavior } : {}),
+    ...(pasteProjection
+      ? { transcriptText: pasteProjection.transcriptText, pastes: pasteProjection.pastes }
+      : {}),
   });
 }
 

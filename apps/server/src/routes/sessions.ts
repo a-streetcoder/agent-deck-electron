@@ -424,6 +424,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     } catch {
       // Session deletion already committed; retain shared blobs for conservative GC.
     }
+    try {
+      ctx.sessionPastes.deleteSession(id);
+    } catch {
+      // Session deletion already committed; retain optional paste metadata conservatively.
+    }
     if (meta.piSessionFile) {
       try {
         rmSync(meta.piSessionFile, { force: true });

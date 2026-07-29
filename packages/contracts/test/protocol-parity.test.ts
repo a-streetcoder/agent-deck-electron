@@ -131,6 +131,17 @@ const fixtures: Fixture[] = [
     expected: "accept",
   },
   {
+    name: "prompt with compact paste metadata",
+    message: {
+      type: "prompt",
+      sessionId: "s1",
+      message: "x".repeat(1_001),
+      transcriptText: "[paste #1 1001 chars]",
+      pastes: [{ id: 1, marker: "[paste #1 1001 chars]", text: "x".repeat(1_001) }],
+    },
+    expected: "accept",
+  },
+  {
     name: "prompt invalid streaming behavior",
     message: { type: "prompt", sessionId: "s1", message: "hi", streamingBehavior: "later" },
     expected: "reject",
@@ -278,6 +289,27 @@ const fixtures: Fixture[] = [
       sessionId: "s1",
       message: "hi",
       images: [{ type: "image", data: "x" }],
+    },
+    expected: "reject",
+  },
+  {
+    name: "prompt paste metadata missing transcript text",
+    message: {
+      type: "prompt",
+      sessionId: "s1",
+      message: "x".repeat(1_001),
+      pastes: [{ id: 1, marker: "[paste #1 1001 chars]", text: "x".repeat(1_001) }],
+    },
+    expected: "reject",
+  },
+  {
+    name: "prompt paste id is not a positive safe integer",
+    message: {
+      type: "prompt",
+      sessionId: "s1",
+      message: "x".repeat(1_001),
+      transcriptText: "[paste #0 1001 chars]",
+      pastes: [{ id: 0, marker: "[paste #0 1001 chars]", text: "x".repeat(1_001) }],
     },
     expected: "reject",
   },

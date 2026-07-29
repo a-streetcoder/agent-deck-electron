@@ -7,6 +7,7 @@ export * from "./pi-types.ts";
 export * from "./transcript.ts";
 export * from "./fileAttachments.ts";
 export * from "./folderAttachments.ts";
+export * from "./pasteAttachments.ts";
 export * from "./thinking.ts";
 export * from "./ingest.ts";
 export * from "./protocol.ts";

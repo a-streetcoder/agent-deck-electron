@@ -16,6 +16,7 @@ import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
+import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
@@ -91,6 +92,7 @@ export interface ServerContext {
   fastify: FastifyInstance;
   sessions: SessionManager;
   sessionImages: SessionImageStore;
+  sessionPastes: SessionPasteStore;
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;

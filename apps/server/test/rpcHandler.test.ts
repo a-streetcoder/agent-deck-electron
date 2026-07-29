@@ -19,6 +19,7 @@ import type { StampedEvent } from "../src/services/pushBus.ts";
 import type { ScriptEvent } from "../src/services/scriptRunner.ts";
 import type { TerminalEvent } from "../src/services/terminal.ts";
 import type { OpenedTerminal, TerminalGateway } from "../src/terminalGateway.ts";
+import type { SessionPasteStore } from "../src/sessionPastes.ts";
 
 /**
  * Unit tests for the Effect-RPC connection core (rpcHandler.ts) — the same
@@ -375,6 +376,7 @@ function harness(
   scripts?: ScriptRunnerGateway,
   checkpoints?: CheckpointServiceShape,
   rollback?: CheckpointRollbackGateway,
+  sessionPastes?: SessionPasteStore,
 ) {
   const frames: Frame[] = [];
   const conn = createRpcConnection({
@@ -386,6 +388,7 @@ function harness(
     scripts: scripts ?? makeScriptGateway().gateway,
     checkpoints: checkpoints ?? makeCheckpointService().service,
     rollback: rollback ?? makeRollbackGateway().gateway,
+    ...(sessionPastes ? { sessionPastes } : {}),
     send: (frame) => {
       // Assert every outbound frame is contract-valid.
       expect(decodeFrame(frame)._tag, JSON.stringify(frame)).toBe("Right");
@@ -541,6 +544,76 @@ describe("createRpcConnection", () => {
     );
     expect(ops.prompt).toHaveBeenCalledWith("hi", images, "followUp");
     expect(frames).toEqual([{ kind: "reply", id: 1, ok: true }]);
+  });
+
+  it("stages compact paste metadata while forwarding only expanded text to Pi", async () => {
+    const { session, ops } = makeSession("s1");
+    const rollbackPaste = vi.fn();
+    const stage = vi.fn(() => ({ rollback: rollbackPaste }));
+    const sessionPastes = { stage } as unknown as SessionPasteStore;
+    const { conn, frames } = harness(
+      makeManager({ s1: session }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionPastes,
+    );
+    const text = "x".repeat(1_001);
+    const marker = "[paste #1 1001 chars]";
+    const pastes = [{ id: 1, marker, text }];
+    await conn.handleMessage(
+      frame(2, {
+        type: "prompt",
+        sessionId: "s1",
+        message: text,
+        transcriptText: marker,
+        pastes,
+      }),
+    );
+
+    expect(stage).toHaveBeenCalledWith("s1", text, marker, pastes);
+    expect(ops.prompt).toHaveBeenCalledWith(text, undefined, undefined);
+    expect(rollbackPaste).not.toHaveBeenCalled();
+    expect(frames).toEqual([{ kind: "reply", id: 2, ok: true }]);
+  });
+
+  it("rolls paste staging back when Pi rejects the prompt", async () => {
+    const { session, ops } = makeSession("s1");
+    ops.prompt.mockRejectedValueOnce(new Error("prompt failed"));
+    const rollbackPaste = vi.fn();
+    const sessionPastes = {
+      stage: vi.fn(() => ({ rollback: rollbackPaste })),
+    } as unknown as SessionPasteStore;
+    const { conn, frames } = harness(
+      makeManager({ s1: session }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionPastes,
+    );
+    const text = "x".repeat(1_001);
+    await conn.handleMessage(
+      frame(3, {
+        type: "prompt",
+        sessionId: "s1",
+        message: text,
+        transcriptText: "[paste #1 1001 chars]",
+        pastes: [{ id: 1, marker: "[paste #1 1001 chars]", text }],
+      }),
+    );
+
+    expect(rollbackPaste).toHaveBeenCalledOnce();
+    expect(frames).toEqual([{ kind: "reply", id: 3, ok: false, error: "Error: prompt failed" }]);
   });
 
   it("set_model rejects a model pi does not offer", async () => {

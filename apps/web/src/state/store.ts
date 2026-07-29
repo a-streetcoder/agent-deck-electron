@@ -6,7 +6,7 @@ import type {
   ProjectMeta,
   SessionMeta,
 } from "@agent-deck/contracts";
-import { emptyTranscript, type TranscriptState } from "@agent-deck/domain";
+import { emptyTranscript, type PasteAttachment, type TranscriptState } from "@agent-deck/domain";
 import { create } from "zustand";
 import type { PendingReviewComment, ReviewCommentSide } from "../lib/reviewComments.ts";
 import type { PendingElementContext } from "../lib/elementContext.ts";
@@ -79,11 +79,14 @@ export interface ComposerDraftFolder {
   path: string;
 }
 
+export type ComposerDraftPaste = PasteAttachment;
+
 export interface ComposerDraft {
   text: string;
   images: readonly ComposerDraftImage[];
   files: readonly ComposerDraftFile[];
   folders: readonly ComposerDraftFolder[];
+  pastes: readonly ComposerDraftPaste[];
 }
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
@@ -91,6 +94,7 @@ export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   images: [],
   files: [],
   folders: [],
+  pastes: [],
 };
 
 export interface PendingComposerText {
@@ -527,13 +531,16 @@ export const useAppStore = create<AppState>((set) => ({
   updateComposerDraft: (sessionId, update) =>
     set((state) => {
       const current = state.composerDrafts[sessionId] ?? EMPTY_COMPOSER_DRAFT;
-      const next = update(current);
+      const updated = update(current);
+      // Tolerate pre-SES-08 in-memory/test drafts during hot reload.
+      const next = updated.pastes ? updated : { ...updated, pastes: [] };
       if (next === current) return {};
       if (
         next.text.length === 0 &&
         next.images.length === 0 &&
         next.files.length === 0 &&
-        next.folders.length === 0
+        next.folders.length === 0 &&
+        next.pastes.length === 0
       ) {
         if (!(sessionId in state.composerDrafts)) return {};
         const { [sessionId]: _removed, ...composerDrafts } = state.composerDrafts;
@@ -554,7 +561,8 @@ export const useAppStore = create<AppState>((set) => ({
         current.text.trim().length > 0 ||
         current.images.length > 0 ||
         current.files.length > 0 ||
-        current.folders.length > 0
+        current.folders.length > 0 ||
+        (current.pastes?.length ?? 0) > 0
       ) {
         return {};
       }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UserCell } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
@@ -69,5 +69,35 @@ describe("user file attachments", () => {
     expect(
       screen.getByRole("listitem", { name: "project: /tmp/project" }).getAttribute("data-kind"),
     ).toBe("folder");
+  });
+
+  it("renders a durable compact paste chip with an escaped selectable preview", async () => {
+    const paste = {
+      id: 1,
+      marker: "[paste #1 1001 chars]",
+      text: `<script>alert("not html")</script>${"x".repeat(970)}`,
+    };
+    const cell: UserCell = {
+      kind: "user",
+      id: "user-paste-entry",
+      text: "",
+      pastes: [paste],
+    };
+
+    render(<CellView cell={cell} />);
+
+    expect(await screen.findByText("Attached a paste.")).toBeTruthy();
+    const chip = screen.getByRole("button", { name: `Preview ${paste.marker}` });
+    expect(chip.closest("li")?.getAttribute("data-kind")).toBe("paste");
+    expect(document.querySelector("script")).toBeNull();
+    expect(screen.queryByTestId("paste-preview-dialog")).toBeNull();
+
+    fireEvent.click(chip);
+    expect(screen.getByRole("dialog", { name: "Pasted text preview" })).toBeTruthy();
+    expect(screen.getByTestId("paste-preview-content").textContent).toBe(paste.text);
+    expect(document.querySelector("script")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("paste-preview-dialog")).toBeNull();
   });
 });

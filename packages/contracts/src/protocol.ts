@@ -55,6 +55,22 @@ export const ImageAttachment = Schema.Struct({
 });
 export type ImageAttachment = typeof ImageAttachment.Type;
 
+export const MAX_PASTE_ATTACHMENTS = 16;
+export const MAX_PASTE_ATTACHMENT_CHARS = 1_000_000;
+export const MAX_PASTE_ATTACHMENTS_AGGREGATE_CHARS = 2_000_000;
+
+const PasteAttachmentId = Schema.Number.pipe(
+  Schema.filter(
+    (value) => (Number.isSafeInteger(value) && value > 0) || "must be a positive safe integer",
+  ),
+);
+export const PasteAttachment = Schema.Struct({
+  id: PasteAttachmentId,
+  marker: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+  text: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(MAX_PASTE_ATTACHMENT_CHARS)),
+});
+export type PasteAttachment = typeof PasteAttachment.Type;
+
 export const ThinkingLevel = Schema.Literal("off", "minimal", "low", "medium", "high", "xhigh");
 export type ThinkingLevel = typeof ThinkingLevel.Type;
 
@@ -113,7 +129,20 @@ export const ClientMessage = Schema.Union(
   Schema.Struct({
     type: Schema.Literal("prompt"),
     sessionId: Schema.String,
+    /** Expanded provider prompt; paste marker metadata never reaches Pi. */
     message: Schema.String,
+    /** Compact marker-form transcript paired with `pastes`. */
+    transcriptText: Schema.optional(Schema.String),
+    pastes: Schema.optional(
+      Schema.mutable(Schema.Array(PasteAttachment)).pipe(
+        Schema.maxItems(MAX_PASTE_ATTACHMENTS),
+        Schema.filter(
+          (pastes) =>
+            pastes.reduce((sum, paste) => sum + paste.text.length, 0) <=
+              MAX_PASTE_ATTACHMENTS_AGGREGATE_CHARS || "aggregate paste payload is too large",
+        ),
+      ),
+    ),
     /** Base64 image attachments sent with the prompt (pi ImageContent). */
     images: Schema.optional(
       Schema.mutable(Schema.Array(ImageAttachment)).pipe(
@@ -127,7 +156,15 @@ export const ClientMessage = Schema.Union(
     ),
     /** Preserve Pi's prompt expansion path while choosing its live queue. */
     streamingBehavior: Schema.optional(StreamingBehavior),
-  }),
+  }).pipe(
+    Schema.filter((request) => {
+      const hasPastes = (request.pastes?.length ?? 0) > 0;
+      return (
+        hasPastes === (request.transcriptText !== undefined) ||
+        "pastes and transcriptText must be supplied together"
+      );
+    }),
+  ),
   Schema.Struct({
     type: Schema.Literal("steer"),
     sessionId: Schema.String,

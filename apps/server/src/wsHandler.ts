@@ -9,6 +9,7 @@ import { setupRpcEndpoint } from "./rpcHandler.ts";
 import type { ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
+import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { TerminalGateway } from "./terminalGateway.ts";
@@ -39,6 +40,7 @@ export function setupWebSocket(deps: {
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
   sessionImages: SessionImageStore;
+  sessionPastes: SessionPasteStore;
 }): WebSocketLayer {
   const { fastify, sessions, terminals, diffs, editors, files, scripts, checkpoints, rollback } =
     deps;
@@ -55,6 +57,7 @@ export function setupWebSocket(deps: {
     checkpoints,
     rollback,
     sessionImages: deps.sessionImages,
+    sessionPastes: deps.sessionPastes,
   });
 
   // Browsers may open cross-origin WebSockets to localhost services; only

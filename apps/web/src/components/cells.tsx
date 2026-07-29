@@ -29,6 +29,7 @@ import {
   subscribeImageReadToken,
 } from "../lib/sessionImageUrl.ts";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
+import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -294,6 +295,7 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
     getImageReadToken,
   );
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
   useEffect(() => setFailed(new Set()), [imageReadToken, sessionId]);
   const items = (cell.images ?? []).map((image, index) => ({
@@ -312,28 +314,44 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
     label: folder.name,
     title: folder.path,
   }));
-  const pathAttachments = [...fileAttachments, ...folderAttachments];
+  const pasteAttachments = (cell.pastes ?? []).map((paste, index) => ({
+    id: `${cell.id}-paste-${paste.id}`,
+    kind: "paste" as const,
+    label: paste.marker,
+    title: "Preview pasted text",
+    onActivate: () => setExpandedPaste(index),
+  }));
+  const attachments = [...fileAttachments, ...folderAttachments, ...pasteAttachments];
   const fileSummary = fileAttachments.length === 1 ? "1 file" : `${fileAttachments.length} files`;
   const folderSummary =
     folderAttachments.length === 1 ? "1 folder" : `${folderAttachments.length} folders`;
+  const pasteSummary =
+    pasteAttachments.length === 1 ? "1 paste" : `${pasteAttachments.length} pastes`;
+  const summaryParts = [
+    ...(fileAttachments.length > 0 ? [fileSummary] : []),
+    ...(folderAttachments.length > 0 ? [folderSummary] : []),
+    ...(pasteAttachments.length > 0 ? [pasteSummary] : []),
+  ];
   const attachmentSummary =
-    fileAttachments.length > 0 && folderAttachments.length > 0
-      ? `Attached ${fileSummary} and ${folderSummary}.`
-      : fileAttachments.length > 0
-        ? fileAttachments.length === 1
-          ? "Attached a file."
-          : `Attached ${fileAttachments.length} files.`
-        : folderAttachments.length === 1
+    summaryParts.length === 1
+      ? summaryParts[0] === "1 file"
+        ? "Attached a file."
+        : summaryParts[0] === "1 folder"
           ? "Attached a folder."
-          : folderAttachments.length > 1
-            ? `Attached ${folderAttachments.length} folders.`
-            : "";
+          : summaryParts[0] === "1 paste"
+            ? "Attached a paste."
+            : `Attached ${summaryParts[0]}.`
+      : summaryParts.length === 2
+        ? `Attached ${summaryParts[0]} and ${summaryParts[1]}.`
+        : summaryParts.length === 3
+          ? `Attached ${summaryParts[0]}, ${summaryParts[1]}, and ${summaryParts[2]}.`
+          : "";
   const visibleText = cell.text || attachmentSummary;
   return (
     <div className="flex justify-end" data-testid="user-cell">
       <div className="max-w-[80%] space-y-2">
-        {visibleText || pathAttachments.length > 0 ? (
-          <MessageBubble role="user" text={visibleText} attachments={pathAttachments} />
+        {visibleText || attachments.length > 0 ? (
+          <MessageBubble role="user" text={visibleText} attachments={attachments} />
         ) : null}
         {items.length ? (
           <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
@@ -375,6 +393,12 @@ function UserCellView({ cell }: { cell: Extract<TranscriptCell, { kind: "user" }
           <ExpandedImageDialog
             preview={{ images: items, index: expanded }}
             onClose={() => setExpanded(null)}
+          />
+        ) : null}
+        {expandedPaste !== null && cell.pastes?.[expandedPaste] ? (
+          <PastePreviewDialog
+            paste={cell.pastes[expandedPaste]!}
+            onClose={() => setExpandedPaste(null)}
           />
         ) : null}
       </div>

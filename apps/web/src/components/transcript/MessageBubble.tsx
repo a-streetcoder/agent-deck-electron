@@ -2,6 +2,7 @@ import { forwardRef, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { BrandIcon } from "../BrandIcon.tsx";
 
 /**
@@ -33,6 +34,7 @@ export interface MessageBubbleAttachment {
   kind: "paste" | "file" | "folder" | "image" | "issue" | "skill" | "command";
   label: string;
   title?: string;
+  onActivate?: () => void;
 }
 
 export interface MessageBubbleProps {
@@ -160,7 +162,18 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
                 "px-2 py-0.5 text-detail font-medium text-text-secondary",
               )}
             >
-              {attachment.label}
+              {attachment.onActivate ? (
+                <ControlButton
+                  type="button"
+                  className="rounded-sm outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label={`Preview ${attachment.label}`}
+                  onClick={attachment.onActivate}
+                >
+                  {attachment.label}
+                </ControlButton>
+              ) : (
+                attachment.label
+              )}
             </li>
           ))}
         </ul>

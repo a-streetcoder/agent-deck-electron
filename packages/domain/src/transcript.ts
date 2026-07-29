@@ -32,6 +32,13 @@ export interface UserFolderRef {
   path: string;
 }
 
+/** Durable compact marker plus the full normalized text it represents. */
+export interface UserPasteRef {
+  id: number;
+  marker: string;
+  text: string;
+}
+
 export interface UserCell {
   kind: "user";
   /** Stable Pi session-entry identity when available (resume/fork history). */
@@ -41,6 +48,7 @@ export interface UserCell {
   images?: UserImageRef[];
   files?: UserFileRef[];
   folders?: UserFolderRef[];
+  pastes?: UserPasteRef[];
 }
 
 export interface AssistantCell {

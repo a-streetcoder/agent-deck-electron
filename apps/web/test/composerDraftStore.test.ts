@@ -40,12 +40,14 @@ describe("composer drafts", () => {
       ],
       files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
       folders: [{ id: "first-folder", name: "project", path: "/tmp/project" }],
+      pastes: [{ id: 1, marker: "[paste #1 1001 chars]", text: "x".repeat(1_001) }],
     }));
     store.updateComposerDraft("second", () => ({
       text: "Unsent second message",
       images: [],
       files: [],
       folders: [],
+      pastes: [],
     }));
 
     expect(useAppStore.getState().composerDrafts).toMatchObject({
@@ -54,12 +56,14 @@ describe("composer drafts", () => {
         images: [{ id: "first-image", name: "first.png" }],
         files: [{ id: "first-file", name: "notes.txt", path: "/tmp/notes.txt" }],
         folders: [{ id: "first-folder", name: "project", path: "/tmp/project" }],
+        pastes: [{ id: 1, marker: "[paste #1 1001 chars]" }],
       },
       second: {
         text: "Unsent second message",
         images: [],
         files: [],
         folders: [],
+        pastes: [],
       },
     });
   });
@@ -72,17 +76,19 @@ describe("composer drafts", () => {
       images: [],
       files: [],
       folders: [],
+      pastes: [],
     }));
     store.updateComposerDraft("second", () => ({
       text: "Second",
       images: [],
       files: [],
       folders: [],
+      pastes: [],
     }));
 
     store.updateComposerDraft("first", (current) => ({ ...current, text: "" }));
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [], files: [], folders: [] },
+      second: { text: "Second", images: [], files: [], folders: [], pastes: [] },
     });
 
     store.removeSession("second");
@@ -96,6 +102,7 @@ describe("composer drafts", () => {
       images: [],
       files: [],
       folders: [{ id: "folder", name: "project", path: "/tmp/project" }],
+      pastes: [],
     }));
     expect(useAppStore.getState().composerDrafts.first?.folders).toHaveLength(1);
 
@@ -110,19 +117,37 @@ describe("composer drafts", () => {
       images: [],
       files: [],
       folders: [],
+      pastes: [],
     }));
     store.updateComposerDraft("second", () => ({
       text: "Second",
       images: [],
       files: [],
       folders: [],
+      pastes: [],
     }));
 
     expect(useAppStore.getState().composerDrafts.first?.text).toBe("   \n");
     store.pruneEmptyComposerDraft("first");
 
     expect(useAppStore.getState().composerDrafts).toEqual({
-      second: { text: "Second", images: [], files: [], folders: [] },
+      second: { text: "Second", images: [], files: [], folders: [], pastes: [] },
     });
+  });
+
+  it("keeps a marker-only paste draft until both marker and payload are removed", () => {
+    const store = useAppStore.getState();
+    const paste = { id: 1, marker: "[paste #1 1001 chars]", text: "x".repeat(1_001) };
+    store.updateComposerDraft("first", () => ({
+      text: paste.marker,
+      images: [],
+      files: [],
+      folders: [],
+      pastes: [paste],
+    }));
+    expect(useAppStore.getState().composerDrafts.first?.pastes).toEqual([paste]);
+
+    store.updateComposerDraft("first", (current) => ({ ...current, text: "", pastes: [] }));
+    expect(useAppStore.getState().composerDrafts.first).toBeUndefined();
   });
 });

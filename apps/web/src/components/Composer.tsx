@@ -8,12 +8,20 @@ import { FilePlus2, FolderPlus, Paperclip, Shrink, X } from "lucide-react";
 import TextareaAutosize from "react-textarea-autosize";
 import {
   appendPathAttachmentPayload,
+  activePasteAttachments,
+  expandPasteMarkers,
   fileAttachmentRefs,
   folderAttachmentRefs,
   isFolderAttachmentPath,
   MAX_FILE_ATTACHMENTS,
   MAX_FOLDER_ATTACHMENTS,
+  MAX_PASTE_ATTACHMENT_CHARS,
+  MAX_PASTE_ATTACHMENTS,
+  MAX_PASTE_ATTACHMENTS_AGGREGATE_CHARS,
+  normalizePastedText,
   openQuestion,
+  pasteMarker,
+  shouldCollapsePaste,
   thinkingLevelsForModel,
 } from "@agent-deck/domain";
 import {
@@ -22,6 +30,7 @@ import {
   type ComposerDraftFile,
   type ComposerDraftFolder,
   type ComposerDraftImage,
+  type ComposerDraftPaste,
   useAppStore,
 } from "../state/store.ts";
 import { useAgents } from "../state/useAgents.ts";
@@ -135,13 +144,18 @@ export function Composer() {
   const images = composerDraft.images;
   const files = composerDraft.files;
   const folders = composerDraft.folders;
+  const pastes = composerDraft.pastes ?? [];
   const setDraft = useCallback(
     (next: string | ((current: string) => string)): void => {
       if (!sessionId) return;
-      updateComposerDraft(sessionId, (current) => ({
-        ...current,
-        text: typeof next === "function" ? next(current.text) : next,
-      }));
+      updateComposerDraft(sessionId, (current) => {
+        const text = typeof next === "function" ? next(current.text) : next;
+        return {
+          ...current,
+          text,
+          pastes: activePasteAttachments(text, current.pastes ?? []),
+        };
+      });
     },
     [sessionId, updateComposerDraft],
   );
@@ -581,7 +595,8 @@ export function Composer() {
     const submittedImages = [...images];
     const submittedFiles = [...files];
     const submittedFolders = [...folders];
-    const outgoing = appendPathAttachmentPayload(
+    const submittedPastes = activePasteAttachments(message, pastes);
+    const transcriptOutgoing = appendPathAttachmentPayload(
       appendElementContextsToPrompt(
         appendReviewCommentsToPrompt(message, submittedComments),
         submittedContexts,
@@ -589,6 +604,7 @@ export function Composer() {
       submittedFiles.map((file) => file.path),
       submittedFolders.map((folder) => folder.path),
     );
+    const outgoing = expandPasteMarkers(transcriptOutgoing, submittedPastes);
     sendLockRef.current = true;
     setSubmitting(true);
     setSubmitStatus({
@@ -602,12 +618,27 @@ export function Composer() {
         ? submittedImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
         : undefined,
       running ? streamingBehavior : undefined,
+      submittedPastes.length > 0
+        ? { transcriptText: transcriptOutgoing, pastes: submittedPastes }
+        : undefined,
     )
       .then(() => {
         if (!isCurrentSubmission()) return;
         // Clear only what this acknowledged request submitted. Draft edits and
         // contexts added while the ack was in flight remain untouched.
-        setDraft((current) => (current === submittedDraft ? "" : current));
+        updateComposerDraft(originatingSessionId, (current) => {
+          if (current.text === submittedDraft) {
+            return {
+              ...current,
+              text: "",
+              pastes: (current.pastes ?? []).filter((paste) => !submittedPastes.includes(paste)),
+            };
+          }
+          return {
+            ...current,
+            pastes: activePasteAttachments(current.text, current.pastes ?? []),
+          };
+        });
         if (sessionIdForComments) {
           for (const comment of submittedComments) {
             removeReviewComment(sessionIdForComments, comment.id);
@@ -859,13 +890,64 @@ export function Composer() {
             );
           }}
           onPaste={(event) => {
-            const files = [...event.clipboardData.items]
+            const clipboardFiles = [...event.clipboardData.items]
               .map((item) => item.getAsFile())
               .filter((f): f is File => f !== null);
-            if (files.some((f) => f.type.startsWith("image/"))) {
+            if (clipboardFiles.some((f) => f.type.startsWith("image/"))) {
               event.preventDefault();
-              void addFiles(files);
+              void addFiles(clipboardFiles);
+              return;
             }
+            const rawText = event.clipboardData.getData("text/plain");
+            if (!rawText) return;
+            const normalized = normalizePastedText(rawText);
+            if (normalized.length > MAX_PASTE_ATTACHMENT_CHARS) {
+              event.preventDefault();
+              setSubmitStatus({
+                kind: "rejection",
+                message: "That paste is too large to attach. Split it into smaller sections.",
+              });
+              return;
+            }
+            if (!shouldCollapsePaste(normalized)) return;
+            event.preventDefault();
+            if (pastes.length >= MAX_PASTE_ATTACHMENTS) {
+              setSubmitStatus({
+                kind: "rejection",
+                message: "Too many paste attachments. Remove one and try again.",
+              });
+              return;
+            }
+            const aggregate =
+              pastes.reduce((sum, paste) => sum + paste.text.length, 0) + normalized.length;
+            if (aggregate > MAX_PASTE_ATTACHMENTS_AGGREGATE_CHARS) {
+              setSubmitStatus({
+                kind: "rejection",
+                message: "The attached paste text is too large. Remove a paste and try again.",
+              });
+              return;
+            }
+            const textarea = event.currentTarget;
+            const start = textarea.selectionStart ?? draft.length;
+            const end = textarea.selectionEnd ?? start;
+            const id = pastes.reduce((highest, paste) => Math.max(highest, paste.id), 0) + 1;
+            const marker = pasteMarker(id, normalized);
+            const attachment: ComposerDraftPaste = { id, marker, text: normalized };
+            const nextText = `${draft.slice(0, start)}${marker}${draft.slice(end)}`;
+            if (!sessionId) return;
+            updateComposerDraft(sessionId, (current) => ({
+              ...current,
+              text: nextText,
+              pastes: [...(current.pastes ?? []), attachment],
+            }));
+            setSubmitStatus({
+              kind: "info",
+              message: "Large paste attached. Delete its marker to remove it.",
+            });
+            requestAnimationFrame(() => {
+              textareaRef.current?.focus();
+              textareaRef.current?.setSelectionRange(start + marker.length, start + marker.length);
+            });
           }}
           onKeyDown={(event) => {
             if (suggestions.handleKeyDown(event)) return;

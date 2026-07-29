@@ -12,6 +12,7 @@ import type { EditorLauncher } from "./editorLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
+import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { ScriptEvent } from "./services/scriptRunner.ts";
@@ -73,6 +74,7 @@ export function createRpcConnection(deps: {
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
   sessionImages?: SessionImageStore;
+  sessionPastes?: SessionPasteStore;
   send: (frame: RpcServerFrame) => void;
   /** Socket send-buffer depth in bytes (`ws` bufferedAmount); 0 when absent. */
   bufferedAmount?: () => number;
@@ -87,6 +89,7 @@ export function createRpcConnection(deps: {
     checkpoints,
     rollback,
     sessionImages,
+    sessionPastes,
     send,
   } = deps;
   const bufferedAmount = deps.bufferedAmount ?? ((): number => 0);
@@ -709,13 +712,33 @@ export function createRpcConnection(deps: {
           subscribe(session, request.lastSeq);
           break;
         case "prompt": {
-          const staged = request.images?.length
-            ? sessionImages?.stage(session.meta.id, request.message, request.images)
-            : undefined;
+          let stagedPastes: { rollback: () => void } | undefined;
+          let stagedImages: { rollback: () => void } | undefined;
           try {
+            stagedPastes =
+              request.pastes && request.transcriptText !== undefined
+                ? sessionPastes?.stage(
+                    session.meta.id,
+                    request.message,
+                    request.transcriptText,
+                    request.pastes,
+                  )
+                : undefined;
+            stagedImages = request.images?.length
+              ? sessionImages?.stage(session.meta.id, request.message, request.images)
+              : undefined;
             await session.prompt(request.message, request.images, request.streamingBehavior);
           } catch (error) {
-            staged?.rollback();
+            try {
+              stagedImages?.rollback();
+            } catch {
+              // Preserve the prompt failure; idle/resume reconciliation cleans stale metadata.
+            }
+            try {
+              stagedPastes?.rollback();
+            } catch {
+              // Preserve the prompt failure; idle/resume reconciliation cleans stale metadata.
+            }
             throw error;
           }
           break;
@@ -805,6 +828,7 @@ export function setupRpcEndpoint(deps: {
   checkpoints: CheckpointServiceShape;
   rollback: CheckpointRollbackGateway;
   sessionImages: SessionImageStore;
+  sessionPastes: SessionPasteStore;
 }): RpcEndpoint {
   const {
     sessions,
@@ -816,6 +840,7 @@ export function setupRpcEndpoint(deps: {
     checkpoints,
     rollback,
     sessionImages,
+    sessionPastes,
   } = deps;
 
   const wss = new WebSocketServer({ noServer: true });
@@ -843,6 +868,7 @@ export function setupRpcEndpoint(deps: {
       checkpoints,
       rollback,
       sessionImages,
+      sessionPastes,
       send: (frame) => sendTo(socket, frame),
       // Terminal push backpressure reads the real socket send-buffer depth.
       bufferedAmount: () => socket.bufferedAmount,
