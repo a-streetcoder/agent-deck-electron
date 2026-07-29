@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -157,14 +157,7 @@ describe("POST /resources/skills/rename", () => {
     await api("PATCH", `/projects/${projectId}`, {
       assignedSkills: ["formatter", "unsafe-rename"],
     });
-    const skillFile = path.join(
-      resourceHome,
-      ".pi",
-      "agent",
-      "skills",
-      "unsafe-rename",
-      "SKILL.md",
-    );
+    const skillFile = path.join(resourceHome, ".agents", "skills", "unsafe-rename", "SKILL.md");
     const outside = path.join(resourceHome, "outside-skill.md");
     writeFileSync(outside, "outside-safe");
     rmSync(skillFile);
@@ -178,16 +171,13 @@ describe("POST /resources/skills/rename", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: expect.stringContaining("unsafe") });
-    expect(existsSync(path.join(resourceHome, ".pi", "agent", "skills", "unsafe-rename"))).toBe(
-      true,
-    );
-    expect(existsSync(path.join(resourceHome, ".pi", "agent", "skills", "unsafe-renamed"))).toBe(
-      false,
-    );
+    expect(existsSync(path.join(resourceHome, ".agents", "skills", "unsafe-rename"))).toBe(true);
+    expect(existsSync(path.join(resourceHome, ".agents", "skills", "unsafe-renamed"))).toBe(false);
     expect(await assignedOf()).toContain("unsafe-rename");
     expect(await assignedOf()).not.toContain("unsafe-renamed");
     expect(await defaultSkills()).toContain("unsafe-rename");
     expect(await defaultSkills()).not.toContain("unsafe-renamed");
+    expect(readFileSync(outside, "utf8")).toBe("outside-safe");
   });
 
   it("409 on a name clash and 404 on a missing source", async () => {

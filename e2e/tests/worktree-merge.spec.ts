@@ -167,8 +167,11 @@ test("review a worktree session's diff and merge it back from the diff panel", a
 
   // Return to the same retained session and make a second iteration.
   await page.getByTestId("sessions-expand").click();
-  await expect(page.getByTestId("sessions-expanded")).toBeVisible();
-  await page.getByTestId("chat-list").locator('button[data-testid^="chat-"]').first().click();
+  const expandedSessions = page.getByTestId("sessions-expanded");
+  await expect(expandedSessions).toBeVisible();
+  await expandedSessions.locator('[role="button"][data-testid^="chat-"]').first().click();
+  await expandedSessions.getByTestId("sessions-collapse").click();
+  await expect(expandedSessions).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTestId("composer-input")).toBeVisible();
   worktreeFileContent = "a second iteration after the retained merge\n";
   await page.getByTestId("composer-input").fill("please write the worktree file again");
@@ -181,9 +184,11 @@ test("review a worktree session's diff and merge it back from the diff panel", a
     await page.getByTestId("diff-toggle").click();
   }
   await page.getByTestId("diff-merge").click();
-  await expect(page.getByTestId("toast")).toContainText("and removed the worktree", {
+  const cleanupToast = page.getByTestId("toast").filter({ hasText: "and removed the worktree" });
+  await expect(cleanupToast).toContainText("and removed the worktree", {
     timeout: 30_000,
   });
+  await expect(cleanupToast).toHaveAttribute("data-kind", "success");
   await expect(page.getByTestId("diff-worktree-toolbar")).toHaveCount(0);
   expect(existsSync(worktreePath)).toBe(false);
   expect(

@@ -55,6 +55,7 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(s.disabledModels).toEqual(["anthropic:claude-legacy"]);
     expect(s.autoTitle).toBe(false);
     expect(s.worktreeIsolation).toBe(true);
+    expect(s.keepWorktreeAfterMerge).toBe(true);
     expect(s.gitAutomation).toBe(false);
     expect(s.defaultModel).toBe("anthropic:claude-opus");
     expect(s.defaultThinking).toBe("high");

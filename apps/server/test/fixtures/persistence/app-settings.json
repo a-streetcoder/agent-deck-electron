@@ -26,6 +26,7 @@
   ],
   "autoTitle": false,
   "worktreeIsolation": true,
+  "keepWorktreeAfterMerge": true,
   "gitAutomation": false,
   "defaultModel": "anthropic:claude-opus",
   "defaultThinking": "high",
