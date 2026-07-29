@@ -8,9 +8,9 @@ export default defineConfig({
   // One worker per project: each spec boots its own server + real pi; keep
   // resource use sane.
   workers: 1,
-  // Run the Electron shell in a fresh worker before browser specs. In
-  // particular, Windows terminal specs exercise ConPTY helpers whose teardown
-  // must not share process state with Electron's DevTools launch handshake.
+  // Run the Electron shell in a fresh worker before browser specs. Windows CI
+  // uses a separate launch smoke because Playwright's mandatory main-process
+  // inspector currently crashes Electron on the hosted Windows runner.
   projects: ci
     ? [
         {

@@ -14,8 +14,6 @@
     "@agent-deck/server": "workspace:*",
     "@agent-deck/testkit": "workspace:*",
     "@playwright/test": "1.62.0",
-    "@types/node": "22.15.29",
-    "electron": "39.1.2",
-    "playwright-electron-compat": "npm:playwright-core@1.56.1"
+    "@types/node": "22.15.29"
   }
 }

@@ -233,12 +233,6 @@ importers:
       '@types/node':
         specifier: 22.15.29
         version: 22.15.29
-      electron:
-        specifier: 39.1.2
-        version: 39.1.2
-      playwright-electron-compat:
-        specifier: npm:playwright-core@1.56.1
-        version: playwright-core@1.56.1
 
   packages/client-runtime:
     dependencies:
