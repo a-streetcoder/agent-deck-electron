@@ -1114,6 +1114,30 @@ test("attention events notify + badge while unfocused, and focus clears the badg
   const window = await app.firstWindow();
   await window.waitForLoadState("domcontentloaded");
 
+  // Route the notification to a real session other than the currently selected
+  // one. Reuse an existing chat when possible; otherwise create one through the
+  // Electron-owned server without selecting it in the renderer.
+  const currentRowTestId = await window
+    .getByTestId("chat-list")
+    .locator('[data-active="true"]')
+    .first()
+    .getAttribute("data-testid");
+  const currentSessionId = currentRowTestId?.replace(/^chat-/, "") ?? null;
+  const targetSessionId = await window.evaluate(async (currentId) => {
+    const listed = (await (await fetch("/sessions")).json()) as {
+      sessions: Array<{ id: string }>;
+    };
+    const existing = listed.sessions.find((session) => session.id !== currentId);
+    if (existing) return existing.id;
+    const created = await fetch("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!created.ok) throw new Error(await created.text());
+    return ((await created.json()) as { session: { id: string } }).session.id;
+  }, currentSessionId);
+
   // Install main-process spies (Slice 22a): record setBadgeCount + notification
   // shows, force isFocused()=false so the focus gate lets events through, and
   // force Notification.isSupported()=true. Stubbing Notification.prototype.show
@@ -1126,6 +1150,7 @@ test("attention events notify + badge while unfocused, and focus clears the badg
         badge: number[];
         notifications: Array<{ title: string; body: string }>;
       };
+      agentDeckLastNotification?: { emit(event: string): void };
     };
     g.agentDeckAttention = { badge: [], notifications: [] };
     electronApp.setBadgeCount = (n: number) => {
@@ -1137,8 +1162,10 @@ test("attention events notify + badge while unfocused, and focus clears the badg
     (Notification.prototype as unknown as { show: () => void }).show = function (this: {
       title?: string;
       body?: string;
+      emit(event: string): void;
     }) {
       g.agentDeckAttention!.notifications.push({ title: this.title ?? "", body: this.body ?? "" });
+      g.agentDeckLastNotification = this;
     };
     // Re-baseline the counter + recording so a stray startup focus can't skew it.
     win.emit("focus");
@@ -1173,20 +1200,38 @@ test("attention events notify + badge while unfocused, and focus clears the badg
   }
 
   // Approval needed while unfocused → a second notification + badge 2.
-  await window.evaluate(() => {
+  await window.evaluate((sessionId) => {
     (
       window as unknown as { agentDeck?: { signalAttention?(p: unknown): void } }
     ).agentDeck?.signalAttention?.({
       kind: "approval-needed",
       title: "My session",
       body: "Run rm -rf build?",
+      sessionId,
     });
-  });
+  }, targetSessionId);
   await expect.poll(async () => (await readAttention()).badge.at(-1)).toBe(2);
   {
     const state = await readAttention();
     expect(state.notifications).toContainEqual({ title: "My session", body: "Run rm -rf build?" });
   }
+
+  // Move away from chat, then click the captured native notification. Main
+  // restores/focuses the window and the preload/renderer route selects the
+  // originating session and returns to the chat surface.
+  await window.getByTestId("nav-projects").click();
+  await expect(window.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "true");
+  await app.evaluate(() => {
+    const g = globalThis as typeof globalThis & {
+      agentDeckLastNotification?: { emit(event: string): void };
+    };
+    if (!g.agentDeckLastNotification) throw new Error("notification was not captured");
+    g.agentDeckLastNotification.emit("click");
+  });
+  await expect(window.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "false");
+  await expect(
+    window.getByTestId("chat-list").getByTestId(`chat-${targetSessionId}`),
+  ).toHaveAttribute("data-active", "true");
 
   // Focusing the window clears the badge (attention "seen").
   await app.evaluate(({ BrowserWindow }) => {

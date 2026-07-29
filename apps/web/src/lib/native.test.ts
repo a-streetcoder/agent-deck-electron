@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chooseDirectory, chooseFiles, signalAttention } from "./native.ts";
+import { chooseDirectory, chooseFiles, onFocusSession, signalAttention } from "./native.ts";
 
 const stubBridge = (bridge: unknown): void => {
   vi.stubGlobal("window", { agentDeck: bridge });
@@ -43,6 +43,33 @@ describe("signalAttention", () => {
 
     expect(() => signalAttention({ kind: "turn-complete", title: "x", body: "y" })).not.toThrow();
     expect(signal).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onFocusSession", () => {
+  it("subscribes through the allow-listed bridge and returns its cleanup", () => {
+    const cleanup = vi.fn();
+    const subscribe = vi.fn().mockReturnValue(cleanup);
+    const handler = vi.fn();
+    stubBridge({ isElectron: true, onFocusSession: subscribe });
+
+    const unsubscribe = onFocusSession(handler);
+
+    expect(subscribe).toHaveBeenCalledWith(handler);
+    unsubscribe();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a safe no-op when the bridge is absent or throws", () => {
+    stubBridge(undefined);
+    expect(() => onFocusSession(vi.fn())()).not.toThrow();
+
+    stubBridge({
+      onFocusSession: vi.fn(() => {
+        throw new Error("ipc down");
+      }),
+    });
+    expect(() => onFocusSession(vi.fn())()).not.toThrow();
   });
 });
 

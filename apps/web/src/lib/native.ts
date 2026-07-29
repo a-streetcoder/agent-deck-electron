@@ -63,6 +63,8 @@ export interface AgentDeckBridge {
   onMenu?(handler: (action: NativeMenuAction) => void): () => void;
   /** Forward a semantic attention event; the main process owns the focus gate. */
   signalAttention?(payload: AttentionPayload): void;
+  /** Subscribe to a notification click targeting an app-owned session id. */
+  onFocusSession?(handler: (sessionId: string) => void): () => void;
   /**
    * Subscribe to browser popup requests (Slice L2): a target=_blank / window.open
    * inside a `<webview>` guest, denied its native child window and forwarded by
@@ -230,5 +232,16 @@ export function signalAttention(payload: AttentionPayload): void {
     bridge.signalAttention(payload);
   } catch {
     // A failed IPC must not surface where a domain transition is detected.
+  }
+}
+
+/** Subscribe to notification-click session routing in the Electron shell. */
+export function onFocusSession(handler: (sessionId: string) => void): () => void {
+  const bridge = nativeBridge();
+  if (!bridge?.onFocusSession) return () => {};
+  try {
+    return bridge.onFocusSession(handler);
+  } catch {
+    return () => {};
   }
 }

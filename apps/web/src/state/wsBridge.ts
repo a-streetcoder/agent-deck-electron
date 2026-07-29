@@ -739,6 +739,7 @@ export async function refreshSessions(): Promise<void> {
 }
 
 let activationToken = 0;
+let notificationFocusToken = 0;
 
 async function refreshSessionsForActivation(token: number): Promise<boolean> {
   const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
@@ -770,9 +771,8 @@ async function activateSession(projectId: string | null, agentName: string | nul
   }
 }
 
-/** Open a specific chat, resuming its pi session if it has ended. */
-export async function switchToSession(target: SessionMeta): Promise<void> {
-  const token = ++activationToken;
+async function switchToSessionAtActivation(target: SessionMeta, token: number): Promise<void> {
+  if (token !== activationToken) return;
   const store = useAppStore.getState();
   disconnect();
   try {
@@ -791,6 +791,36 @@ export async function switchToSession(target: SessionMeta): Promise<void> {
     await refreshSessionsForActivation(token);
   } catch (error) {
     if (token !== activationToken) return;
+    useAppStore.getState().setError(String(error));
+  }
+}
+
+/** Open a specific chat, resuming its pi session if it has ended. */
+export async function switchToSession(target: SessionMeta): Promise<void> {
+  await switchToSessionAtActivation(target, ++activationToken);
+}
+
+/** Navigate an OS-notification click to an existing session without trusting
+ * the renderer-facing opaque id as proof that the session still exists. A
+ * separate request generation orders catalog lookups; the shared activation is
+ * reserved only after a valid target is found, so an unknown/deleted id cannot
+ * cancel a real session switch already in flight. */
+export async function focusSessionFromNotification(sessionId: string): Promise<void> {
+  const activationAtClick = activationToken;
+  const requestToken = ++notificationFocusToken;
+  try {
+    const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
+    if (requestToken !== notificationFocusToken || activationToken !== activationAtClick) return;
+    const target = sessions.find((session) => session.id === sessionId);
+    if (!target) return;
+
+    const token = ++activationToken;
+    const store = useAppStore.getState();
+    store.setSessions(sessions);
+    store.setView("chat");
+    if (store.session?.id !== target.id) await switchToSessionAtActivation(target, token);
+  } catch (error) {
+    if (requestToken !== notificationFocusToken || activationToken !== activationAtClick) return;
     useAppStore.getState().setError(String(error));
   }
 }

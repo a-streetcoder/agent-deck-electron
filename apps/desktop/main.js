@@ -820,7 +820,7 @@ ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
  * nothing. Otherwise show a native notification (when supported) and bump the
  * portable taskbar/dock badge via setBadgeCount. Clicking the notification
  * shows + focuses the window (which clears the badge) and forwards the session
- * id for a future in-app session switch.
+ * id so the renderer can select the originating session.
  */
 ipcMain.on("attention", (_event, payload) => {
   if (!mainWindow || !payload || typeof payload !== "object") return;
@@ -842,10 +842,7 @@ ipcMain.on("attention", (_event, payload) => {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      // Best-effort in-app switch to the session that raised the event. The
-      // renderer wiring for "focus-session" is deferred (Slice 22a focuses the
-      // window; consuming this to select the session is a follow-up) — sending
-      // it now is harmless and future-proofs the channel.
+      // Best-effort in-app switch to the session that raised the event.
       if (typeof sessionId === "string" && sessionId) {
         mainWindow.webContents.send("focus-session", sessionId);
       }

@@ -45,6 +45,22 @@ contextBridge.exposeInMainWorld("agentDeck", {
    */
   signalAttention: (payload) => ipcRenderer.send("attention", payload),
   /**
+   * Subscribe to notification-click session routing. The renderer receives only
+   * the opaque session id selected by main; raw IPC events stay inside preload.
+   * @param {(sessionId: string) => void} handler
+   * @returns {() => void}
+   */
+  onFocusSession: (handler) => {
+    ipcRenderer.removeAllListeners("focus-session");
+    const listener = (_event, sessionId) => {
+      if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 256) {
+        handler(sessionId);
+      }
+    };
+    ipcRenderer.on("focus-session", listener);
+    return () => ipcRenderer.removeListener("focus-session", listener);
+  },
+  /**
    * Subscribe to allow-listed semantic native-menu commands. Returns an
    * unsubscribe function; raw IPC events are never exposed to the renderer.
    * @param {(action: string) => void} handler
