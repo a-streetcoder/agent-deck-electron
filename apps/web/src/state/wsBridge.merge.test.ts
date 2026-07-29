@@ -1,8 +1,15 @@
 import type { SessionMeta } from "@agent-deck/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const transportHarness = vi.hoisted(() => ({
+  host: null as null | { onServerMessage: (message: unknown) => void },
+}));
+
 vi.mock("./clientTransport.ts", () => ({
   RpcClientTransport: class {
+    constructor(host: { onServerMessage: (message: unknown) => void }) {
+      transportHarness.host = host;
+    }
     connect(): void {}
     disconnect(): void {}
     send(): void {}
@@ -36,6 +43,7 @@ async function selectSession(): Promise<void> {
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   useAppStore.getState().resetDiffState();
+  useAppStore.getState().setError(null);
 });
 
 describe("mergeWorktreeSession HTTP validation", () => {
@@ -108,6 +116,7 @@ describe("mergeWorktreeSession HTTP validation", () => {
         sourceBranch: "main",
         commits: "1",
         worktreeCommitted: true,
+        cleanup: { status: "retained", runtimeStopped: false },
       }),
     );
     const error = await mergeWorktreeSession("other-session").catch((value: unknown) => value);
@@ -128,13 +137,133 @@ describe("mergeWorktreeSession HTTP validation", () => {
         sourceBranch: "main",
         commits: 1,
         worktreeCommitted: true,
+        cleanup: { status: "removed", runtimeStopped: false },
       }),
     );
     await expect(mergeWorktreeSession("other-session")).resolves.toMatchObject({
       code: "merge_succeeded",
       outcome: "merged",
       commits: 1,
+      cleanup: { status: "removed", runtimeStopped: false },
     });
+  });
+
+  it("accepts an actionable cleanup failure without changing merge success", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        code: "merge_succeeded",
+        outcome: "merged",
+        branch: "session",
+        sourceBranch: "main",
+        commits: 1,
+        worktreeCommitted: true,
+        cleanup: {
+          status: "failed",
+          runtimeStopped: true,
+          code: "worktree_remove_failed",
+          error: "The merge succeeded, but cleanup is locked.",
+        },
+      }),
+    );
+    await expect(mergeWorktreeSession("other-session")).resolves.toMatchObject({
+      cleanup: { status: "failed", code: "worktree_remove_failed" },
+    });
+  });
+
+  it.each([
+    ["merge_runtime_busy", "Wait for the current Pi turn to finish before merging."],
+    [
+      "merge_runtime_state_unavailable",
+      "Pi runtime state could not be verified. Stop or reopen the session before merging.",
+    ],
+  ] as const)("preserves Pi-specific recovery text for %s", async (code, serverMessage) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(
+        {
+          code,
+          outcome: "busy",
+          error: serverMessage,
+          worktreeCommitted: false,
+        },
+        409,
+      ),
+    );
+
+    const error = await mergeWorktreeSession("other-session").catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(MergeWorktreeError);
+    expect(error).toMatchObject({ code, outcome: "busy" });
+    expect((error as Error).message).toBe(serverMessage);
+    expect((error as Error).message).not.toContain("Git operation");
+  });
+
+  it.each([
+    [false, "pi exited (code 0)"],
+    [true, null],
+  ] as const)(
+    "uses runtimeStopped=%s to classify a response-before-exit cleanup",
+    async (runtimeStopped, expectedError) => {
+      await selectSession();
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          code: "merge_succeeded",
+          outcome: "merged",
+          branch: "session",
+          sourceBranch: "main",
+          commits: 1,
+          worktreeCommitted: true,
+          cleanup: { status: "removed", runtimeStopped },
+        }),
+      );
+
+      await mergeWorktreeSession(session.id);
+      transportHarness.host!.onServerMessage({
+        type: "session_exit",
+        sessionId: session.id,
+        code: 0,
+        signal: null,
+      });
+      expect(useAppStore.getState().error).toBe(expectedError);
+    },
+  );
+
+  it("rejects a cleanup result without explicit runtime ownership truth", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        code: "merge_succeeded",
+        outcome: "merged",
+        branch: "session",
+        sourceBranch: "main",
+        commits: 1,
+        worktreeCommitted: true,
+        cleanup: { status: "removed" },
+      }),
+    );
+
+    await expect(mergeWorktreeSession("other-session")).rejects.toMatchObject({
+      code: "merge_failed",
+    });
+  });
+
+  it("does not clear an unrelated global error after successful cleanup", async () => {
+    useAppStore.getState().setError("unrelated provider error");
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        code: "merge_succeeded",
+        outcome: "merged",
+        branch: "session",
+        sourceBranch: "main",
+        commits: 1,
+        worktreeCommitted: true,
+        cleanup: { status: "removed", runtimeStopped: false },
+      }),
+    );
+
+    await mergeWorktreeSession("other-session");
+    expect(useAppStore.getState().error).toBe("unrelated provider error");
   });
 
   it("preserves active-merge Git detail and completion-or-abort guidance", () => {

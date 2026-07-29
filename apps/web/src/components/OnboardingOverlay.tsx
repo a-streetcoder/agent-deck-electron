@@ -147,6 +147,7 @@ function emptyPreviewChecks(providerConnected: boolean): HealthCheck[] {
 interface Prefs {
   autoTitle: boolean;
   worktreeIsolation: boolean;
+  keepWorktreeAfterMerge: boolean;
   gitAutomation: boolean;
   defaultModel: string | null;
   defaultThinking: string | null;
@@ -424,6 +425,7 @@ export function OnboardingOverlay() {
           setPrefs({
             autoTitle: s.autoTitle,
             worktreeIsolation: s.worktreeIsolation,
+            keepWorktreeAfterMerge: s.keepWorktreeAfterMerge,
             gitAutomation: s.gitAutomation,
             defaultModel: s.defaultModel,
             defaultThinking: s.defaultThinking,
@@ -832,6 +834,15 @@ export function OnboardingOverlay() {
                     onChange={(v) => patchPref({ worktreeIsolation: v })}
                   />
                   <PrefToggle
+                    testid="pref-keep-worktree"
+                    label="Keep worktree and branch after a successful merge"
+                    description="Applies only with worktree isolation. On by default so you can keep iterating; turn off to remove the worktree and branch only after a successful merge. Deleting a session removes its worktree regardless."
+                    disabledDescription="Enable worktree isolation to change this preference."
+                    checked={prefs.keepWorktreeAfterMerge}
+                    disabled={!prefs.worktreeIsolation}
+                    onChange={(v) => patchPref({ keepWorktreeAfterMerge: v })}
+                  />
+                  <PrefToggle
                     testid="pref-git-automation"
                     label="Enable git actions"
                     description="Show Commit / Push / Merge actions on the Git screen."
@@ -1004,28 +1015,38 @@ function PrefToggle({
   description,
   checked,
   onChange,
+  disabled = false,
+  disabledDescription,
 }: {
   testid: string;
   label: string;
   description: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  disabled?: boolean;
+  disabledDescription?: string;
 }) {
+  const descriptionId = `${testid}-description`;
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="text-sm font-medium text-text-primary">{label}</div>
-        <div className="text-xs text-text-muted">{description}</div>
+        <div id={descriptionId} className="text-xs text-text-muted">
+          {description}
+          {disabled && disabledDescription ? ` ${disabledDescription}` : ""}
+        </div>
       </div>
       <ControlButton
         type="button"
         role="switch"
         aria-checked={checked}
         aria-label={label}
+        aria-describedby={descriptionId}
         data-testid={testid}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
-          "relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors",
+          "relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors disabled:cursor-not-allowed disabled:opacity-40",
           checked ? "bg-accent" : "bg-border-strong",
         )}
       >

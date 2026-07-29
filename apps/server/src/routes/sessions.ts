@@ -439,7 +439,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // every non-mutating preflight complete before auto-commit or checkout.
   fastify.post("/sessions/:id/merge", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+    const liveSession = sessions.get(id);
+    const meta = liveSession?.meta ?? index.find((s) => s.id === id);
     if (!meta)
       return reply.status(404).send({
         code: "merge_session_missing",
@@ -466,6 +467,31 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     ) => reply.status(status).send({ code, outcome, error, worktreeCommitted });
     const { cwd, worktreePath, worktreeIdentity, worktreeBranch, worktreeSourceBranch, projectId } =
       meta;
+    // One merge follows the policy selected when it started; a concurrent
+    // preference toggle applies to the next merge, not halfway through this one.
+    const keepWorktreeAfterMerge = settings.get().keepWorktreeAfterMerge;
+    // Renderer idle state is advisory. Refuse from server truth when Pi is
+    // writing, and fail closed if its state cannot be read. Cleanup may later
+    // stop an idle Pi before removing the cwd, but it must never race a turn.
+    if (liveSession?.isRunning) {
+      try {
+        if ((await liveSession.getState()).isStreaming) {
+          return fail(
+            409,
+            "merge_runtime_busy",
+            "busy",
+            "Wait for the current Pi turn to finish before merging.",
+          );
+        }
+      } catch {
+        return fail(
+          409,
+          "merge_runtime_state_unavailable",
+          "busy",
+          "Pi runtime state could not be verified. Stop or reopen the session before merging.",
+        );
+      }
+    }
     if (
       !cwd ||
       !projectId ||
@@ -796,14 +822,121 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         );
       }
       dropDiffCache(id);
-      return {
-        ok: true,
-        code: "merge_succeeded",
-        outcome: "merged",
+
+      const retainedSuccess = () => ({
+        ok: true as const,
+        code: "merge_succeeded" as const,
+        outcome: "merged" as const,
         branch: worktreeBranch,
         sourceBranch: worktreeSourceBranch,
         commits: ahead,
         worktreeCommitted,
+        cleanup: { status: "retained" as const, runtimeStopped: false },
+      });
+      if (keepWorktreeAfterMerge) return retainedSuccess();
+
+      // The merge is committed at this point. Cleanup is deliberately a typed
+      // secondary outcome: it can never turn the successful merge into an HTTP
+      // failure. Re-check Pi immediately before teardown, then await process and
+      // session-owned child cleanup before deleting its cwd (especially required
+      // for Windows directory locks).
+      let runtimeStopped = false;
+      if (liveSession) {
+        try {
+          const runtimeWasRunning = liveSession.isRunning;
+          if (runtimeWasRunning && (await liveSession.getState()).isStreaming) {
+            return {
+              ...retainedSuccess(),
+              cleanup: {
+                status: "failed" as const,
+                runtimeStopped,
+                code: "runtime_busy" as const,
+                error:
+                  "The merge succeeded, but Pi started another turn before cleanup. Wait for it to finish, then delete the session to retry worktree removal.",
+              },
+            };
+          }
+          await sessions.destroy(id);
+          runtimeStopped = runtimeWasRunning;
+        } catch {
+          return {
+            ...retainedSuccess(),
+            cleanup: {
+              status: "failed" as const,
+              runtimeStopped,
+              code: "runtime_shutdown_failed" as const,
+              error:
+                "The merge succeeded, but Pi could not be stopped safely. The worktree and branch were retained; wait for or stop Pi, then delete the session to retry worktree removal.",
+            },
+          };
+        }
+      }
+      if (sessions.get(id)) {
+        return {
+          ...retainedSuccess(),
+          cleanup: {
+            status: "failed" as const,
+            runtimeStopped,
+            code: "runtime_shutdown_failed" as const,
+            error:
+              "The merge succeeded, but the session runtime still owns its worktree. Wait for or stop Pi, then delete the session to retry worktree removal.",
+          },
+        };
+      }
+
+      try {
+        await sessionWorktreeStore.deleteWorktree(worktreePath, worktreeIdentity);
+      } catch {
+        return {
+          ...retainedSuccess(),
+          cleanup: {
+            status: "failed" as const,
+            runtimeStopped,
+            code: "worktree_remove_failed" as const,
+            error:
+              "The merge succeeded, but the worktree could not be removed. Its session metadata and branch were retained; close programs using it, then delete the session to retry worktree removal.",
+          },
+        };
+      }
+
+      // Physical removal succeeded, so returning cwd to the registered project
+      // is now mandatory before publishing metadata. Keep branch metadata until
+      // its conclusively-owned ref has also been deleted.
+      const withoutWorktree = { ...meta, cwd: project.path };
+      delete withoutWorktree.worktreePath;
+      delete withoutWorktree.worktreeIdentity;
+      delete withoutWorktree.worktreeSourceBranch;
+      index.upsert(withoutWorktree);
+      broadcast({ type: "session_meta", session: withoutWorktree });
+
+      try {
+        await gitWorktreePrune(project.path);
+        await gitDeleteOwnedWorktreeBranch(project.path, {
+          path: worktreePath,
+          branch: worktreeBranch,
+          sourceBranch: worktreeSourceBranch,
+          identityToken: worktreeIdentity,
+          branchOwned: true,
+        });
+      } catch {
+        return {
+          ...retainedSuccess(),
+          cleanup: {
+            status: "failed" as const,
+            runtimeStopped,
+            code: "branch_remove_failed" as const,
+            error: `The merge succeeded and the worktree was removed, but branch ${worktreeBranch} could not be deleted. Inspect it and delete it manually when safe.`,
+          },
+        };
+      }
+
+      const cleaned = { ...withoutWorktree };
+      delete cleaned.worktreeBranch;
+      index.upsert(cleaned);
+      broadcast({ type: "session_meta", session: cleaned });
+      return {
+        ...retainedSuccess(),
+        cleanup: { status: "removed" as const, runtimeStopped },
       };
     } finally {
       mergeLocks.delete(projectKey);

@@ -173,10 +173,13 @@ export interface AppSettings {
    * `defaultThinking` seed every NEW parent ("All Projects" / Pi Agent) session's
    * launch when the request doesn't override them; `autoTitle` gates the
    * title-helper launch; `worktreeIsolation` runs each session in its own git
-   * worktree; `gitAutomation` gates the Git screen's Commit/Push/Merge actions.
+   * worktree; `keepWorktreeAfterMerge` preserves an isolated checkout after a
+   * successful merge (the safe default); `gitAutomation` gates the Git screen's
+   * Commit/Push/Merge actions.
    */
   autoTitle: boolean;
   worktreeIsolation: boolean;
+  keepWorktreeAfterMerge: boolean;
   gitAutomation: boolean;
   defaultModel: string | null;
   defaultThinking: ThinkingLevel | null;
@@ -401,6 +404,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
       worktreeIsolation: false,
+      keepWorktreeAfterMerge: true,
       gitAutomation: true, // native piAgentGitAutomationEnabled default: git actions shown
       defaultModel: null,
       defaultThinking: null,
@@ -437,6 +441,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
           worktreeIsolation:
             typeof record.worktreeIsolation === "boolean" ? record.worktreeIsolation : false,
+          keepWorktreeAfterMerge:
+            typeof record.keepWorktreeAfterMerge === "boolean"
+              ? record.keepWorktreeAfterMerge
+              : true,
           gitAutomation: typeof record.gitAutomation === "boolean" ? record.gitAutomation : true,
           defaultModel: typeof record.defaultModel === "string" ? record.defaultModel : null,
           defaultThinking:

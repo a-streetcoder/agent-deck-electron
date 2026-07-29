@@ -33,7 +33,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     <div
       data-testid="toast"
       data-kind={toast.kind}
-      role="status"
+      role={toast.kind === "error" ? "alert" : "status"}
       className="flex items-center gap-2 rounded-xl border bg-surface-elevated px-3 py-2 text-sm text-text-primary shadow-elevated"
       style={{ borderColor: KIND_COLOR[toast.kind] }}
     >

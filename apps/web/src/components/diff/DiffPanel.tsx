@@ -316,13 +316,19 @@ function WorktreeMergeToolbar(props: {
     setMerging(true);
     setError(null);
     try {
-      const { sourceBranch, commits } = await mergeWorktreeSession(props.sessionId);
-      // mergeWorktreeSession refreshes the (now-empty) changed-file set for us —
-      // the working-tree diff clears once the work is committed + merged.
-      pushToast({
-        kind: "success",
-        message: `Merged ${commits} commit${commits === 1 ? "" : "s"} into ${sourceBranch}`,
-      });
+      const { sourceBranch, commits, cleanup } = await mergeWorktreeSession(props.sessionId);
+      // mergeWorktreeSession clears the diff after the merge. Cleanup is a
+      // secondary typed outcome and never rewrites a successful merge as failed.
+      if (cleanup.status === "failed") {
+        // Cleanup recovery is long-lived; use the persistent alert banner as
+        // the single message instead of a short success/error toast pair.
+        setError(cleanup.error);
+      } else {
+        pushToast({
+          kind: "success",
+          message: `Merged ${commits} commit${commits === 1 ? "" : "s"} into ${sourceBranch}${cleanup.status === "removed" ? " and removed the worktree" : ""}`,
+        });
+      }
     } catch (error) {
       // 400 "Nothing to merge" and 409 "Merge failed: <conflict>" both arrive as
       // the thrown Error's message — surface it verbatim.

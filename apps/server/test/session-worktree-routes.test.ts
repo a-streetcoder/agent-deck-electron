@@ -88,6 +88,7 @@ interface Meta {
 function makeRoute(
   overrides: {
     isolated?: boolean;
+    keepWorktreeAfterMerge?: boolean;
     resolveAgent?: ServerContext["resolveNamedAgent"];
     create?: (options: Record<string, unknown>, state: ReturnType<typeof makeState>) => Meta;
     announce?: (session: { meta: Meta }, state: ReturnType<typeof makeState>) => void;
@@ -100,7 +101,13 @@ function makeRoute(
     list: vi.fn(() => [...state.live.values()]),
     get: vi.fn((id: string) => {
       const meta = state.live.get(id);
-      return meta ? { meta } : undefined;
+      return meta
+        ? {
+            meta,
+            isRunning: state.running.has(id),
+            getState: vi.fn(async () => ({ isStreaming: state.streaming.has(id) })),
+          }
+        : undefined;
     }),
     create: vi.fn((options: Record<string, unknown>) => {
       if (overrides.create) return { meta: overrides.create(options, state) };
@@ -139,6 +146,7 @@ function makeRoute(
   };
   const settingsValue = {
     worktreeIsolation: overrides.isolated ?? true,
+    keepWorktreeAfterMerge: overrides.keepWorktreeAfterMerge ?? true,
     defaultModel: null,
     defaultThinking: null,
     disabledSkills: [],
@@ -187,6 +195,8 @@ function makeRoute(
 function makeState() {
   return {
     live: new Map<string, Meta>(),
+    running: new Set<string>(),
+    streaming: new Set<string>(),
     index: new Map<string, Meta>(),
     tokens: new Map<string, string>(),
     broadcasts: [] as unknown[],
@@ -888,8 +898,184 @@ describe("POST /sessions worktree transaction", () => {
       outcome: "merged",
       commits: 1,
       worktreeCommitted: true,
+      cleanup: { status: "retained", runtimeStopped: false },
     });
     await successRoute.fastify.close();
+  });
+
+  it("fails closed from server runtime truth while Pi is streaming", async () => {
+    const { fastify, state } = makeRoute({ keepWorktreeAfterMerge: false });
+    const meta: Meta = {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    };
+    state.live.set(meta.id, meta);
+    state.index.set(meta.id, meta);
+    state.running.add(meta.id);
+    state.streaming.add(meta.id);
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "merge_runtime_busy", outcome: "busy" });
+    expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("removes only the proven worktree and owned branch after a successful merge when retention is off", async () => {
+    const { fastify, state, index } = makeRoute({ keepWorktreeAfterMerge: false });
+    state.index.set("merge-session", {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      cleanup: { status: "removed", runtimeStopped: false },
+    });
+    expect(state.deleteWorktree).toHaveBeenCalledWith(
+      WORKTREE_PATH,
+      "v1:0000000000000001:0000000000000002",
+    );
+    expect(gitMocks.gitWorktreePrune).toHaveBeenCalledWith(PROJECT_PATH);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).toHaveBeenCalledWith(
+      PROJECT_PATH,
+      expect.objectContaining({
+        branch: "agent-deck/session-a1b2c3d4",
+        branchOwned: true,
+      }),
+    );
+    const persisted = state.index.get("merge-session");
+    expect(persisted).toMatchObject({ cwd: PROJECT_PATH });
+    expect(persisted).not.toHaveProperty("worktreePath");
+    expect(persisted).not.toHaveProperty("worktreeBranch");
+    expect(index.upsert).toHaveBeenCalled();
+    expect(state.broadcasts).toContainEqual({ type: "session_meta", session: persisted });
+    await fastify.close();
+  });
+
+  it("reports when successful cleanup stopped a live idle runtime", async () => {
+    const { fastify, state, sessions } = makeRoute({ keepWorktreeAfterMerge: false });
+    const meta: Meta = {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    };
+    state.live.set(meta.id, meta);
+    state.index.set(meta.id, meta);
+    state.running.add(meta.id);
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      cleanup: { status: "removed", runtimeStopped: true },
+    });
+    expect(sessions.destroy).toHaveBeenCalledWith(meta.id);
+    await fastify.close();
+  });
+
+  it("keeps recoverable metadata when worktree removal fails after a successful merge", async () => {
+    const { fastify, state } = makeRoute({ keepWorktreeAfterMerge: false });
+    const meta: Meta = {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    };
+    state.index.set(meta.id, meta);
+    // Credible Windows lock behavior: the hardened native deletion rejects and
+    // the route must not prune, delete the branch, or discard retry metadata.
+    state.deleteWorktree.mockRejectedValueOnce(
+      Object.assign(new Error("locked"), { code: "EBUSY" }),
+    );
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: "merge_succeeded",
+      cleanup: {
+        status: "failed",
+        runtimeStopped: false,
+        code: "worktree_remove_failed",
+        error: expect.stringContaining("delete the session to retry worktree removal"),
+      },
+    });
+    expect(response.json().cleanup.error).not.toContain("merge again");
+    expect(state.index.get(meta.id)).toEqual(meta);
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("reports branch-only cleanup failure after clearing deleted-worktree chrome metadata", async () => {
+    const { fastify, state } = makeRoute({ keepWorktreeAfterMerge: false });
+    state.index.set("merge-session", {
+      id: "merge-session",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+    gitMocks.gitDeleteOwnedWorktreeBranch.mockRejectedValueOnce(new Error("branch locked"));
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions/merge-session/merge",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      cleanup: {
+        status: "failed",
+        runtimeStopped: false,
+        code: "branch_remove_failed",
+        error: expect.stringContaining("worktree was removed"),
+      },
+    });
+    expect(response.json().cleanup.error).toContain("delete it manually");
+    expect(state.index.get("merge-session")).toMatchObject({
+      cwd: PROJECT_PATH,
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    expect(state.index.get("merge-session")).not.toHaveProperty("worktreePath");
+    expect(state.index.get("merge-session")).not.toHaveProperty("worktreeSourceBranch");
+    await fastify.close();
   });
 
   it("rejects duplicate, replaced, non-source, and operation-busy session ownership before commit", async () => {

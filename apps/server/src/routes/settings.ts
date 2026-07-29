@@ -201,6 +201,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
         worktreeIsolation: z.boolean().optional(),
+        keepWorktreeAfterMerge: z.boolean().optional(),
         gitAutomation: z.boolean().optional(),
         defaultModel: z.string().min(1).nullable().optional(),
         defaultThinking: z
@@ -248,6 +249,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (d.defaultSkills !== undefined) patch.defaultSkills = d.defaultSkills;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
     if (d.worktreeIsolation !== undefined) patch.worktreeIsolation = d.worktreeIsolation;
+    if (d.keepWorktreeAfterMerge !== undefined)
+      patch.keepWorktreeAfterMerge = d.keepWorktreeAfterMerge;
     if (d.gitAutomation !== undefined) patch.gitAutomation = d.gitAutomation;
     if (d.defaultModel !== undefined) patch.defaultModel = d.defaultModel;
     if (d.defaultThinking !== undefined) patch.defaultThinking = d.defaultThinking;

@@ -70,14 +70,21 @@ describe("onboarding preferences at session launch", () => {
     // A patch that sets one preference must leave the skills array intact.
     expect((await patchSettings({ defaultSkills: ["keeper"] })).status).toBe(200);
     expect((await patchSettings({ autoTitle: false })).status).toBe(200);
+    expect((await patchSettings({ keepWorktreeAfterMerge: false })).status).toBe(200);
+    expect((await patchSettings({ keepWorktreeAfterMerge: "no" })).status).toBe(400);
     const bad = await patchSettings({ defaultThinking: "bogus" });
     expect(bad.status).toBe(400);
 
     const settings = (await (await fetch(`http://127.0.0.1:${server.port}/settings`)).json()) as {
-      settings: { defaultSkills: string[]; autoTitle: boolean };
+      settings: {
+        defaultSkills: string[];
+        autoTitle: boolean;
+        keepWorktreeAfterMerge: boolean;
+      };
     };
     expect(settings.settings.defaultSkills).toEqual(["keeper"]);
     expect(settings.settings.autoTitle).toBe(false);
+    expect(settings.settings.keepWorktreeAfterMerge).toBe(false);
   });
 
   it("seeds a parent session's provider + model + thinking from the settings", async () => {

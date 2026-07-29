@@ -75,6 +75,9 @@ export function GitScreen() {
   // the setting loads, so neither the actions nor the "off" note flashes first
   // (a flash of enabled actions could let a quick click fire while off).
   const [gitActions, setGitActions] = useState<boolean | null>(null);
+  const [worktreeIsolation, setWorktreeIsolation] = useState<boolean | null>(null);
+  const [keepWorktreeAfterMerge, setKeepWorktreeAfterMerge] = useState<boolean | null>(null);
+  const [savingWorktreePreference, setSavingWorktreePreference] = useState(false);
   const [settingsSettled, setSettingsSettled] = useState(false);
   const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   // Native ReleaseService (generalized to any repo): tag a version + AI notes.
@@ -150,12 +153,50 @@ export function GitScreen() {
         if (!response.ok) throw new Error(`Settings request failed (${response.status})`);
         return response.json();
       })
-      .then((data: { settings: { gitAutomation: boolean } }) =>
-        setGitActions(data.settings.gitAutomation),
+      .then(
+        (data: {
+          settings: {
+            gitAutomation: boolean;
+            worktreeIsolation: boolean;
+            keepWorktreeAfterMerge: boolean;
+          };
+        }) => {
+          setGitActions(data.settings.gitAutomation);
+          setWorktreeIsolation(data.settings.worktreeIsolation);
+          setKeepWorktreeAfterMerge(data.settings.keepWorktreeAfterMerge);
+        },
       )
       .catch(() => setSettingsLoadFailed(true))
       .finally(() => setSettingsSettled(true));
   }, []);
+
+  const saveWorktreePreference = async (
+    patch: { worktreeIsolation: boolean } | { keepWorktreeAfterMerge: boolean },
+  ): Promise<void> => {
+    if (savingWorktreePreference) return;
+    const previousIsolation = worktreeIsolation;
+    const previousKeep = keepWorktreeAfterMerge;
+    if ("worktreeIsolation" in patch) setWorktreeIsolation(patch.worktreeIsolation);
+    else setKeepWorktreeAfterMerge(patch.keepWorktreeAfterMerge);
+    setSavingWorktreePreference(true);
+    setError(null);
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+    } catch (error) {
+      setWorktreeIsolation(previousIsolation);
+      setKeepWorktreeAfterMerge(previousKeep);
+      setError(
+        `Worktree preference was not saved: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setSavingWorktreePreference(false);
+    }
+  };
 
   const commit = async (push: boolean): Promise<void> => {
     if (
@@ -262,11 +303,17 @@ export function GitScreen() {
     setMerging(true);
     setError(null);
     try {
-      const { sourceBranch, commits } = await mergeWorktreeSession(session.id);
-      pushToast({
-        kind: "success",
-        message: `Merged ${commits} commit${commits === 1 ? "" : "s"} into ${sourceBranch}`,
-      });
+      const { sourceBranch, commits, cleanup } = await mergeWorktreeSession(session.id);
+      if (cleanup.status === "failed") {
+        // Recovery can require stopping Pi or deleting the session; keep the
+        // one coherent merge+cleanup message in the persistent alert banner.
+        setError(cleanup.error);
+      } else {
+        pushToast({
+          kind: "success",
+          message: `Merged ${commits} commit${commits === 1 ? "" : "s"} into ${sourceBranch}${cleanup.status === "removed" ? " and removed the worktree" : ""}`,
+        });
+      }
       void load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -740,6 +787,56 @@ export function GitScreen() {
           </div>
         ) : null}
 
+        <section
+          data-testid="git-worktree-preferences"
+          aria-busy={savingWorktreePreference}
+          className="mb-3 mt-2 rounded-lg border border-border-subtle bg-surface px-3 py-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-medium text-text-primary">Session worktrees</h3>
+            {savingWorktreePreference ? (
+              <span
+                data-testid="git-worktree-preferences-saving"
+                className="text-detail text-text-muted"
+                role="status"
+                aria-live="polite"
+              >
+                Saving…
+              </span>
+            ) : null}
+          </div>
+          {settingsLoadFailed ? (
+            <p className="mt-1 text-xs text-text-muted" role="alert">
+              Worktree preferences could not be loaded. Reload the Git screen to try again.
+            </p>
+          ) : worktreeIsolation === null || keepWorktreeAfterMerge === null ? (
+            <p className="mt-1 text-xs text-text-muted" role="status">
+              Loading worktree preferences…
+            </p>
+          ) : (
+            <div className="mt-2 space-y-3">
+              <WorktreePreferenceSwitch
+                testId="git-pref-worktree-isolation"
+                label="Isolate new sessions in a worktree"
+                help="New project sessions use a separate checkout. Existing sessions are unchanged."
+                checked={worktreeIsolation}
+                disabled={savingWorktreePreference}
+                onChange={(checked) => void saveWorktreePreference({ worktreeIsolation: checked })}
+              />
+              <WorktreePreferenceSwitch
+                testId="git-pref-keep-worktree"
+                label="Keep worktree and branch after a successful merge"
+                help="Applies only when isolation is on. On by default so you can keep iterating and merge again. Turn off to remove the proven worktree and its Agent Deck branch only after a successful merge. Deleting a session removes its worktree regardless of this setting."
+                checked={keepWorktreeAfterMerge}
+                disabled={!worktreeIsolation || savingWorktreePreference}
+                onChange={(checked) =>
+                  void saveWorktreePreference({ keepWorktreeAfterMerge: checked })
+                }
+              />
+            </div>
+          )}
+        </section>
+
         {session?.loopReviewRunId ? (
           <div
             data-testid="git-loop-review-banner"
@@ -895,6 +992,49 @@ export function GitScreen() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function WorktreePreferenceSwitch({
+  testId,
+  label,
+  help,
+  checked,
+  disabled,
+  onChange,
+}: {
+  testId: string;
+  label: string;
+  help: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const helpId = `${testId}-help`;
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-text-primary">{label}</div>
+        <p id={helpId} className="mt-0.5 text-detail leading-relaxed text-text-muted">
+          {help}
+        </p>
+      </div>
+      <ControlButton
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-describedby={helpId}
+        aria-label={label}
+        data-testid={testId}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${checked ? "bg-accent" : "bg-border-strong"}`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${checked ? "left-[18px]" : "left-0.5"}`}
+        />
+      </ControlButton>
     </div>
   );
 }

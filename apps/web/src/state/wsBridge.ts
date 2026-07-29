@@ -35,6 +35,12 @@ import { useAppStore } from "./store.ts";
  */
 
 let currentSessionId: string | null = null;
+// A keep-off merge may intentionally stop Pi before deleting its cwd. Defer an
+// exit arriving during that request until the typed response tells us whether
+// cleanup actually reached runtime teardown; never clear unrelated errors.
+const mergeRequests = new Set<string>();
+const deferredMergeExits = new Map<string, string>();
+const expectedCleanupExits = new Set<string>();
 
 const transportHost: TransportHost = {
   onServerMessage: (message) => handleMessage(message),
@@ -290,6 +296,20 @@ export async function rollbackToCheckpoint(turnIndex: number): Promise<{ filesRe
 // ---------------------------------------------------------------------------
 
 /** The parsed success reply of POST /sessions/:id/merge. */
+export type MergeCleanup =
+  | { status: "retained"; runtimeStopped: false }
+  | { status: "removed"; runtimeStopped: boolean }
+  | {
+      status: "failed";
+      runtimeStopped: boolean;
+      code:
+        | "runtime_busy"
+        | "runtime_shutdown_failed"
+        | "worktree_remove_failed"
+        | "branch_remove_failed";
+      error: string;
+    };
+
 export interface MergeResult {
   ok: true;
   code: "merge_succeeded";
@@ -298,6 +318,7 @@ export interface MergeResult {
   sourceBranch: string;
   commits: number;
   worktreeCommitted: boolean;
+  cleanup: MergeCleanup;
 }
 
 export type MergeFailureOutcome =
@@ -320,6 +341,8 @@ const mergeFailureDiscriminants: Readonly<Record<string, MergeFailureOutcome>> =
   merge_parent_dirty: "dirty",
   merge_source_occupied: "stale_ownership",
   merge_worktree_busy: "busy",
+  merge_runtime_busy: "busy",
+  merge_runtime_state_unavailable: "busy",
   merge_preflight_failed: "failed",
   merge_source_checkout_failed: "failed",
   merge_parent_changed: "stale_ownership",
@@ -360,6 +383,20 @@ function parseMergeFailure(value: unknown): MergeFailureBody | null {
 
 function parseMergeSuccess(value: unknown): MergeResult | null {
   const body = record(value);
+  const cleanup = record(body?.cleanup);
+  const cleanupValid =
+    (cleanup?.status === "retained" && cleanup.runtimeStopped === false) ||
+    (cleanup?.status === "removed" && typeof cleanup.runtimeStopped === "boolean") ||
+    (cleanup?.status === "failed" &&
+      typeof cleanup.runtimeStopped === "boolean" &&
+      [
+        "runtime_busy",
+        "runtime_shutdown_failed",
+        "worktree_remove_failed",
+        "branch_remove_failed",
+      ].includes(String(cleanup.code)) &&
+      typeof cleanup.error === "string" &&
+      cleanup.error.length > 0);
   if (
     !body ||
     body.ok !== true ||
@@ -372,7 +409,8 @@ function parseMergeSuccess(value: unknown): MergeResult | null {
     typeof body.commits !== "number" ||
     !Number.isSafeInteger(body.commits) ||
     body.commits < 1 ||
-    typeof body.worktreeCommitted !== "boolean"
+    typeof body.worktreeCommitted !== "boolean" ||
+    !cleanupValid
   ) {
     return null;
   }
@@ -396,7 +434,9 @@ export class MergeWorktreeError extends Error {
       ? "Your session changes were committed in its worktree, but the merge did not finish. "
       : "";
     const guidance =
-      code === "merge_active_failure"
+      code === "merge_active_failure" ||
+      code === "merge_runtime_busy" ||
+      code === "merge_runtime_state_unavailable"
         ? serverMessage
         : outcome === "dirty"
           ? "Commit, stash, or discard the project checkout changes, then try again."
@@ -432,11 +472,25 @@ export class MergeWorktreeError extends Error {
  * stale pre-merge one — the optimistic clear and the server invalidation agree.
  */
 export async function mergeWorktreeSession(sessionId: string): Promise<MergeResult> {
-  const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/merge`, {
-    method: "POST",
-  });
+  mergeRequests.add(sessionId);
+  let response: Response;
+  try {
+    response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/merge`, {
+      method: "POST",
+    });
+  } catch (error) {
+    mergeRequests.delete(sessionId);
+    const deferredExit = deferredMergeExits.get(sessionId);
+    deferredMergeExits.delete(sessionId);
+    if (deferredExit) useAppStore.getState().setError(deferredExit);
+    throw error;
+  }
   if (!response.ok) {
     const body = parseMergeFailure(await response.json().catch(() => null));
+    mergeRequests.delete(sessionId);
+    const deferredExit = deferredMergeExits.get(sessionId);
+    deferredMergeExits.delete(sessionId);
+    if (deferredExit) useAppStore.getState().setError(deferredExit);
     if (!body) {
       throw new MergeWorktreeError(
         "merge_failed",
@@ -450,6 +504,10 @@ export async function mergeWorktreeSession(sessionId: string): Promise<MergeResu
   }
   const result = parseMergeSuccess(await response.json().catch(() => null));
   if (!result) {
+    mergeRequests.delete(sessionId);
+    const deferredExit = deferredMergeExits.get(sessionId);
+    deferredMergeExits.delete(sessionId);
+    if (deferredExit) useAppStore.getState().setError(deferredExit);
     throw new MergeWorktreeError(
       "merge_failed",
       "failed",
@@ -458,6 +516,16 @@ export async function mergeWorktreeSession(sessionId: string): Promise<MergeResu
     );
   }
   clearMergedSessionDiff(sessionId);
+  mergeRequests.delete(sessionId);
+  const deferredExit = deferredMergeExits.get(sessionId);
+  deferredMergeExits.delete(sessionId);
+  if (result.cleanup.runtimeStopped) {
+    // Usually the awaited stop has already delivered the deferred exit. Keep a
+    // one-shot marker for the narrow response-before-push race.
+    if (!deferredExit && sessionId === currentSessionId) expectedCleanupExits.add(sessionId);
+  } else if (deferredExit) {
+    useAppStore.getState().setError(deferredExit);
+  }
   return result;
 }
 
@@ -556,6 +624,8 @@ function disconnect(): void {
 
 function connect(sessionId: string): void {
   currentSessionId = sessionId;
+  expectedCleanupExits.delete(sessionId);
+  deferredMergeExits.delete(sessionId);
   // The old session's changed-file set + checkpoint list must not bleed into the
   // new one; the fresh sets arrive via onSessionSubscribed once it settles.
   useAppStore.getState().resetDiffState();
@@ -593,6 +663,11 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "session_exit":
       if (message.sessionId !== currentSessionId) return;
+      if (expectedCleanupExits.delete(message.sessionId)) return;
+      if (mergeRequests.has(message.sessionId)) {
+        deferredMergeExits.set(message.sessionId, `pi exited (code ${message.code ?? "?"})`);
+        return;
+      }
       store.setError(`pi exited (code ${message.code ?? "?"})`);
       break;
     case "resources_changed":

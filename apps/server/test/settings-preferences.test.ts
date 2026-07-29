@@ -20,6 +20,7 @@ describe("SettingsStore onboarding preferences", () => {
     const s = new SettingsStore(freshDir()).get();
     expect(s.autoTitle).toBe(true);
     expect(s.worktreeIsolation).toBe(false);
+    expect(s.keepWorktreeAfterMerge).toBe(true);
     expect(s.gitAutomation).toBe(true);
     expect(s.defaultModel).toBeNull();
     expect(s.defaultThinking).toBeNull();
@@ -32,6 +33,7 @@ describe("SettingsStore onboarding preferences", () => {
     new SettingsStore(dir).update({
       autoTitle: false,
       worktreeIsolation: true,
+      keepWorktreeAfterMerge: false,
       gitAutomation: true,
       defaultModel: "gpt-5.5",
       defaultThinking: "high",
@@ -40,6 +42,7 @@ describe("SettingsStore onboarding preferences", () => {
     const reloaded = new SettingsStore(dir).get();
     expect(reloaded.autoTitle).toBe(false);
     expect(reloaded.worktreeIsolation).toBe(true);
+    expect(reloaded.keepWorktreeAfterMerge).toBe(false);
     expect(reloaded.gitAutomation).toBe(true);
     expect(reloaded.defaultModel).toBe("gpt-5.5");
     expect(reloaded.defaultThinking).toBe("high");
@@ -65,6 +68,7 @@ describe("SettingsStore onboarding preferences", () => {
       JSON.stringify({
         autoTitle: "yes", // not a boolean → default true
         worktreeIsolation: 1, // not a boolean → default false
+        keepWorktreeAfterMerge: "no", // not a boolean → default true
         defaultModel: 42, // not a string → null
         defaultThinking: "bogus", // not a real level → null
         defaultSkills: ["keep"], // a valid field is still read
@@ -73,6 +77,7 @@ describe("SettingsStore onboarding preferences", () => {
     const s = new SettingsStore(dir).get();
     expect(s.autoTitle).toBe(true);
     expect(s.worktreeIsolation).toBe(false);
+    expect(s.keepWorktreeAfterMerge).toBe(true);
     expect(s.gitAutomation).toBe(true);
     expect(s.defaultModel).toBeNull();
     expect(s.defaultThinking).toBeNull();
