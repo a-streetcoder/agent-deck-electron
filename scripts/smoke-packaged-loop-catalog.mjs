@@ -7,8 +7,8 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -141,43 +141,6 @@ if (resourceSmoke.status !== 0) {
 }
 const serverEntry = path.join(asarPath, "dist", "server", "index.mjs");
 const serverDataDir = path.join(sandbox, "data");
-const managedClone = path.join(serverDataDir, "SkillRepositories", "packaged-http-repo");
-const managedSkill = path.join(managedClone, "skill");
-mkdirSync(path.join(managedClone, ".git"), { recursive: true });
-mkdirSync(managedSkill, { recursive: true });
-writeFileSync(
-  path.join(managedSkill, "SKILL.md"),
-  "---\nname: packaged-http-skill\ndescription: Packaged snapshot\n---\nsafe",
-);
-writeFileSync(
-  path.join(serverDataDir, "app-settings.json"),
-  JSON.stringify({
-    importedSkillRepositories: [
-      {
-        id: "packaged-http-repo",
-        remoteUrl: "https://example.invalid/packaged.git",
-        scope: "global",
-        clonePath: managedClone,
-        skillNames: ["packaged-http-skill"],
-        storageMode: "collection-v1",
-        collectionId: "packaged-http-collection",
-        selectedSkillRelativePaths: ["skill"],
-        syncedSkillRelativePaths: ["skill"],
-        skillRootPaths: [managedSkill],
-        lastSyncedCommit: "deadbeef",
-        importedAt: new Date(0).toISOString(),
-      },
-    ],
-    skillCollections: [
-      {
-        id: "packaged-http-collection",
-        name: "Packaged HTTP",
-        repositoryId: "packaged-http-repo",
-        skillRootPaths: [managedSkill],
-      },
-    ],
-  }),
-);
 const serverEnvironment = {
   ...baseEnvironment,
   HOME: sandbox,
@@ -331,38 +294,48 @@ try {
   listed = await jsonRequest("GET", "/loops");
   if (listed.loops.length !== 0) throw new Error("delete failed");
 
-  const skillInventory = await jsonRequest("GET", "/resources/skills");
-  const packagedSkill = skillInventory.skills.find((skill) => skill.name === "packaged-http-skill");
-  if (!packagedSkill?.baseDir.includes(`${path.sep}SkillRepositorySnapshots${path.sep}`)) {
-    throw new Error("packaged server did not discover the native snapshot");
-  }
-  const snapshotLeaf = path.dirname(path.dirname(packagedSkill.baseDir));
-  const capturedSnapshotLeaf = `${snapshotLeaf}-captured`;
-  renameSync(snapshotLeaf, capturedSnapshotLeaf);
-  const snapshotVictim = path.join(sandbox, "snapshot-victim");
-  mkdirSync(path.join(snapshotVictim, "skills", "0"), { recursive: true });
-  const snapshotSentinel = path.join(snapshotVictim, "skills", "0", "SKILL.md");
-  writeFileSync(
-    snapshotSentinel,
-    "---\nname: packaged-external-sentinel\ndescription: Never scan\n---\nexternal",
-  );
-  symlinkSync(snapshotVictim, snapshotLeaf, expectedPlatform === "win32" ? "junction" : "dir");
-  const quarantinedSkills = await jsonRequest("GET", "/resources/skills");
-  if (quarantinedSkills.skills.some((skill) => skill.name === "packaged-external-sentinel")) {
-    throw new Error("packaged server scanned a replaced snapshot leaf");
-  }
-  const quarantinedRepos = await jsonRequest("GET", "/resources/skill-repos");
-  if (quarantinedRepos.repos[0]?.available !== false) {
-    throw new Error("packaged server did not quarantine a replaced snapshot leaf");
-  }
+  // Exercise the packaged skill engine through the real HTTP boundary. The engine owns skill
+  // writes and git collections now; the retired app-settings collection records no longer
+  // materialize SkillRepositorySnapshots during startup.
+  await jsonRequest("PUT", "/resources/skills", {
+    scope: "global",
+    name: "packaged-http-skill",
+    edit: { description: "Packaged engine smoke", body: "safe" },
+  });
+  let skillInventory = await jsonRequest("GET", "/resources/skills");
+  let packagedSkill = skillInventory.skills.find((skill) => skill.name === "packaged-http-skill");
+  const expectedSkillRoot = path.join(sandbox, ".agents", "skills", "packaged-http-skill");
   if (
-    readFileSync(snapshotSentinel, "utf8") !==
-    "---\nname: packaged-external-sentinel\ndescription: Never scan\n---\nexternal"
+    !packagedSkill ||
+    realpathSync(packagedSkill.baseDir) !== realpathSync(expectedSkillRoot) ||
+    !readFileSync(path.join(expectedSkillRoot, "SKILL.md"), "utf8").includes("safe")
   ) {
-    throw new Error("packaged snapshot sentinel was modified");
+    throw new Error("packaged skill engine create/read failed");
   }
-  rmSync(snapshotLeaf, { recursive: true });
-  renameSync(capturedSnapshotLeaf, snapshotLeaf);
+
+  await jsonRequest("POST", "/resources/skills/rename", {
+    scope: "global",
+    name: "packaged-http-skill",
+    newName: "packaged-http-renamed",
+  });
+  skillInventory = await jsonRequest("GET", "/resources/skills");
+  packagedSkill = skillInventory.skills.find((skill) => skill.name === "packaged-http-renamed");
+  if (
+    !packagedSkill ||
+    skillInventory.skills.some((skill) => skill.name === "packaged-http-skill") ||
+    !existsSync(path.join(packagedSkill.baseDir, "SKILL.md"))
+  ) {
+    throw new Error("packaged skill engine rename/read failed");
+  }
+
+  await jsonRequest("DELETE", "/resources/skills", {
+    scope: "global",
+    name: "packaged-http-renamed",
+  });
+  skillInventory = await jsonRequest("GET", "/resources/skills");
+  if (skillInventory.skills.some((skill) => skill.name === "packaged-http-renamed")) {
+    throw new Error("packaged skill engine delete/read failed");
+  }
 
   await stopServer();
   const catalogRoot = path.join(sandbox, ".pi");
@@ -383,7 +356,7 @@ try {
   if (readFileSync(sentinel, "utf8") !== "sentinel-safe") throw new Error("victim was modified");
 
   console.log(
-    `Packaged Electron Loop/snapshot HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
+    `Packaged Electron Loop/skill-engine HTTP CRUD/containment smoke passed (${runtime.platform}-${runtime.arch}, Electron ${runtime.electron})`,
   );
 } finally {
   await stopServer();

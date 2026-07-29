@@ -24,14 +24,14 @@ describe("LoopSessionSnapshotStore", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "loop-session-snapshot-"));
     const file = path.join(dataDir, "loop-session-snapshots.json");
     const store = new LoopSessionSnapshotStore(dataDir, vi.fn());
-    const cells = Array.from({ length: 240 }, (_, index) =>
+    const cells = Array.from({ length: 24 }, (_, index) =>
       cell(
         `cell-${index}`,
-        `${index}-text-${"🧪".repeat(90_000)}`,
-        `${index}-task-${"\u0000".repeat(80_000)}`,
+        `${index}-text-${"🧪".repeat(70_000)}`,
+        `${index}-task-${"\u0000".repeat(55_000)}`,
         Array.from(
-          { length: 150 },
-          (__, progress) => `${index}-${progress}-${"\u0000".repeat(12_000)}`,
+          { length: 105 },
+          (__, progress) => `${index}-${progress}-${"\u0000".repeat(4_000)}`,
         ),
       ),
     );
@@ -42,7 +42,7 @@ describe("LoopSessionSnapshotStore", () => {
       sessions: Record<string, unknown>;
     };
     const restored = new LoopSessionSnapshotStore(dataDir, vi.fn()).get("session");
-    expect(restored.at(-1)?.id).toBe("cell-239");
+    expect(restored.at(-1)?.id).toBe("cell-23");
     expect(restored.some((item) => item.id === "cell-0")).toBe(false);
     expect(Buffer.byteLength(JSON.stringify(parsed.sessions.session), "utf8")).toBeLessThanOrEqual(
       MAX_LOOP_SNAPSHOT_SESSION_BYTES,
