@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, test, type ElectronApplication } from "@playwright/test";
+import { _electron as electronCompat } from "playwright-electron-compat";
 
 /**
  * Phase-1 gate for the Electron shell: launching the real app boots the same
@@ -27,9 +28,20 @@ const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const DESKTOP_DIR = path.join(WORKSPACE_ROOT, "apps", "desktop");
 const WEB_DIST = path.join(WORKSPACE_ROOT, "apps", "web", "dist");
 
-// Resolve Electron's binary from the desktop package (it's not an e2e dep).
+// Production and POSIX E2E use the desktop package's current Electron. Electron
+// 39.2+ has an unresolved Windows EXCEPTION_BREAKPOINT in Playwright's mandatory
+// main-process inspector handshake, so Windows CI uses the e2e package's test-only
+// 39.1.2 runtime with its compatible Playwright launcher while packaging and
+// POSIX E2E continue to validate the shipped Electron and current Playwright.
 const requireFromDesktop = createRequire(path.join(DESKTOP_DIR, "package.json"));
-const electronPath = requireFromDesktop("electron") as string;
+const requireFromE2e = createRequire(path.join(WORKSPACE_ROOT, "e2e", "package.json"));
+const useInspectorCompatibleElectron =
+  process.env.AGENT_DECK_E2E_USE_INSPECTOR_COMPATIBLE_ELECTRON === "1" ||
+  (process.env.CI && process.platform === "win32");
+const electronPath = useInspectorCompatibleElectron
+  ? (requireFromE2e("electron") as string)
+  : (requireFromDesktop("electron") as string);
+const electronLauncher = useInspectorCompatibleElectron ? electronCompat : electron;
 
 let app: ElectronApplication;
 let electronPid: number | undefined;
@@ -93,7 +105,7 @@ test.beforeAll(async () => {
   ]) {
     delete desktopEnv[key];
   }
-  app = await electron.launch({
+  app = (await electronLauncher.launch({
     executablePath: electronPath,
     args: launchArgs,
     env: {
@@ -111,7 +123,7 @@ test.beforeAll(async () => {
       }),
       AGENT_DECK_DATA_DIR: dataDir,
     },
-  });
+  })) as unknown as ElectronApplication;
   electronPid = app.process().pid ?? undefined;
 
   // A fresh data dir has no projects, so the first-run onboarding modal would

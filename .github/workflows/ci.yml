@@ -159,17 +159,13 @@ jobs:
       - run: pnpm -r --filter '!@agent-deck/e2e' test:pi
 
   # Playwright e2e — the streaming UI and the Electron desktop shell. Runs on
-  # Linux (under xvfb) and Windows, since both are ship targets. Keep the headed
-  # Electron job on Server 2022: windows-latest moved to Server 2025 in June 2026,
-  # whose hosted desktop terminates Electron's Playwright inspector process with
-  # EXCEPTION_BREAKPOINT before the app can open. Unit/native Windows coverage
-  # above stays on windows-latest.
+  # Linux (under xvfb) and Windows, since both are ship targets.
   e2e:
     needs: lint
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-2022]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -198,7 +194,15 @@ jobs:
       - name: Ensure Electron binary
         shell: bash
         run: |
-          ELECTRON_DIR=$(node -e "console.log(require('path').dirname(require.resolve('electron/package.json', { paths: [require('path').resolve('apps/desktop')] })))")
+          ELECTRON_PACKAGE_DIR=apps/desktop
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Electron 39.2+ currently terminates with EXCEPTION_BREAKPOINT when
+            # Playwright attaches its mandatory main-process inspector on Windows.
+            # The test-only e2e runtime/launcher pair is the last known working
+            # inspector combination; packaging and Linux E2E remain on Electron 43.
+            ELECTRON_PACKAGE_DIR=e2e
+          fi
+          ELECTRON_DIR=$(node -e "console.log(require('path').dirname(require.resolve('electron/package.json', { paths: [require('path').resolve(process.argv[1])] })))" "$ELECTRON_PACKAGE_DIR")
           node "$ELECTRON_DIR/install.js"
       - run: pnpm --filter @agent-deck/web build
       # Keep the Windows Electron launch independent from Chromium installation
