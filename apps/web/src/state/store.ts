@@ -1,6 +1,7 @@
 import type {
   CheckpointInfo,
   DiffFileEntry,
+  ImageAttachment,
   KeybindingBinding,
   ProjectMeta,
   SessionMeta,
@@ -60,6 +61,30 @@ export interface QuestionNavigationRequest {
 }
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
+
+export interface ComposerDraftImage extends ImageAttachment {
+  id: string;
+  name: string;
+}
+
+export interface ComposerDraft {
+  text: string;
+  images: readonly ComposerDraftImage[];
+}
+
+export const EMPTY_COMPOSER_DRAFT: ComposerDraft = { text: "", images: [] };
+
+export interface PendingComposerText {
+  sessionId: string;
+  text: string;
+}
+
+export function pendingComposerTextForSession(
+  pending: PendingComposerText | null,
+  sessionId: string | null,
+): string | null {
+  return pending?.sessionId === sessionId ? pending.text : null;
+}
 
 export type AppView =
   | "chat"
@@ -204,8 +229,14 @@ export interface AppState {
   session: SessionMeta | null;
   /** All known sessions (live + persisted), for the sidebar chat list. */
   sessions: SessionMeta[];
-  /** A prompt to drop into the composer (e.g. seeded from a GitHub issue). */
-  pendingComposerText: string | null;
+  /** A one-shot prompt seed bound to the session that requested it. */
+  pendingComposerText: PendingComposerText | null;
+  /**
+   * Unsent composer content keyed by session id. Drafts intentionally live only
+   * for this renderer/store lifetime, matching native; switching sessions keeps
+   * text and pending images separate, while a reload starts clean.
+   */
+  composerDrafts: Record<string, ComposerDraft>;
   /**
    * Whether the per-session terminal drawer is open (Slice 8b). One global
    * boolean like panelExpanded: the drawer shows the CURRENT session's
@@ -312,7 +343,10 @@ export interface AppState {
   setCurrentAgent(agentName: string | null): void;
   setSession(session: SessionMeta | null): void;
   setSessions(sessions: SessionMeta[]): void;
-  setPendingComposerText(text: string | null): void;
+  setPendingComposerText(pending: PendingComposerText | null): void;
+  updateComposerDraft(sessionId: string, update: (current: ComposerDraft) => ComposerDraft): void;
+  /** Drop whitespace-only text once its composer is left or unmounted. */
+  pruneEmptyComposerDraft(sessionId: string): void;
   setKeybindings(keybindings: KeybindingBinding[]): void;
   setCommandPaletteOpen(open: boolean): void;
   setKeybindingsEditorOpen(open: boolean): void;
@@ -411,6 +445,7 @@ export const useAppStore = create<AppState>((set) => ({
   session: null,
   sessions: [],
   pendingComposerText: null,
+  composerDrafts: {},
   terminalOpen: false,
   workspaceTabs: {},
   workspaceBrowserState: {},
@@ -470,6 +505,32 @@ export const useAppStore = create<AppState>((set) => ({
     ),
   setSessions: (sessions) => set({ sessions }),
   setPendingComposerText: (pendingComposerText) => set({ pendingComposerText }),
+  updateComposerDraft: (sessionId, update) =>
+    set((state) => {
+      const current = state.composerDrafts[sessionId] ?? EMPTY_COMPOSER_DRAFT;
+      const next = update(current);
+      if (next === current) return {};
+      if (next.text.length === 0 && next.images.length === 0) {
+        if (!(sessionId in state.composerDrafts)) return {};
+        const { [sessionId]: _removed, ...composerDrafts } = state.composerDrafts;
+        return { composerDrafts };
+      }
+      return {
+        composerDrafts: {
+          ...state.composerDrafts,
+          [sessionId]: next,
+        },
+      };
+    }),
+  pruneEmptyComposerDraft: (sessionId) =>
+    set((state) => {
+      const current = state.composerDrafts[sessionId];
+      if (current === undefined || current.text.trim().length > 0 || current.images.length > 0) {
+        return {};
+      }
+      const { [sessionId]: _removed, ...composerDrafts } = state.composerDrafts;
+      return { composerDrafts };
+    }),
   setKeybindings: (keybindings) => set({ keybindings }),
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   setKeybindingsEditorOpen: (keybindingsEditorOpen) => set({ keybindingsEditorOpen }),
@@ -654,6 +715,12 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   removeSession: (sessionId) =>
     set((state) => {
+      const composerDrafts =
+        sessionId in state.composerDrafts
+          ? Object.fromEntries(
+              Object.entries(state.composerDrafts).filter(([id]) => id !== sessionId),
+            )
+          : state.composerDrafts;
       const pendingReviewComments =
         sessionId in state.pendingReviewComments
           ? Object.fromEntries(
@@ -686,6 +753,7 @@ export const useAppStore = create<AppState>((set) => ({
           : state.workspaceFilesState;
       return {
         sessions: state.sessions.filter((s) => s.id !== sessionId),
+        composerDrafts,
         pendingReviewComments,
         pendingElementContexts,
         workspaceTabs,

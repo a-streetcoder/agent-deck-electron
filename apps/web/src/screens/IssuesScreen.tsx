@@ -151,11 +151,14 @@ export function IssuesScreen() {
     setView("chat");
     // Wait for the new session to become active before seeding its composer,
     // so the prompt can't land in the previous session's draft.
-    await newChat();
-    setPendingComposerText(
-      `Work on GitHub issue #${issue.number}: ${issue.title}\n${issue.url}\n\n` +
+    const session = await newChat();
+    if (!session) return;
+    setPendingComposerText({
+      sessionId: session.id,
+      text:
+        `Work on GitHub issue #${issue.number}: ${issue.title}\n${issue.url}\n\n` +
         `Investigate the issue and propose a fix.`,
-    );
+    });
   };
 
   // Load a single issue's detail (title/state/labels/assignees/author/body).

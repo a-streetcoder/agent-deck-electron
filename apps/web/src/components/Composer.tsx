@@ -7,7 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Paperclip, Shrink, X } from "lucide-react";
 import TextareaAutosize from "react-textarea-autosize";
 import { openQuestion, thinkingLevelsForModel } from "@agent-deck/domain";
-import { useAppStore } from "../state/store.ts";
+import {
+  EMPTY_COMPOSER_DRAFT,
+  pendingComposerTextForSession,
+  type ComposerDraftImage,
+  useAppStore,
+} from "../state/store.ts";
 import { useAgents } from "../state/useAgents.ts";
 import {
   sendAbort,
@@ -16,7 +21,6 @@ import {
   sendSetModel,
   sendSetThinking,
   switchToAgent,
-  type ImageAttachment,
 } from "../state/wsBridge.ts";
 import {
   ModelChip,
@@ -49,27 +53,22 @@ import {
   type ComposerSubmitStatus,
 } from "../lib/composerSubmission.ts";
 
-interface PendingImage extends ImageAttachment {
-  id: string;
-  name: string;
-}
-
 /** Stable empty reference so the pending-comments selector never returns a
  * fresh array (which would re-render the composer every store change). */
 const EMPTY_COMMENTS: readonly PendingReviewComment[] = [];
 /** Stable empty reference for the pending element-context selector (Slice 16). */
 const EMPTY_ELEMENT_CONTEXTS: readonly PendingElementContext[] = [];
 
-const PROMPT_IMAGE_MIMES = new Set<PendingImage["mimeType"]>([
+const PROMPT_IMAGE_MIMES = new Set<ComposerDraftImage["mimeType"]>([
   "image/png",
   "image/jpeg",
   "image/gif",
   "image/webp",
 ]);
-function isPromptImageMime(value: string): value is PendingImage["mimeType"] {
-  return PROMPT_IMAGE_MIMES.has(value as PendingImage["mimeType"]);
+function isPromptImageMime(value: string): value is ComposerDraftImage["mimeType"] {
+  return PROMPT_IMAGE_MIMES.has(value as ComposerDraftImage["mimeType"]);
 }
-async function fileToImage(file: File): Promise<PendingImage | null> {
+async function fileToImage(file: File): Promise<ComposerDraftImage | null> {
   if (!isPromptImageMime(file.type) || file.size > 15_000_000) return null;
   const buffer = await file.arrayBuffer();
   let binary = "";
@@ -97,7 +96,6 @@ function compactTokens(value: number): string {
  * model, thinking) ending in the prominent circular send/stop button.
  */
 export function Composer() {
-  const [draft, setDraft] = useState("");
   const pendingComposerText = useAppStore((state) => state.pendingComposerText);
   const setPendingComposerText = useAppStore((state) => state.setPendingComposerText);
   const agentStatus = useAppStore((state) => state.transcript.agentStatus);
@@ -110,6 +108,38 @@ export function Composer() {
   const connection = useAppStore((state) => state.connection);
   const queueSettled = useAppStore((state) => state.sessionSubscriptionSettled);
   const session = useAppStore((state) => state.session);
+  const sessionId = session?.id ?? null;
+  const composerDraft = useAppStore((state) =>
+    sessionId ? (state.composerDrafts[sessionId] ?? EMPTY_COMPOSER_DRAFT) : EMPTY_COMPOSER_DRAFT,
+  );
+  const updateComposerDraft = useAppStore((state) => state.updateComposerDraft);
+  const pruneEmptyComposerDraft = useAppStore((state) => state.pruneEmptyComposerDraft);
+  const draft = composerDraft.text;
+  const images = composerDraft.images;
+  const setDraft = useCallback(
+    (next: string | ((current: string) => string)): void => {
+      if (!sessionId) return;
+      updateComposerDraft(sessionId, (current) => ({
+        ...current,
+        text: typeof next === "function" ? next(current.text) : next,
+      }));
+    },
+    [sessionId, updateComposerDraft],
+  );
+  const setImages = useCallback(
+    (
+      next:
+        | readonly ComposerDraftImage[]
+        | ((current: readonly ComposerDraftImage[]) => readonly ComposerDraftImage[]),
+    ): void => {
+      if (!sessionId) return;
+      updateComposerDraft(sessionId, (current) => ({
+        ...current,
+        images: typeof next === "function" ? next(current.images) : next,
+      }));
+    },
+    [sessionId, updateComposerDraft],
+  );
   const currentAgentName = useAppStore((state) => state.currentAgentName);
   // Pending review comments (Slice 12) for the CURRENT session: captured on
   // diff rows, shown as cards above the editor, serialized into the next send.
@@ -153,7 +183,6 @@ export function Composer() {
   // True while a manual compaction is in flight, so the button can't double-fire.
   // Reset on the compaction's contextRevision bump (success) or a safety timeout.
   const [compacting, setCompacting] = useState(false);
-  const sessionId = session?.id ?? null;
   // Guards against a stale session's response/timer clobbering the new one.
   const activeSessionRef = useRef<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -238,10 +267,9 @@ export function Composer() {
 
   useEffect(() => {
     activeSessionRef.current = sessionId;
-    // Invalidate every callback belonging to the session we just left. The
-    // store-id guard also covers the render→effect gap during a switch.
+    // Invalidate every submission callback belonging to the session we just
+    // left. The store-id guard also covers the render→effect gap during a switch.
     submissionGenerationRef.current += 1;
-    imageLoadGenerationRef.current += 1;
     sendLockRef.current = false;
     setSubmitting(false);
     setSubmitStatus(null);
@@ -249,6 +277,7 @@ export function Composer() {
     setModels([]);
     setContextUsage(null);
     setSessionTotals(null);
+    setExpandedImageId(null);
     prevAgentStatusRef.current = null;
     if (!sessionId) return;
     void refreshPiState();
@@ -268,8 +297,13 @@ export function Composer() {
       .catch(() => {});
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      // Invalidate reads at the boundary where this composer stops owning the
+      // session. Advancing on the next effect would race a file selected from
+      // the newly rendered composer and discard that legitimate attachment.
+      imageLoadGenerationRef.current += 1;
+      if (sessionId) pruneEmptyComposerDraft(sessionId);
     };
-  }, [sessionId, refreshPiState]);
+  }, [sessionId, refreshPiState, pruneEmptyComposerDraft]);
 
   // Re-read the context fill ONLY on the two events that change it: a completed
   // TURN (a genuine running→idle transition) and a COMPACTION (contextRevision
@@ -301,7 +335,6 @@ export function Composer() {
     (m) => m.provider === piState?.provider && m.id === piState?.modelId,
   );
   const thinkingLevels = thinkingLevelsForModel(currentModel?.reasoning);
-  const [images, setImages] = useState<PendingImage[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Full-size preview overlay: the id of the pending image being expanded, or
   // null. Cleared when its image is removed so a stale id can't reopen it.
@@ -338,11 +371,12 @@ export function Composer() {
   // Seed the composer from elsewhere (e.g. an issue) — replaces the draft,
   // since seeding is a deliberate "start on this" action, not an append.
   useEffect(() => {
-    if (pendingComposerText === null) return;
-    setDraft(pendingComposerText);
+    const pendingText = pendingComposerTextForSession(pendingComposerText, sessionId);
+    if (pendingText === null) return;
+    setDraft(pendingText);
     setPendingComposerText(null);
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [pendingComposerText, setPendingComposerText]);
+  }, [pendingComposerText, sessionId, setDraft, setPendingComposerText]);
 
   const applyAccept = (accepted: { value: string; caret: number }): void => {
     setSubmitStatus(null);
@@ -644,6 +678,7 @@ export function Composer() {
           }
           minRows={2}
           maxRows={6}
+          aria-label="Message Pi"
           value={draft}
           onChange={(event) => {
             setSubmitStatus(null);
@@ -806,11 +841,18 @@ export function Composer() {
           <div className="flex-1" />
           <label
             className={`flex h-8 w-8 items-center justify-center rounded-full text-text-muted ${
-              running
+              running || !sessionId
                 ? "cursor-not-allowed opacity-40"
                 : "cursor-pointer hover:bg-hover hover:text-text-primary"
             }`}
-            title={running ? "Images can only be sent when Pi is idle" : "Attach image"}
+            title={
+              running
+                ? "Images can only be sent when Pi is idle"
+                : sessionId
+                  ? "Attach image"
+                  : "Wait for the chat to connect before attaching an image"
+            }
+            aria-disabled={running || !sessionId}
             data-testid="attach-button"
           >
             <Paperclip size={15} />
@@ -820,7 +862,7 @@ export function Composer() {
               multiple
               className="hidden"
               data-testid="attach-input"
-              disabled={running}
+              disabled={running || !sessionId}
               onChange={(event) => {
                 if (event.target.files) void addFiles(event.target.files);
                 event.target.value = "";

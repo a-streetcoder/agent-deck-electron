@@ -114,6 +114,41 @@ async function activeSessionId(page: Page): Promise<string> {
   return testid!.replace("chat-", "");
 }
 
+test("unsent composer drafts stay with their session", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  const firstId = await activeSessionId(page);
+  await page.getByTestId("composer-input").fill("Draft for the first chat");
+  await page.getByTestId("attach-input").setInputFiles({
+    name: "first-draft.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.getByTestId("attachments")).toContainText("first-draft.png");
+
+  await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  const secondId = await activeSessionId(page);
+  expect(secondId).not.toBe(firstId);
+  await expect(page.getByTestId("composer-input")).toHaveValue("");
+  await expect(page.getByTestId("attachments")).toHaveCount(0);
+  await page.getByTestId("composer-input").fill("Draft for the second chat");
+
+  await page.getByTestId("chat-list").getByTestId(`chat-${firstId}`).click();
+  await expect(page.getByTestId("composer-input")).toHaveValue("Draft for the first chat");
+  await expect(page.getByTestId("attachments")).toContainText("first-draft.png");
+
+  await page.getByTestId("chat-list").getByTestId(`chat-${secondId}`).click();
+  await expect(page.getByTestId("composer-input")).toHaveValue("Draft for the second chat");
+  await expect(page.getByTestId("attachments")).toHaveCount(0);
+});
+
 test("the most recently active session sorts to the top of the list", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");

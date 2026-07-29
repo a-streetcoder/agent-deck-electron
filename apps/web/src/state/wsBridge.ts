@@ -740,6 +740,13 @@ export async function refreshSessions(): Promise<void> {
 
 let activationToken = 0;
 
+async function refreshSessionsForActivation(token: number): Promise<boolean> {
+  const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
+  if (token !== activationToken) return false;
+  useAppStore.getState().setSessions(sessions);
+  return true;
+}
+
 async function activateSession(projectId: string | null, agentName: string | null): Promise<void> {
   // Guards rapid switching: if another activation starts while this one's REST
   // call is in flight, the stale result must never win.
@@ -756,7 +763,7 @@ async function activateSession(projectId: string | null, agentName: string | nul
     if (token !== activationToken) return;
     useAppStore.getState().setSession(session);
     connect(session.id);
-    await refreshSessions();
+    await refreshSessionsForActivation(token);
   } catch (error) {
     if (token !== activationToken) return;
     useAppStore.getState().setError(String(error));
@@ -781,7 +788,7 @@ export async function switchToSession(target: SessionMeta): Promise<void> {
     if (token !== activationToken) return;
     useAppStore.getState().setSession(session);
     connect(session.id);
-    await refreshSessions();
+    await refreshSessionsForActivation(token);
   } catch (error) {
     if (token !== activationToken) return;
     useAppStore.getState().setError(String(error));
@@ -789,7 +796,7 @@ export async function switchToSession(target: SessionMeta): Promise<void> {
 }
 
 /** Start a brand-new chat for the current project + agent. */
-export async function newChat(): Promise<void> {
+export async function newChat(): Promise<SessionMeta | null> {
   const token = ++activationToken;
   const store = useAppStore.getState();
   const { currentProjectId, currentAgentName } = store;
@@ -806,13 +813,22 @@ export async function newChat(): Promise<void> {
         ...(currentAgentName ? { agentName: currentAgentName } : {}),
       }),
     });
-    if (token !== activationToken) return;
+    if (token !== activationToken) return null;
     useAppStore.getState().setSession(session);
     connect(session.id);
-    await refreshSessions();
+    try {
+      if (!(await refreshSessionsForActivation(token))) return null;
+    } catch (error) {
+      if (token !== activationToken) return null;
+      // The chat is already active. Keep its identity available to callers
+      // (notably issue seeding) even if the sidebar list could not refresh.
+      useAppStore.getState().setError(String(error));
+    }
+    return session;
   } catch (error) {
-    if (token !== activationToken) return;
+    if (token !== activationToken) return null;
     useAppStore.getState().setError(String(error));
+    return null;
   }
 }
 

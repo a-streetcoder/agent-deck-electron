@@ -19,7 +19,7 @@ export function createPendingImageId(): string {
 
 /** Remove only the exact attachment objects carried by an acknowledged request. */
 export function retainUnsubmittedImages<T extends object>(
-  current: T[],
+  current: readonly T[],
   submitted: readonly T[],
 ): T[] {
   return current.filter((image) => !submitted.includes(image));

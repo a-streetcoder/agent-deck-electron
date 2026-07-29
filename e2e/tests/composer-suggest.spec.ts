@@ -44,6 +44,7 @@ async function openProject(page: Page): Promise<void> {
   await page.locator('[data-skill-name="deployer"]').click();
   await page.getByTestId(`assign-skill-deployer-${path.basename(project)}`).check();
   await page.getByTestId("new-chat").click();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 }
 
 test("slash panel lists pi commands and inserts one", async ({ page }) => {
