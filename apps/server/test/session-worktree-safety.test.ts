@@ -37,9 +37,6 @@ describe("session worktree startup boundary", () => {
     expect(realpathSync(path.join(dataDir, "session-worktrees"))).toBe(
       path.join(physicalDataDir, "session-worktrees"),
     );
-    expect(realpathSync(path.join(dataDir, "SkillRepositories"))).toBe(
-      path.join(physicalDataDir, "SkillRepositories"),
-    );
   });
 
   it("refuses a linked explicit data directory without touching its target", async () => {

@@ -75,7 +75,7 @@ import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager } from "./SessionManager.ts";
 import { SessionImageStore } from "./sessionImages.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
-import { ManagedSkillRepositories } from "./skillRepositories.ts";
+import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
 import { setupWebSocket } from "./wsHandler.ts";
@@ -156,8 +156,6 @@ export interface StartServerOptions {
    * on-device embedder; absent both, recall stays lexical+fuzzy (the default).
    */
   memoryEmbedder?: Embedder;
-  /** Fixed-root override for hermetic tests only; never exposed as a user setting. */
-  skillRepositoriesRoot?: string;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -188,15 +186,10 @@ async function initServer(
   effectRuntime: ServerRuntime,
 ): Promise<AgentDeckServer> {
   const requestedDataDir = options.dataDir ?? defaultDataDir();
-  // Establish and validate the trusted app-data directory before any persistence
-  // or native capability opens it. This existing trust gate creates a missing
-  // directory, rejects a linked/reparse root, and resolves ancestor links to one
-  // authoritative physical directory for all app-data services below.
-  const managedSkillRepositories = new ManagedSkillRepositories(
-    requestedDataDir,
-    options.skillRepositoriesRoot,
-  );
-  const dataDir = managedSkillRepositories.dataDir;
+  // Establish and validate the trusted app-data directory before any persistence or native
+  // capability opens it: create it if missing, reject a linked/reparse root, and resolve ancestor
+  // links to one authoritative physical directory for all app-data services below.
+  const dataDir = resolveTrustedDataDir(requestedDataDir);
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const sessionImages = new SessionImageStore(dataDir);
