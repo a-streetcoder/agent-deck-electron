@@ -1,6 +1,6 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Send } from "lucide-react";
+import { FolderOpen, Send } from "lucide-react";
 import {
   memoryToolCardLabel,
   type QuestionCell,
@@ -35,6 +35,7 @@ import {
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
+import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -133,6 +134,31 @@ const SUBAGENT_STATUS: Record<SubagentCell["status"], ToolGroupStatus> = {
  * in an expandable card, mirroring the native "agent block".
  */
 function SubagentCellView({ cell }: { cell: SubagentCell }) {
+  const [revealState, setRevealState] = useState<{
+    status: "idle" | "pending" | "success" | "error";
+    message?: string;
+  }>({ status: "idle" });
+  const revealAvailable = canRevealSubagentArtifacts();
+  const reveal = async (): Promise<void> => {
+    if (revealState.status === "pending" || !cell.artifactRootId) return;
+    setRevealState({ status: "pending", message: "Revealing artifacts…" });
+    try {
+      if (await revealSubagentArtifacts(cell.artifactRootId)) {
+        setRevealState({ status: "success", message: "Artifacts revealed in your file manager." });
+      } else {
+        setRevealState({
+          status: "error",
+          message: "Artifact reveal is unavailable. Open this run in the Agent Deck desktop app.",
+        });
+      }
+    } catch {
+      setRevealState({
+        status: "error",
+        message:
+          "Artifacts could not be revalidated. Retry, or restart Agent Deck if the run was moved.",
+      });
+    }
+  };
   return (
     <div data-testid="subagent-cell" data-status={cell.status}>
       <ToolGroupCard
@@ -200,6 +226,34 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               outputTokens={cell.outputTokens}
               durationMs={cell.durationMs}
             />
+            {cell.artifactRootId && revealAvailable ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <ControlButton
+                  type="button"
+                  className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait disabled:opacity-60"
+                  onClick={() => void reveal()}
+                  disabled={revealState.status === "pending"}
+                  aria-describedby={`subagent-reveal-status-${cell.id}`}
+                  data-testid="subagent-reveal-artifacts"
+                >
+                  <FolderOpen size={13} aria-hidden />
+                  {revealState.status === "pending" ? "Revealing…" : "Reveal Artifacts"}
+                </ControlButton>
+                <span
+                  id={`subagent-reveal-status-${cell.id}`}
+                  className={
+                    revealState.status === "error"
+                      ? "text-xs text-danger"
+                      : "text-xs text-text-muted"
+                  }
+                  role={revealState.status === "error" ? "alert" : "status"}
+                  aria-live="polite"
+                  data-testid="subagent-reveal-status"
+                >
+                  {revealState.message}
+                </span>
+              </div>
+            ) : null}
           </div>
         }
       />

@@ -92,6 +92,7 @@ function makeRoute(
     resolveAgent?: ServerContext["resolveNamedAgent"];
     create?: (options: Record<string, unknown>, state: ReturnType<typeof makeState>) => Meta;
     announce?: (session: { meta: Meta }, state: ReturnType<typeof makeState>) => void;
+    artifactReveal?: (runId: string) => string | undefined;
   } = {},
 ) {
   const fastify = Fastify();
@@ -137,6 +138,7 @@ function makeRoute(
       state.live.delete(id);
     }),
     removeLoopSessionSnapshot: vi.fn(),
+    subagentArtifactDirectoryForReveal: vi.fn(overrides.artifactReveal ?? (() => undefined)),
   };
   const index = {
     list: vi.fn(() => [...state.index.values()]),
@@ -253,6 +255,34 @@ beforeEach(() => {
     sourceBranch: "main",
     identityToken: "v1:0000000000000001:0000000000000002",
     branchOwned: true,
+  });
+});
+
+describe("GET /subagent-runs/:id/artifact-directory", () => {
+  it("requires the desktop token and returns only the manager-revalidated path", async () => {
+    const prior = process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN;
+    process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN = "desktop-test-token";
+    const runId = "12345678-1234-4234-8234-123456789abc";
+    const { fastify, sessions } = makeRoute({ artifactReveal: () => "/owned/artifacts" });
+    try {
+      const forbidden = await fastify.inject({
+        method: "GET",
+        url: `/subagent-runs/${runId}/artifact-directory`,
+      });
+      expect(forbidden.statusCode).toBe(403);
+      const response = await fastify.inject({
+        method: "GET",
+        url: `/subagent-runs/${runId}/artifact-directory`,
+        headers: { "x-agent-deck-desktop-recovery-token": "desktop-test-token" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ directory: "/owned/artifacts" });
+      expect(sessions.subagentArtifactDirectoryForReveal).toHaveBeenCalledWith(runId);
+    } finally {
+      if (prior === undefined) delete process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN;
+      else process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN = prior;
+      await fastify.close();
+    }
   });
 });
 

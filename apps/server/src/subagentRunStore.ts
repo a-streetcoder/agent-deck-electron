@@ -12,6 +12,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { SubagentCell } from "@agent-deck/domain";
+import {
+  SubagentArtifactCapabilityError,
+  SubagentArtifactStore,
+  type SubagentArtifactAllocation,
+} from "@agent-deck/loop-catalog-native";
 import { z } from "zod";
 import { syncDirectoryStrict } from "./sessionImages.ts";
 
@@ -49,8 +54,13 @@ export interface SubagentRunRecord {
   durationMs?: number;
   /** Additive v1 fields: absent legacy records remain readable but cannot resume. */
   source?: SubagentRunSource;
-  /** Pi-owned canonical resume handle returned by get_state; Agent Deck never deletes it. */
+  /** Pi canonical resume handle. Ownership controls whether parent deletion may remove it. */
   sessionFile?: string;
+  /** Additive v2 app-owned artifact identity. Paths are never persisted or exposed. */
+  artifactRootId?: string;
+  artifactRootToken?: string;
+  currentTurnId?: string;
+  sessionOwnership?: "owned" | "external";
 }
 
 const runSchema = z
@@ -76,6 +86,10 @@ const runSchema = z
       .max(MAX_SESSION_FILE_BYTES)
       .refine((value) => value.trim().length > 0, "sessionFile cannot be blank")
       .optional(),
+    artifactRootId: z.string().uuid().optional(),
+    artifactRootToken: z.string().min(1).max(200).optional(),
+    currentTurnId: z.string().uuid().optional(),
+    sessionOwnership: z.enum(["owned", "external"]).optional(),
   })
   .superRefine((run, context) => {
     if (!active(run.status) && run.completedAt === undefined) {
@@ -90,10 +104,20 @@ const runSchema = z
         message: "Active subagent run cannot have completedAt",
       });
     }
+    const artifactFields = [run.artifactRootId, run.artifactRootToken, run.currentTurnId];
+    if (artifactFields.some(Boolean) && !artifactFields.every(Boolean)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Incomplete artifact ownership" });
+    }
+    if (run.sessionOwnership === "owned" && !artifactFields.every(Boolean)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Owned session lacks artifact proof",
+      });
+    }
   });
 
 const storeSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   runs: z.array(runSchema).max(MAX_RUNS),
 });
 
@@ -126,7 +150,10 @@ const DEFAULT_DURABILITY_OPS: SubagentRunDurabilityOps = {
 /** Versioned app-data persistence for generic managed_subagent/managed_parallel runs. */
 export class SubagentRunStore {
   private readonly filePath: string;
-  private state: StoreState = { version: 1, runs: [] };
+  private readonly artifacts: SubagentArtifactStore;
+  private readonly deletedParents = new Set<string>();
+  private storeQuarantined = false;
+  private state: StoreState = { version: 2, runs: [] };
 
   constructor(
     dataDir: string,
@@ -135,8 +162,10 @@ export class SubagentRunStore {
   ) {
     this.filePath = path.join(dataDir, "subagent-runs.json");
     mkdirSync(dataDir, { recursive: true });
+    this.artifacts = new SubagentArtifactStore(dataDir);
     this.load();
     this.interruptActiveRuns();
+    this.reconcileArtifacts();
   }
 
   list(parentSessionId: string): SubagentRunRecord[] {
@@ -151,10 +180,81 @@ export class SubagentRunStore {
   }
 
   create(record: SubagentRunRecord): void {
+    if (this.deletedParents.has(record.parentSessionId)) {
+      throw new Error("Parent session was deleted during subagent allocation");
+    }
     if (this.state.runs.some((run) => run.id === record.id)) {
       throw new Error(`Subagent run already exists: ${record.id}`);
     }
-    this.commit({ version: 1, runs: [...this.state.runs, this.normalized(record)] });
+    this.commit({ version: 2, runs: [...this.state.runs, this.normalized(record)] });
+  }
+
+  prepareTurn(
+    record: SubagentRunRecord,
+    systemPrompt: string,
+    continuation?: Pick<SubagentRunRecord, "artifactRootId" | "artifactRootToken">,
+  ): SubagentArtifactAllocation {
+    if (this.deletedParents.has(record.parentSessionId)) {
+      throw new Error("Parent session was deleted before subagent allocation");
+    }
+    const turnId = continuation ? randomUUID() : record.id;
+    return this.artifacts.allocateTurn({
+      runId: record.id,
+      identityToken: continuation?.artifactRootToken,
+      turnId,
+      rootManifest: `${JSON.stringify({ schemaVersion: 1, runId: record.id, createdAt: record.createdAt })}\n`,
+      turnManifest: `${JSON.stringify({ schemaVersion: 1, runId: record.id, turnId, createdAt: record.createdAt, source: record.source ?? "single" })}\n`,
+      input: record.task,
+      systemPrompt,
+    });
+  }
+
+  writeOutput(id: string, output: string, error?: string): void {
+    const run = this.get(id);
+    if (!run?.artifactRootId || !run.artifactRootToken || !run.currentTurnId) {
+      throw new Error("Subagent artifact ownership is unavailable");
+    }
+    const content = utf8Suffix(
+      error ? `${output}${output ? "\n\n" : ""}Error:\n${error}` : output,
+      MAX_RESULT_BYTES,
+    );
+    this.artifacts.writeTurnOutput(
+      run.artifactRootId,
+      run.artifactRootToken,
+      run.currentTurnId,
+      content,
+    );
+  }
+
+  markOwnedSession(id: string, sessionFile: string): string {
+    const run = this.get(id);
+    if (!run?.artifactRootId || !run.artifactRootToken)
+      throw new Error("Subagent artifact ownership is unavailable");
+    const validated = this.artifacts.validateSessionFile(
+      run.artifactRootId,
+      run.artifactRootToken,
+      sessionFile,
+    );
+    this.update(id, { sessionFile: validated, sessionOwnership: "owned" });
+    return validated;
+  }
+
+  artifactDirectoryForReveal(id: string): string | undefined {
+    const run = this.get(id);
+    if (!run?.artifactRootId || !run.artifactRootToken) return undefined;
+    return this.artifacts.revealDirectory(run.artifactRootId, run.artifactRootToken);
+  }
+
+  validateOwnedSession(id: string, sessionFile: string): string {
+    const run = this.get(id);
+    if (!run?.artifactRootId || !run.artifactRootToken || run.sessionOwnership !== "owned") {
+      throw new Error("Subagent owned session proof is unavailable");
+    }
+    return this.artifacts.validateSessionFile(
+      run.artifactRootId,
+      run.artifactRootToken,
+      sessionFile,
+    );
   }
 
   update(
@@ -165,12 +265,35 @@ export class SubagentRunStore {
     if (index < 0) throw new Error(`Unknown subagent run: ${id}`);
     const runs = this.state.runs.slice();
     runs[index] = this.normalized({ ...runs[index]!, ...patch, id });
-    this.commit({ version: 1, runs });
+    this.commit({ version: 2, runs });
   }
 
   removeParent(parentSessionId: string): void {
-    const runs = this.state.runs.filter((run) => run.parentSessionId !== parentSessionId);
-    if (runs.length !== this.state.runs.length) this.commit({ version: 1, runs });
+    // Synchronous claim serializes against prepareTurn/create. If deletion wins
+    // between allocation and metadata commit, create fails and no Pi is prompted.
+    this.deletedParents.add(parentSessionId);
+    const removed = this.state.runs.filter((run) => run.parentSessionId === parentSessionId);
+    // Commit each proven cleanup as its own retryable transaction. If a later
+    // root is unsafe/busy, its record remains while already-deleted roots do not
+    // become stale retry blockers.
+    for (const run of removed) {
+      if (run.artifactRootId && run.artifactRootToken) {
+        try {
+          this.artifacts.deleteRun(run.artifactRootId, run.artifactRootToken);
+        } catch (error) {
+          // A prior attempt may have deleted the proven root and then lost the
+          // metadata commit. Missing is therefore idempotent success; unsafe,
+          // busy, and identity mismatch retain the record for repair/retry.
+          if (
+            !(error instanceof SubagentArtifactCapabilityError) ||
+            error.code !== "SUBAGENT_ARTIFACT_NOT_FOUND"
+          ) {
+            throw error;
+          }
+        }
+      }
+      this.commit({ version: 2, runs: this.state.runs.filter((item) => item.id !== run.id) });
+    }
   }
 
   cells(parentSessionId: string): SubagentCell[] {
@@ -196,6 +319,7 @@ export class SubagentRunStore {
       ...(run.inputTokens !== undefined ? { inputTokens: run.inputTokens } : {}),
       ...(run.outputTokens !== undefined ? { outputTokens: run.outputTokens } : {}),
       ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
+      ...(run.artifactRootId ? { artifactRootId: run.artifactRootId } : {}),
     }));
   }
 
@@ -213,18 +337,67 @@ export class SubagentRunStore {
   private interruptActiveRuns(): void {
     if (!this.state.runs.some((run) => active(run.status))) return;
     const now = new Date().toISOString();
-    const runs = this.state.runs.map((run) =>
-      active(run.status)
-        ? {
-            ...run,
-            status: "interrupted" as const,
-            updatedAt: now,
-            completedAt: now,
-            error: "Subagent run was interrupted by an app or server restart.",
+    const runs = this.state.runs.map((run) => {
+      if (!active(run.status)) return run;
+      let sessionOwnership = run.sessionOwnership;
+      if (
+        run.sessionFile &&
+        run.artifactRootId &&
+        run.artifactRootToken &&
+        sessionOwnership !== "owned"
+      ) {
+        try {
+          this.artifacts.validateSessionFile(
+            run.artifactRootId,
+            run.artifactRootToken,
+            run.sessionFile,
+          );
+          sessionOwnership = "owned";
+        } catch (error) {
+          if (
+            !(error instanceof SubagentArtifactCapabilityError) ||
+            error.code !== "SUBAGENT_ARTIFACT_NOT_FOUND"
+          ) {
+            this.warn("could not validate interrupted subagent session ownership", error);
           }
-        : run,
+        }
+      }
+      return {
+        ...run,
+        ...(sessionOwnership ? { sessionOwnership } : {}),
+        status: "interrupted" as const,
+        updatedAt: now,
+        completedAt: now,
+        error: "Subagent run was interrupted by an app or server restart.",
+      };
+    });
+    this.commit({ version: 2, runs });
+  }
+
+  private reconcileArtifacts(): void {
+    // A corrupt metadata store cannot prove roots are orphaned. Retain all
+    // evidence for repair instead of turning quarantine into data deletion.
+    if (this.storeQuarantined) return;
+    const owned = new Map(
+      this.state.runs.flatMap((run) =>
+        run.artifactRootId && run.artifactRootToken
+          ? [[run.artifactRootId, run.artifactRootToken] as const]
+          : [],
+      ),
     );
-    this.commit({ version: 1, runs });
+    for (const root of this.artifacts.listRoots()) {
+      const token = owned.get(root.artifactRootId);
+      if (token === root.identityToken) continue;
+      if (token) {
+        this.warn("retained subagent artifact root with mismatched ownership proof");
+        continue;
+      }
+      // Allocation intentionally precedes metadata commit. An unknown valid root
+      // may therefore contain the only evidence of a crashed launch. Retain it
+      // for explicit recovery instead of treating absence from the store as
+      // proof that deletion is safe.
+      this.warn(`retained unrecorded subagent artifact root ${root.artifactRootId}`);
+    }
   }
 
   private commit(candidate: StoreState): void {
@@ -232,18 +405,20 @@ export class SubagentRunStore {
     const oldestTerminalIndex = (): number =>
       runs
         .map((run, index) => ({ run, index }))
-        .filter(({ run }) => !active(run.status))
+        // Artifact-bearing evidence is never silently pruned for capacity. Parent
+        // deletion owns its explicit cleanup transaction.
+        .filter(({ run }) => !active(run.status) && !run.artifactRootId)
         .sort((a, b) =>
           a.run.updatedAt === b.run.updatedAt
             ? a.run.id.localeCompare(b.run.id)
             : a.run.updatedAt.localeCompare(b.run.updatedAt),
         )[0]?.index ?? -1;
-    while (runs.length > MAX_RUNS || bytes({ version: 1, runs }) + 1 > MAX_STORE_BYTES) {
+    while (runs.length > MAX_RUNS || bytes({ version: 2, runs }) + 1 > MAX_STORE_BYTES) {
       const index = oldestTerminalIndex();
       if (index < 0) throw new Error("Active subagent runs exceed the persistence budget");
       runs = [...runs.slice(0, index), ...runs.slice(index + 1)];
     }
-    const next = storeSchema.parse({ version: 1, runs });
+    const next = storeSchema.parse({ version: 2, runs });
     const serialized = `${JSON.stringify(next)}\n`;
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     let fd: number | undefined;
@@ -282,7 +457,16 @@ export class SubagentRunStore {
       const raw = readFileSync(this.filePath, "utf8");
       if (Buffer.byteLength(raw, "utf8") > MAX_STORE_BYTES)
         throw new Error("Subagent run store is oversized");
-      this.state = storeSchema.parse(JSON.parse(raw));
+      const loaded = storeSchema.parse(JSON.parse(raw));
+      this.state = {
+        version: 2,
+        runs: loaded.runs.map((run) => ({
+          ...run,
+          ...(run.sessionFile && !run.sessionOwnership
+            ? { sessionOwnership: "external" as const }
+            : {}),
+        })),
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       try {
@@ -290,7 +474,8 @@ export class SubagentRunStore {
       } catch {
         // Invalid state is never used even if quarantine cannot be written.
       }
-      this.state = { version: 1, runs: [] };
+      this.storeQuarantined = true;
+      this.state = { version: 2, runs: [] };
       this.warn("quarantined invalid subagent run store", error);
     }
   }

@@ -83,6 +83,27 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     activeFileSearches.clear();
   });
 
+  // Electron receives only the stable opaque run UUID. The native capability
+  // re-proves the app-owned root immediately before this path crosses to main.
+  fastify.get("/subagent-runs/:id/artifact-directory", async (request, reply) => {
+    const parsed = z
+      .string()
+      .uuid()
+      .safeParse((request.params as { id: string }).id);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid subagent run id" });
+    const supplied = request.headers["x-agent-deck-desktop-recovery-token"];
+    const expected = process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN;
+    if (!expected || supplied !== expected) return reply.status(403).send({ error: "forbidden" });
+    try {
+      const directory = sessions.subagentArtifactDirectoryForReveal(parsed.data);
+      if (!directory)
+        return reply.status(404).send({ error: "Subagent artifacts are unavailable" });
+      return { directory };
+    } catch {
+      return reply.status(409).send({ error: "Subagent artifacts could not be revalidated" });
+    }
+  });
+
   // Live pi session state (model, thinking level, streaming flags) and the
   // available-model catalog — the composer's picker data.
   fastify.get("/sessions/:id/state", async (request, reply) => {

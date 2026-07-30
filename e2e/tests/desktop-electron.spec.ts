@@ -507,20 +507,30 @@ test("resource file bridges validate agent/prompt catalogs and reject unsafe ide
   });
 });
 
-test("Loop reveal bridges accept only backend-owned opaque run ids", async () => {
+test("artifact reveal bridges accept only backend-owned opaque run ids", async () => {
   const window = await app.firstWindow();
   const result = await window.evaluate(async () => {
     const bridge = (
       globalThis as typeof globalThis & {
         agentDeck?: {
+          revealSubagentArtifacts?(runId: string): Promise<boolean>;
           revealLoopArtifacts?(runId: string): Promise<boolean>;
           revealLoopWorktree?(runId: string): Promise<boolean>;
         };
       }
     ).agentDeck;
-    if (!bridge?.revealLoopArtifacts || !bridge.revealLoopWorktree) return "bridge unavailable";
+    if (
+      !bridge?.revealSubagentArtifacts ||
+      !bridge.revealLoopArtifacts ||
+      !bridge.revealLoopWorktree
+    )
+      return "bridge unavailable";
     const messages: string[] = [];
-    for (const reveal of [bridge.revealLoopArtifacts, bridge.revealLoopWorktree]) {
+    for (const reveal of [
+      bridge.revealSubagentArtifacts,
+      bridge.revealLoopArtifacts,
+      bridge.revealLoopWorktree,
+    ]) {
       try {
         await reveal("../../arbitrary-path");
         messages.push("unexpected success");
@@ -531,6 +541,7 @@ test("Loop reveal bridges accept only backend-owned opaque run ids", async () =>
     return messages;
   });
   expect(result).toEqual([
+    expect.stringContaining("Subagent artifacts are unavailable"),
     expect.stringContaining("Loop run is unavailable"),
     expect.stringContaining("Loop run is unavailable"),
   ]);

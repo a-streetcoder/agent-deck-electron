@@ -45,6 +45,25 @@ export type SessionWorktreeErrorCode =
   | "SESSION_WORKTREE_IO"
   | "SESSION_WORKTREE_NATIVE_UNAVAILABLE";
 
+export type SubagentArtifactErrorCode =
+  | "SUBAGENT_ARTIFACT_INVALID_ID"
+  | "SUBAGENT_ARTIFACT_UNSAFE"
+  | "SUBAGENT_ARTIFACT_NOT_FOUND"
+  | "SUBAGENT_ARTIFACT_EXISTS"
+  | "SUBAGENT_ARTIFACT_LIMIT"
+  | "SUBAGENT_ARTIFACT_IO"
+  | "SUBAGENT_ARTIFACT_NATIVE_UNAVAILABLE";
+
+export class SubagentArtifactCapabilityError extends Error {
+  constructor(
+    readonly code: SubagentArtifactErrorCode,
+    message = "Native subagent artifact safety boundary refused the operation.",
+  ) {
+    super(message);
+    this.name = "SubagentArtifactCapabilityError";
+  }
+}
+
 export class SessionWorktreeCapabilityError extends Error {
   constructor(
     readonly code: SessionWorktreeErrorCode,
@@ -125,6 +144,32 @@ interface NativeSessionWorktreeStore {
   deleteWorktree(targetPath: string, identityToken: string): Promise<void>;
 }
 
+export interface SubagentArtifactAllocation {
+  artifactRootId: string;
+  identityToken: string;
+  turnId: string;
+  turnDirectory: string;
+  sessionsDirectory: string;
+  systemPrompt: string;
+}
+
+interface NativeSubagentArtifactStore {
+  listRoots(): Array<{ artifactRootId: string; identityToken: string }>;
+  allocateTurn(
+    runId: string,
+    existingIdentityToken: string | undefined,
+    turnId: string,
+    rootManifest: string,
+    turnManifest: string,
+    input: string,
+    systemPrompt: string,
+  ): SubagentArtifactAllocation;
+  writeTurnOutput(runId: string, identityToken: string, turnId: string, output: string): void;
+  validateSessionFile(runId: string, identityToken: string, sessionFile: string): string;
+  revealDirectory(runId: string, identityToken: string): string;
+  deleteRun(runId: string, identityToken: string): void;
+}
+
 export interface ResourceRecovery {
   token: string;
   skillName: string;
@@ -171,6 +216,7 @@ interface NativeBinding {
   ): ResourceRecovery | undefined;
   acknowledgeResourceRecovery(home: string, catalog: ResourceCatalog, token: string): void;
   SessionWorktreeStore: new (dataDir: string) => NativeSessionWorktreeStore;
+  SubagentArtifactStore: new (dataDir: string) => NativeSubagentArtifactStore;
   ManagedSkillRepositoryStore: new (
     dataDir: string,
     expectedRealpath: string,
@@ -196,7 +242,7 @@ const candidates = [
 let loadedBinding: NativeBinding | undefined;
 let bindingLoadFailed = false;
 
-function loadBinding(domain: "loop" | "resource" | "worktree"): NativeBinding {
+function loadBinding(domain: "loop" | "resource" | "worktree" | "subagent"): NativeBinding {
   if (loadedBinding) return loadedBinding;
   const selected = candidates.find(existsSync);
   if (!selected || bindingLoadFailed) {
@@ -210,6 +256,12 @@ function loadBinding(domain: "loop" | "resource" | "worktree"): NativeBinding {
       throw new SessionWorktreeCapabilityError(
         "SESSION_WORKTREE_NATIVE_UNAVAILABLE",
         `Required native session worktree safety addon is unavailable for ${process.platform}-${process.arch}.`,
+      );
+    }
+    if (domain === "subagent") {
+      throw new SubagentArtifactCapabilityError(
+        "SUBAGENT_ARTIFACT_NATIVE_UNAVAILABLE",
+        `Required native subagent artifact safety addon is unavailable for ${process.platform}-${process.arch}.`,
       );
     }
     throw new LoopCatalogCapabilityError(
@@ -240,6 +292,15 @@ const SESSION_WORKTREE_CODES = new Set<SessionWorktreeErrorCode>([
   "SESSION_WORKTREE_NOT_FOUND",
   "SESSION_WORKTREE_BUSY",
   "SESSION_WORKTREE_IO",
+]);
+
+const SUBAGENT_ARTIFACT_CODES = new Set<SubagentArtifactErrorCode>([
+  "SUBAGENT_ARTIFACT_INVALID_ID",
+  "SUBAGENT_ARTIFACT_UNSAFE",
+  "SUBAGENT_ARTIFACT_NOT_FOUND",
+  "SUBAGENT_ARTIFACT_EXISTS",
+  "SUBAGENT_ARTIFACT_LIMIT",
+  "SUBAGENT_ARTIFACT_IO",
 ]);
 
 const RESOURCE_CODES = new Set<ResourceCatalogErrorCode>([
@@ -276,6 +337,19 @@ async function invokeResourceAsync<T>(operation: () => Promise<T>): Promise<T> {
     const candidate = reason.split(":", 1)[0] as ResourceCatalogErrorCode;
     throw new ResourceCatalogCapabilityError(
       RESOURCE_CODES.has(candidate) ? candidate : "RESOURCE_IO",
+    );
+  }
+}
+
+function invokeSubagentArtifact<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof SubagentArtifactCapabilityError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const candidate = reason.split(":", 1)[0] as SubagentArtifactErrorCode;
+    throw new SubagentArtifactCapabilityError(
+      SUBAGENT_ARTIFACT_CODES.has(candidate) ? candidate : "SUBAGENT_ARTIFACT_IO",
     );
   }
 }
@@ -457,6 +531,60 @@ export class SessionWorktreeStore {
 
   deleteWorktree(targetPath: string, identityToken: string): Promise<void> {
     return invokeSessionWorktreeAsync(() => this.native.deleteWorktree(targetPath, identityToken));
+  }
+}
+
+export class SubagentArtifactStore {
+  private readonly native: NativeSubagentArtifactStore;
+
+  constructor(dataDir: string) {
+    this.native = invokeSubagentArtifact(
+      () => new (loadBinding("subagent").SubagentArtifactStore)(dataDir),
+    );
+  }
+
+  listRoots(): Array<{ artifactRootId: string; identityToken: string }> {
+    return invokeSubagentArtifact(() => this.native.listRoots());
+  }
+
+  allocateTurn(request: {
+    runId: string;
+    identityToken?: string;
+    turnId: string;
+    rootManifest: string;
+    turnManifest: string;
+    input: string;
+    systemPrompt: string;
+  }): SubagentArtifactAllocation {
+    return invokeSubagentArtifact(() =>
+      this.native.allocateTurn(
+        request.runId,
+        request.identityToken,
+        request.turnId,
+        request.rootManifest,
+        request.turnManifest,
+        request.input,
+        request.systemPrompt,
+      ),
+    );
+  }
+
+  writeTurnOutput(runId: string, identityToken: string, turnId: string, output: string): void {
+    invokeSubagentArtifact(() => this.native.writeTurnOutput(runId, identityToken, turnId, output));
+  }
+
+  validateSessionFile(runId: string, identityToken: string, sessionFile: string): string {
+    return invokeSubagentArtifact(() =>
+      this.native.validateSessionFile(runId, identityToken, sessionFile),
+    );
+  }
+
+  revealDirectory(runId: string, identityToken: string): string {
+    return invokeSubagentArtifact(() => this.native.revealDirectory(runId, identityToken));
+  }
+
+  deleteRun(runId: string, identityToken: string): void {
+    invokeSubagentArtifact(() => this.native.deleteRun(runId, identityToken));
   }
 }
 

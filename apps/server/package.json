@@ -17,6 +17,7 @@
     "@a-streetcoder/skill-engine-native": "0.1.5",
     "@agent-deck/contracts": "workspace:*",
     "@agent-deck/domain": "workspace:*",
+    "@agent-deck/loop-catalog-native": "workspace:*",
     "@agent-deck/mcp": "workspace:*",
     "@agent-deck/memory": "workspace:*",
     "@agent-deck/pi-host": "workspace:*",

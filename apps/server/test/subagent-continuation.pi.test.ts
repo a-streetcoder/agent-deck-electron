@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -154,7 +154,31 @@ describe("managed_subagent real-Pi continuation", () => {
         task: SECOND_TASK,
         summary: "SECOND_RESULT: child history retained.",
         sessionFile: expect.any(String),
+        sessionOwnership: "owned",
+        artifactRootId: firstCard.id,
+        artifactRootToken: expect.any(String),
+        currentTurnId: expect.any(String),
       }),
     );
+    const run = persisted.runs[0]! as {
+      currentTurnId: string;
+      sessionFile: string;
+    };
+    const root = path.join(realpathSync(dataDir), "Subagent Runs", firstCard.id);
+    const turn = path.join(root, "turns", run.currentTurnId);
+    expect(readFileSync(path.join(root, "input.md"), "utf8")).toBe(FIRST_TASK);
+    expect(readFileSync(path.join(turn, "input.md"), "utf8")).toBe(SECOND_TASK);
+    expect(readFileSync(path.join(turn, "system-prompt.md"), "utf8")).toContain(
+      `Artifact directory: ${turn}`,
+    );
+    expect(readFileSync(path.join(turn, "system-prompt.md"), "utf8")).toContain(
+      "Expected report outcome",
+    );
+    expect(readFileSync(path.join(turn, "output.md"), "utf8")).toBe(
+      "SECOND_RESULT: child history retained.",
+    );
+    expect(path.dirname(run.sessionFile)).toBe(path.join(root, "sessions"));
+    expect(lstatSync(run.sessionFile).isFile()).toBe(true);
+    expect(readdirSync(path.join(root, "turns"))).toEqual([run.currentTurnId]);
   });
 });

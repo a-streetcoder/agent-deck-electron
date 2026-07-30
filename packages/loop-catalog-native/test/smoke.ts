@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import {
   ManagedSkillRepositoryStore,
   readResourceCatalogFile,
   scanLoopCatalog,
+  SubagentArtifactStore,
   writeResourceCatalogFile,
 } from "../src/index.ts";
 const home = mkdtempSync(path.join(tmpdir(), "loop-native-smoke-"));
@@ -58,6 +60,28 @@ rmSync(path.join(source, "asset"), { recursive: true });
 writeFileSync(path.join(source, "asset"), "now-file");
 writeFileSync(path.join(source, "SKILL.md"), "second");
 copyResourceTree(home, "global-skills", ["smoke-skill"], source, true);
+const artifactStore = new SubagentArtifactStore(home);
+const runId = randomUUID();
+const allocation = artifactStore.allocateTurn({
+  runId,
+  turnId: runId,
+  rootManifest: '{"schemaVersion":1}\n',
+  turnManifest: '{"schemaVersion":1}\n',
+  input: "smoke input",
+  systemPrompt: "smoke prompt",
+});
+artifactStore.writeTurnOutput(runId, allocation.identityToken, runId, "smoke output");
+const childSession = path.join(allocation.sessionsDirectory, "smoke.jsonl");
+writeFileSync(childSession, "{}\n");
+if (
+  artifactStore.validateSessionFile(runId, allocation.identityToken, childSession) !== childSession
+) {
+  throw new Error("native subagent session containment failed");
+}
+artifactStore.deleteRun(runId, allocation.identityToken);
+if (existsSync(path.join(home, "Subagent Runs", runId))) {
+  throw new Error("native subagent artifact delete failed");
+}
 if (
   readResourceCatalogFile(home, "global-skills", ["smoke-skill", "SKILL.md"]) !== "second" ||
   readResourceCatalogFile(home, "global-skills", ["smoke-skill", "asset"]) !== "now-file" ||

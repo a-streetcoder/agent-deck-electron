@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -22,6 +22,94 @@ const record = (overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord =
 };
 
 describe("SubagentRunStore", () => {
+  it("owns bounded per-turn artifacts and deletes only its proven root", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-artifacts-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "single" });
+    const allocation = store.prepareTurn(run, "system prompt");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+    store.writeOutput(run.id, "final output");
+    const sessionFile = path.join(allocation.sessionsDirectory, "child.jsonl");
+    writeFileSync(sessionFile, "{}\n");
+    store.markOwnedSession(run.id, sessionFile);
+    expect(store.artifactDirectoryForReveal(run.id)).toBe(
+      path.join(realpathSync(dataDir), "Subagent Runs", run.id),
+    );
+    expect(store.cells(PARENT_A)[0]?.artifactRootId).toBe(run.id);
+    store.removeParent(PARENT_A);
+    expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);
+  });
+
+  it("retains a valid allocation when metadata commit never happened", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-commit-gap-"));
+    const warnings = vi.fn();
+    const first = new SubagentRunStore(dataDir, warnings);
+    const run = record();
+    first.prepareTurn(run, "system");
+    const root = path.join(realpathSync(dataDir), "Subagent Runs", run.id);
+    expect(existsSync(path.join(root, "manifest.json"))).toBe(true);
+
+    new SubagentRunStore(dataDir, warnings);
+    expect(existsSync(root)).toBe(true);
+    expect(warnings).toHaveBeenCalledWith(
+      expect.stringContaining(`retained unrecorded subagent artifact root ${run.id}`),
+    );
+  });
+
+  it("marks a contained session owned when an active run is interrupted at restart", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-interrupted-owned-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record();
+    const allocation = store.prepareTurn(run, "system");
+    const sessionFile = path.join(allocation.sessionsDirectory, "interrupted.jsonl");
+    writeFileSync(sessionFile, "{}\n");
+    store.create({
+      ...run,
+      sessionFile,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+
+    const reloaded = new SubagentRunStore(dataDir, vi.fn());
+    expect(reloaded.get(run.id)).toEqual(
+      expect.objectContaining({ status: "interrupted", sessionOwnership: "owned" }),
+    );
+    expect(reloaded.cells(run.parentSessionId)[0]).toEqual(
+      expect.objectContaining({ status: "interrupted", artifactRootId: run.id }),
+    );
+  });
+
+  it("serializes parent deletion against allocation commit", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-delete-allocation-race-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record();
+    store.prepareTurn(run, "system");
+    store.removeParent(run.parentSessionId);
+    expect(() => store.create(run)).toThrow(/deleted during subagent allocation/);
+  });
+
+  it("retries metadata removal after a proven root was already deleted", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-delete-retry-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record();
+    const allocation = store.prepareTurn(run, "system");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+    rmSync(path.join(realpathSync(dataDir), "Subagent Runs", run.id), { recursive: true });
+    store.removeParent(PARENT_A);
+    expect(store.get(run.id)).toBeUndefined();
+  });
+
   it("persists independent completed runs and hydrates stable transcript cards", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-runs-"));
     const store = new SubagentRunStore(dataDir, vi.fn());

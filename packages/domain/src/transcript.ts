@@ -98,6 +98,8 @@ export interface SubagentCell {
   id: string;
   task: string;
   status: "running" | "done" | "error" | "stopped" | "interrupted";
+  /** Opaque app-owned artifact root identity; currently equal to the stable run UUID. */
+  artifactRootId?: string;
   /** The named agent this run was delegated to (native named subagents), if any.
    * Absent for a plain anonymous task-runner delegation. */
   agentName?: string;

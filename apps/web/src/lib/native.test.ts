@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chooseDirectory, chooseFiles, onFocusSession, signalAttention } from "./native.ts";
+import {
+  canRevealSubagentArtifacts,
+  chooseDirectory,
+  chooseFiles,
+  onFocusSession,
+  signalAttention,
+} from "./native.ts";
 
 const stubBridge = (bridge: unknown): void => {
   vi.stubGlobal("window", { agentDeck: bridge });
@@ -7,6 +13,15 @@ const stubBridge = (bridge: unknown): void => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("subagent artifact capability", () => {
+  it("reports only the purpose-built preload method", () => {
+    stubBridge({ isElectron: true });
+    expect(canRevealSubagentArtifacts()).toBe(false);
+    stubBridge({ revealSubagentArtifacts: vi.fn() });
+    expect(canRevealSubagentArtifacts()).toBe(true);
+  });
 });
 
 describe("signalAttention", () => {

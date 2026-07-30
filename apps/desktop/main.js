@@ -618,6 +618,30 @@ ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
   }
 });
 
+ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
+  const runId = typeof rawRunId === "string" ? rawRunId : "";
+  assertTrustedPickerSender(event, "Subagent artifacts are unavailable");
+  if (
+    !serverPort ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+  ) {
+    throw new Error("Subagent artifacts are unavailable");
+  }
+  const response = await fetch(
+    `http://127.0.0.1:${serverPort}/subagent-runs/${encodeURIComponent(runId)}/artifact-directory`,
+    { headers: { "x-agent-deck-desktop-recovery-token": desktopRecoveryToken } },
+  );
+  if (!response.ok) throw new Error("Subagent artifacts are unavailable");
+  const body = await response.json().catch(() => null);
+  if (!body || typeof body.directory !== "string" || !path.isAbsolute(body.directory)) {
+    throw new Error("Subagent artifacts are unavailable");
+  }
+  // The backend/native capability revalidated immediately before this external
+  // pathname boundary. shell.showItemInFolder remains an OS API boundary.
+  shell.showItemInFolder(body.directory);
+  return true;
+});
+
 ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   const expectedRendererOrigin = serverPort

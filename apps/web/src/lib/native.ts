@@ -52,6 +52,7 @@ export interface AgentDeckBridge {
     message?: string;
     buttonLabel?: string;
   }): Promise<string[]>;
+  revealSubagentArtifacts?(runId: string): Promise<boolean>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
   trashSkillRecovery?(token: string): Promise<{ moved: boolean; acknowledgementPending: boolean }>;
@@ -87,6 +88,18 @@ export function nativeBridge(): AgentDeckBridge | undefined {
 /** True when running inside the Electron shell (native folder picker available). */
 export function isElectron(): boolean {
   return nativeBridge()?.isElectron === true;
+}
+
+/** Whether this renderer has the purpose-built desktop reveal capability. */
+export function canRevealSubagentArtifacts(): boolean {
+  return typeof nativeBridge()?.revealSubagentArtifacts === "function";
+}
+
+/** Reveal a backend/native-validated subagent artifact root through Electron. */
+export async function revealSubagentArtifacts(runId: string): Promise<boolean> {
+  const bridge = nativeBridge();
+  if (!bridge?.revealSubagentArtifacts) return false;
+  return (await bridge.revealSubagentArtifacts(runId)) === true;
 }
 
 /** Reveal a backend-validated Loop artifact directory through Electron. */

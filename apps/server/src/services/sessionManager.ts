@@ -29,6 +29,7 @@ import {
 import type { Scope } from "effect";
 import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Stream } from "effect";
 import type { ReceiptBus } from "../receipts.ts";
+import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
 import { PiHost, type PiHostHandle, type PiSpawnOptions, type PiStreamItem } from "./piHost.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
@@ -157,6 +158,20 @@ export interface SpawnSessionParams {
       id: string,
       patch: Partial<Omit<SubagentRunRecord, "id" | "parentSessionId" | "createdAt">>,
     ) => void;
+    prepareTurn?: (
+      record: SubagentRunRecord,
+      systemPrompt: string,
+      continuation?: Pick<SubagentRunRecord, "artifactRootId" | "artifactRootToken">,
+    ) => {
+      artifactRootId: string;
+      identityToken: string;
+      turnId: string;
+      turnDirectory: string;
+      sessionsDirectory: string;
+      systemPrompt: string;
+    };
+    writeOutput?: (id: string, output: string, error?: string) => void;
+    markOwnedSession?: (id: string, sessionFile: string) => string;
   };
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
@@ -918,6 +933,8 @@ export interface ChildRunOptions {
   /** Supplied only for an already validated same-parent continuation. */
   runId?: string;
   resumeSessionPath?: string;
+  artifactRootId?: string;
+  artifactRootToken?: string;
   source: SubagentRunSource;
 }
 
@@ -937,7 +954,7 @@ export class ChildRunError extends Error {
   }
 }
 
-const persistChildRun = (operation: () => void): Effect.Effect<void, Error> =>
+const persistChildRun = <T>(operation: () => T): Effect.Effect<T, Error> =>
   Effect.try({
     try: operation,
     catch: (error) =>
@@ -988,14 +1005,53 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     }
     const persona = resolved ? `\n\n# Agent: ${agentName}\n${resolved.body}` : "";
     const isContinuation = runOptions?.resumeSessionPath !== undefined;
+    const boundaryPrompt = isContinuation
+      ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
+      : SUBAGENT_SYSTEM_PROMPT;
+    const authoredSystemPrompt = `${boundaryPrompt}${persona}\n\nTask:\n${task}`;
+    let effectiveSystemPrompt = authoredSystemPrompt;
     const cellId = runId;
     const childSessionId = randomUUID();
     // Loop/constrained executions retain their dedicated snapshot ownership.
     // Generic managed_subagent/managed_parallel runs use this first-class store.
     const durable = toolPolicy === undefined ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
+    let artifactSessionsDirectory: string | undefined;
     if (durable) {
+      const baseRecord: SubagentRunRecord = {
+        id: runId,
+        parentSessionId: meta.id,
+        task,
+        ...(agentName ? { agent: agentName } : {}),
+        status: "starting",
+        createdAt,
+        updatedAt: createdAt,
+        source: runOptions?.source ?? "single",
+      };
+      const allocation = durable.prepareTurn
+        ? yield* persistChildRun(() =>
+            durable.prepareTurn!(
+              baseRecord,
+              authoredSystemPrompt,
+              isContinuation
+                ? {
+                    artifactRootId: runOptions?.artifactRootId,
+                    artifactRootToken: runOptions?.artifactRootToken,
+                  }
+                : undefined,
+            ),
+          )
+        : undefined;
+      artifactSessionsDirectory = allocation?.sessionsDirectory;
+      effectiveSystemPrompt = allocation?.systemPrompt ?? authoredSystemPrompt;
       yield* persistChildRun(() => {
+        const artifactPatch = allocation
+          ? {
+              artifactRootId: allocation.artifactRootId,
+              artifactRootToken: allocation.identityToken,
+              currentTurnId: allocation.turnId,
+            }
+          : {};
         if (isContinuation) {
           durable.update(runId, {
             task,
@@ -1009,18 +1065,10 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             inputTokens: undefined,
             outputTokens: undefined,
             durationMs: undefined,
+            ...artifactPatch,
           });
         } else {
-          durable.create({
-            id: runId,
-            parentSessionId: meta.id,
-            task,
-            ...(agentName ? { agent: agentName } : {}),
-            status: "starting",
-            createdAt,
-            updatedAt: createdAt,
-            source: runOptions?.source ?? "single",
-          });
+          durable.create({ ...baseRecord, ...artifactPatch });
         }
       });
       durableIdentityCreated = true;
@@ -1036,8 +1084,33 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     let childOutputTokens = 0;
     let sawUsage = false;
     let sawAgentEnd = false;
+    let childSessionFile: string | undefined;
+    let childSessionOwned = false;
     let cardOpened = false;
     let startupCardFinalized = false;
+    const claimOwnedSessionIfAvailable = (): boolean => {
+      if (
+        childSessionOwned ||
+        !durable?.markOwnedSession ||
+        !childSessionFile ||
+        (isContinuation && !runOptions?.artifactRootId)
+      ) {
+        return false;
+      }
+      try {
+        durable.markOwnedSession(runId, childSessionFile);
+        childSessionOwned = true;
+        return true;
+      } catch (error) {
+        if (
+          error instanceof SubagentArtifactCapabilityError &&
+          error.code === "SUBAGENT_ARTIFACT_NOT_FOUND"
+        ) {
+          return false;
+        }
+        throw error;
+      }
+    };
     const metadata = (): {
       model?: string;
       inputTokens?: number;
@@ -1085,13 +1158,16 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 status: interrupted ? "stopped" : "error",
                 text: streamed,
                 error,
+                artifactRootId: runId,
                 progress: [],
                 ...(agentName ? { agentName } : {}),
                 ...metadata(),
               },
             });
           }
-          return persistChildRun(() =>
+          return persistChildRun(() => {
+            claimOwnedSessionIfAvailable();
+            durable.writeOutput?.(runId, streamed, error);
             durable.update(runId, {
               status,
               updatedAt: now,
@@ -1099,8 +1175,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               ...(streamed ? { summary: streamed } : {}),
               ...metadata(),
               error,
-            }),
-          ).pipe(
+            });
+          }).pipe(
             Effect.tap(() => Effect.sync(() => (terminalPersisted = true))),
             Effect.tapError((persistError) =>
               Effect.sync(() =>
@@ -1134,10 +1210,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           }),
         );
         const promptFile = join(promptDir, "system.md");
-        const boundaryPrompt = isContinuation
-          ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
-          : SUBAGENT_SYSTEM_PROMPT;
-        writeFileSync(promptFile, `${boundaryPrompt}${persona}\n\nTask:\n${task}`);
+        writeFileSync(promptFile, effectiveSystemPrompt);
 
         const childTools = resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
 
@@ -1153,7 +1226,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             skills: resolved?.skillDirs,
             ...(runOptions?.resumeSessionPath
               ? { resumeSessionPath: runOptions.resumeSessionPath }
-              : {}),
+              : artifactSessionsDirectory
+                ? { sessionDir: artifactSessionsDirectory }
+                : {}),
             extensions: childBridge
               ? [...(helperContext.extensions ?? []), childBridge.extension]
               : helperContext.extensions,
@@ -1177,6 +1252,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               new Error("subagent get_state returned a non-absolute session file"),
             );
           }
+          childSessionFile = sessionFile;
           // Pi creates a fresh session file lazily when the first assistant
           // message is persisted. Store its canonical path now; continuation
           // re-validates existence/type after the run is terminal.
@@ -1187,9 +1263,14 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             durable.update(runId, {
               status: "running",
               sessionFile,
+              ...(isContinuation ? {} : { sessionOwnership: undefined }),
               updatedAt: new Date().toISOString(),
             }),
           );
+          // Pi may create the file at spawn or lazily on its first persisted
+          // event. Claim immediately when possible, then retry on every event
+          // and terminal path without buffering deltas.
+          yield* persistChildRun(() => claimOwnedSessionIfAvailable());
         }
 
         // Open (or replace, for continuation) the stable Subagent card in the PARENT transcript.
@@ -1200,6 +1281,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             id: cellId,
             task,
             status: "running",
+            ...(durable ? { artifactRootId: runId } : {}),
             text: "",
             progress: [],
             ...(agentName ? { agentName } : {}),
@@ -1209,6 +1291,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
 
         const processChild = (item: PiStreamItem): void => {
           if (!isPiEvent(item)) return;
+          claimOwnedSessionIfAvailable();
           const e = item.event as {
             type?: string;
             message?: {
@@ -1267,7 +1350,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               ? childOutcome.left
               : new Error(String(childOutcome.left));
           const persisted = durable
-            ? yield* persistChildRun(() =>
+            ? yield* persistChildRun(() => {
+                claimOwnedSessionIfAvailable();
+                durable.writeOutput?.(runId, streamed, failure.message);
                 durable.update(runId, {
                   status: "failed",
                   updatedAt: completedAt,
@@ -1275,8 +1360,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                   summary: streamed,
                   error: failure.message,
                   ...finalMetadata,
-                }),
-              ).pipe(Effect.either)
+                });
+              }).pipe(Effect.either)
             : ({ _tag: "Right" } as const);
           if (persisted._tag === "Right") terminalPersisted = true;
           const reportedFailure =
@@ -1294,6 +1379,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               status: "error",
               text: streamed,
               error: reportedFailure.message,
+              artifactRootId: runId,
               progress: [],
               ...(agentName ? { agentName } : {}),
               ...finalMetadata,
@@ -1304,15 +1390,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
 
         const result = childOutcome.right;
         const completionWrite = durable
-          ? yield* persistChildRun(() =>
+          ? yield* persistChildRun(() => {
+              claimOwnedSessionIfAvailable();
+              durable.writeOutput?.(runId, result);
               durable.update(runId, {
                 status: "completed",
                 updatedAt: completedAt,
                 completedAt,
                 summary: result,
                 ...finalMetadata,
-              }),
-            ).pipe(Effect.either)
+              });
+            }).pipe(Effect.either)
           : ({ _tag: "Right" } as const);
         if (completionWrite._tag === "Left") {
           const failure = new Error(
@@ -1349,6 +1437,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               status: "error",
               text: result,
               error: reportedFailure.message,
+              artifactRootId: runId,
               progress: [],
               ...(agentName ? { agentName } : {}),
               ...finalMetadata,
@@ -1366,6 +1455,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             task,
             status: "done",
             text: result,
+            artifactRootId: runId,
             progress: [],
             ...(agentName ? { agentName } : {}),
             ...finalMetadata,

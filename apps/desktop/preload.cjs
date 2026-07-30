@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("agentDeck", {
   chooseFiles: (options) => ipcRenderer.invoke("dialog:openFiles", options),
   /** Open a native menu at a renderer-provided titlebar anchor. */
   openAppMenu: (name, anchor) => ipcRenderer.invoke("app-menu:open", name, anchor),
+  /** Reveal a backend/native-validated subagent artifact root by opaque run id. */
+  revealSubagentArtifacts: (runId) => ipcRenderer.invoke("subagents:revealArtifacts", runId),
   /** Reveal a backend-validated Loop artifact directory by opaque run id. */
   revealLoopArtifacts: (runId) => ipcRenderer.invoke("loops:revealArtifacts", runId),
   /** Reveal a backend-validated retained Loop worktree by opaque run id. */

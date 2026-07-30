@@ -648,6 +648,11 @@ export class SessionManager {
             childRuns: {
               create: (record) => this.subagentRuns!.create(record),
               update: (id, patch) => this.subagentRuns!.update(id, patch),
+              prepareTurn: (record, systemPrompt, continuation) =>
+                this.subagentRuns!.prepareTurn(record, systemPrompt, continuation),
+              writeOutput: (id, output, error) => this.subagentRuns!.writeOutput(id, output, error),
+              markOwnedSession: (id, sessionFile) =>
+                this.subagentRuns!.markOwnedSession(id, sessionFile),
             },
           }
         : {}),
@@ -742,6 +747,11 @@ export class SessionManager {
     this.subagentRuns?.removeParent(sessionId);
   }
 
+  /** Revalidate an app-owned root immediately before Electron reveals it. */
+  subagentArtifactDirectoryForReveal(runId: string): string | undefined {
+    return this.subagentRuns?.artifactDirectoryForReveal(runId);
+  }
+
   /** Commit a successfully prepared session to persistence/broadcast, then
    * expose the test milestone. The route uses this after worktree + spawn setup;
    * other creation paths retain their immediate announcement behavior. */
@@ -810,14 +820,24 @@ export class SessionManager {
     if (!isAbsolute(run.sessionFile)) {
       throw new Error("Deck subagent Pi session path is not absolute");
     }
-    let stat;
-    try {
-      stat = lstatSync(run.sessionFile);
-    } catch {
-      throw new Error("Deck subagent Pi session file is missing or inaccessible");
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error("Deck subagent Pi session path is not a regular file");
+    if (run.sessionOwnership === "owned") {
+      try {
+        this.subagentRuns.validateOwnedSession(run.id, run.sessionFile);
+      } catch {
+        throw new Error("Deck subagent owned Pi session could not be revalidated");
+      }
+    } else {
+      // Legacy Pi handles remain explicitly external: continuable, but never
+      // adopted into Agent Deck's deletion boundary.
+      let stat;
+      try {
+        stat = lstatSync(run.sessionFile);
+      } catch {
+        throw new Error("Deck subagent Pi session file is missing or inaccessible");
+      }
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error("Deck subagent Pi session path is not a regular file");
+      }
     }
     this.claimedSubagentContinuations.add(continueSubagentId);
     try {
@@ -829,6 +849,8 @@ export class SessionManager {
         source: "single",
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
+        artifactRootId: run.artifactRootId,
+        artifactRootToken: run.artifactRootToken,
       });
     } finally {
       this.claimedSubagentContinuations.delete(continueSubagentId);

@@ -3433,10 +3433,10 @@ pub fn write_resource_catalog_file(
 
 fn remove_tree_entry(parent: &Dir, name: &str) -> Result<()> {
     let metadata = parent.symlink_metadata(name).map_err(map_resource_io)?;
-    if metadata.file_type().is_symlink() {
+    if metadata_is_link_or_reparse(&metadata) {
         return Err(resource_error(
             "RESOURCE_UNSAFE_COMPONENT",
-            "links are not resource mutation targets",
+            "links and reparse points are not resource mutation targets",
         ));
     }
     if metadata.is_file() {
@@ -4543,6 +4543,499 @@ pub fn acknowledge_resource_recovery(home: String, catalog: String, token: Strin
     }
 }
 
+const SUBAGENT_ROOT: &str = "Subagent Runs";
+const SUBAGENT_MAX_MANIFEST_BYTES: usize = 128 * 1024;
+const SUBAGENT_MAX_INPUT_BYTES: usize = 50 * 1024;
+const SUBAGENT_MAX_PROMPT_BYTES: usize = 128 * 1024;
+const SUBAGENT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
+
+fn subagent_error(code: &'static str, detail: impl AsRef<str>) -> Error {
+    napi_error(code, detail)
+}
+
+fn valid_uuid_leaf(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn subagent_identity_token(metadata: &cap_std::fs::Metadata) -> Result<String> {
+    let identity = cap_file_identity(metadata)?;
+    Ok(format!("{}:{}", identity.volume, identity.file))
+}
+
+fn validate_subagent_root(
+    root: &Dir,
+    root_path: &str,
+    expected: &StableFileIdentity,
+) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(root_path)
+        .map_err(|error| subagent_error("SUBAGENT_ARTIFACT_IO", error.kind().to_string()))?;
+    if !metadata.is_dir() || session_entry_is_link_from_std(&metadata) {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_UNSAFE",
+            "artifact root is not a real directory",
+        ));
+    }
+    let ambient = ambient_file_identity(std::path::Path::new(root_path)).map_err(|_| {
+        subagent_error(
+            "SUBAGENT_ARTIFACT_UNSAFE",
+            "artifact root identity unavailable",
+        )
+    })?;
+    let held = cap_file_identity(&root.dir_metadata().map_err(map_resource_io)?)?;
+    if &ambient != expected || &held != expected {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_UNSAFE",
+            "artifact root identity changed",
+        ));
+    }
+    Ok(())
+}
+
+fn open_owned_subagent_run(root: &Dir, run_id: &str, token: &str) -> Result<Dir> {
+    if !valid_uuid_leaf(run_id) {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_INVALID_ID",
+            "invalid run id",
+        ));
+    }
+    let metadata = root.symlink_metadata(run_id).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "run root is missing")
+        } else {
+            subagent_error("SUBAGENT_ARTIFACT_IO", error.kind().to_string())
+        }
+    })?;
+    if !metadata.is_dir()
+        || metadata_is_link_or_reparse(&metadata)
+        || subagent_identity_token(&metadata)? != token
+    {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_UNSAFE",
+            "run ownership could not be proven",
+        ));
+    }
+    let opened = open_child_dir(root, run_id, false)
+        .map_err(map_resource_io)?
+        .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "run root disappeared"))?;
+    let held_metadata = opened.dir_metadata().map_err(map_resource_io)?;
+    if subagent_identity_token(&held_metadata)? != token
+        || !same_cap_file(&metadata, &held_metadata)?
+    {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_UNSAFE",
+            "run directory changed while it was opened",
+        ));
+    }
+    Ok(opened)
+}
+
+fn clear_owned_subagent_directory(dir: &Dir) -> Result<()> {
+    let mut names = Vec::new();
+    for entry in dir.entries().map_err(map_resource_io)? {
+        names.push(
+            entry
+                .map_err(map_resource_io)?
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    subagent_error("SUBAGENT_ARTIFACT_UNSAFE", "non-UTF-8 artifact entry")
+                })?,
+        );
+    }
+    names.sort();
+    for name in names {
+        let metadata = dir.symlink_metadata(&name).map_err(map_resource_io)?;
+        if metadata_is_link_or_reparse(&metadata) {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "artifact tree contains a link or reparse point",
+            ));
+        }
+        if metadata.is_file() {
+            dir.remove_file(&name).map_err(map_resource_io)?;
+            continue;
+        }
+        if !metadata.is_dir() {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "artifact tree contains a special file",
+            ));
+        }
+        let child = open_child_dir(dir, &name, false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "entry disappeared"))?;
+        let held = child.dir_metadata().map_err(map_resource_io)?;
+        if !same_cap_file(&metadata, &held)? {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "artifact directory changed while it was opened",
+            ));
+        }
+        clear_owned_subagent_directory(&child)?;
+        drop(child);
+        let current = dir.symlink_metadata(&name).map_err(map_resource_io)?;
+        if metadata_is_link_or_reparse(&current) || !same_cap_file(&metadata, &current)? {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "artifact directory changed before deletion",
+            ));
+        }
+        dir.remove_dir(&name).map_err(map_resource_io)?;
+    }
+    sync_dir(dir).map_err(map_resource_io)
+}
+
+fn subagent_write_once(dir: &Dir, name: &str, content: &str, limit: usize) -> Result<()> {
+    if content.len() > limit {
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_LIMIT",
+            "artifact exceeds its UTF-8 byte limit",
+        ));
+    }
+    if let Ok(metadata) = dir.symlink_metadata(name) {
+        if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "artifact target is not a regular file",
+            ));
+        }
+        let mut existing = nofollow_open(dir, name, false, false).map_err(map_resource_io)?;
+        let mut bytes = Vec::new();
+        existing.read_to_end(&mut bytes).map_err(map_resource_io)?;
+        if bytes == content.as_bytes() {
+            return Ok(());
+        }
+        return Err(subagent_error(
+            "SUBAGENT_ARTIFACT_EXISTS",
+            "immutable artifact already exists",
+        ));
+    }
+    let (temp, file) = unique_temp(dir, content).map_err(map_resource_io)?;
+    drop(file);
+    let result = dir.hard_link(&temp, dir, name);
+    let _ = dir.remove_file(&temp);
+    result.map_err(map_resource_io)?;
+    sync_dir(dir).map_err(map_resource_io)
+}
+
+#[napi(object)]
+pub struct SubagentArtifactRoot {
+    pub artifact_root_id: String,
+    pub identity_token: String,
+}
+
+#[napi(object)]
+pub struct SubagentArtifactAllocation {
+    pub artifact_root_id: String,
+    pub identity_token: String,
+    pub turn_id: String,
+    pub turn_directory: String,
+    pub sessions_directory: String,
+    pub system_prompt: String,
+}
+
+/// Descriptor-relative capability for durable generic subagent evidence.
+#[napi]
+pub struct SubagentArtifactStore {
+    root: Dir,
+    root_path: String,
+    root_identity: StableFileIdentity,
+}
+
+#[napi]
+impl SubagentArtifactStore {
+    #[napi(constructor)]
+    pub fn new(data_dir: String) -> Result<Self> {
+        let data =
+            Dir::open_ambient_dir(&data_dir, ambient_authority()).map_err(map_resource_io)?;
+        let root = open_child_dir(&data, SUBAGENT_ROOT, true)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| {
+                subagent_error("SUBAGENT_ARTIFACT_UNSAFE", "artifact root unavailable")
+            })?;
+        #[cfg(unix)]
+        root.set_permissions(
+            ".",
+            cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o700)),
+        )
+        .map_err(map_resource_io)?;
+        let root_path = std::fs::canonicalize(std::path::Path::new(&data_dir).join(SUBAGENT_ROOT))
+            .map_err(map_resource_io)?
+            .to_string_lossy()
+            .into_owned();
+        let root_identity = cap_file_identity(&root.dir_metadata().map_err(map_resource_io)?)?;
+        validate_subagent_root(&root, &root_path, &root_identity)?;
+        Ok(Self {
+            root,
+            root_path,
+            root_identity,
+        })
+    }
+
+    #[napi]
+    pub fn list_roots(&self) -> Result<Vec<SubagentArtifactRoot>> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let mut roots = Vec::new();
+        for entry in self.root.entries().map_err(map_resource_io)? {
+            let name = entry
+                .map_err(map_resource_io)?
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            if !valid_uuid_leaf(&name) {
+                continue;
+            }
+            let metadata = self.root.symlink_metadata(&name).map_err(map_resource_io)?;
+            if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
+                return Err(subagent_error(
+                    "SUBAGENT_ARTIFACT_UNSAFE",
+                    "unsafe entry in artifact root",
+                ));
+            }
+            roots.push(SubagentArtifactRoot {
+                artifact_root_id: name,
+                identity_token: subagent_identity_token(&metadata)?,
+            });
+        }
+        roots.sort_by(|left, right| left.artifact_root_id.cmp(&right.artifact_root_id));
+        Ok(roots)
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)] // Narrow N-API contract keeps artifact inputs explicit.
+    pub fn allocate_turn(
+        &self,
+        run_id: String,
+        existing_identity_token: Option<String>,
+        turn_id: String,
+        root_manifest: String,
+        turn_manifest: String,
+        input: String,
+        system_prompt: String,
+    ) -> Result<SubagentArtifactAllocation> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        if !valid_uuid_leaf(&run_id) || !valid_uuid_leaf(&turn_id) {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_INVALID_ID",
+                "invalid run or turn id",
+            ));
+        }
+        let is_continuation = existing_identity_token.is_some();
+        let (run, identity_token, turn, turn_path) = if let Some(token) = existing_identity_token {
+            let run = open_owned_subagent_run(&self.root, &run_id, &token)?;
+            let turns = open_child_dir(&run, "turns", true)
+                .map_err(map_resource_io)?
+                .unwrap();
+            if turns.symlink_metadata(&turn_id).is_ok() {
+                return Err(subagent_error(
+                    "SUBAGENT_ARTIFACT_EXISTS",
+                    "turn already exists",
+                ));
+            }
+            turns.create_dir(&turn_id).map_err(map_resource_io)?;
+            sync_dir(&turns).map_err(map_resource_io)?;
+            let turn = open_child_dir(&turns, &turn_id, false)
+                .map_err(map_resource_io)?
+                .unwrap();
+            let turn_path = std::path::Path::new(&self.root_path)
+                .join(&run_id)
+                .join("turns")
+                .join(&turn_id);
+            (run, token, turn, turn_path)
+        } else {
+            if self.root.symlink_metadata(&run_id).is_ok() {
+                return Err(subagent_error(
+                    "SUBAGENT_ARTIFACT_EXISTS",
+                    "run root already exists",
+                ));
+            }
+            self.root.create_dir(&run_id).map_err(map_resource_io)?;
+            sync_dir(&self.root).map_err(map_resource_io)?;
+            let run = open_child_dir(&self.root, &run_id, false)
+                .map_err(map_resource_io)?
+                .unwrap();
+            #[cfg(unix)]
+            run.set_permissions(
+                ".",
+                cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o700)),
+            )
+            .map_err(map_resource_io)?;
+            run.create_dir("sessions").map_err(map_resource_io)?;
+            run.create_dir("turns").map_err(map_resource_io)?;
+            let token = subagent_identity_token(&run.dir_metadata().map_err(map_resource_io)?)?;
+            let turn = run.try_clone().map_err(map_resource_io)?;
+            let turn_path = std::path::Path::new(&self.root_path).join(&run_id);
+            (run, token, turn, turn_path)
+        };
+        let effective_system_prompt = format!(
+            "{system_prompt}\n\nArtifact directory: {}\nExpected report outcome: Return a concise, self-contained report to the parent. Agent Deck writes bounded input, prompt, and output evidence here; do not copy or harvest arbitrary project files into this directory.",
+            turn_path.to_string_lossy()
+        );
+        if !is_continuation {
+            subagent_write_once(
+                &run,
+                "manifest.json",
+                &root_manifest,
+                SUBAGENT_MAX_MANIFEST_BYTES,
+            )?;
+        }
+        if !run_id.eq_ignore_ascii_case(&turn_id) {
+            subagent_write_once(
+                &turn,
+                "manifest.json",
+                &turn_manifest,
+                SUBAGENT_MAX_MANIFEST_BYTES,
+            )?;
+        }
+        subagent_write_once(&turn, "input.md", &input, SUBAGENT_MAX_INPUT_BYTES)?;
+        subagent_write_once(
+            &turn,
+            "system-prompt.md",
+            &effective_system_prompt,
+            SUBAGENT_MAX_PROMPT_BYTES,
+        )?;
+        Ok(SubagentArtifactAllocation {
+            artifact_root_id: run_id.clone(),
+            identity_token,
+            turn_id,
+            turn_directory: turn_path.to_string_lossy().into_owned(),
+            sessions_directory: std::path::Path::new(&self.root_path)
+                .join(run_id)
+                .join("sessions")
+                .to_string_lossy()
+                .into_owned(),
+            system_prompt: effective_system_prompt,
+        })
+    }
+
+    #[napi]
+    pub fn write_turn_output(
+        &self,
+        run_id: String,
+        identity_token: String,
+        turn_id: String,
+        output: String,
+    ) -> Result<()> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let turn = if run.symlink_metadata("manifest.json").is_ok()
+            && run_id.eq_ignore_ascii_case(&turn_id)
+        {
+            run.try_clone().map_err(map_resource_io)?
+        } else {
+            let turns = open_child_dir(&run, "turns", false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "turns missing"))?;
+            open_child_dir(&turns, &turn_id, false)
+                .map_err(map_resource_io)?
+                .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "turn missing"))?
+        };
+        subagent_write_once(&turn, "output.md", &output, SUBAGENT_MAX_OUTPUT_BYTES)
+    }
+
+    #[napi]
+    pub fn validate_session_file(
+        &self,
+        run_id: String,
+        identity_token: String,
+        session_file: String,
+    ) -> Result<String> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let sessions = open_child_dir(&run, "sessions", false)
+            .map_err(map_resource_io)?
+            .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "sessions missing"))?;
+        let candidate = std::path::Path::new(&session_file);
+        let expected_parent = std::path::Path::new(&self.root_path)
+            .join(&run_id)
+            .join("sessions");
+        if !candidate.is_absolute() || candidate.parent() != Some(expected_parent.as_path()) {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "session file is outside the owned session directory",
+            ));
+        }
+        let name = candidate
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                subagent_error("SUBAGENT_ARTIFACT_UNSAFE", "invalid session filename")
+            })?;
+        let metadata = sessions.symlink_metadata(name).map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                subagent_error(
+                    "SUBAGENT_ARTIFACT_NOT_FOUND",
+                    "session file is not created yet",
+                )
+            } else {
+                subagent_error("SUBAGENT_ARTIFACT_IO", error.kind().to_string())
+            }
+        })?;
+        if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "session is not a regular file",
+            ));
+        }
+        let file = nofollow_open(&sessions, name, false, false).map_err(map_resource_io)?;
+        if !file.metadata().map_err(map_resource_io)?.is_file() {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "session changed during validation",
+            ));
+        }
+        Ok(candidate.to_string_lossy().into_owned())
+    }
+
+    #[napi]
+    pub fn reveal_directory(&self, run_id: String, identity_token: String) -> Result<String> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let _run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        Ok(std::path::Path::new(&self.root_path)
+            .join(run_id)
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    #[napi]
+    pub fn delete_run(&self, run_id: String, identity_token: String) -> Result<()> {
+        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        clear_owned_subagent_directory(&run)?;
+        let held_metadata = run.dir_metadata().map_err(map_resource_io)?;
+        drop(run);
+        let current = self.root.symlink_metadata(&run_id).map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                subagent_error(
+                    "SUBAGENT_ARTIFACT_NOT_FOUND",
+                    "run root moved during deletion",
+                )
+            } else {
+                subagent_error("SUBAGENT_ARTIFACT_IO", error.kind().to_string())
+            }
+        })?;
+        if metadata_is_link_or_reparse(&current)
+            || subagent_identity_token(&current)? != identity_token
+            || !same_cap_file(&held_metadata, &current)?
+        {
+            return Err(subagent_error(
+                "SUBAGENT_ARTIFACT_UNSAFE",
+                "run root changed before final deletion",
+            ));
+        }
+        self.root.remove_dir(&run_id).map_err(map_resource_io)?;
+        sync_dir(&self.root).map_err(map_resource_io)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4551,6 +5044,151 @@ mod tests {
 
     fn home() -> TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn subagent_artifacts_allocate_immutable_turns_and_owned_sessions() {
+        let data = home();
+        let store = SubagentArtifactStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let run = "12345678-1234-4234-8234-123456789abc".to_string();
+        let first = store
+            .allocate_turn(
+                run.clone(),
+                None,
+                run.clone(),
+                "{\"schemaVersion\":1}\n".into(),
+                "{\"turn\":1}\n".into(),
+                "task".into(),
+                "system".into(),
+            )
+            .unwrap();
+        store
+            .write_turn_output(
+                run.clone(),
+                first.identity_token.clone(),
+                run.clone(),
+                "done".into(),
+            )
+            .unwrap();
+        store
+            .write_turn_output(
+                run.clone(),
+                first.identity_token.clone(),
+                run.clone(),
+                "done".into(),
+            )
+            .unwrap();
+        assert!(
+            store
+                .write_turn_output(
+                    run.clone(),
+                    first.identity_token.clone(),
+                    run.clone(),
+                    "different".into(),
+                )
+                .is_err()
+        );
+        let session = std::path::Path::new(&first.sessions_directory).join("child.jsonl");
+        fs::write(&session, "{}\n").unwrap();
+        assert_eq!(
+            store
+                .validate_session_file(
+                    run.clone(),
+                    first.identity_token.clone(),
+                    session.to_string_lossy().into_owned(),
+                )
+                .unwrap(),
+            session.to_string_lossy()
+        );
+        let turn = "abcdefab-cdef-4abc-8def-abcdefabcdef".to_string();
+        let continued = store
+            .allocate_turn(
+                run.clone(),
+                Some(first.identity_token.clone()),
+                turn.clone(),
+                "{\"schemaVersion\":1}\n".into(),
+                "{\"turn\":2}\n".into(),
+                "next".into(),
+                "continued".into(),
+            )
+            .unwrap();
+        assert!(std::path::Path::new(&continued.turn_directory).ends_with(&turn));
+        assert_eq!(
+            fs::read_to_string(
+                data.path()
+                    .join("Subagent Runs")
+                    .join(&run)
+                    .join("input.md")
+            )
+            .unwrap(),
+            "task"
+        );
+        store.delete_run(run, first.identity_token).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subagent_delete_refuses_a_replacement_run_directory() {
+        let data = home();
+        let store = SubagentArtifactStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let run = "12345678-1234-4234-8234-123456789abc".to_string();
+        let allocation = store
+            .allocate_turn(
+                run.clone(),
+                None,
+                run.clone(),
+                "{}".into(),
+                "{}".into(),
+                "task".into(),
+                "system".into(),
+            )
+            .unwrap();
+        let root = data.path().join("Subagent Runs");
+        fs::rename(root.join(&run), root.join("moved-owned-run")).unwrap();
+        fs::create_dir(root.join(&run)).unwrap();
+        fs::write(root.join(&run).join("sentinel"), "replacement-safe").unwrap();
+        assert!(
+            store
+                .delete_run(run.clone(), allocation.identity_token)
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(run).join("sentinel")).unwrap(),
+            "replacement-safe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subagent_artifacts_refuse_symlinked_owned_content() {
+        use std::os::unix::fs::symlink;
+        let data = home();
+        let outside = data.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let store = SubagentArtifactStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let run = "12345678-1234-4234-8234-123456789abc".to_string();
+        let allocation = store
+            .allocate_turn(
+                run.clone(),
+                None,
+                run.clone(),
+                "{}".into(),
+                "{}".into(),
+                "task".into(),
+                "system".into(),
+            )
+            .unwrap();
+        symlink(
+            &outside,
+            data.path()
+                .join("Subagent Runs")
+                .join(&run)
+                .join("turns")
+                .join("bad"),
+        )
+        .unwrap();
+        assert!(store.delete_run(run, allocation.identity_token).is_err());
+        assert!(outside.exists());
     }
 
     #[test]

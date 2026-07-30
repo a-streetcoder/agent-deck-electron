@@ -75,6 +75,9 @@ importers:
       '@agent-deck/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@agent-deck/loop-catalog-native':
+        specifier: workspace:*
+        version: link:../../packages/loop-catalog-native
       '@agent-deck/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp

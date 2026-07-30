@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubagentCell, UserCell } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { CellView } from "./cells.tsx";
 
 afterEach(() => {
   cleanup();
+  delete window.agentDeck;
   useAppStore.setState({ session: null });
 });
 
@@ -67,6 +68,33 @@ describe("subagent durable status and content", () => {
       />,
     );
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("offers hydrated cards an accessible, duplicate-safe opaque-id reveal", async () => {
+    let finish!: (value: boolean) => void;
+    const revealSubagentArtifacts = vi.fn(
+      () => new Promise<boolean>((resolve) => (finish = resolve)),
+    );
+    window.agentDeck = { revealSubagentArtifacts };
+    renderSubagent({ artifactRootId: "12345678-1234-4234-8234-123456789abc" });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent interrupted/i }));
+    const reveal = screen.getByRole("button", { name: "Reveal Artifacts" });
+    fireEvent.click(reveal);
+    fireEvent.click(reveal);
+    expect(revealSubagentArtifacts).toHaveBeenCalledTimes(1);
+    expect(reveal.getAttribute("disabled")).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Revealing");
+    finish(true);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Artifacts revealed"),
+    );
+    expect(revealSubagentArtifacts).toHaveBeenCalledWith("12345678-1234-4234-8234-123456789abc");
+  });
+
+  it("hides artifact actions when the preload capability is unavailable", () => {
+    renderSubagent({ artifactRootId: "12345678-1234-4234-8234-123456789abc" });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent interrupted/i }));
+    expect(screen.queryByRole("button", { name: "Reveal Artifacts" })).toBeNull();
   });
 
   it("bounds long task and output regions while keeping them keyboard focusable", () => {
