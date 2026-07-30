@@ -38,8 +38,8 @@ describe("SubagentRunStore", () => {
     writeFileSync(sessionFile, "{}\n");
     store.markOwnedSession(run.id, sessionFile);
     const revealed = store.artifactDirectoryForReveal(run.id);
-    expect(revealed).toBeDefined();
-    expect(realpathSync(revealed!)).toBe(realpathSync(path.join(dataDir, "Subagent Runs", run.id)));
+    const canonicalDataDir = process.platform === "win32" ? dataDir : realpathSync(dataDir);
+    expect(revealed).toBe(path.join(canonicalDataDir, "Subagent Runs", run.id));
     expect(store.cells(PARENT_A)[0]?.artifactRootId).toBe(run.id);
     store.removeParent(PARENT_A);
     expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);

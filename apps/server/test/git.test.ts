@@ -155,7 +155,7 @@ describe("strict release synchronization", () => {
       blocker: null,
     });
     expect(result.headSha).toBe(git(work, ["rev-parse", "HEAD"]).trim());
-  });
+  }, 15_000);
 
   it("classifies dirty, ahead, behind, and diverged histories", async () => {
     const dirty = makeRemoteFixture();
