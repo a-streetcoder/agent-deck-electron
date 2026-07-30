@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import {
   createIngestState,
@@ -29,7 +29,7 @@ import {
 import type { Scope } from "effect";
 import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Stream } from "effect";
 import type { ReceiptBus } from "../receipts.ts";
-import type { SubagentRunRecord } from "../subagentRunStore.ts";
+import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
 import { PiHost, type PiHostHandle, type PiSpawnOptions, type PiStreamItem } from "./piHost.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 
@@ -272,7 +272,8 @@ export interface ManagedSessionRuntime {
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
     overrides?: ChildLaunchOverrides,
-  ) => Effect.Effect<string, Error>;
+    runOptions?: ChildRunOptions,
+  ) => Effect.Effect<ChildRunResult, Error>;
 
   /** Subscribe to process exit; fires immediately if already exited. */
   readonly onExit: (listener: (exit: PiProcessExit) => void) => () => void;
@@ -317,6 +318,12 @@ const SUBAGENT_SYSTEM_PROMPT =
   "You are a focused subagent launched by Agent Deck to complete one task and " +
   "report back. You have no conversation history. Do the task, then give a " +
   "concise, self-contained result the parent agent can use directly.";
+
+const SUBAGENT_CONTINUATION_SYSTEM_PROMPT =
+  "You are a focused subagent launched by Agent Deck. This is a continuation of " +
+  "your own child session: prior child messages are available, but no parent " +
+  "conversation is present. The new task is the only active assignment and its " +
+  "result supersedes earlier assignments. Give a concise, self-contained result.";
 
 const SUBAGENT_TIMEOUT_MS = 120_000;
 
@@ -803,7 +810,7 @@ export const makeManagedSessionRuntime = (
           onMetaChange(meta);
         }),
 
-      runChildAgent: (task, agentName, toolPolicy, overrides) =>
+      runChildAgent: (task, agentName, toolPolicy, overrides, runOptions) =>
         Effect.gen(function* () {
           // Child execution is owned by the parent session Scope. Parent stop,
           // deletion, and server shutdown therefore interrupt and finalize every
@@ -819,6 +826,7 @@ export const makeManagedSessionRuntime = (
               agentName,
               toolPolicy,
               overrides,
+              runOptions,
             }),
             sessionScope,
           );
@@ -906,6 +914,29 @@ export interface ChildLaunchOverrides {
   thinking?: ThinkingLevel;
 }
 
+export interface ChildRunOptions {
+  /** Supplied only for an already validated same-parent continuation. */
+  runId?: string;
+  resumeSessionPath?: string;
+  source: SubagentRunSource;
+}
+
+export interface ChildRunResult {
+  runId: string;
+  text: string;
+}
+
+/** Failure after a durable generic child identity has been created/reclaimed. */
+export class ChildRunError extends Error {
+  constructor(
+    readonly runId: string,
+    cause: Error,
+  ) {
+    super(cause.message, { cause });
+    this.name = "ChildRunError";
+  }
+}
+
 const persistChildRun = (operation: () => void): Effect.Effect<void, Error> =>
   Effect.try({
     try: operation,
@@ -925,6 +956,7 @@ interface RunChildArgs {
   readonly agentName?: string;
   readonly toolPolicy?: ChildToolPolicy;
   readonly overrides?: ChildLaunchOverrides;
+  readonly runOptions?: ChildRunOptions;
 }
 
 /**
@@ -934,16 +966,28 @@ interface RunChildArgs {
  * card). Concurrency-safe under managed_parallel: each child owns a distinct
  * cell id and the bus stamps interleaved deltas in arrival order.
  */
-const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
-  const { piHost, helperContext, meta, params, emit, task, agentName, toolPolicy, overrides } =
-    args;
+const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error> => {
+  const runId = args.runOptions?.runId ?? randomUUID();
+  let durableIdentityCreated = false;
+  const {
+    piHost,
+    helperContext,
+    meta,
+    params,
+    emit,
+    task,
+    agentName,
+    toolPolicy,
+    overrides,
+    runOptions,
+  } = args;
   return Effect.gen(function* () {
     const resolved = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
     if (agentName && !resolved) {
       return yield* Effect.fail(new Error(`unknown agent: ${agentName}`));
     }
     const persona = resolved ? `\n\n# Agent: ${agentName}\n${resolved.body}` : "";
-    const runId = randomUUID();
+    const isContinuation = runOptions?.resumeSessionPath !== undefined;
     const cellId = runId;
     const childSessionId = randomUUID();
     // Loop/constrained executions retain their dedicated snapshot ownership.
@@ -951,17 +995,35 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
     const durable = toolPolicy === undefined ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
     if (durable) {
-      yield* persistChildRun(() =>
-        durable.create({
-          id: runId,
-          parentSessionId: meta.id,
-          task,
-          ...(agentName ? { agent: agentName } : {}),
-          status: "starting",
-          createdAt,
-          updatedAt: createdAt,
-        }),
-      );
+      yield* persistChildRun(() => {
+        if (isContinuation) {
+          durable.update(runId, {
+            task,
+            ...(agentName ? { agent: agentName } : {}),
+            status: "starting",
+            updatedAt: createdAt,
+            completedAt: undefined,
+            summary: undefined,
+            error: undefined,
+            model: undefined,
+            inputTokens: undefined,
+            outputTokens: undefined,
+            durationMs: undefined,
+          });
+        } else {
+          durable.create({
+            id: runId,
+            parentSessionId: meta.id,
+            task,
+            ...(agentName ? { agent: agentName } : {}),
+            status: "starting",
+            createdAt,
+            updatedAt: createdAt,
+            source: runOptions?.source ?? "single",
+          });
+        }
+      });
+      durableIdentityCreated = true;
     }
     let terminalPersisted = false;
     // Declare volatile stream/metadata state before registering cleanup. Setup or
@@ -974,6 +1036,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
     let childOutputTokens = 0;
     let sawUsage = false;
     let sawAgentEnd = false;
+    let cardOpened = false;
+    let startupCardFinalized = false;
     const metadata = (): {
       model?: string;
       inputTokens?: number;
@@ -1006,6 +1070,27 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           const error = interrupted
             ? "Subagent run was stopped before completion."
             : `Subagent failed before completion: ${detail}`;
+          // A continuation may fail after its durable record moved to starting
+          // but before spawn/get_state allowed the normal cell_open. Replace the
+          // existing stable card now so live UI and persistence agree; fresh
+          // runs retain their established no-card-on-pre-open-failure behavior.
+          if (isContinuation && !cardOpened && !startupCardFinalized) {
+            startupCardFinalized = true;
+            emit({
+              type: "cell_final",
+              cell: {
+                kind: "subagent",
+                id: cellId,
+                task,
+                status: interrupted ? "stopped" : "error",
+                text: streamed,
+                error,
+                progress: [],
+                ...(agentName ? { agentName } : {}),
+                ...metadata(),
+              },
+            });
+          }
           return persistChildRun(() =>
             durable.update(runId, {
               status,
@@ -1049,7 +1134,10 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           }),
         );
         const promptFile = join(promptDir, "system.md");
-        writeFileSync(promptFile, `${SUBAGENT_SYSTEM_PROMPT}${persona}\n\nTask:\n${task}`);
+        const boundaryPrompt = isContinuation
+          ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
+          : SUBAGENT_SYSTEM_PROMPT;
+        writeFileSync(promptFile, `${boundaryPrompt}${persona}\n\nTask:\n${task}`);
 
         const childTools = resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
 
@@ -1063,6 +1151,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
             model: overrides?.model ?? resolved?.model ?? helperContext.model,
             thinking: overrides?.thinking ?? resolved?.thinking,
             skills: resolved?.skillDirs,
+            ...(runOptions?.resumeSessionPath
+              ? { resumeSessionPath: runOptions.resumeSessionPath }
+              : {}),
             extensions: childBridge
               ? [...(helperContext.extensions ?? []), childBridge.extension]
               : helperContext.extensions,
@@ -1072,18 +1163,36 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
         });
 
-        // Persist the running transition before the child receives its task.
-        // If this write fails, the scoped child is torn down without prompting.
+        // Capture Pi's own opaque resume handle before the first prompt. A run
+        // without this durable handle must fail rather than advertise a stable
+        // continuation ID that cannot actually be resumed.
         if (durable) {
+          const state = yield* child.getState;
+          const sessionFile = (state as { sessionFile?: unknown }).sessionFile;
+          if (typeof sessionFile !== "string" || !sessionFile.trim()) {
+            return yield* Effect.fail(new Error("subagent get_state returned no session file"));
+          }
+          if (!isAbsolute(sessionFile)) {
+            return yield* Effect.fail(
+              new Error("subagent get_state returned a non-absolute session file"),
+            );
+          }
+          // Pi creates a fresh session file lazily when the first assistant
+          // message is persisted. Store its canonical path now; continuation
+          // re-validates existence/type after the run is terminal.
+          // Persist the running transition and resume handle together before
+          // the task can be prompted. If this write fails, scoped cleanup reaps
+          // the unprompted child and terminally updates the already-created ID.
           yield* persistChildRun(() =>
             durable.update(runId, {
               status: "running",
+              sessionFile,
               updatedAt: new Date().toISOString(),
             }),
           );
         }
 
-        // Open the Subagent card in the PARENT transcript before the child runs.
+        // Open (or replace, for continuation) the stable Subagent card in the PARENT transcript.
         emit({
           type: "cell_open",
           cell: {
@@ -1096,6 +1205,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
             ...(agentName ? { agentName } : {}),
           },
         });
+        cardOpened = true;
 
         const processChild = (item: PiStreamItem): void => {
           if (!isPiEvent(item)) return;
@@ -1261,14 +1371,21 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
             ...finalMetadata,
           },
         });
-        return result;
+        return { runId, text: result };
       }),
     );
   }).pipe(
     // Normalize any defect/typed failure into an Error for the facade's promise.
-    Effect.catchAll((error) =>
-      Effect.fail(error instanceof Error ? error : new Error(String(error))),
-    ),
+    // Once persistence accepted the run identity, preserve that stable ID on
+    // every failure so the parent-facing tool result can report it as well.
+    Effect.catchAll((error) => {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      return Effect.fail(
+        durableIdentityCreated && !(normalized instanceof ChildRunError)
+          ? new ChildRunError(runId, normalized)
+          : normalized,
+      );
+    }),
   );
 };
 

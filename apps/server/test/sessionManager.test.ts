@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DomainEvent, SessionMeta } from "@agent-deck/domain";
-import { Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionCreationError, SessionManager } from "../src/SessionManager.ts";
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
@@ -18,6 +18,7 @@ import {
   type SessionPushBusesShape,
 } from "../src/services/pushBus.ts";
 import {
+  ChildRunError,
   makeManagedSessionRuntime,
   resolveChildTools,
   SessionManagerService,
@@ -194,7 +195,11 @@ describe("durable generic child lifecycle", () => {
     );
     await expectProcessGone(pids[1]!);
 
-    const restored = new SubagentRunStore(dataDir, () => {}).cells(params.meta.id)[0];
+    const reloadedStore = new SubagentRunStore(dataDir, () => {});
+    const restored = reloadedStore.cells(params.meta.id)[0];
+    expect(reloadedStore.list(params.meta.id)[0]).toEqual(
+      expect.objectContaining({ source: "single", sessionFile: FIXTURE }),
+    );
     expect(restored).toEqual(
       expect.objectContaining({
         status: "stopped",
@@ -206,6 +211,116 @@ describe("durable generic child lifecycle", () => {
       }),
     );
     expect(restored!.durationMs).toBeGreaterThan(0);
+  });
+
+  it("persists parallel source and Pi's early session handle for a completed generic run", async () => {
+    const { piHost } = makeFakePiHost();
+    const dataDir = makeTempDir();
+    const store = new SubagentRunStore(dataDir, () => {});
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: (record) => store.create(record),
+                update: (id, patch) => store.update(id, patch),
+              },
+            }),
+          );
+          return yield* rt.runChildAgent("finish normally", undefined, undefined, undefined, {
+            source: "parallel",
+          });
+        }),
+      ),
+    );
+
+    expect(store.get(result.runId)).toEqual(
+      expect.objectContaining({
+        source: "parallel",
+        sessionFile: FIXTURE,
+        status: "completed",
+      }),
+    );
+  });
+
+  it("replaces the live continuation card exactly once when startup fails before cell_open", async () => {
+    const { piHost } = makeFakePiHost();
+    const dataDir = makeTempDir();
+    const store = new SubagentRunStore(dataDir, () => {});
+    const params = makeParams();
+    const runId = randomUUID();
+    const now = new Date().toISOString();
+    store.create({
+      id: runId,
+      parentSessionId: params.meta.id,
+      task: "old completed task",
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+      summary: "old completed output",
+      source: "single",
+      sessionFile: FIXTURE,
+    });
+    const events: DomainEvent[] = [];
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, {
+            ...params,
+            childRuns: {
+              create: (record) => store.create(record),
+              update: (id, patch) => {
+                if (patch.status === "running") throw new Error("running persistence failed");
+                store.update(id, patch);
+              },
+            },
+          });
+          yield* rt.seedSyntheticCells(store.cells(params.meta.id));
+          yield* rt.bus.subscribe((event) => events.push(event.event));
+          const exit = yield* Effect.exit(
+            rt.runChildAgent("new continuation task", undefined, undefined, undefined, {
+              source: "single",
+              runId,
+              resumeSessionPath: FIXTURE,
+            }),
+          );
+          expect(exit._tag).toBe("Failure");
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+
+    const live = result.state.cells.filter((cell) => cell.kind === "subagent");
+    const persisted = store.cells(params.meta.id);
+    expect(live).toHaveLength(1);
+    expect(persisted).toHaveLength(1);
+    expect(live[0]).toEqual(
+      expect.objectContaining({
+        id: runId,
+        task: "new continuation task",
+        status: "error",
+        text: "",
+        error: expect.stringContaining("running persistence failed"),
+      }),
+    );
+    expect(persisted[0]).toEqual(
+      expect.objectContaining({
+        id: runId,
+        task: "new continuation task",
+        status: "error",
+        text: "",
+        error: expect.stringContaining("running persistence failed"),
+      }),
+    );
+    expect(events.filter((event) => event.type === "cell_open")).toHaveLength(0);
+    expect(
+      events.filter((event) => event.type === "cell_final" && event.cell.id === runId),
+    ).toHaveLength(1);
   });
 
   it("cleans up without prompting when the running transition cannot be persisted", async () => {
@@ -238,7 +353,7 @@ describe("durable generic child lifecycle", () => {
   it("reports completion persistence failure as a failed card without overwriting it as stopped", async () => {
     const { piHost } = makeFakePiHost();
     const statuses: string[] = [];
-    const cell = await Effect.runPromise(
+    const outcome = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const rt = yield* makeManagedSessionRuntime(
@@ -254,13 +369,19 @@ describe("durable generic child lifecycle", () => {
               },
             }),
           );
-          expect((yield* Effect.exit(rt.runChildAgent("finish normally")))._tag).toBe("Failure");
-          return (yield* rt.snapshot).state.cells.find((item) => item.kind === "subagent");
+          const exit = yield* Effect.exit(rt.runChildAgent("finish normally"));
+          expect(exit._tag).toBe("Failure");
+          return {
+            error: exit._tag === "Failure" ? Cause.squash(exit.cause) : undefined,
+            cell: (yield* rt.snapshot).state.cells.find((item) => item.kind === "subagent"),
+          };
         }),
       ),
     );
     expect(statuses).toEqual(["starting", "running", "completed", "failed"]);
-    expect(cell).toEqual(
+    expect(outcome.error).toBeInstanceOf(ChildRunError);
+    expect((outcome.error as ChildRunError).runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(outcome.cell).toEqual(
       expect.objectContaining({
         status: "error",
         text: "hello",

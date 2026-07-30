@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { emptyTranscript, type SubagentCell } from "@agent-deck/domain";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAppStore } from "../state/store.ts";
@@ -36,6 +36,36 @@ describe("Deck durable subagent runs", () => {
     cleanup();
     renderDeck(cell({ status: "stopped", error: "Stopped by parent." }));
     expect(screen.getByText("Stopped")).toBeTruthy();
+  });
+
+  it("expands once when a terminal row resumes, then respects collapse during streaming", () => {
+    const terminal = cell({ status: "done", error: undefined });
+    renderDeck(terminal);
+    const row = screen.getByTestId("deck-run");
+    const toggle = screen.getByTestId("deck-run-toggle");
+    expect(row.getAttribute("data-expanded")).toBe("false");
+
+    act(() => {
+      useAppStore.setState({
+        transcript: {
+          ...emptyTranscript(),
+          cells: [{ ...terminal, status: "running", task: "Follow-up", text: "live" }],
+        },
+      });
+    });
+    expect(row.getAttribute("data-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(row.getAttribute("data-expanded")).toBe("false");
+
+    act(() => {
+      useAppStore.setState({
+        transcript: {
+          ...emptyTranscript(),
+          cells: [{ ...terminal, status: "running", task: "Follow-up", text: "live delta" }],
+        },
+      });
+    });
+    expect(row.getAttribute("data-expanded")).toBe("false");
   });
 
   it("shows partial output with the failure reason and focusable clipped regions", () => {

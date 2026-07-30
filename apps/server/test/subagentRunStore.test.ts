@@ -60,6 +60,29 @@ describe("SubagentRunStore", () => {
     ]);
   });
 
+  it("round-trips additive continuation fields while accepting legacy v1 records", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-continuation-fields-"));
+    const sessionFile = path.join(dataDir, "child.jsonl");
+    writeFileSync(sessionFile, "{}\n");
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const current = record({ source: "single", sessionFile });
+    store.create(current);
+    expect(new SubagentRunStore(dataDir, vi.fn()).get(current.id)).toEqual(
+      expect.objectContaining({ source: "single", sessionFile }),
+    );
+
+    const legacyDir = mkdtempSync(path.join(tmpdir(), "subagent-legacy-v1-"));
+    const legacy = record();
+    writeFileSync(
+      path.join(legacyDir, "subagent-runs.json"),
+      `${JSON.stringify({ version: 1, runs: [legacy] })}\n`,
+    );
+    const restoredLegacy = new SubagentRunStore(legacyDir, vi.fn()).get(legacy.id)!;
+    expect(restoredLegacy.id).toBe(legacy.id);
+    expect(restoredLegacy.source).toBeUndefined();
+    expect(restoredLegacy.sessionFile).toBeUndefined();
+  });
+
   it("atomically corrects active-at-restart records to interrupted", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-interrupt-"));
     const store = new SubagentRunStore(dataDir, vi.fn());

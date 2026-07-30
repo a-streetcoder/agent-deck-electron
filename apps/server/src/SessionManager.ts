@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import type {
   AskUserAnswer,
@@ -34,6 +34,8 @@ import {
   type ChildBridgeFactory,
   type ChildToolPolicy,
   type ChildLaunchOverrides,
+  type ChildRunOptions,
+  type ChildRunResult,
   type ManagedSessionRuntime,
   type RunHelperOptions,
   type SpawnSessionParams,
@@ -196,10 +198,11 @@ export class ManagedSession {
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
     overrides?: ChildLaunchOverrides,
-  ): Promise<string> {
+    runOptions?: ChildRunOptions,
+  ): Promise<ChildRunResult> {
     return await runPromiseUnwrapped(
       this.runtime,
-      this.rt.runChildAgent(task, agentName, toolPolicy, overrides),
+      this.rt.runChildAgent(task, agentName, toolPolicy, overrides, runOptions),
     );
   }
 
@@ -302,6 +305,8 @@ export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   /** In-flight resumes by session id — double-resume returns the same promise. */
   private readonly resuming = new Map<string, Promise<ManagedSession>>();
+  /** Same-run continuation claims. JS's synchronous Set mutation is the lock. */
+  private readonly claimedSubagentContinuations = new Set<string>();
 
   constructor(
     /** The server's ManagedRuntime (runtime.ts): every session resolves its pi
@@ -760,10 +765,74 @@ export class SessionManager {
     agentName?: string,
     toolPolicy?: ChildToolPolicy,
     overrides?: ChildLaunchOverrides,
+    source: "single" | "parallel" = "single",
   ): Promise<string> {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
-    return await parent.runChildAgent(task, agentName, toolPolicy, overrides);
+    return (await parent.runChildAgent(task, agentName, toolPolicy, overrides, { source })).text;
+  }
+
+  /** Generic managed_subagent entrypoint. Continuations are validated and
+   * claimed entirely before runChildAgent can spawn or prompt a second Pi. */
+  async runManagedSubagent(
+    parentSessionId: string,
+    task: string,
+    agentName?: string,
+    continueSubagentId?: string,
+  ): Promise<ChildRunResult> {
+    const parent = this.sessions.get(parentSessionId);
+    if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
+    if (!this.subagentRuns) throw new Error("subagent run persistence is unavailable");
+
+    if (!continueSubagentId) {
+      return await parent.runChildAgent(task, agentName, undefined, undefined, {
+        source: "single",
+      });
+    }
+
+    const run = this.subagentRuns.get(continueSubagentId);
+    if (!run) throw new Error(`unknown Deck subagent ID: ${continueSubagentId}`);
+    if (run.parentSessionId !== parentSessionId) {
+      throw new Error("Deck subagent continuation belongs to a different parent session");
+    }
+    if (run.source !== "single") {
+      throw new Error("only single managed_subagent runs can be continued");
+    }
+    if (this.claimedSubagentContinuations.has(continueSubagentId)) {
+      throw new Error(`Deck subagent ${continueSubagentId} is already being continued`);
+    }
+    if (run.status === "starting" || run.status === "running") {
+      throw new Error(`Deck subagent ${continueSubagentId} is still active`);
+    }
+    if (!run.sessionFile) {
+      throw new Error("Deck subagent has no durable Pi session file and cannot be continued");
+    }
+    if (!isAbsolute(run.sessionFile)) {
+      throw new Error("Deck subagent Pi session path is not absolute");
+    }
+    let stat;
+    try {
+      stat = lstatSync(run.sessionFile);
+    } catch {
+      throw new Error("Deck subagent Pi session file is missing or inaccessible");
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("Deck subagent Pi session path is not a regular file");
+    }
+    this.claimedSubagentContinuations.add(continueSubagentId);
+    try {
+      // Native continuation permits an explicit agent change. When omitted,
+      // preserve the durable run's original named persona/capabilities rather
+      // than accidentally resuming its history as an anonymous child.
+      const effectiveAgentName = agentName ?? run.agent;
+      return await parent.runChildAgent(task, effectiveAgentName, undefined, undefined, {
+        source: "single",
+        runId: continueSubagentId,
+        resumeSessionPath: run.sessionFile,
+      });
+    } finally {
+      this.claimedSubagentContinuations.delete(continueSubagentId);
+    }
   }
 
   /**

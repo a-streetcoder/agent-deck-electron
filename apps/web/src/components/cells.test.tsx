@@ -41,6 +41,34 @@ describe("subagent durable status and content", () => {
     expect(screen.getByRole("alert").textContent).toBe("Result persistence failed.");
   });
 
+  it("expands once when a retained terminal card resumes, then respects collapse", () => {
+    const terminal: SubagentCell = {
+      kind: "subagent",
+      id: "durable-run",
+      task: "First task",
+      status: "done",
+      text: "first result",
+      progress: [],
+    };
+    const view = render(<CellView cell={terminal} />);
+    const toggle = screen.getByRole("button", { name: /Subagent result/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    view.rerender(
+      <CellView cell={{ ...terminal, task: "Follow-up", status: "running", text: "live delta" }} />,
+    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    view.rerender(
+      <CellView
+        cell={{ ...terminal, task: "Follow-up", status: "running", text: "live delta two" }}
+      />,
+    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("bounds long task and output regions while keeping them keyboard focusable", () => {
     const task = "task ".repeat(20_000);
     const output = "output ".repeat(40_000);

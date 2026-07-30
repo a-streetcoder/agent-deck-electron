@@ -1,4 +1,4 @@
-/* global setTimeout, setInterval, clearInterval */
+/* global setTimeout, setInterval, clearInterval, __filename */
 // A scripted stand-in for `pi --mode rpc`, driven over stdin/stdout JSONL, so
 // the PiHost Effect service (src/services/piHost.ts) can be tested hermetically:
 // out-of-order correlation, exit-with-pending, abort mid-turn, malformed lines.
@@ -27,7 +27,12 @@ rl.on("line", (line) => {
         type: "response",
         command: "get_state",
         success: true,
-        data: { sessionId: "fake-session", isStreaming: false, thinkingLevel: "off" },
+        data: {
+          sessionId: "fake-session",
+          sessionFile: __filename,
+          isStreaming: false,
+          thinkingLevel: "off",
+        },
       });
       break;
     case "get_session_stats":

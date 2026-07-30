@@ -3,6 +3,7 @@ import type { SessionPlanItem } from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
+import { ChildRunError } from "./services/sessionManager.ts";
 
 /**
  * The deck-agent bridge tools — managed_subagent, managed_parallel, and the
@@ -13,16 +14,19 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
   // Native subagents (native-subagent-bridge.md): a parent session can launch a
   // focused child pi to complete one task and report back. v1 is text-returning
   // (managed_subagent); parallel / supervisor / plan tools + the deck UI follow.
-  const subagentParams = z.object({
-    task: z.string().trim().min(1),
-    agent: z.string().trim().min(1).optional(),
-  });
+  const subagentParams = z
+    .object({
+      task: z.string().trim().min(1),
+      agent: z.string().trim().min(1).optional(),
+      continueSubagentID: z.string().uuid().optional(),
+    })
+    .strict();
   bridge.register(
     {
       name: "managed_subagent",
       label: "Subagent",
       description:
-        "Delegate a self-contained task to a fresh subagent (no conversation history) and get its result back. Use for focused, independent work you can hand off with a complete task description. Optionally pass `agent` to delegate to one of your installed named agents (it adopts that agent's persona).",
+        "Delegate a self-contained task to a Deck subagent and get its result plus a stable Deck run ID. Omit `continueSubagentID` for a fresh isolated child with no parent conversation. For a direct follow-up, pass that stable ID: Agent Deck resumes only that child's history, never the parent conversation, and updates the same transcript card.",
       parameters: {
         type: "object",
         properties: {
@@ -35,11 +39,17 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
             description:
               "Optional: the name of an installed agent to delegate to; the subagent adopts its persona. Omit for a plain anonymous subagent.",
           },
+          continueSubagentID: {
+            type: "string",
+            description:
+              "Stable Deck run ID for a direct follow-up. Restores only that child's session and updates the same card; omit to start fresh.",
+          },
         },
         required: ["task"],
         additionalProperties: false,
       },
-      promptSnippet: "managed_subagent — delegate a self-contained task to a fresh subagent.",
+      promptSnippet:
+        "managed_subagent(task, agent?, continueSubagentID?) — start fresh or directly follow up using a stable Deck run ID.",
     },
     async (params, ctx) => {
       const parsed = subagentParams.safeParse(params);
@@ -50,14 +60,22 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
         };
       }
       try {
-        const result = await sessions.runSubagent(
+        const result = await sessions.runManagedSubagent(
           ctx.sessionId,
           parsed.data.task,
           parsed.data.agent,
+          parsed.data.continueSubagentID,
         );
-        return { content: result || "(the subagent returned no output)" };
+        return {
+          content: `Deck subagent ID: ${result.runId}\n\n${result.text || "(the subagent returned no output)"}`,
+        };
       } catch (error) {
-        return { content: `Subagent failed: ${String(error)}`, isError: true };
+        // Only execution failures after the durable identity was accepted carry
+        // an authoritative ID. Never echo an untrusted/unknown caller ID as if
+        // Agent Deck had claimed or started that run.
+        const errorRunId = error instanceof ChildRunError ? error.runId : undefined;
+        const idLine = errorRunId ? `\nDeck subagent ID: ${errorRunId}` : "";
+        return { content: `Subagent failed.${idLine}\n\n${String(error)}`, isError: true };
       }
     },
   );
@@ -126,7 +144,9 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       }
       // allSettled: one failing subagent doesn't drop the others' results.
       const settled = await Promise.allSettled(
-        parsed.data.tasks.map((t) => sessions.runSubagent(ctx.sessionId, t.task, t.agent)),
+        parsed.data.tasks.map((t) =>
+          sessions.runSubagent(ctx.sessionId, t.task, t.agent, undefined, undefined, "parallel"),
+        ),
       );
       const anyOk = settled.some((r) => r.status === "fulfilled");
       const rendered = settled

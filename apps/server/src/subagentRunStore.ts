@@ -20,6 +20,9 @@ const MAX_STORE_BYTES = 8_000_000;
 const MAX_TASK_BYTES = 50_000;
 const MAX_RESULT_BYTES = 256_000;
 const MAX_ERROR_BYTES = 50_000;
+const MAX_SESSION_FILE_BYTES = 16_384;
+
+export type SubagentRunSource = "single" | "parallel";
 
 export type SubagentRunStatus =
   | "starting"
@@ -44,6 +47,10 @@ export interface SubagentRunRecord {
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
+  /** Additive v1 fields: absent legacy records remain readable but cannot resume. */
+  source?: SubagentRunSource;
+  /** Pi-owned canonical resume handle returned by get_state; Agent Deck never deletes it. */
+  sessionFile?: string;
 }
 
 const runSchema = z
@@ -62,6 +69,13 @@ const runSchema = z
     inputTokens: z.number().nonnegative().optional(),
     outputTokens: z.number().nonnegative().optional(),
     durationMs: z.number().nonnegative().optional(),
+    source: z.enum(["single", "parallel"]).optional(),
+    sessionFile: z
+      .string()
+      .min(1)
+      .max(MAX_SESSION_FILE_BYTES)
+      .refine((value) => value.trim().length > 0, "sessionFile cannot be blank")
+      .optional(),
   })
   .superRefine((run, context) => {
     if (!active(run.status) && run.completedAt === undefined) {
@@ -129,6 +143,11 @@ export class SubagentRunStore {
     return this.state.runs
       .filter((run) => run.parentSessionId === parentSessionId)
       .map((run) => ({ ...run }));
+  }
+
+  get(id: string): SubagentRunRecord | undefined {
+    const run = this.state.runs.find((candidate) => candidate.id === id);
+    return run ? { ...run } : undefined;
   }
 
   create(record: SubagentRunRecord): void {

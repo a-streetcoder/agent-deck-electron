@@ -1,5 +1,5 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { deckRunDetail, deckRuns, type DeckRun, type DeckRunDetail } from "@agent-deck/domain";
 import { RunMeta } from "./RunMeta.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -166,6 +166,18 @@ export function DeckPanel() {
   const transcript = useAppStore((state) => state.transcript);
   const runs = useMemo(() => deckRuns(transcript), [transcript]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const previousStatuses = useRef(new Map<string, DeckRun["status"]>());
+  useEffect(() => {
+    const next = new Map(runs.map((run) => [run.id, run.status]));
+    const resumed = runs.find(
+      (run) => run.status === "running" && previousStatuses.current.get(run.id) !== "running",
+    );
+    // Initial fresh runs have no prior row and keep the established Deck state.
+    // A retained terminal row that resumes opens once; later deltas do not
+    // override a user's explicit collapse while it remains running.
+    if (resumed && previousStatuses.current.has(resumed.id)) setExpandedId(resumed.id);
+    previousStatuses.current = next;
+  }, [runs]);
   // Only the expanded run computes its (cheap) detail; recomputes as the run streams.
   const detail = useMemo(
     () => (expandedId ? deckRunDetail(transcript, expandedId) : null),

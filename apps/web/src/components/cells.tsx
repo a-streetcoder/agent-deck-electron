@@ -140,6 +140,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
         variant="generic"
         status={SUBAGENT_STATUS[cell.status]}
         defaultExpanded={cell.status === "running"}
+        expandOnRunningTransition
         body={
           <div className="space-y-2">
             {/* Named delegation (native named subagents): which agent's persona

@@ -1,5 +1,5 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { forwardRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import { Brain, ChevronDown, ChevronRight, Diff, Globe, Plug, Terminal } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -36,6 +36,8 @@ export interface ToolGroupCardProps {
   body?: ReactNode;
   /** Open by default — used for streaming tool calls. */
   defaultExpanded?: boolean;
+  /** Re-open once when a retained terminal card starts running again. */
+  expandOnRunningTransition?: boolean;
   /** Card variant — picks the slot styling and the fallback leading icon. */
   variant?: ToolGroupVariant;
   /** Per-tool leading icon; overrides the variant's default when set. */
@@ -87,6 +89,7 @@ export const ToolGroupCard = forwardRef<HTMLDivElement, ToolGroupCardProps>(func
     duration,
     body,
     defaultExpanded = false,
+    expandOnRunningTransition = false,
     variant = "generic",
     icon,
     className,
@@ -94,6 +97,14 @@ export const ToolGroupCard = forwardRef<HTMLDivElement, ToolGroupCardProps>(func
   ref,
 ) {
   const [open, setOpen] = useState(defaultExpanded);
+  const previousStatus = useRef(status);
+  useEffect(() => {
+    const wasRunning =
+      previousStatus.current === "starting" || previousStatus.current === "running";
+    const isRunning = status === "starting" || status === "running";
+    if (expandOnRunningTransition && !wasRunning && isRunning) setOpen(true);
+    previousStatus.current = status;
+  }, [expandOnRunningTransition, status]);
   const Icon = icon ?? VARIANT_ICON[variant];
 
   return (
