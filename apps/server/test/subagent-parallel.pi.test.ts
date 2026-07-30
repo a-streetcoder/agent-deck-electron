@@ -156,7 +156,9 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       .snapshot()
       .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
     expect(hydrated).toHaveLength(2);
-    expect(hydrated.map((cell) => cell.id)).toEqual(durableIds);
+    // Parallel allocation order is intentionally scheduler-dependent; restart
+    // must preserve the same identities, not impose a new ordering contract.
+    expect(hydrated.map((cell) => cell.id)).toEqual(expect.arrayContaining(durableIds));
     expect(hydrated.map((cell) => cell.text)).toEqual(
       expect.arrayContaining(["RESULT_ALPHA_SENTINEL", "RESULT_BETA_SENTINEL"]),
     );

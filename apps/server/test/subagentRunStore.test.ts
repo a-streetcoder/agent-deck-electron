@@ -37,9 +37,9 @@ describe("SubagentRunStore", () => {
     const sessionFile = path.join(allocation.sessionsDirectory, "child.jsonl");
     writeFileSync(sessionFile, "{}\n");
     store.markOwnedSession(run.id, sessionFile);
-    expect(store.artifactDirectoryForReveal(run.id)).toBe(
-      path.join(realpathSync(dataDir), "Subagent Runs", run.id),
-    );
+    const revealed = store.artifactDirectoryForReveal(run.id);
+    expect(revealed).toBeDefined();
+    expect(realpathSync(revealed!)).toBe(realpathSync(path.join(dataDir, "Subagent Runs", run.id)));
     expect(store.cells(PARENT_A)[0]?.artifactRootId).toBe(run.id);
     store.removeParent(PARENT_A);
     expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);
