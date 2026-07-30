@@ -24,6 +24,7 @@ import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
+import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
 import type { StampedEvent } from "./services/pushBus.ts";
@@ -358,6 +359,7 @@ export class SessionManager {
      */
     private readonly onCheckpointCapture?: (meta: SessionMeta, label: string) => Promise<void>,
     private readonly loopSnapshots?: LoopSessionSnapshotStore,
+    private readonly subagentRuns?: SubagentRunStore,
     private readonly decorateUserCell?: (
       sessionId: string,
       cell: UserCell,
@@ -452,7 +454,10 @@ export class SessionManager {
       const session = this.launch(revived, plan, env);
       try {
         await session.seedFromHistory();
-        session.seedSyntheticCells(this.loopSnapshots?.get(revived.id) ?? []);
+        session.seedSyntheticCells([
+          ...(this.loopSnapshots?.get(revived.id) ?? []),
+          ...(this.subagentRuns?.cells(revived.id) ?? []),
+        ]);
         // The activity plan is app state (not in pi's session file), so restore
         // it from the persisted meta after the pi history is rebuilt.
         //
@@ -633,6 +638,14 @@ export class SessionManager {
       tempDirs,
       childBridgeFactory: this.childBridgeFactory,
       resolveAgent: this.resolveAgent,
+      ...(this.subagentRuns
+        ? {
+            childRuns: {
+              create: (record) => this.subagentRuns!.create(record),
+              update: (id, patch) => this.subagentRuns!.update(id, patch),
+            },
+          }
+        : {}),
       autoTitle: this.autoTitle,
       ...(this.decorateUserCell
         ? {
@@ -717,6 +730,11 @@ export class SessionManager {
 
   removeLoopSessionSnapshot(sessionId: string): void {
     this.loopSnapshots?.remove(sessionId);
+  }
+
+  /** Remove only runs owned by a deleted parent, after destroy() settled children. */
+  removeSubagentRuns(sessionId: string): void {
+    this.subagentRuns?.removeParent(sessionId);
   }
 
   /** Commit a successfully prepared session to persistence/broadcast, then

@@ -76,6 +76,12 @@ describe("managed_subagent: child transcript streams into the parent as a card",
     const { session } = (await response.json()) as { session: { id: string } };
 
     const managed = server.sessions.get(session.id)!;
+    const orderedDeltas: Array<{ seq: number; delta: string }> = [];
+    const unsubscribe = managed.bus.subscribe((stamped) => {
+      if (stamped.event.type === "subagent_delta") {
+        orderedDeltas.push({ seq: stamped.seq, delta: stamped.event.delta });
+      }
+    });
     await managed.prompt("delegate the summary task");
     await server.receipts.waitFor("idle", session.id);
 
@@ -88,6 +94,14 @@ describe("managed_subagent: child transcript streams into the parent as a card",
     expect(subagentCells[0]!.status).toBe("done");
     expect(subagentCells[0]!.task).toBe("Summarize the meeting notes.");
     expect(subagentCells[0]!.text).toContain("CHILD_STREAM_SENTINEL: three bullet summary.");
+    unsubscribe();
+    expect(orderedDeltas.length).toBeGreaterThan(1);
+    expect(orderedDeltas.map((item) => item.seq)).toEqual(
+      [...orderedDeltas].map((item) => item.seq).sort((a, b) => a - b),
+    );
+    expect(orderedDeltas.map((item) => item.delta).join("")).toBe(
+      "CHILD_STREAM_SENTINEL: three bullet summary.",
+    );
 
     // The tool result the MODEL receives is unchanged (still the child's text).
     const followUp = mock.requests[mock.requests.length - 1]!;

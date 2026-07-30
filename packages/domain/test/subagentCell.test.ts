@@ -53,6 +53,32 @@ describe("subagent cell reducer", () => {
     });
   });
 
+  it("preserves distinct interrupted status and partial output with its reason", () => {
+    const state = run([
+      openCell("s1"),
+      { type: "subagent_delta", cellId: "s1", delta: "partial" },
+      {
+        type: "cell_final",
+        cell: {
+          kind: "subagent",
+          id: "s1",
+          task: "T",
+          status: "interrupted",
+          text: "partial",
+          error: "Disconnected during restart.",
+          progress: [],
+        },
+      },
+    ]);
+    expect(subagentCells(state)[0]).toEqual(
+      expect.objectContaining({
+        status: "interrupted",
+        text: "partial",
+        error: "Disconnected during restart.",
+      }),
+    );
+  });
+
   it("ignores a delta for an unknown or non-subagent cell (self-healing)", () => {
     const state = run([
       {

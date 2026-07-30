@@ -29,9 +29,10 @@ const subagentCellSchema = z.object({
   kind: z.literal("subagent"),
   id: z.string().min(1).max(500),
   task: z.string().max(MAX_FIELD_BYTES),
-  status: z.enum(["running", "done", "error"]),
+  status: z.enum(["running", "done", "error", "stopped", "interrupted"]),
   agentName: z.string().max(500).optional(),
   text: z.string(),
+  error: z.string().max(MAX_FIELD_BYTES).optional(),
   progress: z.array(z.string()).max(MAX_PROGRESS),
   model: z.string().max(500).optional(),
   inputTokens: z.number().nonnegative().optional(),
@@ -90,6 +91,7 @@ function normalizedCell(source: SubagentCell): SubagentCell {
     text: utf8Suffix(source.text, MAX_TEXT_BYTES),
     progress: source.progress.slice(-MAX_PROGRESS).map((item) => utf8Suffix(item, MAX_FIELD_BYTES)),
     ...(source.agentName ? { agentName: utf8Suffix(source.agentName, 500) } : {}),
+    ...(source.error ? { error: utf8Suffix(source.error, MAX_FIELD_BYTES) } : {}),
     ...(source.model ? { model: utf8Suffix(source.model, 500) } : {}),
   };
 }
@@ -107,7 +109,7 @@ function boundedSession(
     while (serializedBytes(single) > MAX_LOOP_SNAPSHOT_SESSION_BYTES && next.progress.length > 0) {
       next.progress.shift();
     }
-    for (const field of ["task", "text"] as const) {
+    for (const field of ["task", "text", "error"] as const) {
       while (serializedBytes(single) > MAX_LOOP_SNAPSHOT_SESSION_BYTES && next[field]) {
         next[field] = utf8Suffix(
           next[field],

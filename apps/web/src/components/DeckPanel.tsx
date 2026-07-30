@@ -15,12 +15,16 @@ const STATUS_LABEL: Record<DeckRun["status"], string> = {
   running: "Running",
   done: "Done",
   error: "Failed",
+  stopped: "Stopped",
+  interrupted: "Interrupted",
 };
 
 const STATUS_COLOR: Record<DeckRun["status"], string> = {
   running: "var(--color-brand-accent, var(--color-accent))",
   done: "var(--color-diff-added)",
   error: "var(--color-role-tool)",
+  stopped: "var(--color-text-muted)",
+  interrupted: "var(--color-warning)",
 };
 
 /** The expanded detail for one run: its full task, streamed output, progress
@@ -33,7 +37,13 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       className="mt-2 space-y-2 border-t border-border-subtle pt-2"
       data-testid="deck-run-detail"
     >
-      <div className="whitespace-pre-wrap text-xs text-text-secondary">{cell.task}</div>
+      <div
+        className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        data-testid="deck-run-task"
+        tabIndex={0}
+      >
+        {cell.task}
+      </div>
       {detail.questions.length > 0 ? (
         <ul className="space-y-1" data-testid="deck-run-questions">
           {detail.questions.map((q) => (
@@ -62,10 +72,16 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       ) : null}
       {cell.text ? (
         <div
-          className="max-h-48 overflow-auto whitespace-pre-wrap text-detail text-text-secondary"
+          className="max-h-48 overflow-auto whitespace-pre-wrap rounded text-detail text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           data-testid="deck-run-output"
+          tabIndex={0}
         >
           {cell.text}
+        </div>
+      ) : null}
+      {cell.error ? (
+        <div className="whitespace-pre-wrap text-detail text-danger" role="alert">
+          {cell.error}
         </div>
       ) : null}
     </div>

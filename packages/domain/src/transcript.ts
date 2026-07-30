@@ -97,11 +97,13 @@ export interface SubagentCell {
   kind: "subagent";
   id: string;
   task: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "stopped" | "interrupted";
   /** The named agent this run was delegated to (native named subagents), if any.
    * Absent for a plain anonymous task-runner delegation. */
   agentName?: string;
   text: string;
+  /** Actionable terminal failure detail, kept separate from partial output. */
+  error?: string;
   /**
    * Non-blocking progress updates the child sent up its supervisor channel
    * (contact_supervisor → progress_update). Kept separate from `text` (the
@@ -330,6 +332,7 @@ export interface DeckRun {
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
+  error?: string;
 }
 
 /**
@@ -353,6 +356,7 @@ export function deckRuns(state: TranscriptState): DeckRun[] {
       inputTokens: cell.inputTokens,
       outputTokens: cell.outputTokens,
       durationMs: cell.durationMs,
+      error: cell.error,
     }));
 }
 

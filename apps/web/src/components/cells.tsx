@@ -123,6 +123,8 @@ const SUBAGENT_STATUS: Record<SubagentCell["status"], ToolGroupStatus> = {
   running: "running",
   done: "result",
   error: "failed",
+  stopped: "stopped",
+  interrupted: "interrupted",
 };
 
 /**
@@ -152,7 +154,13 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               </div>
             ) : null}
             <div className="text-xs font-medium uppercase tracking-wide text-text-muted">Task</div>
-            <div className="whitespace-pre-wrap text-xs text-text-muted">{cell.task}</div>
+            <div
+              className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-xs text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              data-testid="subagent-task"
+              tabIndex={0}
+            >
+              {cell.task}
+            </div>
             {cell.progress.length > 0 ? (
               <ul className="space-y-1" data-testid="subagent-progress">
                 {cell.progress.map((message, index) => (
@@ -169,10 +177,20 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
             ) : null}
             {cell.text ? (
               <div
-                className="max-h-64 overflow-auto whitespace-pre-wrap text-xs text-text-secondary"
+                className="max-h-64 overflow-auto whitespace-pre-wrap rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 data-testid="subagent-output"
+                tabIndex={0}
               >
                 {cell.text}
+              </div>
+            ) : null}
+            {cell.error ? (
+              <div
+                className="whitespace-pre-wrap text-xs text-danger"
+                role="alert"
+                data-testid="subagent-error"
+              >
+                {cell.error}
               </div>
             ) : null}
             <RunMeta

@@ -140,5 +140,25 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     expect(cells).toHaveLength(2);
     expect(cells.filter((c) => c.agentName === "reviewer-bot")).toHaveLength(1);
     expect(cells.filter((c) => c.agentName === undefined)).toHaveLength(1);
+    const durableIds = cells.map((cell) => cell.id);
+    expect(new Set(durableIds).size).toBe(2);
+
+    // Completed generic runs survive a full server restart and are hydrated
+    // exactly once alongside Pi's canonical parent history.
+    await server.close();
+    server = await startServer({ dataDir });
+    const resumed = await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}/resume`, {
+      method: "POST",
+    });
+    expect(resumed.status).toBe(200);
+    const hydrated = server.sessions
+      .get(session.id)!
+      .snapshot()
+      .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
+    expect(hydrated).toHaveLength(2);
+    expect(hydrated.map((cell) => cell.id)).toEqual(durableIds);
+    expect(hydrated.map((cell) => cell.text)).toEqual(
+      expect.arrayContaining(["RESULT_ALPHA_SENTINEL", "RESULT_BETA_SENTINEL"]),
+    );
   });
 });

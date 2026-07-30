@@ -5,10 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DomainEvent, SessionMeta } from "@agent-deck/domain";
 import { Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionCreationError, SessionManager } from "../src/SessionManager.ts";
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
+import { SubagentRunStore } from "../src/subagentRunStore.ts";
 import { PiHostLive, spawnPiProcess, type PiHostShape } from "../src/services/piHost.ts";
 import {
   makeSessionPushBusHandle,
@@ -159,6 +160,206 @@ describe("Loop synthetic transcript restoration", () => {
             ["maker", "maker output"],
             ["evaluator", "SUCCESS"],
           ]);
+        }),
+      ),
+    );
+  });
+});
+
+describe("durable generic child lifecycle", () => {
+  it("stops a running child with its parent scope and durably restores partial output + metadata", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const dataDir = makeTempDir();
+    const store = new SubagentRunStore(dataDir, () => {});
+    const params = makeParams({
+      childRuns: {
+        create: (record) => store.create(record),
+        update: (id, patch) => store.update(id, patch),
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.runChildAgent("stream-with-metadata-forever"));
+          yield* waitUntil(() => {
+            const cell = Effect.runSync(rt.snapshot).state.cells.find(
+              (item) => item.kind === "subagent",
+            );
+            return cell?.kind === "subagent" && cell.text.includes("chunk-");
+          });
+          expect(pids).toHaveLength(2);
+        }),
+      ),
+    );
+    await expectProcessGone(pids[1]!);
+
+    const restored = new SubagentRunStore(dataDir, () => {}).cells(params.meta.id)[0];
+    expect(restored).toEqual(
+      expect.objectContaining({
+        status: "stopped",
+        text: expect.stringContaining("chunk-"),
+        model: "fake-child-model",
+        inputTokens: 7,
+        outputTokens: 3,
+        durationMs: expect.any(Number),
+      }),
+    );
+    expect(restored!.durationMs).toBeGreaterThan(0);
+  });
+
+  it("cleans up without prompting when the running transition cannot be persisted", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const statuses: string[] = [];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: (record) => statuses.push(record.status),
+                update: (_id, patch) => {
+                  if (patch.status) statuses.push(patch.status);
+                  if (patch.status === "running") throw new Error("running write failed");
+                },
+              },
+            }),
+          );
+          expect((yield* Effect.exit(rt.runChildAgent("must not prompt")))._tag).toBe("Failure");
+        }),
+      ),
+    );
+    expect(statuses).toEqual(["starting", "running", "failed"]);
+    await expectProcessGone(pids[1]!);
+  });
+
+  it("reports completion persistence failure as a failed card without overwriting it as stopped", async () => {
+    const { piHost } = makeFakePiHost();
+    const statuses: string[] = [];
+    const cell = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: (record) => statuses.push(record.status),
+                update: (_id, patch) => {
+                  if (patch.status) statuses.push(patch.status);
+                  if (patch.status === "completed") throw new Error("completion fsync failed");
+                },
+              },
+            }),
+          );
+          expect((yield* Effect.exit(rt.runChildAgent("finish normally")))._tag).toBe("Failure");
+          return (yield* rt.snapshot).state.cells.find((item) => item.kind === "subagent");
+        }),
+      ),
+    );
+    expect(statuses).toEqual(["starting", "running", "completed", "failed"]);
+    expect(cell).toEqual(
+      expect.objectContaining({
+        status: "error",
+        text: "hello",
+        error: expect.stringContaining("could not be persisted"),
+      }),
+    );
+  });
+
+  it("surfaces a failed-transition write error and retries durable failed during cleanup", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const statuses: string[] = [];
+    let failedWrites = 0;
+    const cell = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: (record) => statuses.push(record.status),
+                update: (_id, patch) => {
+                  if (patch.status) statuses.push(patch.status);
+                  if (patch.status === "failed" && failedWrites++ === 0) {
+                    throw new Error("failed write failed");
+                  }
+                },
+              },
+            }),
+          );
+          expect((yield* Effect.exit(rt.runChildAgent("exit-before-end")))._tag).toBe("Failure");
+          return (yield* rt.snapshot).state.cells.find((item) => item.kind === "subagent");
+        }),
+      ),
+    );
+    expect(statuses).toEqual(["starting", "running", "failed", "failed"]);
+    expect(cell).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: expect.stringContaining("could not persist failed run"),
+      }),
+    );
+    await expectProcessGone(pids[1]!);
+  });
+
+  it("still reaps the child when persisting the stopped transition fails", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const statuses: string[] = [];
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: (record) => statuses.push(record.status),
+                update: (_id, patch) => {
+                  if (patch.status) statuses.push(patch.status);
+                  if (patch.status === "stopped") throw new Error("stopped write failed");
+                },
+              },
+            }),
+          );
+          yield* Effect.fork(rt.runChildAgent("stream-forever"));
+          yield* waitUntil(() => statuses.includes("running"));
+        }),
+      ),
+    );
+    expect(statuses).toEqual(["starting", "running", "stopped"]);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("failed to persist stopped run"),
+      expect.any(Error),
+    );
+    warning.mockRestore();
+    await expectProcessGone(pids[1]!);
+  });
+
+  it("does not spawn a child when the required initial record cannot be persisted", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({
+              childRuns: {
+                create: () => {
+                  throw new Error("disk full");
+                },
+                update: () => {},
+              },
+            }),
+          );
+          const exit = yield* Effect.exit(rt.runChildAgent("must not launch"));
+          expect(exit._tag).toBe("Failure");
+          expect(pids).toHaveLength(1);
         }),
       ),
     );

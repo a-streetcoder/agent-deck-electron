@@ -9,7 +9,13 @@ import { AppLabelTag, type AppLabelTagVariant } from "@/design-system/components
  * Tool run lifecycle phases — picks the status-pill variant and the
  * header tint.
  */
-export type ToolGroupStatus = "starting" | "running" | "result" | "failed";
+export type ToolGroupStatus =
+  | "starting"
+  | "running"
+  | "result"
+  | "failed"
+  | "stopped"
+  | "interrupted";
 
 /**
  * Sub-card transport — drives the leading glyph and a `data-variant`
@@ -42,6 +48,8 @@ const STATUS_LABEL: Record<ToolGroupStatus, string> = {
   running: "running",
   result: "result",
   failed: "failed",
+  stopped: "stopped",
+  interrupted: "interrupted",
 };
 
 const STATUS_TAG: Record<ToolGroupStatus, AppLabelTagVariant> = {
@@ -49,6 +57,8 @@ const STATUS_TAG: Record<ToolGroupStatus, AppLabelTagVariant> = {
   running: "info",
   result: "success",
   failed: "error",
+  stopped: "neutral",
+  interrupted: "warning",
 };
 
 const VARIANT_ICON: Record<ToolGroupVariant, (props: { className: string }) => ReactNode> = {

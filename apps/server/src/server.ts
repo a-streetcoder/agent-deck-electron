@@ -77,6 +77,7 @@ import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
+import { SubagentRunStore } from "./subagentRunStore.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -304,6 +305,9 @@ async function initServer(
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
     fastify.log.warn({ err: error }, message),
   );
+  const subagentRuns = new SubagentRunStore(dataDir, (message, error) =>
+    console.warn(`[subagent-runs] ${message}`, error),
+  );
 
   const sessions: SessionManager = new SessionManager(
     effectRuntime,
@@ -454,6 +458,7 @@ async function initServer(
       receipts.emit("checkpoint_captured", meta.id);
     },
     loopSnapshots,
+    subagentRuns,
     (sessionId, cell, rawContent) => {
       let decorated = cell;
       try {

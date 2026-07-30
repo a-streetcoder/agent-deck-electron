@@ -442,6 +442,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
     sessions.removeLoopSessionSnapshot(id);
+    sessions.removeSubagentRuns?.(id);
     index.remove(id);
     bridgeTokens.delete(id);
     // Image ownership is removed only after every authoritative session deletion

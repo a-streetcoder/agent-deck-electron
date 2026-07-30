@@ -139,7 +139,25 @@ rl.on("line", (line) => {
       // FAKE_PI_HANG makes EVERY prompt stream forever (never agent_end) — used
       // to stand in for a still-running helper pi (e.g. an in-flight title
       // helper) so tests can assert scope close reaps it.
-      if (cmd.message === "stream-forever" || process.env.FAKE_PI_HANG === "1") {
+      if (cmd.message === "exit-before-end") {
+        process.exit(3);
+      } else if (cmd.message === "stream-with-metadata-forever") {
+        send({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            model: "fake-child-model",
+            usage: { input: 7, output: 3 },
+          },
+        });
+        streamTimer = setInterval(() => {
+          streamed += 1;
+          send({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: `chunk-${streamed} ` },
+          });
+        }, 15);
+      } else if (cmd.message === "stream-forever" || process.env.FAKE_PI_HANG === "1") {
         // A turn that never ends by itself — only `abort` stops it.
         streamTimer = setInterval(() => {
           streamed += 1;
@@ -178,6 +196,15 @@ rl.on("line", (line) => {
         });
         send({ type: "agent_end" });
       }
+      break;
+    case "get_last_assistant_text":
+      send({
+        id: cmd.id,
+        type: "response",
+        command: "get_last_assistant_text",
+        success: true,
+        data: { text: "hello" },
+      });
       break;
     case "abort":
       if (streamTimer) {

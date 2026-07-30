@@ -2,13 +2,61 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { UserCell } from "@agent-deck/domain";
+import type { SubagentCell, UserCell } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { CellView } from "./cells.tsx";
 
 afterEach(() => {
   cleanup();
   useAppStore.setState({ session: null });
+});
+
+describe("subagent durable status and content", () => {
+  const renderSubagent = (overrides: Partial<SubagentCell> = {}) => {
+    const cell: SubagentCell = {
+      kind: "subagent",
+      id: "durable-run",
+      task: "Inspect the implementation",
+      status: "interrupted",
+      text: "partial output",
+      error: "The app restarted before completion.",
+      progress: [],
+      ...overrides,
+    };
+    render(<CellView cell={cell} />);
+  };
+
+  it("announces stopped and interrupted as distinct statuses", () => {
+    renderSubagent();
+    expect(screen.getByText("interrupted")).toBeTruthy();
+    cleanup();
+    renderSubagent({ status: "stopped", error: "Stopped by parent shutdown." });
+    expect(screen.getByText("stopped")).toBeTruthy();
+  });
+
+  it("shows partial output and its failure reason together", () => {
+    renderSubagent({ status: "error", error: "Result persistence failed." });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent failed/i }));
+    expect(screen.getByTestId("subagent-output").textContent).toBe("partial output");
+    expect(screen.getByRole("alert").textContent).toBe("Result persistence failed.");
+  });
+
+  it("bounds long task and output regions while keeping them keyboard focusable", () => {
+    const task = "task ".repeat(20_000);
+    const output = "output ".repeat(40_000);
+    renderSubagent({ status: "done", task, text: output, error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    const taskRegion = screen.getByTestId("subagent-task");
+    const outputRegion = screen.getByTestId("subagent-output");
+    expect(taskRegion.getAttribute("tabindex")).toBe("0");
+    expect(outputRegion.getAttribute("tabindex")).toBe("0");
+    expect(taskRegion.textContent).toBe(task);
+    expect(outputRegion.textContent).toBe(output);
+    taskRegion.focus();
+    expect(document.activeElement).toBe(taskRegion);
+    outputRegion.focus();
+    expect(document.activeElement).toBe(outputRegion);
+  });
 });
 
 describe("user file attachments", () => {

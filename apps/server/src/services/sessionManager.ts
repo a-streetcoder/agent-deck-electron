@@ -27,8 +27,9 @@ import {
   type ThinkingLevel,
 } from "@agent-deck/pi-host";
 import type { Scope } from "effect";
-import { Context, Duration, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Stream } from "effect";
 import type { ReceiptBus } from "../receipts.ts";
+import type { SubagentRunRecord } from "../subagentRunStore.ts";
 import { PiHost, type PiHostHandle, type PiSpawnOptions, type PiStreamItem } from "./piHost.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 
@@ -149,6 +150,14 @@ export interface SpawnSessionParams {
   readonly tempDirs: readonly string[];
   readonly childBridgeFactory?: ChildBridgeFactory;
   readonly resolveAgent?: AgentResolver;
+  /** Required durable lifecycle sink for generic managed_subagent/managed_parallel runs. */
+  readonly childRuns?: {
+    create: (record: SubagentRunRecord) => void;
+    update: (
+      id: string,
+      patch: Partial<Omit<SubagentRunRecord, "id" | "parentSessionId" | "createdAt">>,
+    ) => void;
+  };
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
   /**
@@ -795,16 +804,25 @@ export const makeManagedSessionRuntime = (
         }),
 
       runChildAgent: (task, agentName, toolPolicy, overrides) =>
-        runChildAgent({
-          piHost,
-          helperContext,
-          meta,
-          params,
-          emit,
-          task,
-          agentName,
-          toolPolicy,
-          overrides,
+        Effect.gen(function* () {
+          // Child execution is owned by the parent session Scope. Parent stop,
+          // deletion, and server shutdown therefore interrupt and finalize every
+          // child before the parent's teardown completes.
+          const fiber = yield* Effect.forkIn(
+            runChildAgent({
+              piHost,
+              helperContext,
+              meta,
+              params,
+              emit,
+              task,
+              agentName,
+              toolPolicy,
+              overrides,
+            }),
+            sessionScope,
+          );
+          return yield* Fiber.join(fiber);
         }),
 
       onExit: (listener) => {
@@ -888,6 +906,15 @@ export interface ChildLaunchOverrides {
   thinking?: ThinkingLevel;
 }
 
+const persistChildRun = (operation: () => void): Effect.Effect<void, Error> =>
+  Effect.try({
+    try: operation,
+    catch: (error) =>
+      error instanceof Error
+        ? error
+        : new Error(`Subagent run persistence failed: ${String(error)}`),
+  });
+
 interface RunChildArgs {
   readonly piHost: Context.Tag.Service<PiHost>;
   readonly helperContext: HelperContext;
@@ -916,22 +943,100 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
       return yield* Effect.fail(new Error(`unknown agent: ${agentName}`));
     }
     const persona = resolved ? `\n\n# Agent: ${agentName}\n${resolved.body}` : "";
-    const cellId = `subagent-${randomUUID()}`;
+    const runId = randomUUID();
+    const cellId = runId;
     const childSessionId = randomUUID();
-    // Constrained report-only children never receive a bridge extension: even
-    // contact_supervisor mutates parent state and is outside their capability.
-    const childBridge =
-      toolPolicy === undefined
-        ? params.childBridgeFactory?.(childSessionId, {
-            parentSessionId: meta.id,
-            cellId,
-          })
-        : undefined;
+    // Loop/constrained executions retain their dedicated snapshot ownership.
+    // Generic managed_subagent/managed_parallel runs use this first-class store.
+    const durable = toolPolicy === undefined ? params.childRuns : undefined;
+    const createdAt = new Date().toISOString();
+    if (durable) {
+      yield* persistChildRun(() =>
+        durable.create({
+          id: runId,
+          parentSessionId: meta.id,
+          task,
+          ...(agentName ? { agent: agentName } : {}),
+          status: "starting",
+          createdAt,
+          updatedAt: createdAt,
+        }),
+      );
+    }
+    let terminalPersisted = false;
+    // Declare volatile stream/metadata state before registering cleanup. Setup or
+    // spawn failures can finalize safely, while graceful interruption captures
+    // whatever the live child delivered without adding per-delta disk writes.
+    const startedAt = Date.now();
+    let streamed = "";
+    let childModel: string | undefined;
+    let childInputTokens = 0;
+    let childOutputTokens = 0;
+    let sawUsage = false;
+    let sawAgentEnd = false;
+    const metadata = (): {
+      model?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      durationMs: number;
+    } => ({
+      model: childModel,
+      inputTokens: sawUsage ? childInputTokens : undefined,
+      outputTokens: sawUsage ? childOutputTokens : undefined,
+      durationMs: Date.now() - startedAt,
+    });
 
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        // Tear down the child bridge no matter what (runs even if the temp-dir
-        // work below throws before the child spawns).
+        // Register durable cleanup before creating any bridge, prompt directory,
+        // or child process. Interruption by parent stop becomes a clear terminal
+        // record; a persistence failure is logged without blocking child cleanup.
+        yield* Effect.addFinalizer((exit) => {
+          if (!durable || terminalPersisted) return Effect.void;
+          const now = new Date().toISOString();
+          const interrupted = Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause);
+          const status = interrupted ? "stopped" : "failed";
+          const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+          const detail =
+            failure instanceof Error
+              ? failure.message
+              : failure !== undefined
+                ? String(failure)
+                : "Subagent execution ended without a terminal result.";
+          const error = interrupted
+            ? "Subagent run was stopped before completion."
+            : `Subagent failed before completion: ${detail}`;
+          return persistChildRun(() =>
+            durable.update(runId, {
+              status,
+              updatedAt: now,
+              completedAt: now,
+              ...(streamed ? { summary: streamed } : {}),
+              ...metadata(),
+              error,
+            }),
+          ).pipe(
+            Effect.tap(() => Effect.sync(() => (terminalPersisted = true))),
+            Effect.tapError((persistError) =>
+              Effect.sync(() =>
+                console.warn(
+                  `[subagent-runs] failed to persist ${status} run ${runId}`,
+                  persistError,
+                ),
+              ),
+            ),
+            Effect.orDie,
+          );
+        });
+        // Constrained report-only children never receive a bridge extension:
+        // even contact_supervisor mutates parent state and is outside policy.
+        const childBridge =
+          toolPolicy === undefined
+            ? params.childBridgeFactory?.(childSessionId, {
+                parentSessionId: meta.id,
+                cellId,
+              })
+            : undefined;
         yield* Effect.addFinalizer(() => Effect.sync(() => childBridge?.dispose()));
         const promptDir = mkdtempSync(join(tmpdir(), "agent-deck-subagent-"));
         yield* Effect.addFinalizer(() =>
@@ -967,6 +1072,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
         });
 
+        // Persist the running transition before the child receives its task.
+        // If this write fails, the scoped child is torn down without prompting.
+        if (durable) {
+          yield* persistChildRun(() =>
+            durable.update(runId, {
+              status: "running",
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+        }
+
         // Open the Subagent card in the PARENT transcript before the child runs.
         emit({
           type: "cell_open",
@@ -979,25 +1095,6 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
             progress: [],
             ...(agentName ? { agentName } : {}),
           },
-        });
-
-        const startedAt = Date.now();
-        let streamed = "";
-        let childModel: string | undefined;
-        let childInputTokens = 0;
-        let childOutputTokens = 0;
-        let sawUsage = false;
-        let sawAgentEnd = false;
-        const metadata = (): {
-          model?: string;
-          inputTokens?: number;
-          outputTokens?: number;
-          durationMs: number;
-        } => ({
-          model: childModel,
-          inputTokens: sawUsage ? childInputTokens : undefined,
-          outputTokens: sawUsage ? childOutputTokens : undefined,
-          durationMs: Date.now() - startedAt,
         });
 
         const processChild = (item: PiStreamItem): void => {
@@ -1034,7 +1131,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           if (e.type === "agent_end") sawAgentEnd = true;
         };
 
-        const finalText = yield* Effect.gen(function* () {
+        const childOutcome = yield* Effect.gen(function* () {
           const collector = yield* child.events.pipe(
             Stream.takeUntil((item) => isPiEvent(item) && eventType(item.event) === "agent_end"),
             Stream.runForEach((item) => Effect.sync(() => processChild(item))),
@@ -1046,47 +1143,125 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<string, Error> => {
           );
           yield* child.prompt(task);
           yield* Fiber.join(collector);
-          if (!sawAgentEnd) {
+          if (!sawAgentEnd)
             return yield* Effect.fail(new Error("subagent exited before finishing"));
-          }
           const { text } = yield* child.request({ type: "get_last_assistant_text" });
-          const result = text ?? streamed;
+          return text ?? streamed;
+        }).pipe(Effect.either);
+
+        const finalMetadata = metadata();
+        const completedAt = new Date().toISOString();
+        if (childOutcome._tag === "Left") {
+          const failure =
+            childOutcome.left instanceof Error
+              ? childOutcome.left
+              : new Error(String(childOutcome.left));
+          const persisted = durable
+            ? yield* persistChildRun(() =>
+                durable.update(runId, {
+                  status: "failed",
+                  updatedAt: completedAt,
+                  completedAt,
+                  summary: streamed,
+                  error: failure.message,
+                  ...finalMetadata,
+                }),
+              ).pipe(Effect.either)
+            : ({ _tag: "Right" } as const);
+          if (persisted._tag === "Right") terminalPersisted = true;
+          const reportedFailure =
+            persisted._tag === "Left"
+              ? new Error(
+                  `${failure.message} (could not persist failed run: ${persisted.left.message})`,
+                )
+              : failure;
           emit({
             type: "cell_final",
             cell: {
               kind: "subagent",
               id: cellId,
               task,
-              status: "done",
-              text: result,
+              status: "error",
+              text: streamed,
+              error: reportedFailure.message,
               progress: [],
               ...(agentName ? { agentName } : {}),
-              ...metadata(),
+              ...finalMetadata,
             },
           });
-          return result;
-        }).pipe(
-          Effect.catchAll((error) =>
-            Effect.gen(function* () {
-              emit({
-                type: "cell_final",
-                cell: {
-                  kind: "subagent",
-                  id: cellId,
-                  task,
-                  status: "error",
-                  text: streamed,
-                  progress: [],
-                  ...(agentName ? { agentName } : {}),
-                  ...metadata(),
-                },
-              });
-              return yield* Effect.fail(error instanceof Error ? error : new Error(String(error)));
-            }),
-          ),
-        );
+          return yield* Effect.fail(reportedFailure);
+        }
 
-        return finalText;
+        const result = childOutcome.right;
+        const completionWrite = durable
+          ? yield* persistChildRun(() =>
+              durable.update(runId, {
+                status: "completed",
+                updatedAt: completedAt,
+                completedAt,
+                summary: result,
+                ...finalMetadata,
+              }),
+            ).pipe(Effect.either)
+          : ({ _tag: "Right" } as const);
+        if (completionWrite._tag === "Left") {
+          const failure = new Error(
+            `Subagent completed, but its result could not be persisted: ${completionWrite.left.message}`,
+          );
+          const failureWrite = durable
+            ? yield* persistChildRun(() =>
+                durable.update(runId, {
+                  status: "failed",
+                  updatedAt: completedAt,
+                  completedAt,
+                  summary: result,
+                  error: failure.message,
+                  ...finalMetadata,
+                }),
+              ).pipe(Effect.either)
+            : ({ _tag: "Right" } as const);
+          // Never let the scope finalizer overwrite a genuinely completed child
+          // as "stopped". If both writes failed, startup will honestly correct
+          // the last durable active record to interrupted.
+          terminalPersisted = true;
+          const reportedFailure =
+            failureWrite._tag === "Left"
+              ? new Error(
+                  `${failure.message} Failed-run persistence also failed: ${failureWrite.left.message}`,
+                )
+              : failure;
+          emit({
+            type: "cell_final",
+            cell: {
+              kind: "subagent",
+              id: cellId,
+              task,
+              status: "error",
+              text: result,
+              error: reportedFailure.message,
+              progress: [],
+              ...(agentName ? { agentName } : {}),
+              ...finalMetadata,
+            },
+          });
+          return yield* Effect.fail(reportedFailure);
+        }
+
+        terminalPersisted = true;
+        emit({
+          type: "cell_final",
+          cell: {
+            kind: "subagent",
+            id: cellId,
+            task,
+            status: "done",
+            text: result,
+            progress: [],
+            ...(agentName ? { agentName } : {}),
+            ...finalMetadata,
+          },
+        });
+        return result;
       }),
     );
   }).pipe(
