@@ -470,7 +470,18 @@ describe.skipIf(process.platform === "darwin" && !!process.env.CI)(
         const { pid, sawEcho } = await runtime.runPromise(
           Effect.gen(function* () {
             const host = yield* TerminalHost;
-            const handle = yield* Scope.extend(host.spawn({ cwd: process.cwd() }), scope);
+            // PowerShell's interactive line editor can wait for terminal-emulator
+            // query responses that this headless smoke deliberately does not
+            // emulate. The candidate-chain tests cover PowerShell separately;
+            // use cmd on Windows for a deterministic real-ConPTY echo roundtrip.
+            const shellCandidates =
+              process.platform === "win32"
+                ? [{ shell: process.env.ComSpec || "cmd.exe", args: ["/Q"] }]
+                : undefined;
+            const handle = yield* Scope.extend(
+              host.spawn({ cwd: process.cwd(), shellCandidates }),
+              scope,
+            );
             expect(handle.pid).toBeGreaterThan(0);
 
             let output = "";
@@ -478,8 +489,8 @@ describe.skipIf(process.platform === "darwin" && !!process.env.CI)(
               if (event._tag === "Output") output += event.data;
             });
 
-            // Echo roundtrip: the token comes back through the PTY (both as the
-            // echoed keystrokes and the command output — either proves the loop).
+            // node-pty uses carriage return for Enter on both POSIX PTYs and
+            // Windows ConPTY. Poll because PTY output is delivered asynchronously.
             yield* handle.write("echo agent-deck-pty-smoke\r");
             yield* Effect.promise(async () => {
               const deadline = Date.now() + 10_000;
