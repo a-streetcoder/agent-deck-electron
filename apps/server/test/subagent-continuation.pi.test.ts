@@ -164,7 +164,9 @@ describe("managed_subagent real-Pi continuation", () => {
       currentTurnId: string;
       sessionFile: string;
     };
-    const root = path.join(realpathSync(dataDir), "Subagent Runs", firstCard.id);
+    const root = path.toNamespacedPath(
+      realpathSync.native(path.join(dataDir, "Subagent Runs", firstCard.id)),
+    );
     const turn = path.join(root, "turns", run.currentTurnId);
     expect(readFileSync(path.join(root, "input.md"), "utf8")).toBe(FIRST_TASK);
     expect(readFileSync(path.join(turn, "input.md"), "utf8")).toBe(SECOND_TASK);
