@@ -2,7 +2,7 @@
 
 How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
 the contract between the two. Decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md).
-Pending extension (git-repo import): [skill-engine-git-import-request.md](skill-engine-git-import-request.md).
+Historical extension request (now shipped): [skill-engine-git-import-request.md](skill-engine-git-import-request.md).
 
 The engine ships as **`@a-streetcoder/skill-engine-native`** (private GitHub Packages, Syncr-owned).
 agent-deck consumes it for skill **storage**; it keeps the **reader** (pi's loader) and all
@@ -10,7 +10,7 @@ agent-deck consumes it for skill **storage**; it keeps the **reader** (pi's load
 
 ---
 
-## Status (2026-07-28) — the engine is partially lifted in
+## Status (2026-07-28) — the engine is lifted in
 
 **Lifted onto the engine (P3, on `main`):** every in-app skill **write** — create / edit / delete /
 rename / import-local — goes through the engine addon via `EngineSkillStore` (`server.ts`).
@@ -37,21 +37,22 @@ the collection** (Syncr-endorsed; a fresh import materializes into the canonical
 a base snapshot for per-file conflicts). This matters only for installs that used the pre-engine
 importer; fresh installs are unaffected.
 
-**Suites:** resources 136/0, server 503/0.
+**P4 landing suites (historical):** resources 136/0, server 503/0. The later 0.1.5 per-file
+acceptance slice added the real-addon route/store test described under P4 below.
 
 ---
 
 ## The split
 
-| Concern                                                                            | Owner                                                                                                        |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Read / scan / render the catalog                                                   | **agent-deck** (pi scanner) — permanent                                                                      |
-| Write / delete / rename / import-local; scoping; atomicity; version store; fan-out | **engine**                                                                                                   |
-| Recovery (list / restore / acknowledge)                                            | **agent-deck native store, transitional** → engine once sync lands                                           |
-| Git-repo import + upstream sync + conflict resolution                              | **agent-deck** (legacy) → engine; import/sync shipped in 0.1.4, blocked only on per-file conflict resolution |
-| Assignment (default/project/disabled) → `--skill`; Loops; session worktrees        | **agent-deck** — never belonged to storage                                                                   |
+| Concern                                                                            | Owner                                                 |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Read / scan / render the catalog                                                   | **agent-deck** (pi scanner) — permanent               |
+| Write / delete / rename / import-local; scoping; atomicity; version store; fan-out | **engine**                                            |
+| Recovery (list / restore / acknowledge)                                            | **engine**                                            |
+| Git-repo import + upstream sync + per-file conflict resolution                     | **engine 0.1.5**, consumed through `EngineSkillStore` |
+| Assignment (default/project/disabled) → `--skill`; Loops; session worktrees        | **agent-deck** — never belonged to storage            |
 
-## The contract — the shipped NAPI surface (0.1.3)
+## The contract — historical core NAPI surface (0.1.3)
 
 Verified against the shipped binary via Syncr `crates/skill-engine-napi/scripts/smoke.mjs`.
 camelCase **named** exports; errors thrown as `Error` with a `RESOURCE_*` code prefix.
@@ -92,7 +93,8 @@ Private GitHub Packages, scope `@a-streetcoder` (must match repo owner). Project
 
 Install needs a `GITHUB_TOKEN` with `read:packages` (`gh auth token`); **end users need none** — the
 `.node` is resolved via `optionalDependencies` (win32-x64, darwin-arm64/x64, linux-x64-gnu) and
-bundled at build. `pnpm add @a-streetcoder/skill-engine-native@0.1.3` into `apps/server`.
+bundled at build. agent-deck currently pins `@a-streetcoder/skill-engine-native` 0.1.5 in
+`apps/server`.
 
 ## Reference shapes
 
@@ -124,15 +126,12 @@ Global reads keep `.pi/agent/skills` above `~/.agents/skills` — the engine's `
 agrees, and fan-out bridges new global skills into `.pi/agent/skills`. Ranking `.agents` above `.pi`
 **globally** is a deliberate lockstep change for the release pi's own default moves — not done here.
 
-## Recovery — native, transitional
+## Recovery — engine-owned
 
-`listRecoveries` / `restoreRecovery` / `acknowledgeRecovery` are served from the **native**
-`global-skills` store, NOT the engine. In agent-deck's single-user, no-sync scope the recovery
-_producers_ are the legacy skill-repo (its "Take Remote" displaces a local skill) and native
-displacement — both write there. The engine only produces recoveries during its sync/conflict path,
-which agent-deck doesn't drive yet. When sync lands (with the git-import work), recovery moves to the
-engine's `*Recovery` methods — already on the contract. _(Routing recovery to the engine prematurely
-was a real bug: it blanked the legacy repo's recoveries. Guarded by `skill-repo-legacy`'s Take Remote test.)_
+`listRecoveries` / `restoreRecovery` / `acknowledgeRecovery` are served by the engine. Git conflict
+resolution can retain a displaced tree and returns engine `RecoveryInfo`, which `EngineSkillStore`
+maps to Agent Deck's recovery contract. Pre-engine `global-skills` recovery entries are not migrated;
+that bounded upgrade caveat is covered above.
 
 ## Migrations — none
 
@@ -161,9 +160,17 @@ P4 = delete agent-deck's duplicate skill machinery.
   family in `writer.ts` (`writeSkillFile`/`deleteSkillDir`/`renameSkillDir`/`importSkillFile`, prod-
   dead, back only resources tests); and the native `ManagedSkillRepositoryStore` (Rust). Removing
   the native Rust is a separate follow-up.
-- **Follow-ups:** the upgrade caveat above (re-import old collections); the base-less whole-skill
-  conflict card in `SkillsScreen.tsx` (only reachable for pre-0.1.5 imports); a replacement
-  route-level integration test for the git flows (the old suites tested deleted code).
+- **Follow-ups:** the upgrade caveat above (re-import old collections) and the base-less whole-skill
+  conflict card in `SkillsScreen.tsx` (only reachable for pre-0.1.5 imports). These remain bounded
+  compatibility behavior, not an active per-file parity gap.
+- **0.1.5 acceptance:** `skill-git-conflict.acceptance.test.ts` drives the real addon through the
+  production resource routes and `EngineSkillStore` against local Git. It proves a formerly valid
+  merge ID becomes stale after conflict-relevant state moves and maps to `409 LEGACY_MERGE_STALE`,
+  refresh returns a new ID, mixed Keep Mine/Take Remote succeeds, and non-overlap plus exact bytes
+  survive. `SkillsScreen.test.tsx` proves mixed choice submission and stale refresh/reset/retry.
+  Runtime acceptance was macOS arm64; Windows/Linux packages exist but were not executed in this
+  slice. The synchronous API exposes no deterministic interrupted-operation state; its supported
+  stale refresh/retry path is covered.
 - **Question out to Syncr — symlinked skill-tree mutation.** agent-deck's old native rename REFUSED
   a skill whose `SKILL.md` is a symlink (409 "unsafe"); the engine renames it (200). Safe in
   practice (the rename never dereferences the link; engine discovery doesn't follow symlinks), so
