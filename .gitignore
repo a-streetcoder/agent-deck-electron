@@ -15,3 +15,6 @@ test-results/
 
 # Staged shared skill engine .node (build artifact, copied by build-backend.mjs)
 build/skill-engine-native/
+
+# macOS folder metadata
+.DS_Store
