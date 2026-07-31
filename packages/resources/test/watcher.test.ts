@@ -166,12 +166,20 @@ describe("resource watcher", () => {
     const changed = new Promise<void>((resolve) => {
       resolveChange = resolve;
     });
-    const watcher = watchResources({ home: linkedHome }, resolveChange, 10);
+    const watcher = watchResources(
+      { home: linkedHome },
+      () => {
+        if (scanAgents({ home: linkedHome }).some((agent) => agent.name === "later")) {
+          resolveChange();
+        }
+      },
+      10,
+    );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
       const catalog = path.join(physicalHome, ".pi", "agent", "agents");
       mkdirSync(catalog, { recursive: true });
-      writeFileSync(path.join(catalog, "later.md"), "later");
+      writeFileSync(path.join(catalog, "later.md"), "---\nname: later\n---\n\nLater.\n");
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
@@ -182,6 +190,26 @@ describe("resource watcher", () => {
       await watcher.close();
     }
   }, 15_000);
+
+  it("does not rescan for an unrelated sibling directory", async () => {
+    const root = home();
+    let changes = 0;
+    const watcher = watchResources(
+      { home: root },
+      () => {
+        changes += 1;
+      },
+      10,
+    );
+    try {
+      await new Promise<void>((resolve) => watcher.on("ready", resolve));
+      mkdirSync(path.join(root, "unrelated"));
+      await delay(300);
+      expect(changes).toBe(0);
+    } finally {
+      await watcher.close();
+    }
+  });
 
   it("fails closed when a contained catalog ancestor is replaced by an escaping link", async () => {
     const root = home();
@@ -605,9 +633,6 @@ describe("resource watcher", () => {
     );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      // Let any ready-adjacent events settle; only a callback whose rescan sees
-      // the later agent can satisfy the promise.
-      await new Promise((resolve) => setTimeout(resolve, 50));
       const catalog = path.join(root, ".pi", "agent", "agents", "nested");
       mkdirSync(catalog, { recursive: true });
       writeFileSync(path.join(catalog, "later.md"), "---\nname: later\n---\n\nLater.\n");

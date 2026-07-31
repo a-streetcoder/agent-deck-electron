@@ -144,9 +144,10 @@ function isRelevant(candidate: string, targets: WatchTarget[]): boolean {
   );
 }
 
-/** Watch ancestors must remain traversable so missing targets can appear later,
- * but an ancestor metadata event is not itself a resource change. Only an exact
- * target or one of its descendants schedules the authoritative rescan. */
+/** Watch ancestors must remain traversable so missing targets can appear later.
+ * Target/descendant changes schedule the authoritative rescan, as do contained
+ * addDir events anywhere lexically relevant to a target: some backends only
+ * report the ancestor directory when a missing catalog is created rapidly. */
 function isChangedTarget(candidate: string, targets: WatchTarget[]): boolean {
   const resolved = path.resolve(candidate);
   return targets.some(
@@ -203,8 +204,13 @@ export function watchResources(
     if (timer) clearTimeout(timer);
     timer = setTimeout(onChange, debounceMs);
   };
-  watcher.on("all", (_event, candidate) => {
-    if (isChangedTarget(candidate, targets)) scheduleRescan();
+  watcher.on("all", (event, candidate) => {
+    if (
+      isChangedTarget(candidate, targets) ||
+      (event === "addDir" && isRelevant(candidate, targets))
+    ) {
+      scheduleRescan();
+    }
   });
   // Watch errors—including transient file↔directory races—may mean an event
   // was missed. Always schedule the same debounced authoritative rescan.

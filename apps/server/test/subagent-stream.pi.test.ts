@@ -28,6 +28,7 @@ let server: AgentDeckServer;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-subagent-stream-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
+const PARENT_TOOL_CALL_ID = "call_managed_subagent_parent";
 
 function systemText(request: ChatCompletionRequest): string {
   return request.messages
@@ -45,7 +46,11 @@ beforeAll(async () => {
     chunkDelayMs: 30,
     toolCall: (_lastUser, body) => {
       if (isChildRequest(body) || body.messages.some((m) => m.role === "tool")) return null;
-      return { name: "managed_subagent", arguments: { task: "Summarize the meeting notes." } };
+      return {
+        id: PARENT_TOOL_CALL_ID,
+        name: "managed_subagent",
+        arguments: { task: "Summarize the meeting notes." },
+      };
     },
     reply: (_lastUser, body) =>
       isChildRequest(body) ? "CHILD_STREAM_SENTINEL: three bullet summary." : "Delegated and done.",
@@ -146,10 +151,23 @@ describe("managed_subagent: child transcript streams into the parent as a card",
     expect(assistantText(canonical!)).toBe("CHILD_STREAM_SENTINEL: three bullet summary.");
 
     // The tool result the MODEL receives is unchanged (still the child's text).
-    const followUp = mock.requests.findLast((request) =>
-      request.messages.some((message) => message.role === "tool"),
-    )!;
-    const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
+    const followUp = mock.requests.find((request) =>
+      request.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          "tool_call_id" in message &&
+          message.tool_call_id === PARENT_TOOL_CALL_ID,
+      ),
+    );
+    expect(followUp).toBeDefined();
+    const toolText = JSON.stringify(
+      followUp!.messages.filter(
+        (message) =>
+          message.role === "tool" &&
+          "tool_call_id" in message &&
+          message.tool_call_id === PARENT_TOOL_CALL_ID,
+      ),
+    );
     expect(toolText).toContain("CHILD_STREAM_SENTINEL: three bullet summary.");
   });
 });
