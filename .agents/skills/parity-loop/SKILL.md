@@ -133,6 +133,32 @@ Ask me one focused question only when a product, security, privacy, data ownersh
 - Keep implementation, tests, and documentation in the same coherent slice.
 - Do not remove unrelated code, tests, comments, features, files, or public APIs.
 
+## Sync-engine seams
+
+Agent Deck consolidates durable, user-owned state onto the shared Syncr-owned engine through
+explicit seams. The contract and live registry are `docs/sync-seams.md`, with the skills
+precedent in `docs/skill-store-contract.md` and the decision record in
+`docs/adr/0002-consolidate-skill-engine.md`.
+
+- Before starting any row that touches durable or syncable state — skills, agents, prompts,
+  Loop definitions, MCP configuration, session durable records, subagent run records, memory,
+  or settings/assignments — read `docs/sync-seams.md` and the current engine contract.
+- Where engine surface exists, consume it through the seam (`ctx.skillStore` for skills).
+  Never call the raw storage functions behind a seam, and never re-implement capability the
+  shipped engine already exposes; check the contract's NAPI surface first.
+- Missing engine surface is not a blocker. Implement natively, behind a seam: one narrow
+  store interface in front of all mutations, injectable at server construction, typed domain
+  shapes, a single write path, and typed failure codes. Routes and the renderer never reach
+  past the seam. Follow the `SkillStore` precedent (`apps/server/src/skills/skillStore.ts`).
+- Reads may stay host-side (the scanner precedent). Runtime orchestration — assignment,
+  streaming, process control, worktrees — is never seam or sync material.
+- When a slice creates or extends a durable store, update the seam registry in
+  `docs/sync-seams.md` in the same slice: the domain, its interface and write path, its
+  status, and any engine surface it would need for a lift. If the natural home for new
+  capability is the engine, also draft a short request doc to Syncr in the pattern of
+  `docs/skill-engine-per-file-conflict-request.md` — then continue on the native
+  implementation without waiting.
+
 ## Functionality and UI/UX quality gate
 
 “Done” requires more than a working happy path.
