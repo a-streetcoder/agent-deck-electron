@@ -1,0 +1,102 @@
+# User-level sync seams — the host contract for lifting onto the shared engine
+
+How agent-deck builds **durable, user-owned state** so each domain can later be lifted onto the
+shared, Syncr-owned engine (`@a-streetcoder/skill-engine-native` today; its successors as the
+surface grows) without rewriting call sites. Companion to
+[ADR-0002](adr/0002-consolidate-skill-engine.md) and
+[skill-store-contract.md](skill-store-contract.md), generalizing their pattern from skills to
+every domain that will eventually sync at user level.
+
+**Audience:** both sides. agent-deck contributors (including the parity loop) use the seam rules
+and registry below; the Syncr team uses the registry as the roadmap of engine surfaces the host
+will ask for, in the shape the skills lift already proved out.
+
+---
+
+## The posture: build behind seams, never block
+
+Parity and feature work MUST NOT stall waiting for engine surface, and MUST NOT bypass the
+engine where surface already exists. The rule is:
+
+1. **Surface exists** → consume it through the existing seam (`ctx.skillStore` for skills).
+   Never call the raw storage functions behind a seam.
+2. **Surface doesn't exist yet** → implement natively, **behind a seam** (defined below), and
+   record the domain in the registry with what the engine would need. The lift then becomes an
+   implementation swap — the `NativeSkillStore` → `EngineSkillStore` precedent — not a rewrite.
+3. **Capability is engine-adjacent but complex** (sync semantics, conflict resolution, governed
+   history) → do the minimum host-side, write a request doc to Syncr
+   ([skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md) is the
+   template), and keep the row/feature shippable on the native implementation meanwhile.
+
+## What a seam is (the `SkillStore` precedent)
+
+`apps/server/src/skills/skillStore.ts` is the reference implementation of the pattern:
+
+- **One narrow TypeScript interface** in front of ALL mutations for the domain. Consumers
+  (routes, services, renderer via IPC) depend on the interface, never on concrete storage
+  functions or file paths.
+- **Injectable** — the concrete implementation is bound once at server construction
+  (`ctx.<store>`), so tests inject a fake and the engine swap is a one-line binding change.
+- **Typed domain shapes** from `@agent-deck/domain` (or the domain package that owns them), not
+  ad-hoc route payloads.
+- **Single write path** — exactly one module performs the filesystem/app-data writes; no second
+  code path mutates the same state.
+- **Typed failures** — storage errors map to capability errors with stable codes (the
+  `RESOURCE_*` convention), so HTTP mapping survives an implementation swap.
+- **Reads may stay host-side.** The reader-authority split is deliberate and permanent for
+  catalog-shaped domains (pi's scanner reads skills; the engine writes them). A seam does not
+  require routing reads through it — only mutations.
+- **Runtime is never seam material.** Assignment → `--skill`, streaming, process orchestration,
+  and worktrees stay in agent-deck unconditionally (ADR-0002).
+
+## What "sync at user level" means
+
+One user's durable state, consistent across their devices, through the engine's offline-first
+store + optional cloud layer (and later, org governance per [VISION.md](../VISION.md) — assigned
+manifests, provenance, attestations — arriving as extensions of the same seams). Constraints
+every seam inherits:
+
+- **Offline-first.** Every operation works with no cloud; sync composes around the store.
+- **Secrets never sync raw.** OAuth tokens, API keys, and credentials are device-local;
+  syncable config references them by id, never by value.
+- **Device-local state stays device-local.** Process state, caches, embeddings, window
+  layout, and working artifacts are not sync material even when they live next to syncable data.
+
+## Seam registry
+
+The live inventory. **Any slice that creates or extends a durable store updates this table in
+the same commit.** Status: `lifted` (engine-backed), `seamed` (interface exists, native impl),
+`inline` (writes not yet behind a seam), `planned` (store doesn't exist yet).
+
+| Domain                     | What syncs at user level                                                               | Write path today                                                                          | Status                                         | Lift notes for the engine                                                                                                                                                                                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Skills**                 | Catalog + git collections + recovery                                                   | `SkillStore` → `EngineSkillStore` (`apps/server/src/skills/`)                             | **lifted** (engine 0.1.5)                      | Done; the precedent.                                                                                                                                                                                                                                                                              |
+| **Agents**                 | Authored agent definitions (global, library, project), avatars                         | `@agent-deck/resources` writer via routes                                                 | inline                                         | ADR-0002 already defers project-scope agent writes to the engine. Mirror `SkillStore`: write/delete/rename/import behind an `AgentStore`; reads stay with the scanner.                                                                                                                            |
+| **Prompts**                | Prompt library (global, library, project)                                              | `@agent-deck/resources` writer via routes                                                 | inline                                         | Same shape as agents; likely the same lift request.                                                                                                                                                                                                                                               |
+| **Loop definitions**       | Authored Loop definitions (`~/.pi/agent/loops`)                                        | `loop-catalog-native` CRUD via `loopEngine.ts`                                            | inline                                         | Definitions are the sync unit. Loop _runs_, worktrees, and apply/discard evidence are runtime — never sync.                                                                                                                                                                                       |
+| **MCP config**             | Server definitions (global + project `.pi/mcp.json`), project assignment sets          | `mcpTools.ts` + project routes                                                            | inline                                         | Config syncs; OAuth tokens and live clients are device-local. Assignment sets (MCP-06/07) are part of the syncable unit.                                                                                                                                                                          |
+| **Session durable state**  | Drafts, pinned ordering, transcript display prefs, attachment/paste/image _references_ | `persistence.ts`, `sessionImages.ts`, `sessionPastes.ts`, `sessionAttachmentLifecycle.ts` | inline (per-store modules, single write paths) | Sync scope needs a product decision per store: prefs/pins/drafts are natural; full transcripts and content-addressed blobs are heavy and may stay device-local with reference-level sync. Each new durable store from parity work lands as its own narrow module so the decision stays per-store. |
+| **Subagent run records**   | Durable child run records; artifact _metadata_                                         | `subagentRunStore.ts` + native artifact roots                                             | inline                                         | Probably device-local (working evidence); syncing the record without the artifact tree is the likely shape. Decision open.                                                                                                                                                                        |
+| **Memory**                 | Memory entries + tags                                                                  | `memoryTools.ts` app-data store                                                           | inline                                         | Entries sync; embeddings are derived, device-local, re-computed per device.                                                                                                                                                                                                                       |
+| **Settings / assignments** | Resource assignments (default/project/disabled), user preferences                      | `persistence.ts` (`app-settings.json`)                                                    | inline                                         | Split the file conceptually: user-level preferences and assignments sync; device state (paths, window state, trust gates) never does.                                                                                                                                                             |
+
+## What the engine side can rely on
+
+From the skills lift, the conventions any new engine surface should keep (so host adoption
+stays mechanical):
+
+- camelCase **named** NAPI exports; errors thrown as `Error` with a stable `RESOURCE_*`-style
+  code prefix the host maps to typed capability errors.
+- Mutations take the **full root set + scope** (`home`, optional `projectRoot`, `scope`), not a
+  single pre-resolved path.
+- A **pinned version floor** in the host; breaking surface changes bump it explicitly.
+- Distribution via platform `optionalDependencies` packages; the addon ships **outside
+  `app.asar`** (`extraResources`, `loadSkillEngineNative()` ladder) — new addons mirror this.
+- The host keeps reader authority where a catalog reader already exists; the engine
+  materializes into the canonical catalogs the reader scans.
+
+## Contributor rule (extends the skill-store rule)
+
+Consume the seam, never the storage behind it. For domains still `inline`, a change that grows
+the write surface should first pull those writes behind a seam interface — the seam is the
+smallest diff that keeps the lift cheap, not extra architecture.
