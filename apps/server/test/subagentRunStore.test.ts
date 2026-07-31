@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { emptyTranscript } from "@agent-deck/domain";
 import { describe, expect, it, vi } from "vitest";
 import { SubagentRunStore, type SubagentRunRecord } from "../src/subagentRunStore.ts";
 
@@ -82,6 +83,93 @@ describe("SubagentRunStore", () => {
     expect(reloaded.cells(run.parentSessionId)[0]).toEqual(
       expect.objectContaining({ status: "interrupted", artifactRootId: run.id }),
     );
+  });
+
+  it("scopes live transcript projections to the owning parent and invalidates them on deletion", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-live-transcript-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ status: "running" });
+    store.create(run);
+    store.registerLiveTranscript(run.id);
+    const transcript = {
+      ...emptyTranscript(),
+      cells: [
+        { kind: "user" as const, id: "child-user", text: "ordered child input" },
+        {
+          kind: "subagent" as const,
+          id: "nested-child",
+          task: "legacy nested run",
+          status: "done" as const,
+          text: "nested",
+          progress: [],
+          artifactRootId: randomUUID(),
+        },
+        {
+          kind: "tool" as const,
+          id: "tool",
+          toolCallId: "call",
+          toolName: "test",
+          args: { nested: { artifactRootToken: "secret", safe: "kept" } },
+          status: "done" as const,
+        },
+      ],
+    };
+    store.updateLiveTranscript(run.id, transcript);
+
+    expect(store.liveTranscript(PARENT_B, run.id)).toBeUndefined();
+    const snapshot = store.liveTranscript(PARENT_A, run.id)!;
+    expect(snapshot.source).toBe("live");
+    expect(snapshot.cells[0]).toEqual(
+      expect.objectContaining({ kind: "user", text: "ordered child input" }),
+    );
+    expect(snapshot.cells[1]).not.toHaveProperty("artifactRootId");
+    expect(snapshot.cells[2]).toEqual(
+      expect.objectContaining({ args: { nested: { safe: "kept" } } }),
+    );
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /sessionFile|artifactRoot|identityToken|worktree|turnDirectory|sessionsDirectory/,
+    );
+
+    store.removeParent(PARENT_A);
+    expect(store.liveTranscript(PARENT_A, run.id)).toBeUndefined();
+    expect(() => store.updateLiveTranscript(run.id, transcript)).not.toThrow();
+  });
+
+  it.each([
+    ["completed", "done"],
+    ["failed", "error"],
+    ["stopped", "stopped"],
+    ["interrupted", "interrupted"],
+  ] as const)(
+    "maps terminal %s transcript metadata without changing identity",
+    (status, expected) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), `subagent-terminal-${status}-`));
+      const store = new SubagentRunStore(dataDir, vi.fn());
+      const completedAt = new Date().toISOString();
+      const run = record({ status, completedAt, updatedAt: completedAt });
+      store.create(run);
+      expect(store.summaryTranscript(run)).toEqual(
+        expect.objectContaining({ runId: run.id, status: expected, source: "summary_only" }),
+      );
+    },
+  );
+
+  it("labels legacy retained evidence as summary-only rather than canonical", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-summary-transcript-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const completedAt = new Date().toISOString();
+    const run = record({
+      status: "completed",
+      completedAt,
+      updatedAt: completedAt,
+      summary: "retained result",
+    });
+    store.create(run);
+
+    const snapshot = store.summaryTranscript(run);
+    expect(snapshot.source).toBe("summary_only");
+    expect(snapshot.notice).toMatch(/Full canonical child history is unavailable/);
+    expect(snapshot.cells.map((cell) => cell.kind)).toEqual(["user", "assistant"]);
   });
 
   it("serializes parent deletion against allocation commit", () => {

@@ -4,6 +4,7 @@ import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import type { PromptInfo } from "@agent-deck/domain";
+import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
 import { z } from "zod";
 import {
@@ -29,7 +30,11 @@ import {
   SessionWorktreeAddError,
   type GitWorktree,
 } from "../git.ts";
-import { SessionCreationError, type LaunchPlan } from "../SessionManager.ts";
+import {
+  SessionCreationError,
+  SubagentTranscriptEvidenceError,
+  type LaunchPlan,
+} from "../SessionManager.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 
@@ -103,6 +108,56 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       return reply.status(409).send({ error: "Subagent artifacts could not be revalidated" });
     }
   });
+
+  fastify.get(
+    "/sessions/:parentSessionId/subagent-runs/:runId/transcript",
+    async (request, reply) => {
+      const parsed = z
+        .object({ parentSessionId: z.string().uuid(), runId: z.string().uuid() })
+        .safeParse(request.params);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          code: "SUBAGENT_TRANSCRIPT_INVALID_ID",
+          error: "Parent session and child run IDs must be UUIDs.",
+        });
+      }
+      const { parentSessionId, runId } = parsed.data;
+      const parent =
+        sessions.get(parentSessionId)?.meta ?? index.find((item) => item.id === parentSessionId);
+      if (!parent) {
+        return reply.status(404).send({
+          code: "SUBAGENT_TRANSCRIPT_NOT_FOUND",
+          error: "Child transcript was not found.",
+        });
+      }
+      try {
+        const snapshot = await sessions.subagentTranscript(parentSessionId, runId, parent.cwd);
+        if (!snapshot) {
+          return reply.status(404).send({
+            code: "SUBAGENT_TRANSCRIPT_NOT_FOUND",
+            error: "Child transcript was not found.",
+          });
+        }
+        return { transcript: snapshot };
+      } catch (error) {
+        if (
+          error instanceof SubagentArtifactCapabilityError ||
+          error instanceof SubagentTranscriptEvidenceError
+        ) {
+          return reply.status(409).send({
+            code: "SUBAGENT_TRANSCRIPT_UNSAFE_EVIDENCE",
+            error: "The child session evidence could not be safely revalidated.",
+          });
+        }
+        request.log.warn({ err: error, runId }, "child transcript reconstruction failed");
+        return reply.status(502).send({
+          code: "SUBAGENT_TRANSCRIPT_READER_FAILED",
+          error:
+            "The child transcript could not be reconstructed. Retry after restarting Agent Deck.",
+        });
+      }
+    },
+  );
 
   // Live pi session state (model, thinking level, streaming flags) and the
   // available-model catalog — the composer's picker data.

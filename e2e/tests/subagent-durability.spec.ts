@@ -11,6 +11,12 @@ const FOLLOW_UP_OUTPUT = "DURABLE_CONTINUATION_SENTINEL: same child card updated
 
 let harness: E2eHarness;
 
+function allObjectKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(allObjectKeys);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, nested]) => [key, ...allObjectKeys(nested)]);
+}
+
 function isChildRequest(body: ChatCompletionRequest): boolean {
   return body.messages
     .filter((message) => message.role === "developer" || message.role === "system")
@@ -69,6 +75,14 @@ test("restores one completed generic subagent card after end and resume", async 
   const output = deckRun.getByTestId("deck-run-output");
   await expect(task).toHaveText(SUBAGENT_TASK);
   await expect(output).toHaveText(SUBAGENT_OUTPUT);
+  await card.getByRole("button", { name: "Open child transcript" }).click();
+  const childDialog = page.getByRole("dialog", { name: "Child transcript" });
+  await expect(childDialog).toBeVisible();
+  const childContent = childDialog.getByTestId("child-transcript-content");
+  await expect(childContent.getByText(SUBAGENT_TASK, { exact: true })).toBeVisible();
+  await expect(childContent.getByText(SUBAGENT_OUTPUT, { exact: true })).toBeVisible();
+  await childDialog.getByRole("button", { name: "Close child transcript" }).click();
+  await expect(childDialog).toBeHidden();
   await task.focus();
   await expect(task).toBeFocused();
   await page.keyboard.press("Tab");
@@ -102,6 +116,48 @@ test("restores one completed generic subagent card after end and resume", async 
   };
   const sessionId = listed.sessions.filter((session) => !session.endedAt).at(-1)!.id;
   const session = harness.server.sessions.get(sessionId)!;
+  const runId = session.snapshot().state.cells.find((cell) => cell.kind === "subagent")!.id;
+  const transcriptResponse = await fetch(
+    `${harness.baseUrl}/sessions/${sessionId}/subagent-runs/${runId}/transcript`,
+  );
+  expect(transcriptResponse.status).toBe(200);
+  const transcriptJson = (await transcriptResponse.json()) as unknown;
+  const returnedKeys = allObjectKeys(transcriptJson);
+  expect(returnedKeys).not.toEqual(
+    expect.arrayContaining([
+      "sessionFile",
+      "artifactRootToken",
+      "artifactRootId",
+      "worktreePath",
+      "turnDirectory",
+      "sessionsDirectory",
+      "agentStatus",
+      "pendingInput",
+      "plan",
+      "contextRevision",
+    ]),
+  );
+  expect(
+    (await fetch(`${harness.baseUrl}/sessions/not-a-uuid/subagent-runs/${runId}/transcript`))
+      .status,
+  ).toBe(400);
+  const otherParentResponse = await fetch(`${harness.baseUrl}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  expect(otherParentResponse.status).toBe(201);
+  const otherParentId = ((await otherParentResponse.json()) as { session: { id: string } }).session
+    .id;
+  const foreignResponse = await fetch(
+    `${harness.baseUrl}/sessions/${otherParentId}/subagent-runs/${runId}/transcript`,
+  );
+  expect(foreignResponse.status).toBe(404);
+  expect(await foreignResponse.text()).not.toContain(sessionId);
+  expect(
+    (await fetch(`${harness.baseUrl}/sessions/${otherParentId}`, { method: "DELETE" })).status,
+  ).toBe(200);
+
   await expect.poll(() => session.meta.piSessionFile).toBeTruthy();
   await session.stop();
 
@@ -123,4 +179,20 @@ test("restores one completed generic subagent card after end and resume", async 
   await restoredDeckRun.getByTestId("deck-run-toggle").click();
   await expect(restoredDeckRun.getByTestId("deck-run-task")).toHaveText(FOLLOW_UP_TASK);
   await expect(restoredDeckRun.getByTestId("deck-run-output")).toHaveText(FOLLOW_UP_OUTPUT);
+  const restoredToggle = restoredCard.getByRole("button", { name: /Subagent result/i });
+  if ((await restoredToggle.getAttribute("aria-expanded")) !== "true") await restoredToggle.click();
+  const restoredTranscriptTrigger = restoredCard.getByRole("button", {
+    name: "Open child transcript",
+  });
+  await restoredTranscriptTrigger.click();
+  const restoredDialog = page.getByRole("dialog", { name: "Child transcript" });
+  const restoredContent = restoredDialog.getByTestId("child-transcript-content");
+  await expect(restoredContent.getByText(SUBAGENT_TASK, { exact: true })).toBeVisible();
+  await expect(restoredContent.getByText(SUBAGENT_OUTPUT, { exact: true })).toBeVisible();
+  await expect(restoredContent.getByText(FOLLOW_UP_TASK, { exact: true })).toBeVisible();
+  await expect(restoredContent.getByText(FOLLOW_UP_OUTPUT, { exact: true })).toBeVisible();
+  await restoredDialog.getByRole("button", { name: "Close child transcript" }).focus();
+  await page.keyboard.press("Escape");
+  await expect(restoredDialog).toBeHidden();
+  await expect(restoredTranscriptTrigger).toBeFocused();
 });

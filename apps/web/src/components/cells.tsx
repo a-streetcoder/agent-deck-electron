@@ -1,6 +1,6 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { FolderOpen, Send } from "lucide-react";
+import { FolderOpen, MessageSquareText, Send } from "lucide-react";
 import {
   memoryToolCardLabel,
   type QuestionCell,
@@ -36,6 +36,7 @@ import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
 import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
+import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -133,7 +134,20 @@ const SUBAGENT_STATUS: Record<SubagentCell["status"], ToolGroupStatus> = {
  * managed_parallel). The child's task and its live/authoritative output render
  * in an expandable card, mirroring the native "agent block".
  */
+function ReadOnlyChildCell({ cell }: { cell: TranscriptCell }) {
+  if (cell.kind === "question" || cell.kind === "ask_user" || cell.kind === "supervisor_question") {
+    return (
+      <div className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
+        Interactive child request (read-only)
+      </div>
+    );
+  }
+  return <CellView cell={cell} />;
+}
+
 function SubagentCellView({ cell }: { cell: SubagentCell }) {
+  const parentSessionId = useAppStore((state) => state.session?.id);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [revealState, setRevealState] = useState<{
     status: "idle" | "pending" | "success" | "error";
     message?: string;
@@ -226,6 +240,17 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               outputTokens={cell.outputTokens}
               durationMs={cell.durationMs}
             />
+            {parentSessionId ? (
+              <ControlButton
+                type="button"
+                className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                onClick={() => setTranscriptOpen(true)}
+                data-testid="subagent-open-transcript"
+              >
+                <MessageSquareText size={13} aria-hidden />
+                Open child transcript
+              </ControlButton>
+            ) : null}
             {cell.artifactRootId && revealAvailable ? (
               <div className="flex flex-wrap items-center gap-2">
                 <ControlButton
@@ -257,6 +282,15 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
           </div>
         }
       />
+      {transcriptOpen && parentSessionId ? (
+        <ChildTranscriptDialog
+          parentSessionId={parentSessionId}
+          runId={cell.id}
+          expectedStatus={cell.status}
+          renderCell={(childCell) => <ReadOnlyChildCell cell={childCell} />}
+          onClose={() => setTranscriptOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

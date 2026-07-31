@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DomainEvent, SessionMeta } from "@agent-deck/domain";
+import { emptyTranscript, type DomainEvent, type SessionMeta } from "@agent-deck/domain";
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionCreationError, SessionManager } from "../src/SessionManager.ts";
@@ -164,6 +164,70 @@ describe("Loop synthetic transcript restoration", () => {
         }),
       ),
     );
+  });
+});
+
+describe("child transcript reconstruction ownership", () => {
+  it("returns no transcript when parent deletion wins during canonical reconstruction", async () => {
+    const dataDir = makeTempDir();
+    const store = new SubagentRunStore(dataDir, () => {});
+    const parentSessionId = randomUUID();
+    const now = new Date().toISOString();
+    const run = {
+      id: randomUUID(),
+      parentSessionId,
+      task: "race reconstruction",
+      status: "starting" as const,
+      createdAt: now,
+      updatedAt: now,
+      source: "single" as const,
+    };
+    const allocation = store.prepareTurn(run, "system");
+    const sessionFile = path.join(allocation.sessionsDirectory, "child.jsonl");
+    writeFileSync(sessionFile, "{}\n");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+      sessionFile,
+    });
+    store.markOwnedSession(run.id, sessionFile);
+    store.update(run.id, {
+      status: "completed",
+      completedAt: now,
+      updatedAt: now,
+      summary: "done",
+    });
+
+    let release!: (value: ReturnType<typeof emptyTranscript>) => void;
+    const blocked = new Promise<ReturnType<typeof emptyTranscript>>((resolve) => {
+      release = resolve;
+    });
+    const runtime = {
+      runPromise: vi.fn(() => blocked),
+    } as unknown as ServerRuntime;
+    const manager = new SessionManager(
+      runtime,
+      new ReceiptBus(false),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      store,
+    );
+
+    const reading = manager.subagentTranscript(parentSessionId, run.id, dataDir);
+    await vi.waitFor(() => expect(runtime.runPromise).toHaveBeenCalledOnce());
+    store.removeParent(parentSessionId);
+    release(emptyTranscript());
+    await expect(reading).resolves.toBeUndefined();
   });
 });
 

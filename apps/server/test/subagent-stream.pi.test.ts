@@ -9,7 +9,7 @@ import {
   type ChatCompletionRequest,
   type MockProviderServer,
 } from "@agent-deck/testkit";
-import type { SubagentCell } from "@agent-deck/domain";
+import type { AssistantCell, ChildTranscriptSnapshot, SubagentCell } from "@agent-deck/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -42,6 +42,7 @@ function isChildRequest(body: ChatCompletionRequest): boolean {
 
 beforeAll(async () => {
   mock = await startMockProvider({
+    chunkDelayMs: 30,
     toolCall: (_lastUser, body) => {
       if (isChildRequest(body) || body.messages.some((m) => m.role === "tool")) return null;
       return { name: "managed_subagent", arguments: { task: "Summarize the meeting notes." } };
@@ -60,7 +61,7 @@ afterAll(async () => {
 });
 
 describe("managed_subagent: child transcript streams into the parent as a card", () => {
-  it("shows a subagent cell with the child's output and leaves the tool result intact", async () => {
+  it("projects the live child transcript without splitting the parent stream, then reconstructs canonical history", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -77,9 +78,16 @@ describe("managed_subagent: child transcript streams into the parent as a card",
 
     const managed = server.sessions.get(session.id)!;
     const orderedDeltas: Array<{ seq: number; delta: string }> = [];
+    const liveSnapshotPromises: Array<Promise<ChildTranscriptSnapshot | undefined>> = [];
     const unsubscribe = managed.bus.subscribe((stamped) => {
       if (stamped.event.type === "subagent_delta") {
         orderedDeltas.push({ seq: stamped.seq, delta: stamped.event.delta });
+        // processChild updates the scoped projection before emitting this parent
+        // card delta. Reading through the public seam here therefore proves the
+        // same pinned-Pi event reached both views without a second consumer.
+        liveSnapshotPromises.push(
+          server.sessions.subagentTranscript(session.id, stamped.event.cellId, cwd),
+        );
       }
     });
     await managed.prompt("delegate the summary task");
@@ -95,6 +103,27 @@ describe("managed_subagent: child transcript streams into the parent as a card",
     expect(subagentCells[0]!.task).toBe("Summarize the meeting notes.");
     expect(subagentCells[0]!.text).toContain("CHILD_STREAM_SENTINEL: three bullet summary.");
     unsubscribe();
+    const assistantText = (snapshot: ChildTranscriptSnapshot): string =>
+      snapshot.cells
+        .filter((cell): cell is AssistantCell => cell.kind === "assistant")
+        .flatMap((cell) => cell.blocks)
+        .filter((block) => block.kind === "text")
+        .map((block) => block.text)
+        .join("");
+    const liveSnapshots = (await Promise.all(liveSnapshotPromises)).filter(
+      (snapshot): snapshot is ChildTranscriptSnapshot => snapshot?.source === "live",
+    );
+    const liveAssistantUpdates = liveSnapshots
+      .map(assistantText)
+      .filter((text, index, values) => text.length > 0 && text !== values[index - 1]);
+    expect(liveSnapshots.length).toBeGreaterThan(1);
+    expect(liveSnapshots.every((snapshot) => snapshot.status === "running")).toBe(true);
+    expect(liveAssistantUpdates.length).toBeGreaterThan(1);
+    for (let index = 1; index < liveAssistantUpdates.length; index += 1) {
+      expect(liveAssistantUpdates[index]!.startsWith(liveAssistantUpdates[index - 1]!)).toBe(true);
+    }
+    expect(liveAssistantUpdates.at(-1)).toBe("CHILD_STREAM_SENTINEL: three bullet summary.");
+
     expect(orderedDeltas.length).toBeGreaterThan(1);
     expect(orderedDeltas.map((item) => item.seq)).toEqual(
       [...orderedDeltas].map((item) => item.seq).sort((a, b) => a - b),
@@ -103,8 +132,23 @@ describe("managed_subagent: child transcript streams into the parent as a card",
       "CHILD_STREAM_SENTINEL: three bullet summary.",
     );
 
+    const canonical = await server.sessions.subagentTranscript(
+      session.id,
+      subagentCells[0]!.id,
+      cwd,
+    );
+    expect(canonical?.source).toBe("canonical");
+    expect(canonical?.status).toBe("done");
+    expect(canonical?.cells.map((cell) => cell.kind)).toEqual(["user", "assistant"]);
+    expect(canonical?.cells[0]).toEqual(
+      expect.objectContaining({ kind: "user", text: "Summarize the meeting notes." }),
+    );
+    expect(assistantText(canonical!)).toBe("CHILD_STREAM_SENTINEL: three bullet summary.");
+
     // The tool result the MODEL receives is unchanged (still the child's text).
-    const followUp = mock.requests[mock.requests.length - 1]!;
+    const followUp = mock.requests.findLast((request) =>
+      request.messages.some((message) => message.role === "tool"),
+    )!;
     const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
     expect(toolText).toContain("CHILD_STREAM_SENTINEL: three bullet summary.");
   });

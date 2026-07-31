@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubagentCell, UserCell } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
@@ -8,11 +8,23 @@ import { CellView } from "./cells.tsx";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   delete window.agentDeck;
   useAppStore.setState({ session: null });
 });
 
 describe("subagent durable status and content", () => {
+  const setParentSession = () =>
+    useAppStore.setState({
+      session: {
+        id: "12345678-1234-4234-8234-123456789abc",
+        cwd: "/tmp",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    });
+
   const renderSubagent = (overrides: Partial<SubagentCell> = {}) => {
     const cell: SubagentCell = {
       kind: "subagent",
@@ -24,7 +36,7 @@ describe("subagent durable status and content", () => {
       progress: [],
       ...overrides,
     };
-    render(<CellView cell={cell} />);
+    return render(<CellView cell={cell} />);
   };
 
   it("announces stopped and interrupted as distinct statuses", () => {
@@ -95,6 +107,240 @@ describe("subagent durable status and content", () => {
     renderSubagent({ artifactRootId: "12345678-1234-4234-8234-123456789abc" });
     fireEvent.click(screen.getByRole("button", { name: /Subagent interrupted/i }));
     expect(screen.queryByRole("button", { name: "Reveal Artifacts" })).toBeNull();
+  });
+
+  it("opens a read-only accessible child transcript and restores focus on Escape", async () => {
+    setParentSession();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          transcript: {
+            runId: "durable-run",
+            parentSessionId: "12345678-1234-4234-8234-123456789abc",
+            status: "done",
+            task: "Inspect the implementation",
+            source: "canonical",
+            cells: [
+              { kind: "user", id: "child-user", text: "child task" },
+              {
+                kind: "assistant",
+                id: "child-assistant",
+                blocks: [{ kind: "text", contentIndex: 0, text: "child answer", done: true }],
+                streaming: false,
+              },
+            ],
+          },
+        }),
+      }),
+    );
+    renderSubagent({ status: "done", error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    const trigger = screen.getByRole("button", { name: "Open child transcript" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: "Child transcript" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    await waitFor(() => expect(screen.getByText("child answer")).toBeTruthy());
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe(
+      "Canonical · Done",
+    );
+    const close = screen.getByRole("button", { name: "Close child transcript" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    fireEvent.keyDown(close, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("child-transcript-dialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    vi.unstubAllGlobals();
+  });
+
+  it("shows empty summary-only evidence and its honest source label", async () => {
+    setParentSession();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          transcript: {
+            runId: "durable-run",
+            parentSessionId: "12345678-1234-4234-8234-123456789abc",
+            status: "error",
+            task: "A very long child task that must wrap without colliding ".repeat(20),
+            source: "summary_only",
+            notice: "Full canonical child history is unavailable.",
+            cells: [],
+          },
+        }),
+      }),
+    );
+    renderSubagent({ status: "error" });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent failed/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
+
+    await screen.findByText("No child messages yet.");
+    expect(screen.getByText("Full canonical child history is unavailable.")).toBeTruthy();
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe(
+      "Final report only · Error",
+    );
+    expect(screen.getByTestId("child-transcript-task").className).toContain("break-words");
+  });
+
+  it("offers Retry after a transient transcript load failure", async () => {
+    setParentSession();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ error: "Reader temporarily unavailable." }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          transcript: {
+            runId: "durable-run",
+            parentSessionId: "12345678-1234-4234-8234-123456789abc",
+            status: "done",
+            task: "Inspect the implementation",
+            source: "canonical",
+            cells: [],
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSubagent({ status: "done", error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Reader temporarily unavailable.",
+    );
+    const close = screen.getByRole("button", { name: "Close child transcript" });
+    const retry = screen.getByRole("button", { name: "Retry" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(retry);
+    fireEvent.keyDown(retry, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+    fireEvent.click(retry);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("No child messages yet.")).toBeTruthy();
+  });
+
+  it("polls terminal Live · Done through canonical finalization, then stops", async () => {
+    vi.useFakeTimers();
+    setParentSession();
+    const response = (source: "live" | "canonical") => ({
+      ok: true,
+      json: async () => ({
+        transcript: {
+          runId: "durable-run",
+          parentSessionId: "12345678-1234-4234-8234-123456789abc",
+          status: "done",
+          task: "Inspect the implementation",
+          source,
+          cells: [],
+        },
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response("live"))
+      .mockResolvedValue(response("canonical"));
+    vi.stubGlobal("fetch", fetchMock);
+    renderSubagent({ status: "done", error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe("Live · Done");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe(
+      "Canonical · Done",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_250);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps polling an open dialog across terminal to running continuation", async () => {
+    setParentSession();
+    const response = (source: "canonical" | "live", status: "done" | "running", text: string) => ({
+      ok: true,
+      json: async () => ({
+        transcript: {
+          runId: "durable-run",
+          parentSessionId: "12345678-1234-4234-8234-123456789abc",
+          status,
+          task: status === "running" ? "Follow-up task" : "First task",
+          source,
+          cells: [
+            {
+              kind: "assistant",
+              id: "child-assistant",
+              blocks: [{ kind: "text", contentIndex: 0, text, done: status === "done" }],
+              streaming: status === "running",
+            },
+          ],
+        },
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response("canonical", "done", "first result"))
+      // Brief stale endpoint response immediately after continuation starts.
+      .mockResolvedValueOnce(response("canonical", "done", "first result"))
+      .mockResolvedValueOnce(response("live", "running", "follow-up delta"))
+      .mockResolvedValue(response("canonical", "done", "final follow-up"));
+    vi.stubGlobal("fetch", fetchMock);
+    const terminal: SubagentCell = {
+      kind: "subagent",
+      id: "durable-run",
+      task: "First task",
+      status: "done",
+      text: "first result",
+      progress: [],
+    };
+    const view = render(<CellView cell={terminal} />);
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
+    await screen.findByText("first result");
+
+    view.rerender(
+      <CellView
+        cell={{ ...terminal, task: "Follow-up task", status: "running", text: "follow-up" }}
+      />,
+    );
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3), {
+      timeout: 2_000,
+    });
+    expect(await screen.findByText("follow-up delta")).toBeTruthy();
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe("Live · Running");
+
+    view.rerender(
+      <CellView
+        cell={{ ...terminal, task: "Follow-up task", status: "done", text: "final follow-up" }}
+      />,
+    );
+    await screen.findByText("final follow-up");
+    expect(screen.getByTestId("child-transcript-source-status").textContent).toBe(
+      "Canonical · Done",
+    );
+    const terminalCalls = fetchMock.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 850));
+    expect(fetchMock).toHaveBeenCalledTimes(terminalCalls);
   });
 
   it("bounds long task and output regions while keeping them keyboard focusable", () => {

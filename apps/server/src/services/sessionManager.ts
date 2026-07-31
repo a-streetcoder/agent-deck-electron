@@ -172,6 +172,9 @@ export interface SpawnSessionParams {
     };
     writeOutput?: (id: string, output: string, error?: string) => void;
     markOwnedSession?: (id: string, sessionFile: string) => string;
+    registerTranscript?: (id: string) => void;
+    updateTranscript?: (id: string, transcript: TranscriptState) => void;
+    unregisterTranscript?: (id: string) => void;
   };
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
@@ -306,7 +309,7 @@ type ThinkingLevelArg = Parameters<PiHostHandle["setThinkingLevel"]>[0];
 
 /** `get_entries` returns the append-only tree; transcript history is only the
  * current leaf's ancestry, in root-to-leaf order. */
-function activeEntryChain(data: EntriesData): EntriesData["entries"] {
+export function activeEntryChain(data: EntriesData): EntriesData["entries"] {
   if (!data.leafId) return [];
   const byId = new Map(data.entries.map((entry) => [entry.id, entry]));
   const reversed: EntriesData["entries"] = [];
@@ -328,6 +331,51 @@ const TITLE_SYSTEM_PROMPT =
   "summarizing the user's message. No quotes, no punctuation at the end.";
 
 const TITLE_TIMEOUT_MS = 20_000;
+
+export function transcriptFromEntries(data: EntriesData): TranscriptState {
+  const state = createIngestState();
+  let transcript = emptyTranscript();
+  for (const entry of activeEntryChain(data)) {
+    if (entry.type !== "message") continue;
+    for (const event of ingestPiEvent(state, {
+      type: "message_end",
+      entryId: entry.id,
+      message: entry.message,
+    } as unknown as PiInboundEvent)) {
+      transcript = reduceTranscript(transcript, event);
+    }
+  }
+  return transcript;
+}
+
+/** Canonical reader used only after owned-session validation. It does not
+ * consume a live child stream; the short-lived resumed Pi is queried by RPC. */
+export const readCanonicalChildTranscript = (
+  sessionFile: string,
+  cwd: string,
+): Effect.Effect<TranscriptState, Error, PiHost> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const piHost = yield* PiHost;
+      const reader = yield* piHost.spawn({
+        binPath: resolvePiBinary().path,
+        args: buildLaunchArgs({
+          kind: "agent",
+          resumeSessionPath: sessionFile,
+          systemPrompt: { mode: "replace", text: "Read-only transcript reconstruction." },
+          tools: [],
+        }),
+        cwd,
+        requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
+      });
+      const entries = yield* reader.getEntries;
+      return transcriptFromEntries(entries);
+    }),
+  ).pipe(
+    Effect.catchAll((error) =>
+      Effect.fail(error instanceof Error ? error : new Error(String(error))),
+    ),
+  );
 
 const SUBAGENT_SYSTEM_PROMPT =
   "You are a focused subagent launched by Agent Deck to complete one task and " +
@@ -1072,7 +1120,16 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         }
       });
       durableIdentityCreated = true;
+      yield* persistChildRun(() => durable.registerTranscript?.(runId));
     }
+    let transcriptRegistered = durableIdentityCreated;
+    let childTranscript = emptyTranscript();
+    const childIngest = createIngestState();
+    const unregisterTranscript = (): void => {
+      if (!transcriptRegistered) return;
+      transcriptRegistered = false;
+      durable?.unregisterTranscript?.(runId);
+    };
     let terminalPersisted = false;
     // Declare volatile stream/metadata state before registering cleanup. Setup or
     // spawn failures can finalize safely, while graceful interruption captures
@@ -1129,6 +1186,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         // or child process. Interruption by parent stop becomes a clear terminal
         // record; a persistence failure is logged without blocking child cleanup.
         yield* Effect.addFinalizer((exit) => {
+          unregisterTranscript();
           if (!durable || terminalPersisted) return Effect.void;
           const now = new Date().toISOString();
           const interrupted = Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause);
@@ -1292,6 +1350,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         const processChild = (item: PiStreamItem): void => {
           if (!isPiEvent(item)) return;
           claimOwnedSessionIfAvailable();
+          try {
+            for (const event of ingestPiEvent(childIngest, item.event)) {
+              childTranscript = reduceTranscript(childTranscript, event);
+            }
+            durable?.updateTranscript?.(runId, childTranscript);
+          } catch {
+            // A projection failure must never perturb the authoritative child
+            // consumer, parent card stream, cancellation, or finalization.
+          }
           const e = item.event as {
             type?: string;
             message?: {

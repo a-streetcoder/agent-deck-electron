@@ -11,7 +11,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import type { SubagentCell } from "@agent-deck/domain";
+import {
+  emptyTranscript,
+  type ChildTranscriptSnapshot,
+  type SubagentCell,
+  type TranscriptCell,
+  type TranscriptState,
+} from "@agent-deck/domain";
 import {
   SubagentArtifactCapabilityError,
   SubagentArtifactStore,
@@ -137,6 +143,33 @@ function utf8Suffix(value: string, maxBytes: number): string {
 const active = (status: SubagentRunStatus): boolean =>
   status === "starting" || status === "running";
 
+const CAPABILITY_FIELDS = new Set([
+  "artifactRootId",
+  "artifactRootToken",
+  "identityToken",
+  "sessionFile",
+  "sessionOwnership",
+  "currentTurnId",
+  "turnDirectory",
+  "sessionsDirectory",
+  "worktreePath",
+  "worktreeIdentity",
+]);
+
+function sanitizeCapabilityFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeCapabilityFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !CAPABILITY_FIELDS.has(key))
+      .map(([key, nested]) => [key, sanitizeCapabilityFields(nested)]),
+  );
+}
+
+function sanitizeTranscriptCells(cells: readonly TranscriptCell[]): TranscriptCell[] {
+  return cells.map((cell) => sanitizeCapabilityFields(cell) as TranscriptCell);
+}
+
 export interface SubagentRunDurabilityOps {
   syncFile(fd: number): void;
   syncDirectory(directory: string): void;
@@ -154,6 +187,8 @@ export class SubagentRunStore {
   private readonly deletedParents = new Set<string>();
   private storeQuarantined = false;
   private state: StoreState = { version: 2, runs: [] };
+  /** Runtime-only projections. Pi's existing child event consumer is the sole writer. */
+  private readonly liveTranscripts = new Map<string, TranscriptState>();
 
   constructor(
     dataDir: string,
@@ -177,6 +212,86 @@ export class SubagentRunStore {
   get(id: string): SubagentRunRecord | undefined {
     const run = this.state.runs.find((candidate) => candidate.id === id);
     return run ? { ...run } : undefined;
+  }
+
+  registerLiveTranscript(id: string): void {
+    if (!this.get(id)) throw new Error(`Unknown subagent run: ${id}`);
+    if (this.liveTranscripts.has(id))
+      throw new Error(`Subagent transcript already registered: ${id}`);
+    this.liveTranscripts.set(id, emptyTranscript());
+  }
+
+  updateLiveTranscript(id: string, transcript: TranscriptState): void {
+    if (!this.liveTranscripts.has(id)) return;
+    this.liveTranscripts.set(id, transcript);
+  }
+
+  unregisterLiveTranscript(id: string): void {
+    this.liveTranscripts.delete(id);
+  }
+
+  liveTranscript(parentSessionId: string, id: string): ChildTranscriptSnapshot | undefined {
+    const run = this.get(id);
+    const transcript = this.liveTranscripts.get(id);
+    if (!run || run.parentSessionId !== parentSessionId || !transcript) return undefined;
+    return this.snapshot(run, "live", transcript);
+  }
+
+  summaryTranscript(run: SubagentRunRecord): ChildTranscriptSnapshot {
+    const cells: TranscriptCell[] = [
+      { kind: "user", id: `${run.id}-summary-user`, text: run.task },
+    ];
+    if (run.summary) {
+      cells.push({
+        kind: "assistant",
+        id: `${run.id}-summary-assistant`,
+        blocks: [{ kind: "text", contentIndex: 0, text: run.summary, done: true }],
+        streaming: false,
+        ...(run.error ? { errorMessage: run.error } : {}),
+      });
+    } else if (run.error) {
+      cells.push({
+        kind: "assistant",
+        id: `${run.id}-summary-error`,
+        blocks: [],
+        streaming: false,
+        errorMessage: run.error,
+      });
+    }
+    return this.snapshot(
+      run,
+      "summary_only",
+      cells,
+      "Full canonical child history is unavailable. Showing retained task and result evidence only.",
+    );
+  }
+
+  snapshot(
+    run: SubagentRunRecord,
+    source: ChildTranscriptSnapshot["source"],
+    transcriptOrCells: TranscriptState | readonly TranscriptCell[],
+    notice?: string,
+  ): ChildTranscriptSnapshot {
+    const cells = Array.isArray(transcriptOrCells)
+      ? (transcriptOrCells as readonly TranscriptCell[])
+      : (transcriptOrCells as TranscriptState).cells;
+    return {
+      runId: run.id,
+      parentSessionId: run.parentSessionId,
+      status:
+        run.status === "completed"
+          ? "done"
+          : run.status === "failed"
+            ? "error"
+            : run.status === "starting" || run.status === "running"
+              ? "running"
+              : run.status,
+      task: run.task,
+      ...(run.agent ? { agentName: run.agent } : {}),
+      source,
+      cells: sanitizeTranscriptCells(cells),
+      ...(notice ? { notice } : {}),
+    };
   }
 
   create(record: SubagentRunRecord): void {
@@ -269,6 +384,11 @@ export class SubagentRunStore {
   }
 
   removeParent(parentSessionId: string): void {
+    // Invalidate reads before artifact deletion; child finalizers may race and
+    // unregister again, which is deliberately idempotent.
+    for (const run of this.state.runs) {
+      if (run.parentSessionId === parentSessionId) this.liveTranscripts.delete(run.id);
+    }
     // Synchronous claim serializes against prepareTurn/create. If deletion wins
     // between allocation and metadata commit, create fails and no Pi is prompted.
     this.deletedParents.add(parentSessionId);

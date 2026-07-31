@@ -425,6 +425,22 @@ export type DomainEvent =
   | { type: "plan_update"; updates: SessionPlanUpdate[] }
   | { type: "context_changed" };
 
+export type ChildTranscriptSource = "live" | "canonical" | "summary_only";
+
+/** Safe, parent-scoped read model for a managed child's read-only transcript. */
+export interface ChildTranscriptSnapshot {
+  runId: string;
+  parentSessionId: string;
+  status: SubagentCell["status"];
+  task: string;
+  agentName?: string;
+  source: ChildTranscriptSource;
+  /** Sanitized display cells only; runtime queues/status/plan never cross this boundary. */
+  cells: TranscriptCell[];
+  /** Present only when the retained evidence is intentionally less than canonical history. */
+  notice?: string;
+}
+
 export interface TranscriptState {
   cells: TranscriptCell[];
   agentStatus: AgentStatus;

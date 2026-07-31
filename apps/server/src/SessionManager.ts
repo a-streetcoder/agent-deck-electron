@@ -11,6 +11,7 @@ import type {
   SessionPlanUpdate,
   SubagentCell,
   TranscriptState,
+  ChildTranscriptSnapshot,
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
@@ -29,6 +30,7 @@ import type { ServerRuntime } from "./runtime.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
 import type { StampedEvent } from "./services/pushBus.ts";
 import {
+  readCanonicalChildTranscript,
   runOneShotHelper,
   SessionManagerService,
   type ChildBridgeFactory,
@@ -59,6 +61,13 @@ export type {
  * facade is the seam that lets them not churn before then. Same pattern
  * `pushBus.ts` used for the bus in Slice 3.
  */
+
+export class SubagentTranscriptEvidenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubagentTranscriptEvidenceError";
+  }
+}
 
 export class SessionCreationError extends Error {
   constructor(
@@ -653,6 +662,10 @@ export class SessionManager {
               writeOutput: (id, output, error) => this.subagentRuns!.writeOutput(id, output, error),
               markOwnedSession: (id, sessionFile) =>
                 this.subagentRuns!.markOwnedSession(id, sessionFile),
+              registerTranscript: (id) => this.subagentRuns!.registerLiveTranscript(id),
+              updateTranscript: (id, transcript) =>
+                this.subagentRuns!.updateLiveTranscript(id, transcript),
+              unregisterTranscript: (id) => this.subagentRuns!.unregisterLiveTranscript(id),
             },
           }
         : {}),
@@ -745,6 +758,46 @@ export class SessionManager {
   /** Remove only runs owned by a deleted parent, after destroy() settled children. */
   removeSubagentRuns(sessionId: string): void {
     this.subagentRuns?.removeParent(sessionId);
+  }
+
+  async subagentTranscript(
+    parentSessionId: string,
+    runId: string,
+    parentCwd: string,
+  ): Promise<ChildTranscriptSnapshot | undefined> {
+    const store = this.subagentRuns;
+    const run = store?.get(runId);
+    if (!store || !run || run.parentSessionId !== parentSessionId) return undefined;
+    const live = store.liveTranscript(parentSessionId, runId);
+    if (live) return live;
+    const legacyOrExternal = !run.artifactRootId || run.sessionOwnership === "external";
+    if (legacyOrExternal) return store.summaryTranscript(run);
+    if (!run.sessionFile || run.sessionOwnership !== "owned") {
+      throw new SubagentTranscriptEvidenceError("Subagent owned session proof is unavailable");
+    }
+
+    // Fail closed at the last possible moment before handing the opaque handle
+    // to Pi. Validation failures are not converted to summary evidence.
+    const sessionFile = store.validateOwnedSession(run.id, run.sessionFile);
+    const transcript = await this.runtime.runPromise(
+      readCanonicalChildTranscript(sessionFile, parentCwd),
+    );
+
+    // Reconstruction is asynchronous. Parent deletion or continuation may win
+    // while Pi is reading, so prove the same parent and capability again before
+    // any reconstructed cells cross the HTTP boundary.
+    const current = store.get(runId);
+    if (!current || current.parentSessionId !== parentSessionId) return undefined;
+    if (
+      current.sessionFile !== run.sessionFile ||
+      current.sessionOwnership !== "owned" ||
+      current.artifactRootId !== run.artifactRootId ||
+      current.artifactRootToken !== run.artifactRootToken
+    ) {
+      throw new SubagentTranscriptEvidenceError("Subagent session evidence changed while reading");
+    }
+    store.validateOwnedSession(current.id, current.sessionFile);
+    return store.snapshot(current, "canonical", transcript);
   }
 
   /** Revalidate an app-owned root immediately before Electron reveals it. */
