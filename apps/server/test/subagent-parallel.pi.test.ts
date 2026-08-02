@@ -15,10 +15,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
- * managed_parallel end-to-end against real pi: a parent fans out two tasks; two
- * child pi sessions run concurrently, each producing a task-specific result, and
- * the parent receives BOTH combined in the tool result. One task delegates to a
- * NAMED agent (per-task `agent`) — that child adopts the agent's persona.
+ * managed_parallel end-to-end against real pi: a parent fans out three tasks
+ * through a concurrency-two pool. Controlled provider gates prove overlap never
+ * exceeds two while every child streams and returns in input order. One task
+ * delegates to a NAMED agent (per-task `agent`) — that child adopts its persona.
  */
 
 process.env.AGENT_DECK_TEST = "1";
@@ -31,6 +31,25 @@ let projectId: string;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const project = mkdtempSync(path.join(tmpdir(), "pi-parallel-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const childGates = {
+  alpha: deferred(),
+  beta: deferred(),
+  gamma: deferred(),
+};
+const twoChildrenStarted = deferred();
+const thirdChildStarted = deferred();
+let initialChildrenStarted = 0;
+let activeInitialChildren = 0;
+let maxActiveInitialChildren = 0;
 
 function systemText(request: ChatCompletionRequest): string {
   return request.messages
@@ -46,6 +65,23 @@ function isChildRequest(body: ChatCompletionRequest): boolean {
 beforeAll(async () => {
   mock = await startMockProvider({
     chunkDelayMs: 10,
+    beforeResponse: async (_lastUser, body) => {
+      const hasToolResult = body.messages.some((m) => m.role === "tool");
+      if (!isChildRequest(body) || hasToolResult) return;
+      const sys = systemText(body);
+      const gate = sys.includes("TASK_ALPHA")
+        ? childGates.alpha
+        : sys.includes("TASK_BETA")
+          ? childGates.beta
+          : childGates.gamma;
+      initialChildrenStarted += 1;
+      activeInitialChildren += 1;
+      maxActiveInitialChildren = Math.max(maxActiveInitialChildren, activeInitialChildren);
+      if (initialChildrenStarted === 2) twoChildrenStarted.resolve();
+      if (initialChildrenStarted === 3) thirdChildStarted.resolve();
+      await gate.promise;
+      activeInitialChildren -= 1;
+    },
     toolCall: (_lastUser, body) => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
       if (isChildRequest(body)) {
@@ -55,7 +91,11 @@ beforeAll(async () => {
           name: "write",
           arguments: {
             path: "child-output.txt",
-            content: sys.includes("TASK_ALPHA") ? "alpha isolated\n" : "beta isolated\n",
+            content: sys.includes("TASK_ALPHA")
+              ? "alpha isolated\n"
+              : sys.includes("TASK_BETA")
+                ? "beta isolated\n"
+                : "gamma isolated\n",
           },
         };
       }
@@ -63,10 +103,12 @@ beforeAll(async () => {
       return {
         name: "managed_parallel",
         arguments: {
+          concurrency: 2,
           worktree: true,
           tasks: [
             { task: "TASK_ALPHA: write alpha" },
             { task: "TASK_BETA: write beta", agent: "reviewer-bot" },
+            { task: "TASK_GAMMA: write gamma" },
           ],
         },
       };
@@ -78,6 +120,8 @@ beforeAll(async () => {
         return "RESULT_ALPHA_SENTINEL: isolated writer completed with retained evidence.";
       if (sys.includes("TASK_BETA"))
         return "RESULT_BETA_SENTINEL: isolated writer completed with retained evidence.";
+      if (sys.includes("TASK_GAMMA"))
+        return "RESULT_GAMMA_SENTINEL: isolated writer completed with retained evidence.";
       return "Delegated to parallel subagents.";
     },
   });
@@ -128,7 +172,7 @@ afterAll(async () => {
 });
 
 describe("managed_parallel: fan out subagents and combine results", () => {
-  it("runs two children concurrently and returns both results to the parent", async () => {
+  it("runs three children with exact concurrency two and returns ordered results", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -154,17 +198,34 @@ describe("managed_parallel: fan out subagents and combine results", () => {
         });
       }
     });
-    await server.sessions.get(session.id)!.prompt("run both writers in parallel worktrees");
+    const prompt = server.sessions
+      .get(session.id)!
+      .prompt("run all three writers in concurrency-two parallel worktrees");
+    await twoChildrenStarted.promise;
+    expect(initialChildrenStarted).toBe(2);
+    expect(activeInitialChildren).toBe(2);
+    expect(maxActiveInitialChildren).toBe(2);
+
+    // Free one slot only after both initial requests overlap. The queued third
+    // child cannot allocate/start until the first child has fully completed.
+    childGates.alpha.resolve();
+    await thirdChildStarted.promise;
+    expect(initialChildrenStarted).toBe(3);
+    expect(activeInitialChildren).toBe(2);
+    expect(maxActiveInitialChildren).toBe(2);
+    childGates.beta.resolve();
+    childGates.gamma.resolve();
+    await prompt;
     await server.receipts.waitFor("idle", session.id);
 
-    // Both child tasks actually ran (two distinct child requests hit the provider).
     const childSystems = mock.requests.filter(isChildRequest).map(systemText);
     expect(childSystems.some((s) => s.includes("TASK_ALPHA"))).toBe(true);
     expect(childSystems.some((s) => s.includes("TASK_BETA"))).toBe(true);
+    expect(childSystems.some((s) => s.includes("TASK_GAMMA"))).toBe(true);
 
     unsubscribe();
 
-    // Preserve anonymous + named delegation while both writer children retain
+    // Preserve anonymous + named delegation while all writer children retain
     // ordered, genuinely incremental parent-card deltas.
     const betaChild = childSystems.find((s) => s.includes("TASK_BETA"))!;
     const alphaChild = childSystems.find((s) => s.includes("TASK_ALPHA"))!;
@@ -175,21 +236,25 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       [...orderedEvents.map((event) => event.seq)].sort((a, b) => a - b),
     );
 
-    // The parent received BOTH results, combined in the tool result.
+    // The parent received every result in input order despite scheduler timing.
     const followUp = mock.requests[mock.requests.length - 1]!;
     const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
-    expect(toolText).toContain("RESULT_ALPHA_SENTINEL");
-    expect(toolText).toContain("RESULT_BETA_SENTINEL");
+    const alphaResultIndex = toolText.indexOf("RESULT_ALPHA_SENTINEL");
+    const betaResultIndex = toolText.indexOf("RESULT_BETA_SENTINEL");
+    const gammaResultIndex = toolText.indexOf("RESULT_GAMMA_SENTINEL");
+    expect(alphaResultIndex).toBeGreaterThan(-1);
+    expect(betaResultIndex).toBeGreaterThan(alphaResultIndex);
+    expect(gammaResultIndex).toBeGreaterThan(betaResultIndex);
 
-    // Two subagent cells and two distinct retained detached worktrees. Both
-    // wrote the same relative path without touching the parent checkout.
+    // Three subagent cells and distinct retained detached worktrees. They wrote
+    // the same relative path without touching the parent checkout.
     const cells = server.sessions
       .get(session.id)!
       .snapshot()
       .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
-    expect(cells).toHaveLength(2);
+    expect(cells).toHaveLength(3);
     expect(cells.filter((c) => c.agentName === "reviewer-bot")).toHaveLength(1);
-    expect(cells.filter((c) => c.agentName === undefined)).toHaveLength(1);
+    expect(cells.filter((c) => c.agentName === undefined)).toHaveLength(2);
     for (const cell of cells) {
       const deltas = orderedEvents.filter((event) => event.cellId === cell.id);
       expect(deltas.length).toBeGreaterThan(1);
@@ -199,7 +264,7 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       expect(deltas.map((event) => event.delta).join(""), cell.task).toBe(cell.text);
     }
     const durableIds = cells.map((cell) => cell.id);
-    expect(new Set(durableIds).size).toBe(2);
+    expect(new Set(durableIds).size).toBe(3);
     const persisted = JSON.parse(
       readFileSync(path.join(dataDir, "subagent-runs.json"), "utf8"),
     ) as {
@@ -207,11 +272,15 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     };
     const worktreeRuns = persisted.runs.filter((run) => durableIds.includes(run.id));
     const worktreePaths = worktreeRuns.map((run) => run.worktreePath!);
-    expect(new Set(worktreePaths).size).toBe(2);
+    expect(new Set(worktreePaths).size).toBe(3);
     expect(worktreeRuns.every((run) => Boolean(run.worktreeBaseCommit))).toBe(true);
-    expect(readFileSync(path.join(worktreePaths[0]!, "child-output.txt"), "utf8")).not.toBe(
-      readFileSync(path.join(worktreePaths[1]!, "child-output.txt"), "utf8"),
-    );
+    expect(
+      new Set(
+        worktreePaths.map((worktreePath) =>
+          readFileSync(path.join(worktreePath, "child-output.txt"), "utf8"),
+        ),
+      ).size,
+    ).toBe(3);
     expect(existsSync(path.join(project, "child-output.txt"))).toBe(false);
     expect(readFileSync(path.join(project, "parent-sentinel.txt"), "utf8")).toBe(
       "parent unchanged\n",
@@ -229,7 +298,7 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       .get(session.id)!
       .snapshot()
       .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
-    expect(hydrated).toHaveLength(2);
+    expect(hydrated).toHaveLength(3);
     // Parallel allocation order is intentionally scheduler-dependent; restart
     // must preserve the same identities, not impose a new ordering contract.
     expect(hydrated.map((cell) => cell.id)).toEqual(expect.arrayContaining(durableIds));
@@ -237,6 +306,7 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       expect.arrayContaining([
         "RESULT_ALPHA_SENTINEL: isolated writer completed with retained evidence.",
         "RESULT_BETA_SENTINEL: isolated writer completed with retained evidence.",
+        "RESULT_GAMMA_SENTINEL: isolated writer completed with retained evidence.",
       ]),
     );
     const deleted = await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}`, {

@@ -32,6 +32,8 @@ export interface MockProviderOptions {
    * model answer with text. Lets bridge tools be exercised end-to-end.
    */
   toolCall?: (lastUserMessage: string, body: ChatCompletionRequest) => MockToolCall | null;
+  /** Optional deterministic test gate after request capture and before any response bytes. */
+  beforeResponse?: (lastUserMessage: string, body: ChatCompletionRequest) => void | Promise<void>;
   /** Delay between streamed chunks (ms). */
   chunkDelayMs?: number;
 }
@@ -81,6 +83,7 @@ export async function startMockProvider(
 ): Promise<MockProviderServer> {
   const reply = options.reply ?? DEFAULT_REPLY;
   const toolCall = options.toolCall;
+  const beforeResponse = options.beforeResponse;
   const chunkDelayMs = options.chunkDelayMs ?? 5;
   const requests: ChatCompletionRequest[] = [];
   const events: MockProviderEvent[] = [];
@@ -92,7 +95,7 @@ export async function startMockProvider(
     }
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       let body: ChatCompletionRequest;
       try {
         body = JSON.parse(raw) as ChatCompletionRequest;
@@ -105,6 +108,12 @@ export async function startMockProvider(
       events.push({ requestIndex, kind: "request" });
       const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
       const lastUserText = contentToString(lastUser?.content ?? "");
+      try {
+        await beforeResponse?.(lastUserText, body);
+      } catch {
+        res.writeHead(500).end();
+        return;
+      }
       const id = `chatcmpl-mock-${requests.length}`;
       const created = 0;
 

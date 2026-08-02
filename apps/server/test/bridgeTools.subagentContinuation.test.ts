@@ -106,6 +106,7 @@ describe("managed_subagent continuation bridge contract", () => {
 
   it("keeps managed_parallel fresh-only and marks every child parallel", async () => {
     const sessions = {
+      get: vi.fn().mockReturnValue({ isRunning: true }),
       runSubagent: vi.fn().mockResolvedValue("result"),
     } as unknown as SessionManager;
     const bridge = new BridgeRegistry();

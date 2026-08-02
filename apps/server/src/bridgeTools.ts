@@ -84,6 +84,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
   // is capped so a single call can't spawn an unbounded number of processes.
   const parallelParams = z
     .object({
+      concurrency: z.number().int().min(1).max(8).optional(),
       worktree: z.boolean().optional(),
       tasks: z
         .array(
@@ -105,10 +106,17 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       name: "managed_parallel",
       label: "Parallel subagents",
       description:
-        "Run several self-contained tasks in parallel, each in its own fresh subagent, and get all their results back together. Use when the tasks are independent. Set top-level `worktree: true` to require a distinct app-owned detached Git worktree for every child; allocation failures never fall back to the parent checkout. Each task may optionally name an `agent` to delegate to (it adopts that agent's persona).",
+        "Run several self-contained tasks with bounded concurrency, each in its own fresh subagent, and get all their results back together in task order. Use when the tasks are independent. Optional `concurrency` is an integer from 1 to 8 and defaults to 4. Set top-level `worktree: true` to require a distinct app-owned detached Git worktree for every child; allocation failures never fall back to the parent checkout. Each task may optionally name an `agent` to delegate to (it adopts that agent's persona).",
       parameters: {
         type: "object",
         properties: {
+          concurrency: {
+            type: "integer",
+            minimum: 1,
+            maximum: 8,
+            description:
+              "Optional maximum number of children running at once (integer 1-8). Defaults to 4 and is capped by the task count.",
+          },
           worktree: {
             type: "boolean",
             description:
@@ -141,7 +149,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
         additionalProperties: false,
       },
       promptSnippet:
-        "managed_parallel(tasks, worktree?) — run independent tasks in parallel; worktree:true isolates every child checkout.",
+        "managed_parallel(tasks, concurrency?, worktree?) — run independent tasks with bounded concurrency (default 4); worktree:true isolates every child checkout.",
     },
     async (params, ctx) => {
       const parsed = parallelParams.safeParse(params);
@@ -151,20 +159,49 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           isError: true,
         };
       }
-      // allSettled: one failing subagent doesn't drop the others' results.
-      const settled = await Promise.allSettled(
-        parsed.data.tasks.map((t) =>
-          sessions.runSubagent(
-            ctx.sessionId,
-            t.task,
-            t.agent,
-            undefined,
-            undefined,
-            "parallel",
-            parsed.data.worktree ?? false,
-          ),
-        ),
-      );
+      // Keep allSettled semantics without eagerly allocating every child's run,
+      // artifacts, or optional worktree. Workers claim in input order and remain
+      // work-conserving until the queue is empty or its parent is torn down.
+      const settled: PromiseSettledResult<string>[] = new Array(parsed.data.tasks.length);
+      const workerCount = Math.min(parsed.data.concurrency ?? 4, parsed.data.tasks.length);
+      let nextIndex = 0;
+      const worker = async (): Promise<void> => {
+        while (nextIndex < parsed.data.tasks.length) {
+          // The manager retains a parent during stop, so isRunning is required as
+          // well as existence. On teardown, reject every unclaimed task without
+          // entering runSubagent (where durable child allocation begins).
+          const parent = sessions.get(ctx.sessionId);
+          if (!parent?.isRunning) {
+            const reason = new Error(
+              "parent session is no longer running; queued subagent cancelled",
+            );
+            while (nextIndex < parsed.data.tasks.length) {
+              settled[nextIndex] = { status: "rejected", reason };
+              nextIndex += 1;
+            }
+            return;
+          }
+
+          const index = nextIndex;
+          nextIndex += 1;
+          const task = parsed.data.tasks[index]!;
+          try {
+            const value = await sessions.runSubagent(
+              ctx.sessionId,
+              task.task,
+              task.agent,
+              undefined,
+              undefined,
+              "parallel",
+              parsed.data.worktree ?? false,
+            );
+            settled[index] = { status: "fulfilled", value };
+          } catch (reason) {
+            settled[index] = { status: "rejected", reason };
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
       const anyOk = settled.some((r) => r.status === "fulfilled");
       const rendered = settled
         .map((result, index) => {
