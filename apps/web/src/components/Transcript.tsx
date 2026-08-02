@@ -136,6 +136,22 @@ export function Transcript() {
       }}
     >
       {session ? <ForkProvenanceCard session={session} /> : null}
+      {session?.status === "failed" ? (
+        <section
+          className="max-w-full rounded-md border border-danger bg-danger-subtle px-4 py-3 text-sm text-danger"
+          data-testid="session-failure-details"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <div className="font-medium">Session failed</div>
+          {session.lastError ? (
+            <div className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {session.lastError}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       <SessionPlanPanel />
       {cells.length === 0 ? (
         isNewSession ? (

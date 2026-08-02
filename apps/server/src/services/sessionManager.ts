@@ -27,11 +27,31 @@ import {
   type ThinkingLevel,
 } from "@agent-deck/pi-host";
 import type { Scope } from "effect";
-import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Stream,
+} from "effect";
 import type { ReceiptBus } from "../receipts.ts";
+import { normalizeSessionError, processFailureMessage } from "../sessionFailure.ts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
-import { PiHost, type PiHostHandle, type PiSpawnOptions, type PiStreamItem } from "./piHost.ts";
+import {
+  PiExited,
+  PiHost,
+  type PiHostHandle,
+  PiRpcFailure,
+  PiRpcTimeout,
+  type PiSpawnOptions,
+  type PiStreamItem,
+} from "./piHost.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 
 /**
@@ -242,6 +262,10 @@ export interface ManagedSessionRuntime {
   readonly plan: Effect.Effect<SessionPlanItem[]>;
   /** Run exit handling now if the stream hasn't already (post scope-close guard). */
   readonly ensureExitHandled: Effect.Effect<void>;
+  /** Mark scope/process teardown as intentional before platform-specific killing. */
+  readonly expectTeardown: Effect.Effect<void>;
+  /** Facade seam for ordinary resume/history-seed failures. */
+  readonly recordFailure: (error: unknown, publish?: boolean) => Effect.Effect<void>;
 
   // Synthetic domain-event emitters (synchronous, stamped onto the bus in order).
   readonly setPlan: (items: SessionPlanItem[]) => Effect.Effect<void>;
@@ -506,6 +530,37 @@ export const makeManagedSessionRuntime = (
     const exitListeners = new Set<(exit: PiProcessExit) => void>();
     let currentExit: PiProcessExit | null = null;
     let exitHandled = false;
+    let expectedTeardown = false;
+    let ingestionStarted = false;
+    let pendingProcessExit: PiProcessExit | null = null;
+    const ingestionSettled = yield* Deferred.make<void>();
+
+    const clearFailure = (): void => {
+      delete meta.status;
+      delete meta.lastError;
+    };
+    const recordFailure = (error: unknown, publish = true): void => {
+      meta.status = "failed";
+      meta.lastError = normalizeSessionError(error);
+      if (publish) onMetaChange(meta);
+    };
+    const recordRpcFailure = (error: unknown): void => {
+      // A timeout abandons only the caller's wait. Pi may still be healthy and
+      // may accept/finish the command, so it is never terminal metadata.
+      if (error instanceof PiRpcTimeout) return;
+      // Scope-close intentionally rejects every pending RPC as PiExited. The
+      // lifecycle owner has already classified deletion/rebind/shutdown as an
+      // expected teardown, so command waiters must not reclassify it as failure.
+      if (error instanceof PiExited) {
+        if (expectedTeardown) return;
+        // PiExited carries only the generic process consequence. Ingestion may
+        // already have consumed the final provider message while this pending
+        // RPC Deferred resumes on another fiber; never let that scheduler race
+        // overwrite the specific durable failure.
+        if (meta.status === "failed") return;
+      }
+      if (error instanceof PiRpcFailure || error instanceof PiExited) recordFailure(error);
+    };
 
     /**
      * The single seam through which both pi-derived and synthetic domain events
@@ -540,6 +595,11 @@ export const makeManagedSessionRuntime = (
       exitHandled = true;
       currentExit = exit;
       meta.endedAt = new Date().toISOString();
+      if (!expectedTeardown && (exit.signal !== null || exit.code !== 0)) {
+        // A provider/message failure is more useful than the generic process
+        // consequence that commonly follows it.
+        if (meta.status !== "failed") recordFailure(processFailureMessage(exit), false);
+      }
       onMetaChange(meta);
       for (const listener of exitListeners) listener(exit);
       cleanupTempDirs();
@@ -605,7 +665,27 @@ export const makeManagedSessionRuntime = (
     });
 
     const applyPiEvent = (piEvent: PiInboundEvent): void => {
-      if (eventType(piEvent) === "extension_ui_request") {
+      const type = eventType(piEvent);
+      if (type === "agent_start") {
+        clearFailure();
+        onMetaChange(meta);
+      }
+      const rawEvent = piEvent as {
+        message?: { role?: string; stopReason?: string; errorMessage?: string };
+        messages?: Array<{ role?: string; stopReason?: string; errorMessage?: string }>;
+      };
+      const finalAssistant =
+        type === "message_end" && rawEvent.message?.role === "assistant"
+          ? rawEvent.message
+          : type === "agent_end"
+            ? [...(rawEvent.messages ?? [])]
+                .reverse()
+                .find((message) => message.role === "assistant")
+            : undefined;
+      if (finalAssistant?.stopReason === "error") {
+        recordFailure(finalAssistant.errorMessage || "The provider failed to complete this turn.");
+      }
+      if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
         pendingUiRequests.set(e.id, e.method);
       }
@@ -724,23 +804,25 @@ export const makeManagedSessionRuntime = (
           // surfaced by pi-host but ignored here.
           return;
         case "ProcessExit":
-          runExitHandling(item.exit);
+          // Finalize only after the stream drains. Already-queued final events
+          // can then replace the generic process consequence with the specific
+          // provider/runtime failure, regardless of observer timing.
+          pendingProcessExit = item.exit;
       }
     };
 
     const ingestLoop = handle.events.pipe(
       Stream.runForEach((item) =>
-        // `Effect.sync` turns any throw in processStreamItem (a throwing bus
-        // subscriber, a reduceTranscript on malformed input) into a DEFECT, not
-        // a typed failure — `catchAll` can't see those. Catch defects PER ITEM
-        // and continue, so one bad event can't kill this detached fiber and
-        // freeze the session; later events keep flowing to the bus/socket.
+        // A malformed event/subscriber defect is isolated per item so later
+        // ordered events, including terminal failure detail, still arrive.
         Effect.sync(() => processStreamItem(item)).pipe(Effect.catchAllDefect(() => Effect.void)),
       ),
-      // The single-consumer contract can't be violated (we're the only run) but
-      // `PiEventsAlreadyConsumed` is in the stream's error type; swallow it so a
-      // stray typed failure can't crash the fiber either.
       Effect.catchAll(() => Effect.void),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (pendingProcessExit) runExitHandling(pendingProcessExit);
+        }).pipe(Effect.andThen(Deferred.succeed(ingestionSettled, undefined)), Effect.asVoid),
+      ),
     );
 
     const seedFromHistory = Effect.gen(function* () {
@@ -783,7 +865,13 @@ export const makeManagedSessionRuntime = (
     const runtime: ManagedSessionRuntime = {
       meta,
       bus,
-      ingest: ingestLoop,
+      // Reading the one-shot ingestion effect is the synchronous ownership
+      // claim. It happens before runFork can schedule the child fiber, so exit
+      // handling knows to await queue drain even under a saturated scheduler.
+      get ingest() {
+        ingestionStarted = true;
+        return ingestLoop;
+      },
       seedFromHistory,
       seedSyntheticCells: (cells) =>
         Effect.sync(() => {
@@ -799,9 +887,18 @@ export const makeManagedSessionRuntime = (
       plan: Effect.sync(() => transcript.plan),
       ensureExitHandled: Effect.gen(function* () {
         if (exitHandled) return;
+        // Ingestion owns finalization once attached. Waiting for its finalizer
+        // prevents endedAt/generic error publication from racing queued events.
+        if (ingestionStarted) yield* Deferred.await(ingestionSettled);
+        if (exitHandled) return;
         const exit = yield* handle.exit;
         if (Option.isSome(exit)) runExitHandling(exit.value);
       }),
+      expectTeardown: Effect.gen(function* () {
+        // Do not retroactively bless an already-observed crash as intentional.
+        if (Option.isNone(yield* handle.exit)) expectedTeardown = true;
+      }),
+      recordFailure: (error, publish = true) => Effect.sync(() => recordFailure(error, publish)),
 
       setPlan: (items) =>
         Effect.sync(() => {
@@ -885,12 +982,27 @@ export const makeManagedSessionRuntime = (
 
       prompt: (message, images, streamingBehavior) =>
         handle.prompt(message, images, streamingBehavior).pipe(
-          // Prompting is activity — bump updatedAt via the meta-change callback.
-          Effect.tap(() => Effect.sync(() => onMetaChange(meta))),
+          // An accepted prompt is the authoritative recovery boundary. A later
+          // provider error in the same turn will set failure again.
+          Effect.tap(() =>
+            Effect.sync(() => {
+              clearFailure();
+              onMetaChange(meta);
+            }),
+          ),
+          Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
           Effect.orDie,
         ),
-      steer: (message) => handle.steer(message).pipe(Effect.orDie),
-      followUp: (message) => handle.followUp(message).pipe(Effect.orDie),
+      steer: (message) =>
+        handle.steer(message).pipe(
+          Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
+          Effect.orDie,
+        ),
+      followUp: (message) =>
+        handle.followUp(message).pipe(
+          Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
+          Effect.orDie,
+        ),
       compact: handle.compact.pipe(Effect.orDie),
       abort: handle.abort.pipe(Effect.orDie),
       getState: handle.getState.pipe(Effect.orDie),

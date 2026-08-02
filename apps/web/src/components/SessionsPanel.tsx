@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  CircleAlert,
   GitFork,
   Pencil,
   Pin,
@@ -61,7 +62,7 @@ function formatSessionTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function SessionRow({
+export function SessionRow({
   session,
   displayTitle,
   active,
@@ -127,11 +128,17 @@ function SessionRow({
         "group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
         active ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
-        !active && session.endedAt && "opacity-60 saturate-50",
+        !active && session.endedAt && session.status !== "failed" && "opacity-60 saturate-50",
       )}
       data-testid={`chat-${session.id}`}
       data-active={active ? "true" : "false"}
+      data-status={session.status ?? (session.endedAt ? "ended" : running ? "running" : "idle")}
       title={session.agentName ? `agent: ${session.agentName}` : undefined}
+      aria-label={
+        session.status === "failed"
+          ? `${displayTitle}, failed${session.lastError ? `: ${session.lastError}` : ""}`
+          : displayTitle
+      }
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -151,6 +158,17 @@ function SessionRow({
         >
           {displayTitle}
         </span>
+        {session.status === "failed" ? (
+          <span
+            className="flex items-center gap-1 truncate text-detail text-danger"
+            data-testid="chat-failure-subtitle"
+          >
+            <CircleAlert size={10} className="shrink-0" aria-hidden="true" />
+            <span className="truncate">
+              Failed{session.lastError ? ` · ${session.lastError}` : ""}
+            </span>
+          </span>
+        ) : null}
         {detailed && session.agentName ? (
           <span
             className="flex items-center gap-1 truncate text-detail text-text-muted"

@@ -301,6 +301,11 @@ const ForkProvenanceFromSelf: Schema.Schema<ForkProvenance> = Schema.declare(
   (_input: unknown): _input is ForkProvenance => true,
   { identifier: "ForkProvenancePassThrough" },
 );
+/** Future producers may add live statuses, but this version acts only on failed. */
+const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
+  (_input: unknown): _input is "failed" => true,
+  { identifier: "SessionFailureStatusPassThrough" },
+);
 
 export const SessionMeta = Schema.mutable(
   Schema.Struct({
@@ -322,6 +327,10 @@ export const SessionMeta = Schema.mutable(
     piSessionFile: Schema.optional(Schema.String),
     /** Set when the pi subprocess exits; absent while live. */
     endedAt: Schema.optional(Schema.String),
+    /** Durable terminal failure only. Running/idle remain live transcript state. */
+    status: Schema.optional(SessionFailureStatusFromSelf),
+    /** Safe, bounded explanation for the latest terminal chat failure. */
+    lastError: Schema.optional(Schema.String),
     /**
      * The LaunchPlan this session was created with (opaque here — typed in
      * pi-host). Persisted so resume relaunches with the same shape: agent

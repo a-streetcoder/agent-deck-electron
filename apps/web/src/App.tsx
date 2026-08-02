@@ -45,6 +45,7 @@ import { SkillsScreen } from "./screens/SkillsScreen.tsx";
 import { cn } from "@/lib/cn";
 import { hasIntegratedDesktopChrome, isElectron, isMacDesktop } from "@/lib/native";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
+import { selectedSessionStatus } from "@/lib/sessionStatus";
 import { refreshCheckpoints } from "./state/wsBridge.ts";
 import { useAppStore } from "./state/store.ts";
 import { useKeyboardShortcuts } from "./state/useKeyboardShortcuts.ts";
@@ -212,14 +213,17 @@ export function App() {
   const macDesktop = isMacDesktop();
   const integratedDesktopChrome = hasIntegratedDesktopChrome();
 
-  const statusLabel =
-    connection !== "open" ? connection : agentStatus === "running" ? "responding" : "idle";
+  // Live transport/activity outrank durable terminal metadata. `agent_end`
+  // changes only transcript activity and must not erase a persisted failure.
+  const statusLabel = selectedSessionStatus(connection, agentStatus, session?.status);
   const statusColor =
     connection !== "open"
       ? "var(--color-warning)"
       : agentStatus === "running"
         ? "var(--color-brand-accent)"
-        : "var(--color-success)";
+        : session?.status === "failed"
+          ? "var(--color-danger)"
+          : "var(--color-success)";
 
   return (
     <div className="flex h-full flex-col">
@@ -428,6 +432,9 @@ export function App() {
                 className="flex items-center gap-2"
                 data-testid="status-indicator"
                 data-status={statusLabel}
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
               >
                 <span
                   className="inline-block h-2.5 w-2.5 rounded-full"

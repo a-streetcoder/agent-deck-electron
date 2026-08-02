@@ -139,6 +139,17 @@ rl.on("line", (line) => {
       });
       break;
     case "prompt":
+      if (cmd.message === "timeout-prompt") break;
+      if (cmd.message === "reject-prompt") {
+        send({
+          id: cmd.id,
+          type: "response",
+          command: "prompt",
+          success: false,
+          error: "provider token=super-secret rejected prompt",
+        });
+        break;
+      }
       send({ id: cmd.id, type: "response", command: "prompt", success: true });
       send({ type: "turn_start" });
       // FAKE_PI_HANG makes EVERY prompt stream forever (never agent_end) — used
@@ -146,6 +157,40 @@ rl.on("line", (line) => {
       // helper) so tests can assert scope close reaps it.
       if (cmd.message === "exit-before-end") {
         process.exit(3);
+      } else if (cmd.message === "provider-error-then-exit") {
+        rl.close();
+        process.stdin.destroy();
+        // End stdout and assign the nonzero exit only from its completion
+        // callback. Setting exitCode before the asynchronous pipe write settles
+        // lets an otherwise-idle Node process terminate with bytes still queued
+        // under suite load, which models an event never produced rather than the
+        // intended produced-event-vs-exit scheduling race.
+        process.stdout.end(
+          `${JSON.stringify({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "Provider failed: Bearer secret-token-value",
+              content: [],
+            },
+          })}\n`,
+          () => {
+            process.exitCode = 9;
+          },
+        );
+      } else if (cmd.message === "fallback-error") {
+        send({
+          type: "agent_end",
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "Fallback provider failure",
+              content: [],
+            },
+          ],
+        });
       } else if (cmd.message === "stream-with-metadata-forever") {
         send({
           type: "message_end",
@@ -201,6 +246,17 @@ rl.on("line", (line) => {
         });
         send({ type: "agent_end" });
       }
+      break;
+    case "steer":
+    case "follow_up":
+      if (cmd.message.startsWith("timeout")) break;
+      send({
+        id: cmd.id,
+        type: "response",
+        command: cmd.type,
+        success: false,
+        error: `${cmd.type} rejected api_key=command-secret`,
+      });
       break;
     case "get_last_assistant_text":
       send({

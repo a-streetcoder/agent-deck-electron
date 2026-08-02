@@ -78,6 +78,23 @@ afterEach(() => {
   });
 });
 
+describe("Transcript durable failure details", () => {
+  it("renders long persisted error content with polite status semantics", () => {
+    const detail = `Provider failure ${"detail ".repeat(400)}`;
+    useAppStore.setState({
+      session: { ...session("failed"), status: "failed", lastError: detail },
+    });
+
+    render(<Transcript />);
+
+    const failure = screen.getByTestId("session-failure-details");
+    expect(failure.getAttribute("role")).toBe("status");
+    expect(failure.getAttribute("aria-live")).toBe("polite");
+    expect(failure.textContent).toContain(detail);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("Transcript question navigation", () => {
   it("removes hidden category cells without changing question navigation", () => {
     useAppStore.setState({

@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyTranscript, type DomainEvent, type SessionMeta } from "@agent-deck/domain";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionCreationError, SessionManager } from "../src/SessionManager.ts";
+import { ManagedSession, SessionCreationError, SessionManager } from "../src/SessionManager.ts";
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
-import { PiHostLive, spawnPiProcess, type PiHostShape } from "../src/services/piHost.ts";
+import { PiHost, PiHostLive, spawnPiProcess, type PiHostShape } from "../src/services/piHost.ts";
 import {
   makeSessionPushBusHandle,
   SessionPushBusesLive,
@@ -22,6 +22,7 @@ import {
   makeManagedSessionRuntime,
   resolveChildTools,
   SessionManagerService,
+  SessionManagerServiceLive,
   type ManagedSessionRuntime,
   type SpawnSessionParams,
 } from "../src/services/sessionManager.ts";
@@ -880,6 +881,122 @@ describe("SessionManager Effect service (services/sessionManager.ts)", () => {
     await expectProcessGone(out.helperPid);
     await expectProcessGone(out.mainPid);
   }, 20_000);
+});
+
+describe("expected teardown with pending chat RPCs", () => {
+  it("stop asynchronously awaits queued exit ingestion before finalizing exactly once", async () => {
+    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ServerRuntime;
+    const scope = Effect.runSync(Scope.make());
+    const ingestionSettled = Effect.runSync(Deferred.make<void>());
+    const ensureEntered = Effect.runSync(Deferred.make<void>());
+    let exitQueued = false;
+    let exitHandled = false;
+    let ensureCalls = 0;
+    let finalizationCalls = 0;
+
+    Effect.runSync(
+      Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          exitQueued = true;
+        }),
+      ),
+    );
+
+    const rt = {
+      meta: {
+        id: randomUUID(),
+        cwd: process.cwd(),
+        createdAt: new Date().toISOString(),
+      },
+      bus: Effect.runSync(makeSessionPushBusHandle()),
+      expectTeardown: Effect.void,
+      ensureExitHandled: Effect.gen(function* () {
+        if (exitHandled) return;
+        ensureCalls += 1;
+        if (!exitQueued) return yield* Effect.die("exit was not queued before exit handling");
+        yield* Deferred.succeed(ensureEntered, undefined);
+        yield* Deferred.await(ingestionSettled);
+        if (exitHandled) return;
+        exitHandled = true;
+        finalizationCalls += 1;
+      }),
+    } as unknown as ManagedSessionRuntime;
+    const session = new ManagedSession(rt, runtime, scope);
+
+    try {
+      let stopSettled = false;
+      const stopping = session.stop().then(() => {
+        stopSettled = true;
+      });
+      await Effect.runPromise(Deferred.await(ensureEntered));
+      expect(exitQueued).toBe(true);
+      expect(stopSettled).toBe(false);
+      expect(ensureCalls).toBe(1);
+      expect(finalizationCalls).toBe(0);
+
+      Effect.runSync(Deferred.succeed(ingestionSettled, undefined));
+      await stopping;
+      expect(stopSettled).toBe(true);
+      expect(finalizationCalls).toBe(1);
+
+      await session.stop();
+      expect(finalizationCalls).toBe(1);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it.each(["prompt", "steer", "followUp"] as const)(
+    "destroy rejects a pending %s RPC without persisting failure",
+    async (command) => {
+      const { piHost } = makeFakePiHost();
+      const runtime = ManagedRuntime.make(
+        SessionManagerServiceLive.pipe(
+          Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+        ),
+      ) as ServerRuntime;
+      const published: SessionMeta[] = [];
+      try {
+        const manager = new SessionManager(runtime, new ReceiptBus(false), (value) =>
+          published.push({ ...value }),
+        );
+        const session = manager.create({ cwd: process.cwd(), plan: { kind: "parent" } });
+        let exits = 0;
+        session.onExit(() => {
+          exits += 1;
+        });
+        const pending = (
+          command === "prompt"
+            ? session.prompt("timeout-prompt")
+            : command === "steer"
+              ? session.steer("timeout-steer")
+              : session.followUp("timeout-follow-up")
+        ).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        // Let PiHost register the RPC Deferred before the authoritative owner
+        // starts expected process-tree teardown.
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await manager.destroy(session.meta.id);
+        expect(await pending).toBeInstanceOf(Error);
+        expect(manager.get(session.meta.id)).toBeUndefined();
+        expect(session.meta.endedAt).toBeDefined();
+        expect(session.meta.status).toBeUndefined();
+        expect(session.meta.lastError).toBeUndefined();
+        expect(exits).toBe(1);
+        expect(published.filter((meta) => meta.endedAt !== undefined)).toHaveLength(1);
+        // Idempotent repeated teardown cannot duplicate exit/meta cleanup.
+        await manager.destroy(session.meta.id);
+        expect(exits).toBe(1);
+        expect(published.filter((meta) => meta.endedAt !== undefined)).toHaveLength(1);
+      } finally {
+        await runtime.dispose();
+      }
+    },
+    15_000,
+  );
 });
 
 describe("SessionManager facade cleanup on create/resume/fork failures", () => {

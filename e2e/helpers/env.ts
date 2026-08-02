@@ -22,6 +22,9 @@ export interface E2eHarness {
   baseUrl: string;
   /** The hermetic HOME the pi subprocesses (and resource scanner) use. */
   piHome: string;
+  dataDir: string;
+  /** Restart only the app server against the same durable data/provider. */
+  restart(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -36,6 +39,7 @@ export async function startHarness(options?: {
   extraExtensions?: string[];
   /** Drive a real pi tool call (e.g. read/bash) — see MockProviderOptions.toolCall. */
   toolCall?: NonNullable<Parameters<typeof startMockProvider>[0]>["toolCall"];
+  beforeResponse?: NonNullable<Parameters<typeof startMockProvider>[0]>["beforeResponse"];
   /** Seed persistence/catalog fixtures before the server reads them. */
   prepare?: (paths: { dataDir: string; piHome: string }) => void;
 }): Promise<E2eHarness> {
@@ -49,6 +53,7 @@ export async function startHarness(options?: {
   const mock = await startMockProvider({
     reply: options?.reply ? (m) => options.reply!(m) : undefined,
     toolCall: options?.toolCall,
+    beforeResponse: options?.beforeResponse,
     chunkDelayMs: options?.chunkDelayMs ?? 120,
   });
   const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-e2e-home-"));
@@ -76,19 +81,23 @@ export async function startHarness(options?: {
 
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-e2e-data-"));
   options?.prepare?.({ dataDir, piHome: tmpHome });
-  const server = await startServer({
-    staticDir: WEB_DIST,
-    dataDir,
-  });
-
-  return {
+  const start = () => startServer({ staticDir: WEB_DIST, dataDir });
+  const server = await start();
+  const harness: E2eHarness = {
     server,
     mock,
     baseUrl: `http://127.0.0.1:${server.port}`,
     piHome: tmpHome,
+    dataDir,
+    restart: async () => {
+      await harness.server.close();
+      harness.server = await start();
+      harness.baseUrl = `http://127.0.0.1:${harness.server.port}`;
+    },
     close: async () => {
-      await server.close();
+      await harness.server.close();
       await mock.close();
     },
   };
+  return harness;
 }

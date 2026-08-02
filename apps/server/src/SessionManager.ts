@@ -27,6 +27,7 @@ import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
+import { normalizeSessionError } from "./sessionFailure.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
 import type { StampedEvent } from "./services/pushBus.ts";
 import {
@@ -325,9 +326,28 @@ export class ManagedSession {
     this.enableMetaPublication();
   }
 
+  recordFailure(error: unknown, publish = true): void {
+    // The fallback keeps injected legacy test/runtime implementations compatible;
+    // production runtimes always provide the authority method above.
+    if (this.rt.recordFailure) {
+      runSyncUnwrapped(this.rt.recordFailure(error, publish));
+      return;
+    }
+    this.rt.meta.status = "failed";
+    this.rt.meta.lastError = normalizeSessionError(error);
+  }
+
+  clearFailure(): void {
+    delete this.rt.meta.status;
+    delete this.rt.meta.lastError;
+  }
+
   async stop(): Promise<void> {
+    if (this.rt.expectTeardown) {
+      await runPromiseUnwrapped(this.runtime, this.rt.expectTeardown);
+    }
     await this.runtime.runPromise(Scope.close(this.scope, Exit.void));
-    Effect.runSync(this.rt.ensureExitHandled);
+    await runPromiseUnwrapped(this.runtime, this.rt.ensureExitHandled);
   }
 }
 
@@ -518,7 +538,11 @@ export class SessionManager {
         // Now that history is seeded, start draining live events (buffered since
         // spawn) so they apply strictly after the seed.
         session.startIngestion();
+        session.clearFailure();
       } catch (error) {
+        // Persist an ordinary resume/history reconstruction failure on the
+        // durable session. Teardown then publishes it coherently with endedAt.
+        session.recordFailure(error, false);
         // launch() already spawned pi and registered the session, but seeding
         // failed (pi died / getMessages timed out) BEFORE ingestion was forked,
         // so its exit handling would never run. Tear the half-built session down
@@ -1066,6 +1090,9 @@ export class SessionManager {
       ...(forkProvenance ? { forkProvenance } : {}),
     };
     if (!forkProvenance) delete meta.forkProvenance;
+    // A newly materialized fork is an independent recovery boundary.
+    delete meta.status;
+    delete meta.lastError;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.
@@ -1135,6 +1162,7 @@ export class SessionManager {
       await session.seedFromHistory();
       if (meta.plan?.length) session.restorePlan(meta.plan);
       session.startIngestion();
+      session.clearFailure();
       session.publishMetaChanges();
       this.onMetaChange(meta);
       return session;

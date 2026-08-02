@@ -103,8 +103,16 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
       // data delivered, trailing partial line flushed above) or after a
       // destroy. It gates exit publication — see the module doc.
       stdout.on("close", () => {
-        this.stdoutDone = true;
-        this.maybePublishExit();
+        // Node can queue the final `data` callback and stream `close` in the
+        // same libuv turn. Cross one check-phase barrier before publishing the
+        // process exit so every already-produced stdout chunk has reached the
+        // JSONL reader and, in turn, PiHost's ordered event queue. Without this
+        // barrier a loaded process can expose ProcessExit before its final
+        // provider message, losing the specific failure to a generic exit.
+        setImmediate(() => {
+          this.stdoutDone = true;
+          this.maybePublishExit();
+        });
       });
     } else {
       this.stdoutDone = true;
