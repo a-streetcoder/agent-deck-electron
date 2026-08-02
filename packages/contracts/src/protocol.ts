@@ -326,6 +326,10 @@ export const SessionMeta = Schema.mutable(
     worktreeIdentity: Schema.optional(Schema.String),
     worktreeBranch: Schema.optional(Schema.String),
     worktreeSourceBranch: Schema.optional(Schema.String),
+    /** Device-local CAS input captured only from an exactly registered, native-
+     * identity-verified worktree before physical removal. It is never sufficient
+     * authority without that exact stale Git registration. */
+    worktreeCleanupBranchHead: Schema.optional(Schema.String),
     /** A history-fork target's durable, non-owning dependency on the source
      * session's app-owned worktree. Such a target retains cwd but never receives
      * worktreePath/identity/branch deletion authority. */

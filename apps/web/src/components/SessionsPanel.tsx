@@ -220,6 +220,15 @@ function SessionRow({
           title="Delete"
           onClick={(event) => {
             event.stopPropagation();
+            if (
+              session.worktreePath &&
+              !session.loopReviewRunId &&
+              !window.confirm(
+                "Delete this isolated session? Its worktree and app-owned branch, including any unmerged commits, will be permanently removed.",
+              )
+            ) {
+              return;
+            }
             void deleteSession(session.id);
           }}
         >

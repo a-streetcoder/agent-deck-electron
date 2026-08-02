@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
@@ -24,6 +24,8 @@ const gitMocks = vi.hoisted(() => ({
   gitWorktreeRegistrationAtPath: vi.fn(),
   gitWorktreeRegistrationMatches: vi.fn(),
   gitDeleteOwnedWorktreeBranch: vi.fn(),
+  gitDeleteOwnedWorktreeBranchCas: vi.fn(),
+  gitOwnedWorktreeBranchOid: vi.fn(),
   gitCheckoutBranch: vi.fn(),
   gitCommitAll: vi.fn(),
   gitCommitsAhead: vi.fn(),
@@ -51,6 +53,8 @@ vi.mock("../src/git.ts", async (importOriginal) => ({
   gitWorktreeRegistrationAtPath: gitMocks.gitWorktreeRegistrationAtPath,
   gitWorktreeRegistrationMatches: gitMocks.gitWorktreeRegistrationMatches,
   gitDeleteOwnedWorktreeBranch: gitMocks.gitDeleteOwnedWorktreeBranch,
+  gitDeleteOwnedWorktreeBranchCas: gitMocks.gitDeleteOwnedWorktreeBranchCas,
+  gitOwnedWorktreeBranchOid: gitMocks.gitOwnedWorktreeBranchOid,
   gitCheckoutBranch: gitMocks.gitCheckoutBranch,
   gitCommitAll: gitMocks.gitCommitAll,
   gitCommitsAhead: gitMocks.gitCommitsAhead,
@@ -82,6 +86,7 @@ interface Meta {
   worktreeIdentity?: string;
   worktreeBranch?: string;
   worktreeSourceBranch?: string;
+  worktreeCleanupBranchHead?: string;
   worktreeOwnerSessionId?: string;
   loopReviewRunId?: string;
 }
@@ -190,6 +195,8 @@ function makeRoute(
       })),
     enabledExtensionPaths: () => [],
     prepareProjectMcpSession: state.prepareProjectMcpSession,
+    sessionImages: { deleteSession: state.deleteSessionImages },
+    sessionPastes: { deleteSession: state.deleteSessionPastes },
     dropDiffCache: state.dropDiffCache,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
@@ -209,6 +216,8 @@ function makeState() {
     reserveWorktree: vi.fn((_target: string) => "v1:0000000000000001:0000000000000002"),
     captureWorktreeIdentity: vi.fn(() => "v1:0000000000000001:0000000000000002"),
     deleteWorktree: vi.fn(async () => {}),
+    deleteSessionImages: vi.fn(),
+    deleteSessionPastes: vi.fn(),
     releaseMcpPreparation,
     prepareProjectMcpSession: vi.fn(async () => ({
       result: { ok: true as const, missing: [] },
@@ -231,6 +240,8 @@ beforeEach(() => {
   });
   gitMocks.gitWorktreeRegistrationMatches.mockReset().mockResolvedValue(true);
   gitMocks.gitDeleteOwnedWorktreeBranch.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitDeleteOwnedWorktreeBranchCas.mockReset().mockResolvedValue(undefined);
+  gitMocks.gitOwnedWorktreeBranchOid.mockReset().mockResolvedValue("a".repeat(40));
   gitMocks.gitCheckoutBranch.mockReset().mockResolvedValue(undefined);
   gitMocks.gitCommitAll.mockReset().mockResolvedValue({ committed: true });
   gitMocks.gitCommitsAhead.mockReset().mockResolvedValue(1);
@@ -717,6 +728,193 @@ describe("POST /sessions worktree transaction", () => {
     await fastify.close();
   });
 
+  it("removes an isolated session's runtime, worktree registration, and owned branch before durable data", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const present = mkdtempSync(path.join(tmpdir(), "isolated-delete-"));
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: present,
+      branch: "agent-deck/session-a1b2c3d4",
+    });
+    state.live.set("isolated-delete", {
+      id: "isolated-delete",
+      cwd: present,
+      projectId: "project-1",
+      worktreePath: present,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+    state.index.set("isolated-delete", state.live.get("isolated-delete")!);
+
+    const response = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/isolated-delete",
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).toHaveBeenCalledWith(
+      PROJECT_PATH,
+      {
+        path: present,
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+        identityToken: "v1:0000000000000001:0000000000000002",
+        branchOwned: true,
+      },
+      "a".repeat(40),
+    );
+    expect(sessions.destroy.mock.invocationCallOrder[0]).toBeLessThan(
+      state.deleteWorktree.mock.invocationCallOrder[0]!,
+    );
+    expect(state.deleteWorktree.mock.invocationCallOrder[0]).toBeLessThan(
+      gitMocks.gitDeleteOwnedWorktreeBranchCas.mock.invocationCallOrder[0]!,
+    );
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas.mock.invocationCallOrder[0]).toBeLessThan(
+      gitMocks.gitWorktreePrune.mock.invocationCallOrder[0]!,
+    );
+    expect(gitMocks.gitWorktreePrune.mock.invocationCallOrder[0]).toBeLessThan(
+      index.remove.mock.invocationCallOrder[0]!,
+    );
+    expect(state.index.has("isolated-delete")).toBe(false);
+    await fastify.close();
+  });
+
+  it("retains durable session data on branch deletion failure and safely retries after the worktree is missing", async () => {
+    const { fastify, state, index } = makeRoute();
+    const present = mkdtempSync(path.join(tmpdir(), "branch-retry-"));
+    state.index.set("branch-retry", {
+      id: "branch-retry",
+      cwd: present,
+      projectId: "project-1",
+      worktreePath: present,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: present,
+      branch: "agent-deck/session-a1b2c3d4",
+    });
+    state.deleteWorktree.mockImplementationOnce(async () => {
+      rmSync(present, { recursive: true });
+    });
+    gitMocks.gitDeleteOwnedWorktreeBranchCas.mockRejectedValueOnce(new Error("branch locked"));
+
+    const failed = await fastify.inject({ method: "DELETE", url: "/sessions/branch-retry" });
+
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json()).toMatchObject({
+      code: "session_worktree_branch_cleanup_failed",
+    });
+    expect(failed.json().error).toContain("resolve the Git issue and retry deletion");
+    expect(state.index.get("branch-retry")?.worktreeCleanupBranchHead).toBe("a".repeat(40));
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(state.index.has("branch-retry")).toBe(true);
+    expect(index.remove).not.toHaveBeenCalledWith("branch-retry");
+    expect(state.deleteSessionImages).not.toHaveBeenCalled();
+    expect(state.deleteSessionPastes).not.toHaveBeenCalled();
+
+    const retried = await fastify.inject({ method: "DELETE", url: "/sessions/branch-retry" });
+
+    expect(retried.statusCode, retried.body).toBe(200);
+    expect(state.deleteWorktree).toHaveBeenCalledTimes(2);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).toHaveBeenCalledTimes(2);
+    expect(state.index.has("branch-retry")).toBe(false);
+    await fastify.close();
+  });
+
+  it("retries a crash after CAS branch deletion but before registration prune", async () => {
+    const { fastify, state } = makeRoute();
+    const missing = path.join(tmpdir(), "cas-before-prune-a1b2c3d4");
+    state.index.set("cas-before-prune", {
+      id: "cas-before-prune",
+      cwd: missing,
+      projectId: "project-1",
+      worktreePath: missing,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+      worktreeCleanupBranchHead: "a".repeat(40),
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
+      path: missing,
+      branch: "agent-deck/session-a1b2c3d4",
+    });
+    gitMocks.gitWorktreePrune.mockRejectedValueOnce(new Error("prune interrupted"));
+
+    const interrupted = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/cas-before-prune",
+    });
+    expect(interrupted.statusCode).toBe(409);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).toHaveBeenCalledOnce();
+    expect(state.index.has("cas-before-prune")).toBe(true);
+
+    const retried = await fastify.inject({
+      method: "DELETE",
+      url: "/sessions/cas-before-prune",
+    });
+    expect(retried.statusCode, retried.body).toBe(200);
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).toHaveBeenCalledTimes(2);
+    expect(gitMocks.gitWorktreePrune).toHaveBeenCalledTimes(2);
+    expect(state.index.has("cas-before-prune")).toBe(false);
+    await fastify.close();
+  });
+
+  it("finishes non-destructively when both registration and branch are already absent", async () => {
+    const { fastify, state } = makeRoute();
+    const missing = path.join(tmpdir(), "fully-cleaned-a1b2c3d4");
+    state.index.set("fully-cleaned", {
+      id: "fully-cleaned",
+      cwd: missing,
+      projectId: "project-1",
+      worktreePath: missing,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+      worktreeCleanupBranchHead: "forged-but-non-authoritative",
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue(undefined);
+    gitMocks.gitOwnedWorktreeBranchOid.mockResolvedValue(undefined);
+
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/fully-cleaned" });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(state.index.has("fully-cleaned")).toBe(false);
+    await fastify.close();
+  });
+
+  it("rejects forged missing-path metadata and cleanup OID when registration is absent", async () => {
+    const { fastify, state, sessions, index } = makeRoute();
+    const missing = path.join(tmpdir(), "forged-missing-a1b2c3d4");
+    state.index.set("forged-missing", {
+      id: "forged-missing",
+      cwd: missing,
+      projectId: "project-1",
+      worktreePath: missing,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+      worktreeCleanupBranchHead: "a".repeat(40),
+    });
+    gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue(undefined);
+
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/forged-missing" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "session_worktree_cleanup_failed" });
+    expect(response.json().error).toContain("registration is absent while its branch still exists");
+    expect(sessions.destroy).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranchCas).not.toHaveBeenCalled();
+    expect(index.remove).not.toHaveBeenCalled();
+    expect(state.index.has("forged-missing")).toBe(true);
+    await fastify.close();
+  });
+
   it("rejects a missing target still registered to another branch", async () => {
     const { fastify, state, sessions, index } = makeRoute();
     const missing = path.join(tmpdir(), "missing-registered-a1b2c3d4");
@@ -742,6 +940,7 @@ describe("POST /sessions worktree transaction", () => {
     expect(sessions.destroy).not.toHaveBeenCalledWith("missing-mismatch");
     expect(state.deleteWorktree).not.toHaveBeenCalled();
     expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     expect(index.remove).not.toHaveBeenCalledWith("missing-mismatch");
     expect(state.index.has("missing-mismatch")).toBe(true);
     await fastify.close();
@@ -771,6 +970,7 @@ describe("POST /sessions worktree transaction", () => {
     expect(response.statusCode).toBe(409);
     expect(sessions.destroy).not.toHaveBeenCalledWith("branch-mismatch");
     expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
     expect(index.remove).not.toHaveBeenCalledWith("branch-mismatch");
     expect(state.index.has("branch-mismatch")).toBe(true);
     await fastify.close();

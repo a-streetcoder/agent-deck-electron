@@ -11,10 +11,12 @@ import {
   gitBlobAtCommit,
   gitCommitsAhead,
   gitCreateAndPushReleaseTag,
+  gitDeleteOwnedWorktreeBranchCas,
   gitLocalBranchRef,
   gitLocalTagExists,
   gitLoopWorktreePatch,
   gitOperationInProgress,
+  gitOwnedWorktreeBranchOid,
   gitRepositoryIdentity,
   gitReleaseSynchronization,
   gitRemoteTagExists,
@@ -463,6 +465,32 @@ describe("session worktree branch ownership", () => {
       false,
     );
     expect(() => execFileSync("git", ["branch", "-D", "--", branch], { cwd: repo })).not.toThrow();
+  });
+
+  it("atomically CAS-deletes only the exact owned branch object and is absent-idempotent", async () => {
+    const repo = makeRepo();
+    const worktree = {
+      path: path.join(repo, "removed-worktree"),
+      branch: "agent-deck/session-cas-delete",
+      sourceBranch: "main",
+      identityToken: "v1:0000000000000001:0000000000000002",
+      branchOwned: true as const,
+    };
+    const expectedOid = git(repo, ["rev-parse", "HEAD"]).trim();
+    git(repo, ["branch", worktree.branch, expectedOid]);
+    expect(await gitOwnedWorktreeBranchOid(repo, worktree.branch)).toBe(expectedOid);
+
+    commitFile(repo, "replacement.txt");
+    const replacementOid = git(repo, ["rev-parse", "HEAD"]).trim();
+    git(repo, ["update-ref", `refs/heads/${worktree.branch}`, replacementOid, expectedOid]);
+    await expect(gitDeleteOwnedWorktreeBranchCas(repo, worktree, expectedOid)).rejects.toThrow();
+    expect(await gitOwnedWorktreeBranchOid(repo, worktree.branch)).toBe(replacementOid);
+
+    await gitDeleteOwnedWorktreeBranchCas(repo, worktree, replacementOid);
+    expect(await gitOwnedWorktreeBranchOid(repo, worktree.branch)).toBeUndefined();
+    await expect(
+      gitDeleteOwnedWorktreeBranchCas(repo, worktree, replacementOid),
+    ).resolves.toBeUndefined();
   });
 
   it("never deletes a pre-existing same-named branch", async () => {

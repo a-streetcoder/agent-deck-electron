@@ -1077,6 +1077,7 @@ export class SessionManager {
     delete meta.worktreeIdentity;
     delete meta.worktreeBranch;
     delete meta.worktreeSourceBranch;
+    delete meta.worktreeCleanupBranchHead;
     const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     const plan: LaunchPlan =
       original.kind === "agent"

@@ -157,7 +157,7 @@ describe("persisted session worktree deletion boundary", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "retains metadata until an interrupted quarantine can be reconciled",
+    "persists expected OID and finishes after restart with stale registration and absent branch",
     async () => {
       const dataDir = mkdtempSync(path.join(tmpdir(), "session-worktree-retry-data-"));
       const project = mkdtempSync(path.join(tmpdir(), "session-worktree-retry-project-"));
@@ -217,10 +217,11 @@ describe("persisted session worktree deletion boundary", () => {
       ) as Array<{
         id: string;
         worktreeIdentity?: string;
+        worktreeCleanupBranchHead?: string;
       }>;
-      expect(adopted.find(({ id }) => id === "retry-session")?.worktreeIdentity).toMatch(
-        /^v1:[0-9a-f]{16}:[0-9a-f]{16}$/,
-      );
+      const persisted = adopted.find(({ id }) => id === "retry-session");
+      expect(persisted?.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
+      expect(persisted?.worktreeCleanupBranchHead).toMatch(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
       await server.close();
       server = undefined;
@@ -229,7 +230,23 @@ describe("persisted session worktree deletion boundary", () => {
       expect(existsSync(path.join(root, quarantine!))).toBe(true);
       expect(await listedIds()).toContain("retry-session");
 
-      rmSync(path.join(root, quarantine!, "blocked"));
+      // Simulate a crash after physical removal + CAS ref deletion but before
+      // prune: retain the exact stale registration and the same-row expected OID.
+      rmSync(path.join(root, quarantine!), { recursive: true });
+      execFileSync(
+        "git",
+        [
+          "update-ref",
+          "-d",
+          "refs/heads/agent-deck/session-facefeed",
+          persisted!.worktreeCleanupBranchHead!,
+        ],
+        { cwd: project },
+      );
+      await server.close();
+      server = undefined;
+      server = await startServer({ dataDir });
+
       expect((await remove()).status).toBe(200);
       expect(existsSync(path.join(root, quarantine!))).toBe(false);
       expect(await listedIds()).not.toContain("retry-session");
@@ -239,6 +256,12 @@ describe("persisted session worktree deletion boundary", () => {
           encoding: "utf8",
         }),
       ).not.toContain(`worktree ${target}`);
+      expect(
+        execFileSync("git", ["branch", "--list", "agent-deck/session-facefeed"], {
+          cwd: project,
+          encoding: "utf8",
+        }).trim(),
+      ).toBe("");
     },
   );
 });

@@ -15,12 +15,14 @@ import {
   gitCommitsAhead,
   gitCurrentBranch,
   gitDeleteOwnedWorktreeBranch,
+  gitDeleteOwnedWorktreeBranchCas,
   gitErrorText,
   gitHasUnmergedEntries,
   gitLocalBranchRef,
   gitMergeInProgress,
   gitMergeNoCheckout,
   gitOperationInProgress,
+  gitOwnedWorktreeBranchOid,
   gitRepositoryIdentity,
   gitWorkingTreeClean,
   gitWorktreePrune,
@@ -424,6 +426,17 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     try {
       let meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
       if (!meta) return reply.status(404).send({ error: "unknown session" });
+      let isolatedCleanup:
+        | {
+            projectPath: string;
+            worktreePath: string;
+            worktreeIdentity: string;
+            worktreeBranch: string;
+            sourceBranch: string;
+            expectedOid: string;
+          }
+        | { alreadyGone: true }
+        | undefined;
       const worktreeDependent = index
         .list()
         .find((candidate) => candidate.id !== id && candidate.worktreeOwnerSessionId === id);
@@ -454,10 +467,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           }
         }
         const projectId = meta.projectId;
+        const worktreePath = meta.worktreePath;
+        const worktreeBranch = meta.worktreeBranch;
         const project = projectId
           ? projects.find((candidate) => candidate.id === projectId)
           : undefined;
-        if (!project || !meta.worktreeBranch) {
+        if (!projectId || !project || !worktreeBranch) {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error:
@@ -466,58 +481,121 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         }
         // Always inspect Git, including when the leaf is physically missing: a
         // stale registration for another branch must never be silently pruned.
-        // Missing + no registration is the idempotent post-prune/crash case; a
-        // present checkout still requires an exact matching registration.
         let registration: { path: string; branch?: string } | undefined;
         try {
-          registration = await gitWorktreeRegistrationAtPath(project.path, meta.worktreePath);
+          registration = await gitWorktreeRegistrationAtPath(project.path, worktreePath);
         } catch {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error: "Git worktree ownership could not be verified. Session metadata was retained.",
           });
         }
-        if (!meta.worktreeIdentity) {
-          // Pre-identity compatibility is deliberately narrow: only an existing
-          // private target with exact persisted project+branch registration may be
-          // adopted. Capture through the held native root, durably persist first,
-          // then update the live object. No teardown occurs until all three settle.
-          if (!registration || registration.branch !== meta.worktreeBranch) {
+        const physicallyPresent = existsSync(worktreePath);
+        if (physicallyPresent) {
+          if (!registration || registration.branch !== worktreeBranch) {
             return reply.status(409).send({
               code: "session_worktree_cleanup_failed",
               error:
-                "This legacy session's worktree ownership could not be proven. Its path and metadata were retained.",
+                "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
             });
           }
-          try {
-            const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(
-              meta.worktreePath,
-            );
-            const adopted = { ...meta, worktreeIdentity };
-            index.upsert(adopted);
-            const liveSession = sessions.get(id);
-            if (liveSession) {
-              liveSession.meta.worktreeIdentity = worktreeIdentity;
-              meta = liveSession.meta;
-            } else {
+          if (!meta.worktreeIdentity) {
+            try {
+              const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(worktreePath);
+              const adopted = { ...meta, worktreeIdentity };
+              index.upsert(adopted);
+              const liveSession = sessions.get(id);
+              if (liveSession) liveSession.meta.worktreeIdentity = worktreeIdentity;
               meta = adopted;
+            } catch {
+              return reply.status(409).send({
+                code: "session_worktree_cleanup_failed",
+                error:
+                  "This legacy session's worktree identity could not be safely adopted. Its path and metadata were retained.",
+              });
             }
+          }
+          const worktreeIdentity = meta.worktreeIdentity;
+          let expectedOid: string | undefined;
+          try {
+            if (
+              !worktreeIdentity ||
+              sessionWorktreeStore.captureWorktreeIdentity(worktreePath) !== worktreeIdentity ||
+              (await gitRepositoryIdentity(worktreePath)) !==
+                (await gitRepositoryIdentity(project.path))
+            ) {
+              throw new Error("worktree ownership mismatch");
+            }
+            expectedOid = await gitOwnedWorktreeBranchOid(project.path, worktreeBranch);
+            if (!expectedOid) throw new Error("owned branch missing");
           } catch {
             return reply.status(409).send({
               code: "session_worktree_cleanup_failed",
               error:
-                "This legacy session's worktree identity could not be safely adopted. Its path and metadata were retained.",
+                "The isolated worktree's native, repository, or branch identity could not be verified. Session metadata was retained.",
             });
           }
-        } else if (
-          (registration && registration.branch !== meta.worktreeBranch) ||
-          (!registration && existsSync(meta.worktreePath))
-        ) {
-          return reply.status(409).send({
-            code: "session_worktree_cleanup_failed",
-            error:
-              "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
-          });
+          try {
+            const prepared = { ...meta, worktreeCleanupBranchHead: expectedOid };
+            index.upsert(prepared);
+            const liveSession = sessions.get(id);
+            if (liveSession) liveSession.meta.worktreeCleanupBranchHead = expectedOid;
+            meta = prepared;
+          } catch {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "The expected branch object could not be durably recorded. No worktree data was removed.",
+            });
+          }
+          isolatedCleanup = {
+            projectPath: project.path,
+            worktreePath,
+            worktreeIdentity,
+            worktreeBranch,
+            sourceBranch: meta.worktreeSourceBranch ?? "",
+            expectedOid,
+          };
+        } else if (registration) {
+          const expectedOid = meta.worktreeCleanupBranchHead;
+          if (
+            registration.branch !== worktreeBranch ||
+            !meta.worktreeIdentity ||
+            !expectedOid ||
+            !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(expectedOid)
+          ) {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "The missing worktree does not retain exact registered branch cleanup evidence. Metadata was retained and no branch was touched.",
+            });
+          }
+          isolatedCleanup = {
+            projectPath: project.path,
+            worktreePath,
+            worktreeIdentity: meta.worktreeIdentity,
+            worktreeBranch,
+            sourceBranch: meta.worktreeSourceBranch ?? "",
+            expectedOid,
+          };
+        } else {
+          let branchOid: string | undefined;
+          try {
+            branchOid = await gitOwnedWorktreeBranchOid(project.path, worktreeBranch);
+          } catch {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error: "Branch state could not be verified. Session metadata was retained.",
+            });
+          }
+          if (branchOid) {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "The worktree registration is absent while its branch still exists. Metadata was retained and the branch was not touched.",
+            });
+          }
+          isolatedCleanup = { alreadyGone: true };
         }
       }
       // Resolve parent bridge waits before destroying their transcript owner.
@@ -536,31 +614,74 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             "The session was stopped, but app-owned child cleanup could not complete safely. Metadata for every unfinished child was retained; a worktree already marked physically removed may remain removed. Resolve the Git/worktree issue and retry deletion.",
         });
       }
-      // For an ordinary isolated session, physical deletion must succeed through the held
-      // native root before Git metadata or persisted session metadata is removed.
-      // A forged/stale persisted path therefore fails honestly and remains visible
-      // for repair; it can never select an ambient deletion target.
-      if (meta.worktreePath && !meta.loopReviewRunId) {
-        const projectId = meta.projectId;
-        const project = projectId
-          ? projects.find((candidate) => candidate.id === projectId)
-          : undefined;
-        if (!project) {
-          return reply.status(409).send({
-            code: "session_worktree_cleanup_failed",
-            error:
-              "The session was stopped, but its isolated worktree could not be safely matched to its project. Session metadata was retained.",
-          });
-        }
+      // The stale exact Git registration remains the destructive-cleanup authority:
+      // native removal -> CAS ref deletion -> prune. A CAS failure deliberately leaves
+      // the registration untouched so a restart can prove and retry the same operation.
+      if (isolatedCleanup && !("alreadyGone" in isolatedCleanup)) {
         try {
-          await sessionWorktreeStore.deleteWorktree(meta.worktreePath, meta.worktreeIdentity!);
-          await gitWorktreePrune(project.path);
+          await sessionWorktreeStore.deleteWorktree(
+            isolatedCleanup.worktreePath,
+            isolatedCleanup.worktreeIdentity,
+          );
         } catch {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error:
               "The session was stopped, but its isolated worktree could not be safely removed. Session metadata was retained; retry deletion after resolving the cleanup issue.",
           });
+        }
+        let registration: { path: string; branch?: string } | undefined;
+        try {
+          registration = await gitWorktreeRegistrationAtPath(
+            isolatedCleanup.projectPath,
+            isolatedCleanup.worktreePath,
+          );
+        } catch {
+          return reply.status(409).send({
+            code: "session_worktree_branch_cleanup_failed",
+            error:
+              "The worktree was removed, but its Git registration could not be reverified. Metadata was retained and no branch was touched.",
+          });
+        }
+        if (!registration) {
+          const branchOid = await gitOwnedWorktreeBranchOid(
+            isolatedCleanup.projectPath,
+            isolatedCleanup.worktreeBranch,
+          ).catch(() => "unknown");
+          if (branchOid) {
+            return reply.status(409).send({
+              code: "session_worktree_branch_cleanup_failed",
+              error:
+                "The worktree registration disappeared while its branch still exists. Metadata was retained and the branch was not touched.",
+            });
+          }
+        } else {
+          if (registration.branch !== isolatedCleanup.worktreeBranch) {
+            return reply.status(409).send({
+              code: "session_worktree_branch_cleanup_failed",
+              error:
+                "The retained worktree registration no longer matches the expected branch. Metadata was retained and no branch was touched.",
+            });
+          }
+          try {
+            await gitDeleteOwnedWorktreeBranchCas(
+              isolatedCleanup.projectPath,
+              {
+                path: isolatedCleanup.worktreePath,
+                branch: isolatedCleanup.worktreeBranch,
+                sourceBranch: isolatedCleanup.sourceBranch,
+                identityToken: isolatedCleanup.worktreeIdentity,
+                branchOwned: true,
+              },
+              isolatedCleanup.expectedOid,
+            );
+            await gitWorktreePrune(isolatedCleanup.projectPath);
+          } catch {
+            return reply.status(409).send({
+              code: "session_worktree_branch_cleanup_failed",
+              error: `The session was stopped and its worktree was removed, but exact app-owned branch ${isolatedCleanup.worktreeBranch} cleanup could not complete. Its Git registration and durable metadata were retained; resolve the Git issue and retry deletion.`,
+            });
+          }
         }
       }
       sessions.removeLoopSessionSnapshot(id);
@@ -1098,6 +1219,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         delete withoutWorktree.worktreePath;
         delete withoutWorktree.worktreeIdentity;
         delete withoutWorktree.worktreeSourceBranch;
+        delete withoutWorktree.worktreeCleanupBranchHead;
         index.upsert(withoutWorktree);
         broadcast({ type: "session_meta", session: withoutWorktree });
 

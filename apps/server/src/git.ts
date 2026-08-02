@@ -660,7 +660,7 @@ export async function gitWorktreeSource(cwd: string): Promise<{
 
 /** Delete a branch only when the caller holds createSessionWorktree's ownership
  * proof and the name is in Agent Deck's private namespace. Throws on failure so
- * transaction callers can log it without masking their primary typed error. */
+ * ordinary creation/merge/Loop callers retain their existing strict behavior. */
 export async function gitDeleteOwnedWorktreeBranch(
   projectDir: string,
   worktree: GitWorktree,
@@ -669,6 +669,42 @@ export async function gitDeleteOwnedWorktreeBranch(
     throw new Error("refusing to delete an unowned worktree branch");
   }
   await runGit(projectDir, ["branch", "-D", "--", worktree.branch]);
+}
+
+/** Read the exact local branch object id without accepting revision syntax. */
+export async function gitOwnedWorktreeBranchOid(
+  projectDir: string,
+  branch: string,
+): Promise<string | undefined> {
+  if (!branch.startsWith("agent-deck/")) throw new Error("invalid owned worktree branch");
+  try {
+    return (await runGit(projectDir, ["show-ref", "--hash", `refs/heads/${branch}`])).trim();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return undefined;
+    throw error;
+  }
+}
+
+/** Atomically delete the exact ref observed before physical worktree removal.
+ * The route may call this only while the exact stale worktree registration still
+ * exists. A replaced branch fails Git's old-object-id compare-and-swap. */
+export async function gitDeleteOwnedWorktreeBranchCas(
+  projectDir: string,
+  worktree: GitWorktree,
+  expectedOid: string,
+): Promise<void> {
+  if (worktree.branchOwned !== true || !worktree.branch.startsWith("agent-deck/")) {
+    throw new Error("refusing to delete an unowned worktree branch");
+  }
+  validateGitObjectId(expectedOid);
+  try {
+    await runGit(projectDir, ["update-ref", "-d", `refs/heads/${worktree.branch}`, expectedOid]);
+  } catch (error) {
+    // A crash may already have committed this exact deletion. The failed CAS is
+    // non-mutating; only an observed absent ref converts it to idempotent success.
+    if ((await gitOwnedWorktreeBranchOid(projectDir, worktree.branch)) === undefined) return;
+    throw error;
+  }
 }
 
 /**
