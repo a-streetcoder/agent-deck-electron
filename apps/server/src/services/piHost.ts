@@ -243,6 +243,8 @@ export interface PiHostHandle {
   readonly compact: Effect.Effect<void, PiRequestError>;
   readonly getState: Effect.Effect<PiCommandData<"get_state">, PiRequestError>;
   readonly getEntries: Effect.Effect<PiCommandData<"get_entries">, PiRequestError>;
+  readonly getForkMessages: Effect.Effect<PiCommandData<"get_fork_messages">, PiRequestError>;
+  readonly fork: (entryId: string) => Effect.Effect<PiCommandData<"fork">, PiRequestError>;
   readonly getMessages: Effect.Effect<PiCommandData<"get_messages">, PiRequestError>;
   readonly getCommands: Effect.Effect<PiCommandData<"get_commands">["commands"], PiRequestError>;
   readonly getSessionStats: Effect.Effect<PiCommandData<"get_session_stats">, PiRequestError>;
@@ -438,6 +440,8 @@ export const spawnPiProcess = (
           compact: Effect.asVoid(request({ type: "compact" }, COMPACT_TIMEOUT_MS)),
           getState: request({ type: "get_state" }),
           getEntries: request({ type: "get_entries" }),
+          getForkMessages: request({ type: "get_fork_messages" }),
+          fork: (entryId) => request({ type: "fork", entryId }),
           getMessages: request({ type: "get_messages" }),
           getCommands: Effect.map(request({ type: "get_commands" }), (data) => data.commands),
           getSessionStats: request({ type: "get_session_stats" }),

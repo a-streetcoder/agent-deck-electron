@@ -78,6 +78,9 @@ test("a picked folder survives live delivery, reload, resume, fork, and a missin
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
     timeout: 30_000,
   });
+  // Idle reconciliation adds Pi's stable entry id. Its same-cell replacement
+  // must retain canonical attachment fields before snapshots/reloads consume it.
+  await expect(sentFolderChip(page)).toBeVisible();
   await expect(page.getByTestId("transcript")).not.toContainText("folder: `");
   const providerFolderMessage = harness.mock.requests
     .flatMap((request) => request.messages)

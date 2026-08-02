@@ -365,6 +365,20 @@ export class SessionPasteStore {
     );
   }
 
+  /** Durable compact projection needed to stage an exact historic resend. */
+  promptProjection(
+    sessionId: string,
+    entryId: string,
+  ): { transcriptText: string; pastes: PasteAttachment[] } | undefined {
+    const record = this.read(sessionId).find((candidate) => candidate.entryId === entryId);
+    return record
+      ? {
+          transcriptText: record.transcriptText,
+          pastes: record.pastes.map((paste) => ({ ...paste })),
+        }
+      : undefined;
+  }
+
   fork(sourceSessionId: string, targetSessionId: string): void {
     this.write(
       targetSessionId,

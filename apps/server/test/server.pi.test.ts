@@ -105,6 +105,10 @@ class WsClient {
     });
   }
 
+  clear(): void {
+    this.messages.length = 0;
+  }
+
   close(): void {
     this.socket.close();
   }
@@ -168,6 +172,77 @@ describe("server: REST + WS against real pi", () => {
     client.close();
   });
 
+  it("signals two same-id subscribers to resubscribe and preserves ordered post-rerun deltas", async () => {
+    const entryId = (await server.sessions.get(sessionId)!.getForkMessages()).messages.find(
+      (message) => message.text === "hello over ws",
+    )?.entryId;
+    expect(entryId).toBeTruthy();
+    const first = new WsClient(server.port);
+    const second = new WsClient(server.port);
+    await Promise.all([first.open(), second.open()]);
+    first.send({ type: "subscribe_session", sessionId });
+    second.send({ type: "subscribe_session", sessionId });
+    await Promise.all([
+      first.waitFor((message) => message.type === "snapshot"),
+      second.waitFor((message) => message.type === "snapshot"),
+    ]);
+
+    const response = await fetch(
+      `http://127.0.0.1:${server.port}/sessions/${sessionId}/history/rerun`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entryId }),
+      },
+    );
+    expect(response.status, await response.text()).toBe(200);
+    const reboundGeneration = server.sessions.get(sessionId)?.meta.streamGeneration;
+    expect(reboundGeneration).toBeTruthy();
+    await Promise.all([
+      first.waitFor(
+        (message) => message.type === "session_rebind" && message.sessionId === sessionId,
+      ),
+      second.waitFor(
+        (message) => message.type === "session_rebind" && message.sessionId === sessionId,
+      ),
+    ]);
+
+    first.clear();
+    second.clear();
+    first.send({ type: "subscribe_session", sessionId });
+    second.send({ type: "subscribe_session", sessionId });
+    const [firstSnapshot, secondSnapshot] = await Promise.all([
+      first.waitFor((message) => message.type === "snapshot"),
+      second.waitFor((message) => message.type === "snapshot"),
+    ]);
+    expect(firstSnapshot).toEqual(secondSnapshot);
+    expect(firstSnapshot).toMatchObject({ streamGeneration: reboundGeneration });
+
+    first.clear();
+    second.clear();
+    first.send({ type: "prompt", sessionId, message: "post rerun" });
+    await Promise.all([
+      first.waitFor(
+        (message) =>
+          message.type === "event" &&
+          message.event.type === "agent_status" &&
+          message.event.status === "idle",
+      ),
+      second.waitFor(
+        (message) =>
+          message.type === "event" &&
+          message.event.type === "agent_status" &&
+          message.event.status === "idle",
+      ),
+    ]);
+    const sequence = (client: WsClient) =>
+      client.messages.filter((message) => message.type === "event").map((message) => message.seq);
+    expect(sequence(first)).toEqual(sequence(second));
+    expect(sequence(first)).toEqual([...sequence(first)].sort((a, b) => a - b));
+    first.close();
+    second.close();
+  }, 120_000);
+
   it("replays from a mid-stream seq for a reconnecting client", async () => {
     const session = server.sessions.get(sessionId)!;
     const { seq: lastSeq } = session.snapshot();
@@ -175,12 +250,22 @@ describe("server: REST + WS against real pi", () => {
 
     const client = new WsClient(server.port);
     await client.open();
-    client.send({ type: "subscribe_session", sessionId, lastSeq: midSeq });
+    client.send({
+      type: "subscribe_session",
+      sessionId,
+      lastSeq: midSeq,
+      streamGeneration: session.meta.streamGeneration,
+    });
     await client.waitFor((m) => m.type === "event" && m.seq === lastSeq);
 
     const events = client.messages.filter((m) => m.type === "event");
     expect(events[0]!.seq).toBe(midSeq + 1);
-    expect(events.at(-1)!.seq).toBe(lastSeq);
+    // Turn-idle side effects may append after lastSeq was sampled; replay must
+    // include the sampled boundary and remain ordered if a newer event races in.
+    expect(events.some((event) => event.seq === lastSeq)).toBe(true);
+    expect(events.map((event) => event.seq)).toEqual(
+      [...events.map((event) => event.seq)].sort((a, b) => a - b),
+    );
     expect(client.messages.some((m) => m.type === "snapshot")).toBe(false);
     client.close();
   });

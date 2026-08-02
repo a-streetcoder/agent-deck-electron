@@ -127,11 +127,33 @@ describe("real pi through the PiHost Effect service", () => {
           ),
         );
 
+        // Pinned Pi history surface: select only its stable entry id, then prove
+        // fork rebinds this same process to ancestry before that user turn.
+        const forkMessages = yield* handle.getForkMessages;
+        const target = forkMessages.messages.find(
+          (message) => message.text === "hello, stream to me",
+        );
+        if (!target) return yield* Effect.fail(new Error("real Pi omitted the fork message"));
+        const forkResult = yield* handle.fork(target.entryId);
+        const forkState = yield* handle.getState;
+        const forkEntries = yield* handle.getEntries;
+
         // Clean scope close: release SIGTERMs pi and waits for the real exit.
         yield* Scope.close(scope, Exit.void);
         const exit = yield* handle.exit;
         const running = yield* handle.isRunning;
-        return { pid, sessionId: state.sessionId, items, exit, running };
+        return {
+          pid,
+          sessionId: state.sessionId,
+          originalSessionFile: state.sessionFile,
+          items,
+          exit,
+          running,
+          target,
+          forkResult,
+          forkState,
+          forkEntries,
+        };
       });
     }
 
@@ -151,6 +173,11 @@ describe("real pi through the PiHost Effect service", () => {
     expect(text).toBe(SCRIPTED_REPLY);
     expect(result.items.length).toBeGreaterThan(0);
     expect(isAgentEndItem(result.items.at(-1)!)).toBe(true);
+    expect(result.forkResult).toEqual({ text: "hello, stream to me", cancelled: false });
+    expect(result.forkState.sessionFile).not.toBe(result.originalSessionFile);
+    expect(result.forkEntries.entries.some((entry) => entry.id === result.target.entryId)).toBe(
+      false,
+    );
 
     // Scope close settled the exit and — the orphan proof — the OS pid is gone.
     expect(Option.isSome(result.exit)).toBe(true);

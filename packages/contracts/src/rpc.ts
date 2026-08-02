@@ -125,7 +125,7 @@ export type RpcHelloOkFrame = typeof RpcHelloOkFrame.Type;
  * server → client: an unsolicited push. `message` is a bare `ServerMessage`
  * (the same push subset the legacy envelope broadcasts / streams per
  * subscription: event, snapshot, session_exit, session_meta, session_removed,
- * resources_changed), so the seq/replay/snapshot contract is unchanged.
+ * session_rebind, resources_changed), so the seq/replay/snapshot contract is unchanged.
  */
 export const RpcPushFrame = Schema.Struct({
   kind: Schema.Literal("push"),

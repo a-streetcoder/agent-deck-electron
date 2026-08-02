@@ -82,6 +82,7 @@ interface Meta {
   worktreeIdentity?: string;
   worktreeBranch?: string;
   worktreeSourceBranch?: string;
+  worktreeOwnerSessionId?: string;
   loopReviewRunId?: string;
 }
 
@@ -775,6 +776,90 @@ describe("POST /sessions worktree transaction", () => {
     await fastify.close();
   });
 
+  it("rejects isolated-owner deletion while an indexed generic/history fork depends on it", async () => {
+    const { fastify, state, sessions } = makeRoute();
+    state.index.set("source", {
+      id: "source",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    state.index.set("target", {
+      id: "target",
+      cwd: WORKTREE_PATH,
+      worktreeOwnerSessionId: "source",
+    });
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/source" });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "session_worktree_in_use" });
+    expect(sessions.destroy).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(state.index.has("source")).toBe(true);
+    await fastify.close();
+  });
+
+  it("deletes a non-owner history target without touching its source worktree", async () => {
+    const { fastify, state } = makeRoute();
+    state.index.set("source", {
+      id: "source",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    state.index.set("target", {
+      id: "target",
+      cwd: WORKTREE_PATH,
+      worktreeOwnerSessionId: "source",
+    });
+    const response = await fastify.inject({ method: "DELETE", url: "/sessions/target" });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
+    expect(state.index.has("source")).toBe(true);
+    expect(state.index.has("target")).toBe(false);
+    await fastify.close();
+  });
+
+  it("keeps the original worktree owner protected across nested fork deletion", async () => {
+    const { fastify, state } = makeRoute();
+    state.index.set("original", {
+      id: "original",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+    });
+    state.index.set("child", {
+      id: "child",
+      cwd: WORKTREE_PATH,
+      worktreeOwnerSessionId: "original",
+    });
+    state.index.set("grandchild", {
+      id: "grandchild",
+      cwd: WORKTREE_PATH,
+      worktreeOwnerSessionId: "original",
+    });
+
+    const blocked = await fastify.inject({ method: "DELETE", url: "/sessions/original" });
+    expect(blocked.json()).toMatchObject({ code: "session_worktree_in_use" });
+    expect((await fastify.inject({ method: "DELETE", url: "/sessions/child" })).statusCode).toBe(
+      200,
+    );
+    const stillBlocked = await fastify.inject({ method: "DELETE", url: "/sessions/original" });
+    expect(stillBlocked.json()).toMatchObject({ code: "session_worktree_in_use" });
+    expect(
+      (await fastify.inject({ method: "DELETE", url: "/sessions/grandchild" })).statusCode,
+    ).toBe(200);
+    const afterDependents = await fastify.inject({ method: "DELETE", url: "/sessions/original" });
+    expect(afterDependents.json()).not.toMatchObject({ code: "session_worktree_in_use" });
+    await fastify.close();
+  });
+
   it("rejects duplicate persisted worktree ownership before teardown", async () => {
     const { fastify, state, sessions, index } = makeRoute();
     for (const id of ["first", "second"]) {
@@ -798,6 +883,33 @@ describe("POST /sessions worktree transaction", () => {
     expect(index.remove).not.toHaveBeenCalledWith("first");
     expect(state.index.has("first")).toBe(true);
     expect(state.index.has("second")).toBe(true);
+    await fastify.close();
+  });
+
+  it("rejects isolated-owner merge while an indexed generic/history fork depends on it", async () => {
+    const { fastify, state } = makeRoute({ keepWorktreeAfterMerge: false });
+    state.index.set("source", {
+      id: "source",
+      cwd: WORKTREE_PATH,
+      projectId: "project-1",
+      worktreePath: WORKTREE_PATH,
+      worktreeIdentity: "v1:0000000000000001:0000000000000002",
+      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      worktreeSourceBranch: "main",
+    });
+    state.index.set("target", {
+      id: "target",
+      cwd: WORKTREE_PATH,
+      worktreeOwnerSessionId: "source",
+    });
+    const response = await fastify.inject({ method: "POST", url: "/sessions/source/merge" });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "merge_worktree_in_use",
+      worktreeCommitted: false,
+    });
+    expect(gitMocks.gitCommitAll).not.toHaveBeenCalled();
+    expect(state.deleteWorktree).not.toHaveBeenCalled();
     await fastify.close();
   });
 
@@ -1261,7 +1373,7 @@ describe("POST /sessions worktree transaction", () => {
     await unresolvedProject.fastify.close();
   });
 
-  it("fails fast when another merge holds the canonical project lock", async () => {
+  it("fails fast when another merge holds the source mutation claim", async () => {
     const { fastify, state } = makeRoute();
     state.index.set("merge-session", {
       id: "merge-session",
@@ -1282,7 +1394,7 @@ describe("POST /sessions worktree transaction", () => {
     await vi.waitFor(() => expect(gitMocks.gitOperationInProgress).toHaveBeenCalledOnce());
     const second = await fastify.inject({ method: "POST", url: "/sessions/merge-session/merge" });
     expect(second.json()).toMatchObject({
-      code: "merge_busy",
+      code: "session_mutation_busy",
       outcome: "busy",
       worktreeCommitted: false,
     });

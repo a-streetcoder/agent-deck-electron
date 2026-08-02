@@ -1,6 +1,7 @@
 import type {
   ClientMessage,
   EditorId,
+  HistoryActionResult,
   ProjectMeta,
   ProjectServerCommand,
   ScriptPush,
@@ -41,6 +42,20 @@ let currentSessionId: string | null = null;
 const mergeRequests = new Set<string>();
 const deferredMergeExits = new Map<string, string>();
 const expectedCleanupExits = new Set<string>();
+const historyActionClaims = new Map<string, number>();
+const historyActionClaimListeners = new Set<() => void>();
+const updateHistoryClaim = (sessionId: string, delta: 1 | -1): void => {
+  const next = Math.max(0, (historyActionClaims.get(sessionId) ?? 0) + delta);
+  if (next) historyActionClaims.set(sessionId, next);
+  else historyActionClaims.delete(sessionId);
+  for (const listener of historyActionClaimListeners) listener();
+};
+export const historyActionPending = (sessionId: string | null): boolean =>
+  sessionId !== null && (historyActionClaims.get(sessionId) ?? 0) > 0;
+export const subscribeHistoryActionPending = (listener: () => void): (() => void) => {
+  historyActionClaimListeners.add(listener);
+  return () => historyActionClaimListeners.delete(listener);
+};
 
 const transportHost: TransportHost = {
   onServerMessage: (message) => handleMessage(message),
@@ -55,6 +70,7 @@ const transportHost: TransportHost = {
     useAppStore.getState().setConnection(status);
   },
   getLastSeq: () => useAppStore.getState().lastSeq,
+  getStreamGeneration: () => useAppStore.getState().streamGeneration,
   onTerminalPush: (message) => {
     for (const listener of terminalPushListeners) listener(message);
   },
@@ -649,7 +665,7 @@ function handleMessage(message: ServerMessage): void {
   switch (message.type) {
     case "snapshot":
       if (message.sessionId !== currentSessionId) return;
-      store.setSnapshot(message.state, message.seq);
+      store.setSnapshot(message.state, message.seq, message.streamGeneration);
       break;
     case "event": {
       if (message.sessionId !== currentSessionId) return;
@@ -664,6 +680,7 @@ function handleMessage(message: ServerMessage): void {
     case "session_exit":
       if (message.sessionId !== currentSessionId) return;
       if (expectedCleanupExits.delete(message.sessionId)) return;
+      if (historyActionPending(message.sessionId)) return;
       if (mergeRequests.has(message.sessionId)) {
         deferredMergeExits.set(message.sessionId, `pi exited (code ${message.code ?? "?"})`);
         return;
@@ -675,6 +692,15 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "session_meta":
       store.upsertSessionMeta(message.session);
+      break;
+    case "session_rebind":
+      if (message.sessionId !== currentSessionId) return;
+      // A same-id history re-run replaced the process and ordered bus. This is
+      // server-driven so every renderer subscribed to the id drops stale seq
+      // ancestry and requests the replacement runtime's full snapshot.
+      store.resetTranscript();
+      store.setError(null);
+      connect(message.sessionId);
       break;
     case "session_removed":
       store.removeSession(message.sessionId);
@@ -905,6 +931,39 @@ export async function deleteSession(sessionId: string): Promise<void> {
     await refreshSessions();
   } catch (error) {
     useAppStore.getState().setError(String(error));
+  }
+}
+
+/** Run a stable-entry history action. The server result is durable even when a
+ * newer user navigation wins; only activation/draft focus is generation-gated. */
+export async function runHistoryAction(
+  sessionId: string,
+  entryId: string,
+  action: "fork" | "rerun",
+): Promise<HistoryActionResult> {
+  const activationAtStart = activationToken;
+  updateHistoryClaim(sessionId, 1);
+  try {
+    const result = await fetchJson<HistoryActionResult>(
+      `/sessions/${encodeURIComponent(sessionId)}/history/${action}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entryId }),
+      },
+    );
+    await refreshSessions().catch(() => {});
+    if (activationToken !== activationAtStart || currentSessionId !== sessionId) return result;
+    if (result.outcome === "forked") {
+      // Replace, never merge with a pre-existing target/source draft.
+      const store = useAppStore.getState();
+      store.updateComposerDraft(result.session.id, () => result.draft);
+      store.setPendingComposerText({ sessionId: result.session.id, text: result.draft.text });
+      await switchToSession(result.session);
+    }
+    return result;
+  } finally {
+    updateHistoryClaim(sessionId, -1);
   }
 }
 

@@ -50,6 +50,8 @@ export interface TransportHost {
   setConnection(status: ConnectionStatus): void;
   /** The last applied seq — sent on (re)subscribe so the server replays the gap. */
   getLastSeq(): number;
+  /** Durable bus generation that owns lastSeq, when the server has coined one. */
+  getStreamGeneration(): string | null;
   /** A terminal push (Slice 8b): output chunks + exit, outside the reducer path. */
   onTerminalPush?(message: TerminalPush): void;
   /** A diff push (Slice 10): a session's refreshed changed-file set, outside
@@ -168,6 +170,7 @@ export class RpcClientTransport implements ClientTransport {
         // Resubscribe on every (re)connection with the current lastSeq — the
         // server replays the gap from the ring, or snapshots when it evicted it.
         const lastSeq = this.host.getLastSeq();
+        const streamGeneration = this.host.getStreamGeneration();
         void transport
           .hello()
           .then(() =>
@@ -175,6 +178,7 @@ export class RpcClientTransport implements ClientTransport {
               type: "subscribe_session",
               sessionId,
               lastSeq: lastSeq > 0 ? lastSeq : undefined,
+              streamGeneration: streamGeneration ?? undefined,
             }),
           )
           .then(() => {

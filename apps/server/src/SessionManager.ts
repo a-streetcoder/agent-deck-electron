@@ -121,6 +121,7 @@ export class ManagedSession {
     private readonly runtime: ServerRuntime,
     /** The session's own Scope: closing it kills pi and settles everything. */
     private readonly scope: Scope.CloseableScope,
+    private readonly enableMetaPublication: () => void = () => {},
   ) {
     const handle = rt.bus;
     this.busView = {
@@ -267,6 +268,22 @@ export class ManagedSession {
     return await runPromiseUnwrapped(this.runtime, this.rt.getState);
   }
 
+  async getForkMessages(): Promise<
+    Effect.Effect.Success<ManagedSessionRuntime["getForkMessages"]>
+  > {
+    return await runPromiseUnwrapped(this.runtime, this.rt.getForkMessages);
+  }
+
+  async getEntries(): Promise<Effect.Effect.Success<ManagedSessionRuntime["getEntries"]>> {
+    return await runPromiseUnwrapped(this.runtime, this.rt.getEntries);
+  }
+
+  async forkAtEntry(
+    entryId: string,
+  ): Promise<Effect.Effect.Success<ReturnType<ManagedSessionRuntime["fork"]>>> {
+    return await runPromiseUnwrapped(this.runtime, this.rt.fork(entryId));
+  }
+
   async getSessionStats(): Promise<
     Effect.Effect.Success<ManagedSessionRuntime["getSessionStats"]>
   > {
@@ -304,6 +321,10 @@ export class ManagedSession {
   /** Stop the session: close its Scope (kills pi, runs finalizers), then run the
    * exit handling now so endedAt/exit listeners fire before the caller proceeds
    * (matching the legacy synchronous pi-exit handler ordering). */
+  publishMetaChanges(): void {
+    this.enableMetaPublication();
+  }
+
   async stop(): Promise<void> {
     await this.runtime.runPromise(Scope.close(this.scope, Exit.void));
     Effect.runSync(this.rt.ensureExitHandled);
@@ -464,7 +485,15 @@ export class SessionManager {
     }
 
     const task = (async () => {
-      const revived: SessionMeta = { ...meta, endedAt: undefined };
+      // Naturally-ended sessions remain addressable in the map for snapshot/
+      // exit semantics. Close and remove that settled owner before relaunch;
+      // destroy keeps it registered if scope close itself fails.
+      if (live) await this.destroy(meta.id);
+      const revived: SessionMeta = {
+        ...meta,
+        endedAt: undefined,
+        ...(meta.streamGeneration ? { streamGeneration: randomUUID() } : {}),
+      };
       const session = this.launch(revived, plan, env);
       try {
         await session.seedFromHistory();
@@ -522,12 +551,19 @@ export class SessionManager {
     env?: Record<string, string | undefined>,
     deferAnnouncement = false,
   ): ManagedSession {
+    if (this.sessions.has(meta.id)) {
+      throw new Error(`session already has an authoritative runtime owner: ${meta.id}`);
+    }
     const tempDirs: string[] = [];
     // A throw before the session owns tempDirs would leak them; clean up on any
     // pre-ownership failure.
     let owned = false;
     try {
-      const params = this.buildSpawnParams(meta, plan, env, tempDirs);
+      let publicationEnabled = !deferAnnouncement;
+      const publishMeta = (changed: SessionMeta): void => {
+        if (publicationEnabled) this.onMetaChange(changed);
+      };
+      const params = this.buildSpawnParams(meta, plan, env, tempDirs, publishMeta);
       const scope = this.runtime.runSync(Scope.make());
       let rt: ManagedSessionRuntime;
       try {
@@ -547,7 +583,9 @@ export class SessionManager {
       // The session now owns tempDirs cleanup (via its exit handling).
       owned = true;
       try {
-        const session = new ManagedSession(rt, this.runtime, scope);
+        const session = new ManagedSession(rt, this.runtime, scope, () => {
+          publicationEnabled = true;
+        });
         this.sessions.set(meta.id, session);
         if (!deferAnnouncement) {
           // Preserve the established non-deferred ordering used by Loop/direct
@@ -591,6 +629,7 @@ export class SessionManager {
     plan: LaunchPlan,
     env: Record<string, string | undefined> | undefined,
     tempDirs: string[],
+    onMetaChange: (meta: SessionMeta) => void = this.onMetaChange,
   ): SpawnSessionParams {
     const bridgeExtension = this.bridgeExtensionFactory(meta);
     let launchPlan: LaunchPlan = bridgeExtension
@@ -637,7 +676,7 @@ export class SessionManager {
       meta,
       spawn,
       receipts: this.receipts,
-      onMetaChange: this.onMetaChange,
+      onMetaChange,
       helperContext: {
         provider: plan.provider,
         model: plan.model,
@@ -811,6 +850,7 @@ export class SessionManager {
    * expose the test milestone. The route uses this after worktree + spawn setup;
    * other creation paths retain their immediate announcement behavior. */
   announceCreated(session: ManagedSession): void {
+    session.publishMetaChanges();
     this.onMetaChange(session.meta);
     this.receipts.emit("session_created", session.meta.id);
   }
@@ -931,12 +971,14 @@ export class SessionManager {
     return [...this.sessions.values()].map((session) => session.meta);
   }
 
-  /** Stop and drop a live session from the manager (index removal is caller's). */
+  /** Stop and drop a live session from the manager (index removal is caller's).
+   * Map ownership remains authoritative until stop settles. A failed stop keeps
+   * the owner registered so no second process can launch under the same id. */
   async destroy(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) return;
-    this.sessions.delete(id);
     await session.stop();
+    if (this.sessions.get(id) === session) this.sessions.delete(id);
   }
 
   /**
@@ -962,6 +1004,11 @@ export class SessionManager {
       piSessionFile: copyTo,
       title: source.title ? `${source.title} (fork)` : undefined,
       plan: source.plan,
+      ...(source.worktreeOwnerSessionId
+        ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
+        : source.worktreePath
+          ? { worktreeOwnerSessionId: source.id }
+          : {}),
     };
     const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     let plan: LaunchPlan;
@@ -995,6 +1042,100 @@ export class SessionManager {
       } catch {
         // Best-effort rollback must not mask the launch failure.
       }
+      throw error;
+    }
+  }
+
+  /** Materialize a Pi-created branch file as a new Deck session. The caller has
+   * already stopped the source runtime because Pi's fork RPC rebound it. */
+  async materializeHistoryFork(
+    source: SessionMeta,
+    branchFile: string,
+    env?: Record<string, string | undefined>,
+  ): Promise<ManagedSession> {
+    const now = new Date().toISOString();
+    const meta: SessionMeta = {
+      ...source,
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      endedAt: undefined,
+      piSessionFile: branchFile,
+      title: source.title ? `${source.title} (fork)` : undefined,
+    };
+    // The target shares the checkout as a portable cwd reference, never the
+    // source's app-owned worktree deletion authority. Persist the dependency so
+    // source deletion/merge cannot remove the checkout while this target exists.
+    if (source.worktreeOwnerSessionId) {
+      meta.worktreeOwnerSessionId = source.worktreeOwnerSessionId;
+    } else if (source.worktreePath) {
+      meta.worktreeOwnerSessionId = source.id;
+    } else {
+      delete meta.worktreeOwnerSessionId;
+    }
+    delete meta.worktreePath;
+    delete meta.worktreeIdentity;
+    delete meta.worktreeBranch;
+    delete meta.worktreeSourceBranch;
+    const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const plan: LaunchPlan =
+      original.kind === "agent"
+        ? { ...original, sessionDir: undefined, resumeSessionPath: branchFile }
+        : original.kind === "parent"
+          ? { ...original, resumeSessionPath: branchFile }
+          : original;
+    let session: ManagedSession | undefined;
+    let rollbackAttachments: (() => void) | undefined;
+    try {
+      rollbackAttachments = this.forkSessionImages?.(source.id, meta.id);
+      session = this.launch(meta, plan, env, true);
+      await session.seedFromHistory();
+      if (meta.plan?.length) session.restorePlan(meta.plan);
+      session.startIngestion();
+      this.announceCreated(session);
+      return session;
+    } catch (error) {
+      if (session) await this.destroy(meta.id).catch(() => {});
+      try {
+        rollbackAttachments?.();
+      } catch {
+        // Preserve the primary branch materialization failure.
+      }
+      throw error;
+    }
+  }
+
+  /** Relaunch the same Deck identity without publishing the branch handle until
+   * launch and canonical history seeding both succeed. */
+  async rebindHistoryDeferred(
+    source: SessionMeta,
+    branchFile: string,
+    env?: Record<string, string | undefined>,
+  ): Promise<ManagedSession> {
+    const meta = {
+      ...source,
+      piSessionFile: branchFile,
+      endedAt: undefined,
+      streamGeneration: randomUUID(),
+    };
+    const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const plan: LaunchPlan =
+      original.kind === "agent"
+        ? { ...original, sessionDir: undefined, resumeSessionPath: branchFile }
+        : original.kind === "parent"
+          ? { ...original, resumeSessionPath: branchFile }
+          : original;
+    let session: ManagedSession | undefined;
+    try {
+      session = this.launch(meta, plan, env, true);
+      await session.seedFromHistory();
+      if (meta.plan?.length) session.restorePlan(meta.plan);
+      session.startIngestion();
+      session.publishMetaChanges();
+      this.onMetaChange(meta);
+      return session;
+    } catch (error) {
+      if (session) await this.destroy(meta.id).catch(() => {});
       throw error;
     }
   }

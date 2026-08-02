@@ -31,6 +31,7 @@ describe("RpcClientTransport.disconnect", () => {
       onServerMessage: vi.fn(),
       setConnection: (status) => statuses.push(status),
       getLastSeq: () => 0,
+      getStreamGeneration: () => null,
       onSessionSubscribed: vi.fn(),
     };
     const transport = new RpcClientTransport(host);
@@ -56,6 +57,7 @@ describe("RpcClientTransport.disconnect", () => {
       onServerMessage: vi.fn(),
       setConnection: vi.fn(),
       getLastSeq: () => 4,
+      getStreamGeneration: () => "generation-current",
       onSessionSubscribed: vi.fn(),
     };
     const transport = new RpcClientTransport(host);
@@ -91,9 +93,14 @@ describe("RpcClientTransport.disconnect", () => {
     await Promise.resolve();
     expect(getImageReadToken()).toBe("rotated-token");
     const subscribe = JSON.parse(String(second.send.mock.calls[1]![0])) as {
-      request: { type: string; lastSeq?: number };
+      request: { type: string; lastSeq?: number; streamGeneration?: string };
     };
-    expect(subscribe.request).toEqual({ type: "subscribe_session", sessionId: "s1", lastSeq: 4 });
+    expect(subscribe.request).toEqual({
+      type: "subscribe_session",
+      sessionId: "s1",
+      lastSeq: 4,
+      streamGeneration: "generation-current",
+    });
     transport.disconnect();
   });
 });

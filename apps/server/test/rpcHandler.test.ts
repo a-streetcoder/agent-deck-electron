@@ -47,6 +47,7 @@ function makeSession(
     cwd?: string;
     /** Session exit already happened: onExit fires its listener immediately. */
     exitImmediately?: boolean;
+    streamGeneration?: string;
   },
 ) {
   let subscriber: ((s: StampedEvent) => void) | null = null;
@@ -57,7 +58,7 @@ function makeSession(
       return unsubscribe;
     },
     emit: (event) => subscriber?.(event),
-    replayFrom: () => opts?.replay ?? null,
+    replayFrom: vi.fn(() => opts?.replay ?? null),
   };
   const ops = {
     prompt: vi.fn(async () => {}),
@@ -78,6 +79,7 @@ function makeSession(
       cwd: opts?.cwd ?? "/tmp",
       createdAt: "2026-01-01T00:00:00.000Z",
       ...(opts?.endedAt !== undefined ? { endedAt: opts.endedAt } : {}),
+      ...(opts?.streamGeneration ? { streamGeneration: opts.streamGeneration } : {}),
     },
     bus: {
       subscribe: bus.subscribe,
@@ -463,6 +465,66 @@ describe("createRpcConnection", () => {
     ]);
     expect(frames[0]).toMatchObject({ kind: "push", message: { seq: 3 } });
     expect(frames[1]).toMatchObject({ kind: "push", message: { seq: 4 } });
+  });
+
+  it("snapshots when a disconnected subscriber presents an old generation and colliding seq", async () => {
+    const replay: StampedEvent[] = [{ seq: 6, event: { type: "agent_status", status: "idle" } }];
+    const state = { cells: ["authoritative replacement"] };
+    const { session, bus } = makeSession("s1", {
+      streamGeneration: "generation-new",
+      replay,
+      snapshot: { seq: 6, state },
+    });
+    const { conn, frames } = harness(makeManager({ s1: session }));
+    await conn.handleMessage(
+      frame(31, {
+        type: "subscribe_session",
+        sessionId: "s1",
+        lastSeq: 5,
+        streamGeneration: "generation-old",
+      }),
+    );
+    expect(bus.replayFrom).not.toHaveBeenCalled();
+    expect(frames[0]).toEqual({
+      kind: "push",
+      message: {
+        type: "snapshot",
+        sessionId: "s1",
+        seq: 6,
+        state,
+        streamGeneration: "generation-new",
+      },
+    });
+
+    frames.length = 0;
+    await conn.handleMessage(frame(33, { type: "subscribe_session", sessionId: "s1", lastSeq: 5 }));
+    expect(bus.replayFrom).not.toHaveBeenCalled();
+    expect(frames[0]).toMatchObject({
+      kind: "push",
+      message: { type: "snapshot", streamGeneration: "generation-new" },
+    });
+  });
+
+  it("replays the tail when subscriber generation matches the current bus", async () => {
+    const replay: StampedEvent[] = [{ seq: 6, event: { type: "agent_status", status: "idle" } }];
+    const { session, bus } = makeSession("s1", {
+      streamGeneration: "generation-current",
+      replay,
+    });
+    const { conn, frames } = harness(makeManager({ s1: session }));
+    await conn.handleMessage(
+      frame(32, {
+        type: "subscribe_session",
+        sessionId: "s1",
+        lastSeq: 5,
+        streamGeneration: "generation-current",
+      }),
+    );
+    expect(bus.replayFrom).toHaveBeenCalledWith(5);
+    expect(frames.map((item) => (item.kind === "push" ? item.message.type : item.kind))).toEqual([
+      "event",
+      "reply",
+    ]);
   });
 
   it("subscribe_session with an evicted lastSeq falls back to a snapshot", async () => {

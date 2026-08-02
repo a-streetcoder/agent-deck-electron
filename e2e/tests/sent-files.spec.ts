@@ -79,6 +79,9 @@ test("a picked file survives live delivery, reload, resume, fork, and a missing 
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
     timeout: 30_000,
   });
+  // Idle reconciliation adds Pi's stable entry id. Its same-cell replacement
+  // must retain canonical attachment fields before snapshots/reloads consume it.
+  await expect(sentFileChip(page)).toBeVisible();
   await expect(page.getByTestId("transcript")).not.toContainText("<file");
   const providerFileMessage = harness.mock.requests
     .flatMap((request) => request.messages)

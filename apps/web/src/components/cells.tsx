@@ -1,6 +1,6 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { FolderOpen, MessageSquareText, Send } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { FolderOpen, GitFork, MessageSquareText, RotateCcw, Send } from "lucide-react";
 import {
   memoryToolCardLabel,
   type QuestionCell,
@@ -25,7 +25,12 @@ import { OpenInPicker, type OpenInEditorController } from "@/components/diff/Ope
 import { AskUserDecisionCard } from "./AskUserDecisionCard.tsx";
 import { RunMeta } from "./RunMeta.tsx";
 import { QuestionAnswerControls } from "./QuestionAnswerControls.tsx";
-import { sendSupervisorAnswer } from "../state/wsBridge.ts";
+import {
+  historyActionPending,
+  runHistoryAction,
+  sendSupervisorAnswer,
+  subscribeHistoryActionPending,
+} from "../state/wsBridge.ts";
 import { useAppStore } from "../state/store.ts";
 import {
   getImageReadToken,
@@ -37,6 +42,7 @@ import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
 import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
+import { useFocusTrap } from "../lib/useFocusTrap.ts";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -399,6 +405,127 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
   );
 }
 
+function UserHistoryActions({ entryId }: { entryId: string }) {
+  const sessionId = useAppStore((state) => state.session?.id);
+  const sessionPending = useSyncExternalStore(
+    subscribeHistoryActionPending,
+    () => historyActionPending(sessionId ?? null),
+    () => false,
+  );
+  const [pending, setPending] = useState<"fork" | "rerun" | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState("");
+  const [failed, setFailed] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>(confirming, cancelRef);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const keydown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !pending) {
+        event.preventDefault();
+        setConfirming(false);
+      }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [confirming, pending]);
+
+  const run = async (action: "fork" | "rerun"): Promise<void> => {
+    if (!sessionId || sessionPending) return;
+    setPending(action);
+    setFailed(false);
+    setMessage(action === "fork" ? "Forking message…" : "Re-running message…");
+    try {
+      const result = await runHistoryAction(sessionId, entryId, action);
+      setFailed(false);
+      setMessage(result.outcome === "forked" ? "Fork created." : "Message re-sent.");
+      setConfirming(false);
+    } catch (error) {
+      setFailed(true);
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex flex-wrap justify-end gap-1.5" aria-busy={sessionPending}>
+        <ControlButton
+          type="button"
+          className="inline-flex items-center gap-1 rounded-capsule border border-border px-2 py-1 text-detail text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+          title="Fork before this message"
+          aria-label="Fork before this message"
+          disabled={sessionPending}
+          onClick={() => void run("fork")}
+          data-testid="message-fork"
+        >
+          <GitFork size={12} aria-hidden /> Fork
+        </ControlButton>
+        <ControlButton
+          type="button"
+          className="inline-flex items-center gap-1 rounded-capsule border border-border px-2 py-1 text-detail text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+          title="Re-run from this message"
+          aria-label="Re-run from this message"
+          disabled={sessionPending}
+          onClick={() => setConfirming(true)}
+          data-testid="message-rerun"
+        >
+          <RotateCcw size={12} aria-hidden /> Re-run
+        </ControlButton>
+      </div>
+      <div
+        className={message ? "text-right text-detail text-text-muted" : "sr-only"}
+        role={failed ? "alert" : "status"}
+        aria-live="polite"
+      >
+        {message}
+      </div>
+      {confirming ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay px-4">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`rerun-title-${entryId}`}
+            className="w-full max-w-sm rounded-xl border border-border-strong bg-surface p-4 shadow-card"
+            data-testid="rerun-confirm"
+          >
+            <h2 id={`rerun-title-${entryId}`} className="font-semibold text-text-primary">
+              Re-run from this message?
+            </h2>
+            <p className="mt-2 text-sm text-text-secondary">
+              Later conversation messages will be abandoned. Workspace files are not changed. This
+              message and its original attachments will be sent once.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <ControlButton
+                ref={cancelRef}
+                type="button"
+                className="rounded-md px-3 py-1.5 text-sm text-text-secondary hover:bg-hover"
+                disabled={sessionPending}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </ControlButton>
+              <ControlButton
+                type="button"
+                className="rounded-md bg-danger px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={sessionPending}
+                onClick={() => void run("rerun")}
+                data-testid="rerun-confirm-button"
+              >
+                {pending === "rerun" ? "Re-running…" : "Re-run"}
+              </ControlButton>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function UserCellView({
   cell,
   showImages,
@@ -530,6 +657,7 @@ function UserCellView({
             })}
           </div>
         ) : null}
+        {cell.entryId ? <UserHistoryActions entryId={cell.entryId} /> : null}
         {showImages && expanded !== null ? (
           <ExpandedImageDialog
             preview={{ images: items, index: expanded }}

@@ -36,6 +36,8 @@ import {
   type LaunchPlan,
 } from "../SessionManager.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "../context.ts";
+import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
+import { SessionMutationClaims } from "../sessionMutationClaims.ts";
 import { finalizeExtensions } from "./shared.ts";
 
 const mergeLocks = new Set<string>();
@@ -77,6 +79,17 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     dropDiffCache,
     prepareProjectMcpSession,
   } = ctx;
+
+  const sessionMutations = new SessionMutationClaims();
+  const historyActions = new HistoryActionCoordinator(
+    sessions,
+    index,
+    ctx.sessionImages,
+    ctx.sessionPastes,
+    sessionMutations,
+    () => envDefaults().env,
+    (sessionId) => broadcast({ type: "session_rebind", sessionId }),
+  );
 
   let fileSearchSequence = 0;
   const activeFileSearches = new Map<
@@ -401,585 +414,656 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // session file. Session content is destroyed — this is the explicit delete.
   fastify.delete("/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    let meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
-    if (!meta) return reply.status(404).send({ error: "unknown session" });
-    // Retained Loop review evidence is explicitly outside this boundary. Before
-    // stopping an ordinary session, prove no other session record owns the same
-    // normalized path. Persisted metadata is untrusted and may be duplicated.
-    if (meta.worktreePath && !meta.loopReviewRunId) {
-      const targetKey = await canonicalWorktreePath(meta.worktreePath);
-      const live = sessions.list();
-      const otherRecords = [
-        ...live,
-        ...index.list().filter((candidate) => !live.some((item) => item.id === candidate.id)),
-      ].filter((candidate) => candidate.id !== id && candidate.worktreePath);
-      for (const candidate of otherRecords) {
-        if ((await canonicalWorktreePath(candidate.worktreePath!)) === targetKey) {
+    const releaseMutation = sessionMutations.tryClaim(id, "delete");
+    if (!releaseMutation) {
+      return reply.status(409).send({
+        code: "session_mutation_busy",
+        error: "Another session mutation is already in progress. Try again when it finishes.",
+      });
+    }
+    try {
+      let meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+      if (!meta) return reply.status(404).send({ error: "unknown session" });
+      const worktreeDependent = index
+        .list()
+        .find((candidate) => candidate.id !== id && candidate.worktreeOwnerSessionId === id);
+      if (worktreeDependent) {
+        return reply.status(409).send({
+          code: "session_worktree_in_use",
+          error:
+            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before deleting its owner.",
+        });
+      }
+      // Retained Loop review evidence is explicitly outside this boundary. Before
+      // stopping an ordinary session, prove no other session record owns the same
+      // normalized path. Persisted metadata is untrusted and may be duplicated.
+      if (meta.worktreePath && !meta.loopReviewRunId) {
+        const targetKey = await canonicalWorktreePath(meta.worktreePath);
+        const live = sessions.list();
+        const otherRecords = [
+          ...live,
+          ...index.list().filter((candidate) => !live.some((item) => item.id === candidate.id)),
+        ].filter((candidate) => candidate.id !== id && candidate.worktreePath);
+        for (const candidate of otherRecords) {
+          if ((await canonicalWorktreePath(candidate.worktreePath!)) === targetKey) {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "The isolated worktree is also referenced by another session. No session data was removed.",
+            });
+          }
+        }
+        const projectId = meta.projectId;
+        const project = projectId
+          ? projects.find((candidate) => candidate.id === projectId)
+          : undefined;
+        if (!project || !meta.worktreeBranch) {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error:
-              "The isolated worktree is also referenced by another session. No session data was removed.",
+              "The isolated worktree lacks trusted project/branch ownership. The worktree path and session metadata were retained for manual recovery.",
+          });
+        }
+        // Always inspect Git, including when the leaf is physically missing: a
+        // stale registration for another branch must never be silently pruned.
+        // Missing + no registration is the idempotent post-prune/crash case; a
+        // present checkout still requires an exact matching registration.
+        let registration: { path: string; branch?: string } | undefined;
+        try {
+          registration = await gitWorktreeRegistrationAtPath(project.path, meta.worktreePath);
+        } catch {
+          return reply.status(409).send({
+            code: "session_worktree_cleanup_failed",
+            error: "Git worktree ownership could not be verified. Session metadata was retained.",
+          });
+        }
+        if (!meta.worktreeIdentity) {
+          // Pre-identity compatibility is deliberately narrow: only an existing
+          // private target with exact persisted project+branch registration may be
+          // adopted. Capture through the held native root, durably persist first,
+          // then update the live object. No teardown occurs until all three settle.
+          if (!registration || registration.branch !== meta.worktreeBranch) {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "This legacy session's worktree ownership could not be proven. Its path and metadata were retained.",
+            });
+          }
+          try {
+            const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(
+              meta.worktreePath,
+            );
+            const adopted = { ...meta, worktreeIdentity };
+            index.upsert(adopted);
+            const liveSession = sessions.get(id);
+            if (liveSession) {
+              liveSession.meta.worktreeIdentity = worktreeIdentity;
+              meta = liveSession.meta;
+            } else {
+              meta = adopted;
+            }
+          } catch {
+            return reply.status(409).send({
+              code: "session_worktree_cleanup_failed",
+              error:
+                "This legacy session's worktree identity could not be safely adopted. Its path and metadata were retained.",
+            });
+          }
+        } else if (
+          (registration && registration.branch !== meta.worktreeBranch) ||
+          (!registration && existsSync(meta.worktreePath))
+        ) {
+          return reply.status(409).send({
+            code: "session_worktree_cleanup_failed",
+            error:
+              "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
           });
         }
       }
-      const projectId = meta.projectId;
-      const project = projectId
-        ? projects.find((candidate) => candidate.id === projectId)
-        : undefined;
-      if (!project || !meta.worktreeBranch) {
-        return reply.status(409).send({
-          code: "session_worktree_cleanup_failed",
-          error:
-            "The isolated worktree lacks trusted project/branch ownership. The worktree path and session metadata were retained for manual recovery.",
-        });
-      }
-      // Always inspect Git, including when the leaf is physically missing: a
-      // stale registration for another branch must never be silently pruned.
-      // Missing + no registration is the idempotent post-prune/crash case; a
-      // present checkout still requires an exact matching registration.
-      let registration: { path: string; branch?: string } | undefined;
+      // Resolve parent bridge waits before destroying their transcript owner.
+      askUser.cancelSession(id);
+      await sessions.destroy(id);
+      // Child worktrees are rooted in the parent's authoritative checkout. Remove
+      // them after all child scopes settle but before an isolated parent checkout
+      // itself can be deleted. Any proof/cleanup failure retains every remaining
+      // child record, artifact, and parent session row for a safe retry.
       try {
-        registration = await gitWorktreeRegistrationAtPath(project.path, meta.worktreePath);
+        await sessions.removeSubagentRuns?.(id);
       } catch {
         return reply.status(409).send({
-          code: "session_worktree_cleanup_failed",
-          error: "Git worktree ownership could not be verified. Session metadata was retained.",
+          code: "subagent_worktree_cleanup_failed",
+          error:
+            "The session was stopped, but app-owned child cleanup could not complete safely. Metadata for every unfinished child was retained; a worktree already marked physically removed may remain removed. Resolve the Git/worktree issue and retry deletion.",
         });
       }
-      if (!meta.worktreeIdentity) {
-        // Pre-identity compatibility is deliberately narrow: only an existing
-        // private target with exact persisted project+branch registration may be
-        // adopted. Capture through the held native root, durably persist first,
-        // then update the live object. No teardown occurs until all three settle.
-        if (!registration || registration.branch !== meta.worktreeBranch) {
+      // For an ordinary isolated session, physical deletion must succeed through the held
+      // native root before Git metadata or persisted session metadata is removed.
+      // A forged/stale persisted path therefore fails honestly and remains visible
+      // for repair; it can never select an ambient deletion target.
+      if (meta.worktreePath && !meta.loopReviewRunId) {
+        const projectId = meta.projectId;
+        const project = projectId
+          ? projects.find((candidate) => candidate.id === projectId)
+          : undefined;
+        if (!project) {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error:
-              "This legacy session's worktree ownership could not be proven. Its path and metadata were retained.",
+              "The session was stopped, but its isolated worktree could not be safely matched to its project. Session metadata was retained.",
           });
         }
         try {
-          const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(meta.worktreePath);
-          const adopted = { ...meta, worktreeIdentity };
-          index.upsert(adopted);
-          const liveSession = sessions.get(id);
-          if (liveSession) {
-            liveSession.meta.worktreeIdentity = worktreeIdentity;
-            meta = liveSession.meta;
-          } else {
-            meta = adopted;
-          }
+          await sessionWorktreeStore.deleteWorktree(meta.worktreePath, meta.worktreeIdentity!);
+          await gitWorktreePrune(project.path);
         } catch {
           return reply.status(409).send({
             code: "session_worktree_cleanup_failed",
             error:
-              "This legacy session's worktree identity could not be safely adopted. Its path and metadata were retained.",
+              "The session was stopped, but its isolated worktree could not be safely removed. Session metadata was retained; retry deletion after resolving the cleanup issue.",
           });
         }
-      } else if (
-        (registration && registration.branch !== meta.worktreeBranch) ||
-        (!registration && existsSync(meta.worktreePath))
-      ) {
-        return reply.status(409).send({
-          code: "session_worktree_cleanup_failed",
-          error:
-            "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
-        });
       }
-    }
-    // Resolve parent bridge waits before destroying their transcript owner.
-    askUser.cancelSession(id);
-    await sessions.destroy(id);
-    // Child worktrees are rooted in the parent's authoritative checkout. Remove
-    // them after all child scopes settle but before an isolated parent checkout
-    // itself can be deleted. Any proof/cleanup failure retains every remaining
-    // child record, artifact, and parent session row for a safe retry.
-    try {
-      await sessions.removeSubagentRuns?.(id);
-    } catch {
-      return reply.status(409).send({
-        code: "subagent_worktree_cleanup_failed",
-        error:
-          "The session was stopped, but app-owned child cleanup could not complete safely. Metadata for every unfinished child was retained; a worktree already marked physically removed may remain removed. Resolve the Git/worktree issue and retry deletion.",
-      });
-    }
-    // For an ordinary isolated session, physical deletion must succeed through the held
-    // native root before Git metadata or persisted session metadata is removed.
-    // A forged/stale persisted path therefore fails honestly and remains visible
-    // for repair; it can never select an ambient deletion target.
-    if (meta.worktreePath && !meta.loopReviewRunId) {
-      const projectId = meta.projectId;
-      const project = projectId
-        ? projects.find((candidate) => candidate.id === projectId)
-        : undefined;
-      if (!project) {
-        return reply.status(409).send({
-          code: "session_worktree_cleanup_failed",
-          error:
-            "The session was stopped, but its isolated worktree could not be safely matched to its project. Session metadata was retained.",
-        });
+      sessions.removeLoopSessionSnapshot(id);
+      index.remove(id);
+      bridgeTokens.delete(id);
+      // Image ownership is removed only after every authoritative session deletion
+      // step above succeeded; failed worktree cleanup intentionally retains it.
+      try {
+        ctx.sessionImages.deleteSession(id);
+      } catch {
+        // Session deletion already committed; retain shared blobs for conservative GC.
       }
       try {
-        await sessionWorktreeStore.deleteWorktree(meta.worktreePath, meta.worktreeIdentity!);
-        await gitWorktreePrune(project.path);
+        ctx.sessionPastes.deleteSession(id);
       } catch {
-        return reply.status(409).send({
-          code: "session_worktree_cleanup_failed",
-          error:
-            "The session was stopped, but its isolated worktree could not be safely removed. Session metadata was retained; retry deletion after resolving the cleanup issue.",
-        });
+        // Session deletion already committed; retain optional paste metadata conservatively.
       }
-    }
-    sessions.removeLoopSessionSnapshot(id);
-    index.remove(id);
-    bridgeTokens.delete(id);
-    // Image ownership is removed only after every authoritative session deletion
-    // step above succeeded; failed worktree cleanup intentionally retains it.
-    try {
-      ctx.sessionImages.deleteSession(id);
-    } catch {
-      // Session deletion already committed; retain shared blobs for conservative GC.
-    }
-    try {
-      ctx.sessionPastes.deleteSession(id);
-    } catch {
-      // Session deletion already committed; retain optional paste metadata conservatively.
-    }
-    if (meta.piSessionFile) {
-      try {
-        rmSync(meta.piSessionFile, { force: true });
-      } catch {
-        // pi may still hold the file briefly; best-effort.
+      if (meta.piSessionFile) {
+        try {
+          rmSync(meta.piSessionFile, { force: true });
+        } catch {
+          // pi may still hold the file briefly; best-effort.
+        }
       }
+      broadcast({ type: "session_removed", sessionId: id });
+      return { ok: true };
+    } finally {
+      releaseMutation();
     }
-    broadcast({ type: "session_removed", sessionId: id });
-    return { ok: true };
   });
 
   // Merge an ordinary isolated session into its source branch. Ownership and
   // every non-mutating preflight complete before auto-commit or checkout.
   fastify.post("/sessions/:id/merge", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const liveSession = sessions.get(id);
-    const meta = liveSession?.meta ?? index.find((s) => s.id === id);
-    if (!meta)
-      return reply.status(404).send({
-        code: "merge_session_missing",
-        outcome: "failed",
-        error: "Unknown session.",
-        worktreeCommitted: false,
-      });
-    // This must remain before native identity and all Git calls.
-    if (meta.loopReviewRunId) {
+    const releaseMutation = sessionMutations.tryClaim(id, "merge");
+    if (!releaseMutation) {
       return reply.status(409).send({
-        code: "loop_review_read_only",
-        outcome: "read_only",
-        error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+        code: "session_mutation_busy",
+        outcome: "busy",
+        error: "Another session mutation is already in progress. Try again when it finishes.",
         worktreeCommitted: false,
       });
     }
+    try {
+      const liveSession = sessions.get(id);
+      const meta = liveSession?.meta ?? index.find((s) => s.id === id);
+      if (!meta)
+        return reply.status(404).send({
+          code: "merge_session_missing",
+          outcome: "failed",
+          error: "Unknown session.",
+          worktreeCommitted: false,
+        });
+      // This must remain before native identity and all Git calls.
+      if (meta.loopReviewRunId) {
+        return reply.status(409).send({
+          code: "loop_review_read_only",
+          outcome: "read_only",
+          error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+          worktreeCommitted: false,
+        });
+      }
 
-    const fail = (
-      status: number,
-      code: string,
-      outcome: string,
-      error: string,
-      worktreeCommitted = false,
-    ) => reply.status(status).send({ code, outcome, error, worktreeCommitted });
-    const { cwd, worktreePath, worktreeIdentity, worktreeBranch, worktreeSourceBranch, projectId } =
-      meta;
-    // One merge follows the policy selected when it started; a concurrent
-    // preference toggle applies to the next merge, not halfway through this one.
-    const keepWorktreeAfterMerge = settings.get().keepWorktreeAfterMerge;
-    // Renderer idle state is advisory. Refuse from server truth when Pi is
-    // writing, and fail closed if its state cannot be read. Cleanup may later
-    // stop an idle Pi before removing the cwd, but it must never race a turn.
-    if (liveSession?.isRunning) {
-      try {
-        if ((await liveSession.getState()).isStreaming) {
+      const worktreeDependent = index
+        .list()
+        .find((candidate) => candidate.id !== id && candidate.worktreeOwnerSessionId === id);
+      if (worktreeDependent) {
+        return reply.status(409).send({
+          code: "merge_worktree_in_use",
+          outcome: "stale_ownership",
+          error:
+            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before merging its owner.",
+          worktreeCommitted: false,
+        });
+      }
+
+      const fail = (
+        status: number,
+        code: string,
+        outcome: string,
+        error: string,
+        worktreeCommitted = false,
+      ) => reply.status(status).send({ code, outcome, error, worktreeCommitted });
+      const {
+        cwd,
+        worktreePath,
+        worktreeIdentity,
+        worktreeBranch,
+        worktreeSourceBranch,
+        projectId,
+      } = meta;
+      // One merge follows the policy selected when it started; a concurrent
+      // preference toggle applies to the next merge, not halfway through this one.
+      const keepWorktreeAfterMerge = settings.get().keepWorktreeAfterMerge;
+      // Renderer idle state is advisory. Refuse from server truth when Pi is
+      // writing, and fail closed if its state cannot be read. Cleanup may later
+      // stop an idle Pi before removing the cwd, but it must never race a turn.
+      if (liveSession?.isRunning) {
+        try {
+          if ((await liveSession.getState()).isStreaming) {
+            return fail(
+              409,
+              "merge_runtime_busy",
+              "busy",
+              "Wait for the current Pi turn to finish before merging.",
+            );
+          }
+        } catch {
           return fail(
             409,
-            "merge_runtime_busy",
+            "merge_runtime_state_unavailable",
             "busy",
-            "Wait for the current Pi turn to finish before merging.",
+            "Pi runtime state could not be verified. Stop or reopen the session before merging.",
           );
+        }
+      }
+      if (
+        !cwd ||
+        !projectId ||
+        !worktreePath ||
+        !worktreeIdentity ||
+        !worktreeBranch ||
+        !worktreeSourceBranch
+      ) {
+        return fail(
+          409,
+          "merge_stale_ownership",
+          "stale_ownership",
+          "This session's isolated-worktree ownership metadata is incomplete.",
+        );
+      }
+      const project = projects.find((p) => p.id === projectId);
+      if (!project)
+        return fail(
+          409,
+          "merge_stale_ownership",
+          "stale_ownership",
+          "This session no longer belongs to an exact registered project.",
+        );
+
+      let worktreeKey: string;
+      let sessionCwdKey: string;
+      try {
+        [worktreeKey, sessionCwdKey] = await Promise.all([
+          canonicalWorktreePath(worktreePath),
+          canonicalWorktreePath(cwd),
+        ]);
+      } catch {
+        return fail(
+          409,
+          "merge_path_validation_failed",
+          "stale_ownership",
+          "The session and isolated-worktree paths can no longer be safely resolved.",
+        );
+      }
+      if (sessionCwdKey !== worktreeKey) {
+        return fail(
+          409,
+          "merge_stale_ownership",
+          "stale_ownership",
+          "The session checkout no longer matches its registered worktree.",
+        );
+      }
+      const owners = [...index.list(), ...sessions.list()];
+      const ownerIds = new Set<string>();
+      try {
+        for (const owner of owners) {
+          if (
+            owner.worktreePath &&
+            (await canonicalWorktreePath(owner.worktreePath)) === worktreeKey
+          )
+            ownerIds.add(owner.id);
         }
       } catch {
         return fail(
           409,
-          "merge_runtime_state_unavailable",
-          "busy",
-          "Pi runtime state could not be verified. Stop or reopen the session before merging.",
+          "merge_path_validation_failed",
+          "stale_ownership",
+          "Persisted session worktree paths can no longer be safely resolved.",
         );
       }
-    }
-    if (
-      !cwd ||
-      !projectId ||
-      !worktreePath ||
-      !worktreeIdentity ||
-      !worktreeBranch ||
-      !worktreeSourceBranch
-    ) {
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "This session's isolated-worktree ownership metadata is incomplete.",
-      );
-    }
-    const project = projects.find((p) => p.id === projectId);
-    if (!project)
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "This session no longer belongs to an exact registered project.",
-      );
-
-    let worktreeKey: string;
-    let sessionCwdKey: string;
-    try {
-      [worktreeKey, sessionCwdKey] = await Promise.all([
-        canonicalWorktreePath(worktreePath),
-        canonicalWorktreePath(cwd),
-      ]);
-    } catch {
-      return fail(
-        409,
-        "merge_path_validation_failed",
-        "stale_ownership",
-        "The session and isolated-worktree paths can no longer be safely resolved.",
-      );
-    }
-    if (sessionCwdKey !== worktreeKey) {
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "The session checkout no longer matches its registered worktree.",
-      );
-    }
-    const owners = [...index.list(), ...sessions.list()];
-    const ownerIds = new Set<string>();
-    try {
-      for (const owner of owners) {
-        if (owner.worktreePath && (await canonicalWorktreePath(owner.worktreePath)) === worktreeKey)
-          ownerIds.add(owner.id);
+      if (ownerIds.size !== 1 || !ownerIds.has(id)) {
+        return fail(
+          409,
+          "merge_stale_ownership",
+          "stale_ownership",
+          "Multiple sessions claim this isolated worktree.",
+        );
       }
-    } catch {
-      return fail(
-        409,
-        "merge_path_validation_failed",
-        "stale_ownership",
-        "Persisted session worktree paths can no longer be safely resolved.",
-      );
-    }
-    if (ownerIds.size !== 1 || !ownerIds.has(id)) {
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "Multiple sessions claim this isolated worktree.",
-      );
-    }
-    let capturedIdentity: string;
-    try {
-      capturedIdentity = sessionWorktreeStore.captureWorktreeIdentity(worktreePath);
-    } catch {
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "The isolated worktree's native identity can no longer be verified.",
-      );
-    }
-    if (capturedIdentity !== worktreeIdentity) {
-      return fail(
-        409,
-        "merge_stale_ownership",
-        "stale_ownership",
-        "The isolated worktree has been replaced since this session was created.",
-      );
-    }
-
-    let projectKey: string;
-    try {
-      projectKey = await canonicalWorktreePath(project.path);
-    } catch {
-      return fail(
-        409,
-        "merge_path_validation_failed",
-        "stale_ownership",
-        "The registered project path can no longer be safely resolved.",
-      );
-    }
-    if (mergeLocks.has(projectKey)) {
-      return fail(
-        409,
-        "merge_busy",
-        "busy",
-        "Another merge is already in progress for this project.",
-      );
-    }
-    mergeLocks.add(projectKey);
-    let worktreeCommitted = false;
-    try {
-      let registration;
+      let capturedIdentity: string;
       try {
-        registration = await gitWorktreeRegistrationAtPath(project.path, worktreePath);
-        if (!registration || registration.branch !== worktreeBranch)
-          throw new Error("registration mismatch");
-        if (
-          (await gitRepositoryIdentity(project.path)) !==
-          (await gitRepositoryIdentity(worktreePath))
-        )
-          throw new Error("repository mismatch");
-        await gitLocalBranchRef(project.path, worktreeBranch);
+        capturedIdentity = sessionWorktreeStore.captureWorktreeIdentity(worktreePath);
       } catch {
         return fail(
           409,
           "merge_stale_ownership",
           "stale_ownership",
-          "Git no longer registers this exact worktree, branch, and project repository.",
+          "The isolated worktree's native identity can no longer be verified.",
         );
       }
+      if (capturedIdentity !== worktreeIdentity) {
+        return fail(
+          409,
+          "merge_stale_ownership",
+          "stale_ownership",
+          "The isolated worktree has been replaced since this session was created.",
+        );
+      }
+
+      let projectKey: string;
       try {
-        await gitLocalBranchRef(project.path, worktreeSourceBranch);
+        projectKey = await canonicalWorktreePath(project.path);
       } catch {
         return fail(
           409,
-          "merge_source_missing",
+          "merge_path_validation_failed",
           "stale_ownership",
-          "The registered source branch no longer exists or is invalid.",
+          "The registered project path can no longer be safely resolved.",
         );
       }
-
-      let parentBranch: string;
+      if (mergeLocks.has(projectKey)) {
+        return fail(
+          409,
+          "merge_busy",
+          "busy",
+          "Another merge is already in progress for this project.",
+        );
+      }
+      mergeLocks.add(projectKey);
+      let worktreeCommitted = false;
       try {
-        if (await gitOperationInProgress(project.path))
-          return fail(
-            409,
-            "merge_parent_busy",
-            "busy",
-            "Finish or abort the Git operation in the project checkout before merging.",
-          );
-        if (!(await gitWorkingTreeClean(project.path)))
-          return fail(
-            409,
-            "merge_parent_dirty",
-            "dirty",
-            "Commit, stash, or discard all project-checkout changes before merging.",
-          );
-        parentBranch = await gitCurrentBranch(project.path);
-        const registrations = await gitWorktreeRegistrations(project.path);
-        const sourceOwners = registrations.filter((item) => item.branch === worktreeSourceBranch);
-        for (const owner of sourceOwners) {
-          let ownerKey: string;
-          try {
-            ownerKey = await canonicalWorktreePath(owner.path);
-          } catch {
-            return fail(
-              409,
-              "merge_path_validation_failed",
-              "stale_ownership",
-              "A registered Git worktree path can no longer be safely resolved.",
-            );
-          }
-          if (ownerKey !== projectKey) {
-            return fail(
-              409,
-              "merge_source_occupied",
-              "stale_ownership",
-              "The source branch is checked out in another worktree. Close or switch that checkout before merging.",
-            );
-          }
-        }
-        if (await gitOperationInProgress(worktreePath))
-          return fail(
-            409,
-            "merge_worktree_busy",
-            "busy",
-            "Finish or abort the Git operation in the session worktree before merging.",
-          );
-        if ((await gitCurrentBranch(worktreePath)) !== worktreeBranch)
+        let registration;
+        try {
+          registration = await gitWorktreeRegistrationAtPath(project.path, worktreePath);
+          if (!registration || registration.branch !== worktreeBranch)
+            throw new Error("registration mismatch");
+          if (
+            (await gitRepositoryIdentity(project.path)) !==
+            (await gitRepositoryIdentity(worktreePath))
+          )
+            throw new Error("repository mismatch");
+          await gitLocalBranchRef(project.path, worktreeBranch);
+        } catch {
           return fail(
             409,
             "merge_stale_ownership",
             "stale_ownership",
-            "The session worktree is no longer on its registered branch.",
+            "Git no longer registers this exact worktree, branch, and project repository.",
           );
-      } catch (error) {
-        return fail(
-          409,
-          "merge_preflight_failed",
-          "failed",
-          `Merge preflight failed: ${gitErrorText(error)}`,
-        );
-      }
-
-      if (parentBranch !== worktreeSourceBranch) {
+        }
         try {
-          await gitCheckoutBranch(project.path, worktreeSourceBranch);
+          await gitLocalBranchRef(project.path, worktreeSourceBranch);
+        } catch {
+          return fail(
+            409,
+            "merge_source_missing",
+            "stale_ownership",
+            "The registered source branch no longer exists or is invalid.",
+          );
+        }
+
+        let parentBranch: string;
+        try {
+          if (await gitOperationInProgress(project.path))
+            return fail(
+              409,
+              "merge_parent_busy",
+              "busy",
+              "Finish or abort the Git operation in the project checkout before merging.",
+            );
+          if (!(await gitWorkingTreeClean(project.path)))
+            return fail(
+              409,
+              "merge_parent_dirty",
+              "dirty",
+              "Commit, stash, or discard all project-checkout changes before merging.",
+            );
+          parentBranch = await gitCurrentBranch(project.path);
+          const registrations = await gitWorktreeRegistrations(project.path);
+          const sourceOwners = registrations.filter((item) => item.branch === worktreeSourceBranch);
+          for (const owner of sourceOwners) {
+            let ownerKey: string;
+            try {
+              ownerKey = await canonicalWorktreePath(owner.path);
+            } catch {
+              return fail(
+                409,
+                "merge_path_validation_failed",
+                "stale_ownership",
+                "A registered Git worktree path can no longer be safely resolved.",
+              );
+            }
+            if (ownerKey !== projectKey) {
+              return fail(
+                409,
+                "merge_source_occupied",
+                "stale_ownership",
+                "The source branch is checked out in another worktree. Close or switch that checkout before merging.",
+              );
+            }
+          }
+          if (await gitOperationInProgress(worktreePath))
+            return fail(
+              409,
+              "merge_worktree_busy",
+              "busy",
+              "Finish or abort the Git operation in the session worktree before merging.",
+            );
+          if ((await gitCurrentBranch(worktreePath)) !== worktreeBranch)
+            return fail(
+              409,
+              "merge_stale_ownership",
+              "stale_ownership",
+              "The session worktree is no longer on its registered branch.",
+            );
         } catch (error) {
           return fail(
             409,
-            "merge_source_checkout_failed",
+            "merge_preflight_failed",
             "failed",
-            `Couldn't check out the source branch: ${gitErrorText(error)}`,
+            `Merge preflight failed: ${gitErrorText(error)}`,
           );
         }
-      }
-      try {
-        if (
-          (await gitCurrentBranch(project.path)) !== worktreeSourceBranch ||
-          (await gitOperationInProgress(project.path)) ||
-          !(await gitWorkingTreeClean(project.path))
-        ) {
-          return fail(
-            409,
-            "merge_parent_changed",
-            "stale_ownership",
-            "The project checkout changed during merge preflight. Review it and try again.",
-          );
-        }
-        const currentRegistration = await gitWorktreeRegistrationAtPath(project.path, worktreePath);
-        if (
-          currentRegistration?.branch !== worktreeBranch ||
-          (await gitCurrentBranch(worktreePath)) !== worktreeBranch
-        ) {
-          return fail(
-            409,
-            "merge_stale_ownership",
-            "stale_ownership",
-            "The session worktree ownership changed during merge preflight.",
-          );
-        }
-        if (await gitOperationInProgress(worktreePath)) {
-          return fail(
-            409,
-            "merge_worktree_busy",
-            "busy",
-            "Finish or abort the Git operation in the session worktree before merging.",
-          );
-        }
-      } catch (error) {
-        return fail(
-          409,
-          "merge_preflight_failed",
-          "failed",
-          `Merge preflight failed: ${gitErrorText(error)}`,
-        );
-      }
 
-      try {
-        await gitCommitAll(worktreePath, `Agent Deck: ${meta.title ?? "session"} changes`);
-        worktreeCommitted = true;
-        // Auto-commit empties the session's working-tree diff even when a later
-        // ahead check or merge fails; never replay the stale pre-commit cache.
-        dropDiffCache(id);
-      } catch (error) {
-        if (!(error instanceof Error && error.message === "nothing_to_commit")) {
-          return fail(
-            409,
-            "merge_worktree_commit_failed",
-            "failed",
-            `Couldn't commit the session worktree: ${gitErrorText(error)}`,
-            worktreeCommitted,
-          );
+        if (parentBranch !== worktreeSourceBranch) {
+          try {
+            await gitCheckoutBranch(project.path, worktreeSourceBranch);
+          } catch (error) {
+            return fail(
+              409,
+              "merge_source_checkout_failed",
+              "failed",
+              `Couldn't check out the source branch: ${gitErrorText(error)}`,
+            );
+          }
         }
-      }
-
-      let ahead: number;
-      try {
-        ahead = await gitCommitsAhead(project.path, worktreeBranch, worktreeSourceBranch);
-      } catch (error) {
-        return fail(
-          500,
-          "merge_ahead_failed",
-          "failed",
-          `Couldn't determine commits ahead: ${gitErrorText(error)}`,
-          worktreeCommitted,
-        );
-      }
-      if (ahead === 0)
-        return fail(
-          400,
-          "merge_nothing_to_merge",
-          "nothing_to_merge",
-          "Nothing to merge — the session made no commits.",
-          worktreeCommitted,
-        );
-
-      try {
-        await gitMergeNoCheckout(project.path, worktreeBranch);
-      } catch (error) {
-        const conflict = await gitHasUnmergedEntries(project.path).catch(() => false);
-        const mergeActive = await gitMergeInProgress(project.path).catch(() => false);
-        if (conflict) {
-          return fail(
-            409,
-            "merge_conflict",
-            "conflict",
-            "Merge conflict detected. Resolve the conflicts and commit the merge, or abort it in the project checkout.",
-            worktreeCommitted,
-          );
-        }
-        if (mergeActive) {
-          return fail(
-            409,
-            "merge_active_failure",
-            "failed",
-            `Git prepared the merge but couldn't create its commit: ${gitErrorText(error)} Fix the reported issue and complete the merge commit, or abort the merge in the project checkout.`,
-            worktreeCommitted,
-          );
-        }
-        return fail(
-          500,
-          "merge_failed",
-          "failed",
-          `Merge failed: ${gitErrorText(error)}`,
-          worktreeCommitted,
-        );
-      }
-      dropDiffCache(id);
-
-      const retainedSuccess = () => ({
-        ok: true as const,
-        code: "merge_succeeded" as const,
-        outcome: "merged" as const,
-        branch: worktreeBranch,
-        sourceBranch: worktreeSourceBranch,
-        commits: ahead,
-        worktreeCommitted,
-        cleanup: { status: "retained" as const, runtimeStopped: false },
-      });
-      if (keepWorktreeAfterMerge) return retainedSuccess();
-
-      // The merge is committed at this point. Cleanup is deliberately a typed
-      // secondary outcome: it can never turn the successful merge into an HTTP
-      // failure. Re-check Pi immediately before teardown, then await process and
-      // session-owned child cleanup before deleting its cwd (especially required
-      // for Windows directory locks).
-      let runtimeStopped = false;
-      if (liveSession) {
         try {
-          const runtimeWasRunning = liveSession.isRunning;
-          if (runtimeWasRunning && (await liveSession.getState()).isStreaming) {
+          if (
+            (await gitCurrentBranch(project.path)) !== worktreeSourceBranch ||
+            (await gitOperationInProgress(project.path)) ||
+            !(await gitWorkingTreeClean(project.path))
+          ) {
+            return fail(
+              409,
+              "merge_parent_changed",
+              "stale_ownership",
+              "The project checkout changed during merge preflight. Review it and try again.",
+            );
+          }
+          const currentRegistration = await gitWorktreeRegistrationAtPath(
+            project.path,
+            worktreePath,
+          );
+          if (
+            currentRegistration?.branch !== worktreeBranch ||
+            (await gitCurrentBranch(worktreePath)) !== worktreeBranch
+          ) {
+            return fail(
+              409,
+              "merge_stale_ownership",
+              "stale_ownership",
+              "The session worktree ownership changed during merge preflight.",
+            );
+          }
+          if (await gitOperationInProgress(worktreePath)) {
+            return fail(
+              409,
+              "merge_worktree_busy",
+              "busy",
+              "Finish or abort the Git operation in the session worktree before merging.",
+            );
+          }
+        } catch (error) {
+          return fail(
+            409,
+            "merge_preflight_failed",
+            "failed",
+            `Merge preflight failed: ${gitErrorText(error)}`,
+          );
+        }
+
+        try {
+          await gitCommitAll(worktreePath, `Agent Deck: ${meta.title ?? "session"} changes`);
+          worktreeCommitted = true;
+          // Auto-commit empties the session's working-tree diff even when a later
+          // ahead check or merge fails; never replay the stale pre-commit cache.
+          dropDiffCache(id);
+        } catch (error) {
+          if (!(error instanceof Error && error.message === "nothing_to_commit")) {
+            return fail(
+              409,
+              "merge_worktree_commit_failed",
+              "failed",
+              `Couldn't commit the session worktree: ${gitErrorText(error)}`,
+              worktreeCommitted,
+            );
+          }
+        }
+
+        let ahead: number;
+        try {
+          ahead = await gitCommitsAhead(project.path, worktreeBranch, worktreeSourceBranch);
+        } catch (error) {
+          return fail(
+            500,
+            "merge_ahead_failed",
+            "failed",
+            `Couldn't determine commits ahead: ${gitErrorText(error)}`,
+            worktreeCommitted,
+          );
+        }
+        if (ahead === 0)
+          return fail(
+            400,
+            "merge_nothing_to_merge",
+            "nothing_to_merge",
+            "Nothing to merge — the session made no commits.",
+            worktreeCommitted,
+          );
+
+        try {
+          await gitMergeNoCheckout(project.path, worktreeBranch);
+        } catch (error) {
+          const conflict = await gitHasUnmergedEntries(project.path).catch(() => false);
+          const mergeActive = await gitMergeInProgress(project.path).catch(() => false);
+          if (conflict) {
+            return fail(
+              409,
+              "merge_conflict",
+              "conflict",
+              "Merge conflict detected. Resolve the conflicts and commit the merge, or abort it in the project checkout.",
+              worktreeCommitted,
+            );
+          }
+          if (mergeActive) {
+            return fail(
+              409,
+              "merge_active_failure",
+              "failed",
+              `Git prepared the merge but couldn't create its commit: ${gitErrorText(error)} Fix the reported issue and complete the merge commit, or abort the merge in the project checkout.`,
+              worktreeCommitted,
+            );
+          }
+          return fail(
+            500,
+            "merge_failed",
+            "failed",
+            `Merge failed: ${gitErrorText(error)}`,
+            worktreeCommitted,
+          );
+        }
+        dropDiffCache(id);
+
+        const retainedSuccess = () => ({
+          ok: true as const,
+          code: "merge_succeeded" as const,
+          outcome: "merged" as const,
+          branch: worktreeBranch,
+          sourceBranch: worktreeSourceBranch,
+          commits: ahead,
+          worktreeCommitted,
+          cleanup: { status: "retained" as const, runtimeStopped: false },
+        });
+        if (keepWorktreeAfterMerge) return retainedSuccess();
+
+        // The merge is committed at this point. Cleanup is deliberately a typed
+        // secondary outcome: it can never turn the successful merge into an HTTP
+        // failure. Re-check Pi immediately before teardown, then await process and
+        // session-owned child cleanup before deleting its cwd (especially required
+        // for Windows directory locks).
+        let runtimeStopped = false;
+        if (liveSession) {
+          try {
+            const runtimeWasRunning = liveSession.isRunning;
+            if (runtimeWasRunning && (await liveSession.getState()).isStreaming) {
+              return {
+                ...retainedSuccess(),
+                cleanup: {
+                  status: "failed" as const,
+                  runtimeStopped,
+                  code: "runtime_busy" as const,
+                  error:
+                    "The merge succeeded, but Pi started another turn before cleanup. Wait for it to finish, then delete the session to retry worktree removal.",
+                },
+              };
+            }
+            await sessions.destroy(id);
+            runtimeStopped = runtimeWasRunning;
+          } catch {
             return {
               ...retainedSuccess(),
               cleanup: {
                 status: "failed" as const,
                 runtimeStopped,
-                code: "runtime_busy" as const,
+                code: "runtime_shutdown_failed" as const,
                 error:
-                  "The merge succeeded, but Pi started another turn before cleanup. Wait for it to finish, then delete the session to retry worktree removal.",
+                  "The merge succeeded, but Pi could not be stopped safely. The worktree and branch were retained; wait for or stop Pi, then delete the session to retry worktree removal.",
               },
             };
           }
-          await sessions.destroy(id);
-          runtimeStopped = runtimeWasRunning;
-        } catch {
+        }
+        if (sessions.get(id)) {
           return {
             ...retainedSuccess(),
             cleanup: {
@@ -987,82 +1071,101 @@ export function registerSessionRoutes(ctx: ServerContext): void {
               runtimeStopped,
               code: "runtime_shutdown_failed" as const,
               error:
-                "The merge succeeded, but Pi could not be stopped safely. The worktree and branch were retained; wait for or stop Pi, then delete the session to retry worktree removal.",
+                "The merge succeeded, but the session runtime still owns its worktree. Wait for or stop Pi, then delete the session to retry worktree removal.",
             },
           };
         }
-      }
-      if (sessions.get(id)) {
+
+        try {
+          await sessionWorktreeStore.deleteWorktree(worktreePath, worktreeIdentity);
+        } catch {
+          return {
+            ...retainedSuccess(),
+            cleanup: {
+              status: "failed" as const,
+              runtimeStopped,
+              code: "worktree_remove_failed" as const,
+              error:
+                "The merge succeeded, but the worktree could not be removed. Its session metadata and branch were retained; close programs using it, then delete the session to retry worktree removal.",
+            },
+          };
+        }
+
+        // Physical removal succeeded, so returning cwd to the registered project
+        // is now mandatory before publishing metadata. Keep branch metadata until
+        // its conclusively-owned ref has also been deleted.
+        const withoutWorktree = { ...meta, cwd: project.path };
+        delete withoutWorktree.worktreePath;
+        delete withoutWorktree.worktreeIdentity;
+        delete withoutWorktree.worktreeSourceBranch;
+        index.upsert(withoutWorktree);
+        broadcast({ type: "session_meta", session: withoutWorktree });
+
+        try {
+          await gitWorktreePrune(project.path);
+          await gitDeleteOwnedWorktreeBranch(project.path, {
+            path: worktreePath,
+            branch: worktreeBranch,
+            sourceBranch: worktreeSourceBranch,
+            identityToken: worktreeIdentity,
+            branchOwned: true,
+          });
+        } catch {
+          return {
+            ...retainedSuccess(),
+            cleanup: {
+              status: "failed" as const,
+              runtimeStopped,
+              code: "branch_remove_failed" as const,
+              error: `The merge succeeded and the worktree was removed, but branch ${worktreeBranch} could not be deleted. Inspect it and delete it manually when safe.`,
+            },
+          };
+        }
+
+        const cleaned = { ...withoutWorktree };
+        delete cleaned.worktreeBranch;
+        index.upsert(cleaned);
+        broadcast({ type: "session_meta", session: cleaned });
         return {
           ...retainedSuccess(),
-          cleanup: {
-            status: "failed" as const,
-            runtimeStopped,
-            code: "runtime_shutdown_failed" as const,
-            error:
-              "The merge succeeded, but the session runtime still owns its worktree. Wait for or stop Pi, then delete the session to retry worktree removal.",
-          },
+          cleanup: { status: "removed" as const, runtimeStopped },
         };
+      } finally {
+        mergeLocks.delete(projectKey);
       }
-
-      try {
-        await sessionWorktreeStore.deleteWorktree(worktreePath, worktreeIdentity);
-      } catch {
-        return {
-          ...retainedSuccess(),
-          cleanup: {
-            status: "failed" as const,
-            runtimeStopped,
-            code: "worktree_remove_failed" as const,
-            error:
-              "The merge succeeded, but the worktree could not be removed. Its session metadata and branch were retained; close programs using it, then delete the session to retry worktree removal.",
-          },
-        };
-      }
-
-      // Physical removal succeeded, so returning cwd to the registered project
-      // is now mandatory before publishing metadata. Keep branch metadata until
-      // its conclusively-owned ref has also been deleted.
-      const withoutWorktree = { ...meta, cwd: project.path };
-      delete withoutWorktree.worktreePath;
-      delete withoutWorktree.worktreeIdentity;
-      delete withoutWorktree.worktreeSourceBranch;
-      index.upsert(withoutWorktree);
-      broadcast({ type: "session_meta", session: withoutWorktree });
-
-      try {
-        await gitWorktreePrune(project.path);
-        await gitDeleteOwnedWorktreeBranch(project.path, {
-          path: worktreePath,
-          branch: worktreeBranch,
-          sourceBranch: worktreeSourceBranch,
-          identityToken: worktreeIdentity,
-          branchOwned: true,
-        });
-      } catch {
-        return {
-          ...retainedSuccess(),
-          cleanup: {
-            status: "failed" as const,
-            runtimeStopped,
-            code: "branch_remove_failed" as const,
-            error: `The merge succeeded and the worktree was removed, but branch ${worktreeBranch} could not be deleted. Inspect it and delete it manually when safe.`,
-          },
-        };
-      }
-
-      const cleaned = { ...withoutWorktree };
-      delete cleaned.worktreeBranch;
-      index.upsert(cleaned);
-      broadcast({ type: "session_meta", session: cleaned });
-      return {
-        ...retainedSuccess(),
-        cleanup: { status: "removed" as const, runtimeStopped },
-      };
     } finally {
-      mergeLocks.delete(projectKey);
+      releaseMutation();
     }
   });
+
+  const historyActionBody = z.object({ entryId: z.string().trim().min(1).max(500) });
+  for (const action of ["fork", "rerun"] as const) {
+    fastify.post(`/sessions/:id/history/${action}`, async (request, reply) => {
+      const parsed = historyActionBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          code: "history_invalid_request",
+          error: "A stable Pi entry id is required.",
+        });
+      }
+      const { id } = request.params as { id: string };
+      try {
+        const result = await historyActions.run(id, parsed.data.entryId, action);
+        return reply.status(result.outcome === "forked" ? 201 : 200).send(result);
+      } catch (error) {
+        if (error instanceof HistoryActionError) {
+          return reply
+            .status(error.code === "history_source_missing" ? 404 : 409)
+            .send({ code: error.code, error: error.message });
+        }
+        request.log.warn({ err: error, sessionId: id, action }, "history action failed");
+        return reply.status(500).send({
+          code: "history_failed",
+          error: "The history action failed. Reopen the session and try again.",
+        });
+      }
+    });
+  }
 
   // Fork/duplicate: copy the source's pi session file and launch an
   // independent resumed session from the copy. The original is untouched.

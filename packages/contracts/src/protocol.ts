@@ -125,6 +125,9 @@ export const ClientMessage = Schema.Union(
     sessionId: Schema.String,
     /** Last seq this client saw; omit for a fresh snapshot. */
     lastSeq: Schema.optional(WireInt.pipe(Schema.nonNegative())),
+    /** Generation that owns lastSeq. Generated sessions require an exact match
+     * before replay; missing/mismatched generations receive a full snapshot. */
+    streamGeneration: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("prompt"),
@@ -323,6 +326,13 @@ export const SessionMeta = Schema.mutable(
     worktreeIdentity: Schema.optional(Schema.String),
     worktreeBranch: Schema.optional(Schema.String),
     worktreeSourceBranch: Schema.optional(Schema.String),
+    /** A history-fork target's durable, non-owning dependency on the source
+     * session's app-owned worktree. Such a target retains cwd but never receives
+     * worktreePath/identity/branch deletion authority. */
+    worktreeOwnerSessionId: Schema.optional(Schema.String),
+    /** Durable identity of the currently authoritative ordered transcript bus.
+     * Absent on legacy sessions until their first same-id rebind. */
+    streamGeneration: Schema.optional(Schema.String),
     /** Internal durable marker for a retained Loop review session. The renderer
      * may observe this capability flag but cannot choose its diff revision. */
     loopReviewRunId: Schema.optional(Schema.String),
@@ -365,6 +375,7 @@ export const ServerMessage = Schema.Union(
     sessionId: Schema.String,
     seq: Schema.Number,
     state: TranscriptStateFromSelf,
+    streamGeneration: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("session_exit"),
@@ -374,6 +385,9 @@ export const ServerMessage = Schema.Union(
   }),
   Schema.Struct({ type: Schema.Literal("session_meta"), session: SessionMeta }),
   Schema.Struct({ type: Schema.Literal("session_removed"), sessionId: Schema.String }),
+  /** Same Deck identity now owns a replacement ordered transcript bus. Every
+   * subscribed client must resubscribe without carrying its prior sequence. */
+  Schema.Struct({ type: Schema.Literal("session_rebind"), sessionId: Schema.String }),
   Schema.Struct({ type: Schema.Literal("resources_changed") }),
   Schema.Struct({
     type: Schema.Literal("error"),

@@ -279,6 +279,9 @@ export interface ManagedSessionRuntime {
   readonly compact: Effect.Effect<void>;
   readonly abort: Effect.Effect<void>;
   readonly getState: Effect.Effect<StateData>;
+  readonly getForkMessages: Effect.Effect<ForkMessagesData>;
+  readonly getEntries: Effect.Effect<EntriesData>;
+  readonly fork: (entryId: string) => Effect.Effect<ForkData>;
   readonly getSessionStats: Effect.Effect<StatsData>;
   readonly getAvailableModels: Effect.Effect<AvailableModels>;
   readonly getCommands: Effect.Effect<SlashCommands>;
@@ -307,6 +310,8 @@ type StatsData = Effect.Effect.Success<PiHostHandle["getSessionStats"]>;
 type AvailableModels = Effect.Effect.Success<PiHostHandle["getAvailableModels"]>;
 type SlashCommands = Effect.Effect.Success<PiHostHandle["getCommands"]>;
 type EntriesData = Effect.Effect.Success<PiHostHandle["getEntries"]>;
+type ForkMessagesData = Effect.Effect.Success<PiHostHandle["getForkMessages"]>;
+type ForkData = Effect.Effect.Success<ReturnType<PiHostHandle["fork"]>>;
 type ThinkingLevelArg = Parameters<PiHostHandle["setThinkingLevel"]>[0];
 
 /** `get_entries` returns the append-only tree; transcript history is only the
@@ -647,9 +652,35 @@ export const makeManagedSessionRuntime = (
                   entryId: entry.id,
                   cellId: textEvent.cell.id,
                   text: textEvent.cell.text,
+                  cell: textEvent.cell,
                   rawMessage: entry.message,
                 },
               ];
+            });
+            // Live Pi message events do not consistently carry session-entry
+            // ids. Reconcile provider-backed user cells by authoritative active
+            // ancestry order, then emit same-cell replacements so every client
+            // gains the stable entryId without a reload or duplicate-text match.
+            const liveUsers = transcript.cells.filter(
+              (cell): cell is Extract<TranscriptState["cells"][number], { kind: "user" }> =>
+                cell.kind === "user",
+            );
+            users.forEach((user, index) => {
+              const current = liveUsers[index];
+              if (!current || current.entryId === user.entryId) return;
+              // Keep the canonical parser's complete projection. Rebuilding a
+              // replacement from text alone drops file/folder-only messages at
+              // the exact moment stable entry ids are reconciled, so a later
+              // snapshot/reload cannot reconstruct their chips.
+              let canonical: Extract<TranscriptState["cells"][number], { kind: "user" }> = {
+                ...user.cell,
+                id: current.id,
+                entryId: user.entryId,
+              };
+              if (params.decorateUserCell) {
+                canonical = params.decorateUserCell(canonical, user.rawMessage);
+              }
+              emit({ type: "cell_final", cell: { ...canonical, id: current.id } });
             });
             params.reconcileImages(users);
           }).pipe(Effect.catchAll(() => Effect.sync(() => params.expirePendingImages?.())));
@@ -863,6 +894,9 @@ export const makeManagedSessionRuntime = (
       compact: handle.compact.pipe(Effect.orDie),
       abort: handle.abort.pipe(Effect.orDie),
       getState: handle.getState.pipe(Effect.orDie),
+      getForkMessages: handle.getForkMessages.pipe(Effect.orDie),
+      getEntries: handle.getEntries.pipe(Effect.orDie),
+      fork: (entryId) => handle.fork(entryId).pipe(Effect.orDie),
       getSessionStats: handle.getSessionStats.pipe(Effect.orDie),
       getAvailableModels: handle.getAvailableModels.pipe(Effect.orDie),
       getCommands: handle.getCommands.pipe(Effect.orDie),

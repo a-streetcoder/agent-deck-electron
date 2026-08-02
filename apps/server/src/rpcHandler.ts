@@ -260,7 +260,11 @@ export function createRpcConnection(deps: {
     sessionExitHooks.set(sessionId, unhook);
   };
 
-  const subscribe = (session: ManagedSession, lastSeq?: number): void => {
+  const subscribe = (
+    session: ManagedSession,
+    lastSeq?: number,
+    streamGeneration?: string,
+  ): void => {
     cleanups.get(session.meta.id)?.();
 
     const unsubscribeBus = session.bus.subscribe(({ seq, event }) => {
@@ -281,7 +285,10 @@ export function createRpcConnection(deps: {
 
     // seq/replay/snapshot semantics: subscribe with lastSeq → replay from the
     // ring, or snapshot when the ring has evicted that seq.
-    if (lastSeq !== undefined) {
+    const generationMatches =
+      session.meta.streamGeneration === undefined ||
+      streamGeneration === session.meta.streamGeneration;
+    if (lastSeq !== undefined && generationMatches) {
       const replay = session.bus.replayFrom(lastSeq);
       if (replay) {
         for (const { seq, event } of replay) {
@@ -291,7 +298,13 @@ export function createRpcConnection(deps: {
       }
     }
     const { seq, state } = session.snapshot();
-    push({ type: "snapshot", sessionId: session.meta.id, seq, state });
+    push({
+      type: "snapshot",
+      sessionId: session.meta.id,
+      seq,
+      state,
+      ...(session.meta.streamGeneration ? { streamGeneration: session.meta.streamGeneration } : {}),
+    });
   };
 
   const handleMessage = async (raw: string): Promise<void> => {
@@ -709,7 +722,7 @@ export function createRpcConnection(deps: {
     try {
       switch (request.type) {
         case "subscribe_session":
-          subscribe(session, request.lastSeq);
+          subscribe(session, request.lastSeq, request.streamGeneration);
           break;
         case "prompt": {
           let stagedPastes: { rollback: () => void } | undefined;

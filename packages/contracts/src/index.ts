@@ -4,6 +4,7 @@ export * from "./checkpoints.ts";
 export * from "./diff.ts";
 export * from "./editor.ts";
 export * from "./files.ts";
+export * from "./history.ts";
 export * from "./keybindings.ts";
 export * from "./protocol.ts";
 export * from "./rpc.ts";

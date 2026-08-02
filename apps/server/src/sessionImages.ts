@@ -750,6 +750,21 @@ export class SessionImageStore {
     this.writeManifest(sessionId, manifest);
     this.garbageCollect();
   }
+  /** Recover Pi prompt image payloads for one authoritative historic entry. */
+  promptImages(sessionId: string, entryId: string): ImageAttachment[] {
+    const records = this.readManifest(sessionId).images.filter(
+      (image) => image.entryId === entryId,
+    );
+    return records.map((image) => ({
+      type: "image" as const,
+      data: this.verifyBlob(
+        path.join(this.blobs, image.blobHash),
+        image.blobHash,
+        image.size,
+      ).toString("base64"),
+      mimeType: image.mimeType as ImageAttachment["mimeType"],
+    }));
+  }
   fork(sourceId: string, targetId: string): void {
     this.writeManifest(targetId, this.readManifest(sourceId));
   }

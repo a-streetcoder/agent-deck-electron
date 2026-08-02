@@ -14,6 +14,41 @@ afterEach(() => {
   useAppStore.setState({ session: null });
 });
 
+describe("historic user message actions", () => {
+  const historic: UserCell = {
+    kind: "user",
+    id: "user-entry-1",
+    entryId: "entry-1",
+    text: "Try this",
+  };
+
+  afterEach(() => useAppStore.setState({ session: null }));
+
+  it("shows keyboard-reachable actions only for stable Pi entries", () => {
+    useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
+    const view = render(<CellView cell={historic} />);
+    expect(screen.getByRole("button", { name: "Fork before this message" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Re-run from this message" })).toBeTruthy();
+    view.rerender(<CellView cell={{ ...historic, entryId: undefined }} />);
+    expect(screen.queryByRole("button", { name: "Fork before this message" })).toBeNull();
+  });
+
+  it("confirms destructive rerun, traps initial focus, closes on Escape, and restores focus", () => {
+    useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
+    render(<CellView cell={historic} />);
+    const trigger = screen.getByRole("button", { name: "Re-run from this message" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Later conversation messages will be abandoned. Workspace files are not changed.",
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+
 describe("subagent durable status and content", () => {
   const setParentSession = () =>
     useAppStore.setState({

@@ -1006,6 +1006,149 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     }
   });
 
+  it("deferred history publication leaves original metadata untouched when seeding fails", async () => {
+    const { runtime } = makeFakeRuntime();
+    const published: SessionMeta[] = [];
+    try {
+      const sm = new SessionManager(runtime, new ReceiptBus(false), (value) =>
+        published.push({ ...value }),
+      );
+      const source: SessionMeta = {
+        id: randomUUID(),
+        cwd: process.cwd(),
+        createdAt: new Date().toISOString(),
+        piSessionFile: "/tmp/source.jsonl",
+        launchPlan: {
+          kind: "agent",
+          systemPrompt: { mode: "replace", text: "persona" },
+          tools: ["read"],
+          model: "model-a",
+        },
+      };
+      await expect(sm.rebindHistoryDeferred(source, "/tmp/branch.jsonl")).rejects.toThrow();
+      expect(published).toEqual([]);
+      expect(sm.get(source.id)).toBeUndefined();
+      expect(source.piSessionFile).toBe("/tmp/source.jsonl");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("history and generic fork targets share cwd with transitive non-owner worktree dependency", async () => {
+    let captured: SessionMeta | undefined;
+    const fakeBus: SessionPushBusHandle = {
+      lastSeq: Effect.succeed(0),
+      append: () => Effect.succeed({ seq: 0, event: {} as DomainEvent }),
+      replayFrom: () => Effect.succeed(null),
+      subscribe: () => Effect.succeed(Effect.void),
+      unsafeAppend: () => ({ seq: 0, event: {} as DomainEvent }),
+      unsafeLastSeq: () => 0,
+    };
+    const fakeSpawn = (
+      params: SpawnSessionParams,
+    ): Effect.Effect<ManagedSessionRuntime, never, Scope.Scope> => {
+      captured = params.meta;
+      return Effect.succeed({
+        meta: params.meta,
+        bus: fakeBus,
+        ingest: Effect.void,
+        seedFromHistory: Effect.void,
+        seedSyntheticCells: () => Effect.void,
+        restorePlan: () => Effect.void,
+        ensureExitHandled: Effect.void,
+      } as unknown as ManagedSessionRuntime);
+    };
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(
+        Layer.succeed(SessionManagerService, { spawn: fakeSpawn }),
+        SessionPushBusesLive,
+        PiHostLive,
+      ),
+    ) as ServerRuntime;
+    try {
+      const sm = new SessionManager(runtime, new ReceiptBus(false));
+      const source: SessionMeta = {
+        id: randomUUID(),
+        cwd: "/private/worktree",
+        createdAt: new Date().toISOString(),
+        piSessionFile: "/tmp/source.jsonl",
+        worktreePath: "/private/worktree",
+        worktreeIdentity: "owned-token",
+        worktreeBranch: "agent-deck/source",
+        worktreeSourceBranch: "main",
+      };
+      const dir = makeTempDir();
+      const sourceFile = path.join(dir, "source.jsonl");
+      const genericFile = path.join(dir, "generic.jsonl");
+      const nestedGenericFile = path.join(dir, "nested-generic.jsonl");
+      writeFileSync(sourceFile, "{}\n");
+      const generic = await sm.fork(source, sourceFile, genericFile);
+      expect(generic.meta).toMatchObject({
+        cwd: source.cwd,
+        worktreeOwnerSessionId: source.id,
+        piSessionFile: genericFile,
+      });
+      expect(generic.meta).not.toHaveProperty("worktreePath");
+      const nestedGeneric = await sm.fork(generic.meta, genericFile, nestedGenericFile);
+      expect(nestedGeneric.meta).toMatchObject({
+        cwd: source.cwd,
+        worktreeOwnerSessionId: source.id,
+        piSessionFile: nestedGenericFile,
+      });
+      expect(nestedGeneric.meta).not.toHaveProperty("worktreePath");
+
+      const target = await sm.materializeHistoryFork(source, "/tmp/branch.jsonl");
+      expect(captured).toMatchObject({
+        cwd: source.cwd,
+        piSessionFile: "/tmp/branch.jsonl",
+        worktreeOwnerSessionId: source.id,
+      });
+      expect(captured).not.toHaveProperty("worktreePath");
+      expect(captured).not.toHaveProperty("worktreeIdentity");
+      expect(captured).not.toHaveProperty("worktreeBranch");
+      expect(captured).not.toHaveProperty("worktreeSourceBranch");
+      expect(source).toMatchObject({
+        worktreePath: "/private/worktree",
+        worktreeIdentity: "owned-token",
+      });
+      const nested = await sm.materializeHistoryFork(target.meta, "/tmp/nested-branch.jsonl");
+      expect(nested.meta).toMatchObject({
+        cwd: source.cwd,
+        worktreeOwnerSessionId: source.id,
+        piSessionFile: "/tmp/nested-branch.jsonl",
+      });
+      expect(nested.meta).not.toHaveProperty("worktreePath");
+      await sm.destroy(nested.meta.id);
+      await sm.destroy(target.meta.id);
+      await sm.destroy(nestedGeneric.meta.id);
+      await sm.destroy(generic.meta.id);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("keeps authoritative map ownership when destroy stop fails", async () => {
+    const { runtime } = makeFakeRuntime();
+    try {
+      const sm = new SessionManager(runtime, new ReceiptBus(false));
+      const owner = {
+        meta: { id: "owned", cwd: process.cwd(), createdAt: new Date().toISOString() },
+        stop: vi.fn(async () => {
+          throw new Error("stop failed");
+        }),
+      };
+      const sessionMap = (sm as unknown as { sessions: Map<string, typeof owner> }).sessions;
+      sessionMap.set("owned", owner);
+      await expect(sm.destroy("owned")).rejects.toThrow("stop failed");
+      expect(sm.get("owned")).toBe(owner);
+      await expect(sm.rebindHistoryDeferred(owner.meta, "/tmp/replacement.jsonl")).rejects.toThrow(
+        "authoritative runtime owner",
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("fork() destroys the half-built session when history seeding fails", async () => {
     const { runtime, exitHandledCalls } = makeFakeRuntime();
     const dir = makeTempDir();

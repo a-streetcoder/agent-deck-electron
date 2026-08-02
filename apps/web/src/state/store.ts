@@ -361,6 +361,8 @@ export interface AppState {
   transcript: TranscriptState;
   /** Last seq applied — sent on resubscribe so the server replays the gap. */
   lastSeq: number;
+  /** Durable bus generation that owns lastSeq; null for legacy/fresh snapshots. */
+  streamGeneration: string | null;
   error: string | null;
   /** Transient notifications (native toasts), newest last; auto-dismissed by the Toaster. */
   toasts: Toast[];
@@ -442,7 +444,7 @@ export interface AppState {
   clearDiffJump(): void;
   upsertSessionMeta(session: SessionMeta): void;
   removeSession(sessionId: string): void;
-  setSnapshot(state: TranscriptState, seq: number): void;
+  setSnapshot(state: TranscriptState, seq: number, streamGeneration?: string): void;
   setTranscript(state: TranscriptState, seq: number): void;
   resetTranscript(): void;
   setError(error: string | null): void;
@@ -505,6 +507,7 @@ export const useAppStore = create<AppState>((set) => ({
   questionNavigationAnchorId: null,
   transcript: emptyTranscript(),
   lastSeq: 0,
+  streamGeneration: null,
   error: null,
   toasts: [],
   setConnection: (connection) =>
@@ -818,9 +821,10 @@ export const useAppStore = create<AppState>((set) => ({
         workspaceFilesState,
       };
     }),
-  setSnapshot: (transcript, lastSeq) => set({ transcript, lastSeq }),
+  setSnapshot: (transcript, lastSeq, streamGeneration) =>
+    set({ transcript, lastSeq, streamGeneration: streamGeneration ?? null }),
   setTranscript: (transcript, lastSeq) => set({ transcript, lastSeq }),
-  resetTranscript: () => set({ transcript: emptyTranscript(), lastSeq: 0 }),
+  resetTranscript: () => set({ transcript: emptyTranscript(), lastSeq: 0, streamGeneration: null }),
   setError: (error) => set({ error }),
   pushToast: (toast) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

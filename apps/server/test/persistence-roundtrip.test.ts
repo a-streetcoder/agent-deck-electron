@@ -56,6 +56,21 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(reloaded?.updatedAt).toBe(original.updatedAt);
   });
 
+  it("round-trips durable history worktree and stream generations", () => {
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    const original = sessions.list()[0]!;
+    sessions.upsert({
+      ...original,
+      worktreeOwnerSessionId: "original-owner",
+      streamGeneration: "generation-2",
+    });
+    expect(new SessionIndex(dir).find((session) => session.id === original.id)).toMatchObject({
+      worktreeOwnerSessionId: "original-owner",
+      streamGeneration: "generation-2",
+    });
+  });
+
   it("class facade loads the fixture settings identically (every field)", () => {
     const s = new SettingsStore(FIXTURE_DIR).get();
     expect(s.defaultSkills).toEqual(["diagnose", "tdd"]);
