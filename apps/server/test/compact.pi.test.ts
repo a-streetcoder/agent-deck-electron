@@ -90,5 +90,8 @@ describe("manual compaction (native Compact context)", () => {
     await expect
       .poll(() => managed.snapshot().state.contextRevision, { timeout: 30_000 })
       .toBeGreaterThan(before);
-  });
+    // The real-Pi compact request itself permits up to 120 seconds. Give this
+    // real-process test a longer outer deadline so Vitest's suite-wide
+    // 60-second default cannot preempt it on slower Windows runners.
+  }, 180_000);
 });
