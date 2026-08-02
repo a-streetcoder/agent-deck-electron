@@ -100,11 +100,15 @@ describe("SubagentRunStore", () => {
       execFileSync("git", ["rev-parse", "HEAD"], { cwd: firstPath, encoding: "utf8" }).trim(),
     ).not.toBe(store.get(first.id)?.worktreeBaseCommit);
 
+    const expectedRepositoryRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const restarted = new SubagentRunStore(dataDir, vi.fn());
     expect(restarted.get(first.id)).toEqual(
       expect.objectContaining({
         worktreePath: firstPath,
-        worktreeParentRepository: realpathSync(repo),
+        worktreeParentRepository: expectedRepositoryRoot,
         worktreeBaseCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
       }),
     );
@@ -287,8 +291,11 @@ describe("SubagentRunStore", () => {
     });
     await gitDetachedWorktreeAdd(source.repositoryRoot, target, source.baseCommit);
     expect(
-      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }),
-    ).toContain(target);
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repo,
+        encoding: "utf8",
+      }).replaceAll("\\", "/"),
+    ).toContain(target.replaceAll("\\", "/"));
 
     const restarted = new SubagentRunStore(dataDir, vi.fn());
     await restarted.removeParent(PARENT_A);
