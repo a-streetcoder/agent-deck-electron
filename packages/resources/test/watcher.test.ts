@@ -162,6 +162,8 @@ describe("resource watcher", () => {
     const linkedHome = path.join(container, "home-link");
     linkDirectory(physicalHome, linkedHome);
 
+    const catalog = path.join(physicalHome, ".pi", "agent", "agents");
+    const agentFile = path.join(catalog, "later.md");
     let resolveChange!: () => void;
     const changed = new Promise<void>((resolve) => {
       resolveChange = resolve;
@@ -169,17 +171,16 @@ describe("resource watcher", () => {
     const watcher = watchResources(
       { home: linkedHome },
       () => {
-        if (scanAgents({ home: linkedHome }).some((agent) => agent.name === "later")) {
-          resolveChange();
-        }
+        // Keep this focused on watcher delivery. Scanner behavior has separate
+        // coverage, and parsing here made delivery depend on callback timing.
+        if (existsSync(agentFile)) resolveChange();
       },
       10,
     );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      const catalog = path.join(physicalHome, ".pi", "agent", "agents");
       mkdirSync(catalog, { recursive: true });
-      writeFileSync(path.join(catalog, "later.md"), "---\nname: later\n---\n\nLater.\n");
+      writeFileSync(agentFile, "---\nname: later\n---\n\nLater.\n");
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>

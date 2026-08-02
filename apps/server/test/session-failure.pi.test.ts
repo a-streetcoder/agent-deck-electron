@@ -44,9 +44,12 @@ async function prompt(sessionId: string, message: string): Promise<WebSocket> {
 
 afterAll(async () => {
   await server?.close();
-  rmSync(dataDir, { recursive: true, force: true });
-  rmSync(cwd, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
+  // Windows may retain a directory handle briefly after Pi exits. Node's
+  // recursive rm retry path handles EBUSY/EPERM with bounded linear backoff.
+  const cleanupOptions = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 } as const;
+  rmSync(dataDir, cleanupOptions);
+  rmSync(cwd, cleanupOptions);
+  rmSync(home, cleanupOptions);
 });
 
 describe("real Pi durable provider failure", () => {
