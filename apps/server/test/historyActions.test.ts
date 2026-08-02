@@ -1,8 +1,12 @@
 import type { SessionMeta } from "@agent-deck/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { HistoryActionCoordinator } from "../src/historyActions.ts";
+import {
+  deriveForkProvenance,
+  FORK_RECAP_MAX_CHARS,
+  HistoryActionCoordinator,
+} from "../src/historyActions.ts";
 import type { HistoryActionError } from "../src/historyActions.ts";
-import type { SessionManager } from "../src/SessionManager.ts";
+import type { ManagedSession, SessionManager } from "../src/SessionManager.ts";
 import type { SessionIndex } from "../src/persistence.ts";
 import type { SessionImageStore } from "../src/sessionImages.ts";
 import type { SessionPasteStore } from "../src/sessionPastes.ts";
@@ -22,6 +26,7 @@ function harness(
     deferredPublicationFailure?: boolean;
     endedNamed?: boolean;
     notifyFailure?: boolean;
+    priorProvenance?: boolean;
   } = {},
 ) {
   const sourceMeta: SessionMeta = options.endedNamed
@@ -39,6 +44,17 @@ function harness(
         },
       }
     : meta();
+  if (options.priorProvenance) {
+    sourceMeta.forkProvenance = {
+      version: 1,
+      sourceSessionId: "grandparent",
+      sourceEntryId: "old-entry",
+      sourceTitle: "Grandparent",
+      recap: "old recap",
+      recapTruncated: false,
+    };
+    sourceMeta.title = "Immediate parent";
+  }
   let stateCalls = 0;
   const source = {
     meta: sourceMeta,
@@ -164,6 +180,123 @@ function harness(
   return { coordinator, source, manager, rebound, images, pastes, notifyRebind };
 }
 
+describe("fork provenance derivation", () => {
+  const source: SessionMeta = {
+    id: "source",
+    cwd: "/tmp/project",
+    createdAt: "now",
+    title: "Captured title",
+  };
+
+  it("uses canonical active ancestry, excludes fork origin and non-conversation payloads", () => {
+    const data = {
+      leafId: "later",
+      entries: [
+        {
+          id: "orphan",
+          parentId: null,
+          type: "message",
+          message: { role: "user", content: "noise" },
+        },
+        {
+          id: "u1",
+          parentId: null,
+          type: "message",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "hello" },
+              { type: "image", data: "secret-bytes" },
+            ],
+          },
+        },
+        {
+          id: "a1",
+          parentId: "u1",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "reasoning" },
+              { type: "toolCall", arguments: { secret: true } },
+              { type: "text", text: "answer" },
+            ],
+          },
+        },
+        {
+          id: "chosen",
+          parentId: "a1",
+          type: "message",
+          message: { role: "user", content: [{ type: "text", text: "fork here" }] },
+        },
+        {
+          id: "later",
+          parentId: "chosen",
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "not inherited" }] },
+        },
+      ],
+    } as Awaited<ReturnType<ManagedSession["getEntries"]>>;
+    const provenance = deriveForkProvenance(data, source, "chosen");
+    expect(provenance).toMatchObject({
+      sourceSessionId: "source",
+      sourceEntryId: "chosen",
+      sourceTitle: "Captured title",
+      recapTruncated: false,
+    });
+    expect(provenance.recap).toBe("User:\nhello\n\nThinking:\nreasoning\n\nAssistant:\nanswer");
+    expect(provenance.recap).not.toContain("secret");
+    expect(provenance.recap).not.toContain("fork here");
+    expect(provenance.recap).not.toContain("not inherited");
+  });
+
+  it("retains a deterministic recent bounded recap and marks truncation", () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      id: `a${index}`,
+      parentId: index ? `a${index - 1}` : null,
+      type: "message" as const,
+      message: {
+        role: "assistant" as const,
+        content: [{ type: "text", text: `${index}:${"x".repeat(3_000)}` }],
+      },
+    }));
+    const data = {
+      leafId: "chosen",
+      entries: [
+        ...entries,
+        {
+          id: "chosen",
+          parentId: "a19",
+          type: "message",
+          message: { role: "user", content: "fork" },
+        },
+      ],
+    } as Awaited<ReturnType<ManagedSession["getEntries"]>>;
+    const provenance = deriveForkProvenance(data, source, "chosen");
+    expect(provenance.recap.length).toBeLessThanOrEqual(FORK_RECAP_MAX_CHARS);
+    expect(provenance.recapTruncated).toBe(true);
+    expect(provenance.recap).toContain("19:");
+    expect(provenance.recap).not.toContain("Assistant:\n0:");
+  });
+
+  it("rejects a stable id that no longer identifies an active user turn", () => {
+    const data = {
+      leafId: "chosen",
+      entries: [
+        {
+          id: "chosen",
+          parentId: null,
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "changed" }] },
+        },
+      ],
+    } as Awaited<ReturnType<ManagedSession["getEntries"]>>;
+    expect(() => deriveForkProvenance(data, source, "chosen")).toThrowError(
+      expect.objectContaining({ code: "history_entry_missing" }),
+    );
+  });
+});
+
 describe("HistoryActionCoordinator", () => {
   it("selects only the exact Pi entry id even when text is duplicated", async () => {
     const { coordinator, source, manager } = harness();
@@ -216,6 +349,30 @@ describe("HistoryActionCoordinator", () => {
       }),
       "/tmp/branch.jsonl",
       undefined,
+      expect.objectContaining({
+        version: 1,
+        sourceSessionId: "source",
+        sourceEntryId: "chosen",
+        sourceTitle: "Untitled chat",
+      }),
+    );
+  });
+
+  it("a fork of a fork records only its immediate source", async () => {
+    const { coordinator, manager } = harness({ priorProvenance: true });
+    await coordinator.run("source", "chosen", "fork");
+    expect(manager.materializeHistoryFork).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "source",
+        forkProvenance: expect.objectContaining({ sourceSessionId: "grandparent" }),
+      }),
+      "/tmp/branch.jsonl",
+      undefined,
+      expect.objectContaining({
+        sourceSessionId: "source",
+        sourceEntryId: "chosen",
+        sourceTitle: "Immediate parent",
+      }),
     );
   });
 
@@ -259,6 +416,24 @@ describe("HistoryActionCoordinator", () => {
     expect(source.prompt).toHaveBeenCalledWith("canonical @file.txt", undefined);
     expect(manager.resume).toHaveBeenCalled();
     expect(manager.rebindHistoryDeferred).not.toHaveBeenCalled();
+  });
+
+  it("rerun preserves existing provenance without stamping a new fork origin", async () => {
+    const { coordinator, manager } = harness({ priorProvenance: true });
+    await expect(coordinator.run("source", "chosen", "rerun")).resolves.toMatchObject({
+      outcome: "rerun",
+      session: {
+        forkProvenance: { sourceSessionId: "grandparent", sourceEntryId: "old-entry" },
+      },
+    });
+    expect(manager.materializeHistoryFork).not.toHaveBeenCalled();
+    expect(manager.rebindHistoryDeferred).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forkProvenance: expect.objectContaining({ sourceSessionId: "grandparent" }),
+      }),
+      "/tmp/branch.jsonl",
+      undefined,
+    );
   });
 
   it("sends an accepted rerun prompt exactly once before deferred publication", async () => {

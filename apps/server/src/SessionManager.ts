@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { SessionMeta } from "@agent-deck/contracts";
+import type { ForkProvenance, SessionMeta } from "@agent-deck/contracts";
 import type {
   AskUserAnswer,
   AskUserCell,
@@ -1052,6 +1052,7 @@ export class SessionManager {
     source: SessionMeta,
     branchFile: string,
     env?: Record<string, string | undefined>,
+    forkProvenance?: ForkProvenance,
   ): Promise<ManagedSession> {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -1062,7 +1063,9 @@ export class SessionManager {
       endedAt: undefined,
       piSessionFile: branchFile,
       title: source.title ? `${source.title} (fork)` : undefined,
+      ...(forkProvenance ? { forkProvenance } : {}),
     };
+    if (!forkProvenance) delete meta.forkProvenance;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.

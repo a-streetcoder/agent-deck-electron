@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isTranscriptCellVisible } from "../lib/transcriptVisibility.ts";
 import { useAppStore } from "../state/store.ts";
 import { CellView } from "./cells.tsx";
+import { ForkProvenanceCard } from "./ForkProvenanceCard.tsx";
 import { SessionPlanPanel } from "./SessionPlanPanel.tsx";
 import { SessionStartupCard } from "./SessionStartupCard.tsx";
 import { useOpenInEditor } from "./diff/OpenInPicker.tsx";
@@ -134,6 +135,7 @@ export function Transcript() {
         pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
+      {session ? <ForkProvenanceCard session={session} /> : null}
       <SessionPlanPanel />
       {cells.length === 0 ? (
         isNewSession ? (

@@ -1,10 +1,12 @@
 import type {
   HistoryActionResult,
+  ForkProvenance,
   HistoryDraft,
   ImageAttachment,
   SessionMeta,
 } from "@agent-deck/contracts";
 import type { UserCell } from "@agent-deck/domain";
+import { activeEntryChain } from "./services/sessionManager.ts";
 import type { SessionManager, ManagedSession } from "./SessionManager.ts";
 import type { SessionIndex } from "./persistence.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
@@ -26,6 +28,80 @@ export class HistoryActionError extends Error {
     super(message);
     this.name = "HistoryActionError";
   }
+}
+
+export const FORK_RECAP_MAX_CHARS = 32_768;
+
+function plainTextBlocks(content: unknown): Array<{ label: string; text: string }> {
+  if (typeof content === "string") return [{ label: "", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block: unknown) => {
+    if (!block || typeof block !== "object") return [];
+    const value = block as { type?: unknown; text?: unknown; thinking?: unknown };
+    if (value.type === "text" && typeof value.text === "string") {
+      return [{ label: "", text: value.text }];
+    }
+    if (value.type === "thinking" && typeof value.thinking === "string") {
+      return [{ label: "Thinking", text: value.thinking }];
+    }
+    return [];
+  });
+}
+
+/** Build a durable, payload-free recap from canonical active Pi ancestry.
+ * The selected user turn itself is the fork origin/composer draft, so only its
+ * strict ancestors are inherited by Pi's `fork(entryId)` branch. */
+export function deriveForkProvenance(
+  data: Awaited<ReturnType<ManagedSession["getEntries"]>>,
+  source: SessionMeta,
+  sourceEntryId: string,
+): ForkProvenance {
+  const chain = activeEntryChain(data);
+  const selectedIndex = chain.findIndex((entry) => entry.id === sourceEntryId);
+  const selected = selectedIndex < 0 ? undefined : chain[selectedIndex];
+  if (!selected || selected.type !== "message" || selected.message.role !== "user") {
+    throw new HistoryActionError(
+      "history_entry_missing",
+      "That entry is no longer the selected user message. Refresh the session and try again.",
+    );
+  }
+
+  const sections: string[] = [];
+  for (const entry of chain.slice(0, selectedIndex)) {
+    if (entry.type !== "message") continue;
+    const role = entry.message.role;
+    if (role !== "user" && role !== "assistant") continue;
+    for (const block of plainTextBlocks((entry.message as { content?: unknown }).content)) {
+      const text = block.text.trim();
+      if (!text) continue;
+      const label = block.label || (role === "user" ? "User" : "Assistant");
+      sections.push(`${label}:\n${text}`);
+    }
+  }
+
+  const retained = [...sections];
+  let recap = retained.join("\n\n");
+  let recapTruncated = false;
+  while (retained.length > 1 && recap.length > FORK_RECAP_MAX_CHARS) {
+    retained.shift();
+    recapTruncated = true;
+    recap = retained.join("\n\n");
+  }
+  // An individual recent section can exceed the bound. Preserve a useful tail
+  // without ever persisting arbitrary attachment/custom payloads.
+  if (recap.length > FORK_RECAP_MAX_CHARS) {
+    recap = recap.slice(-FORK_RECAP_MAX_CHARS);
+    recapTruncated = true;
+  }
+
+  return {
+    version: 1,
+    sourceSessionId: source.id,
+    sourceEntryId,
+    sourceTitle: source.title?.trim() || "Untitled chat",
+    recap,
+    recapTruncated,
+  };
 }
 
 const waitForIdle = async (session: ManagedSession, timeoutMs = 120_000): Promise<void> => {
@@ -122,13 +198,20 @@ export class HistoryActionCoordinator {
       let promptImages: ImageAttachment[];
       let pasteProjection: ReturnType<SessionPasteStore["promptProjection"]>;
       let cell: UserCell | undefined;
+      let forkProvenance: ForkProvenance;
       try {
         const entries = await source.getEntries();
+        // Revalidate stable identity and role against canonical active ancestry
+        // immediately before any attachment staging or Pi mutation.
+        forkProvenance = deriveForkProvenance(entries, originalMeta, entryId);
         const entry = entries.entries.find((candidate) => candidate.id === entryId);
-        const content =
-          entry?.type === "message" && entry.message.role === "user"
-            ? (entry.message as { content?: unknown }).content
-            : undefined;
+        if (!entry || entry.type !== "message" || entry.message.role !== "user") {
+          throw new HistoryActionError(
+            "history_entry_missing",
+            "The selected user message changed.",
+          );
+        }
+        const content = (entry.message as { content?: unknown }).content;
         const expectedImages = Array.isArray(content)
           ? content.filter(
               (block: unknown) =>
@@ -147,7 +230,8 @@ export class HistoryActionCoordinator {
               candidate.kind === "user" && candidate.entryId === entryId,
           );
         cell = found;
-      } catch {
+      } catch (error) {
+        if (error instanceof HistoryActionError) throw error;
         throw new HistoryActionError(
           "history_attachment_missing",
           "An original image attachment is missing or corrupt. The conversation was not changed.",
@@ -241,6 +325,7 @@ export class HistoryActionCoordinator {
             originalMeta,
             branchFile,
             this.env(),
+            forkProvenance,
           );
           committed = true;
           return { outcome: "forked", session: targetSession.meta, draft };

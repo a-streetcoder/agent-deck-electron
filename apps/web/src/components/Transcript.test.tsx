@@ -16,6 +16,7 @@ import { Transcript } from "./Transcript.tsx";
 vi.mock("./cells.tsx", () => ({
   CellView: ({ cell }: { cell: { id: string } }) => <div>cell {cell.id}</div>,
 }));
+vi.mock("./ForkProvenanceCard.tsx", () => ({ ForkProvenanceCard: () => null }));
 vi.mock("./SessionPlanPanel.tsx", () => ({ SessionPlanPanel: () => null }));
 vi.mock("./SessionStartupCard.tsx", () => ({ SessionStartupCard: () => null }));
 vi.mock("./diff/OpenInPicker.tsx", () => ({ useOpenInEditor: () => ({}) }));

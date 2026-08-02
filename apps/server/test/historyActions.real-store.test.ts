@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
+import type { DomainEvent } from "@agent-deck/domain";
+import { Effect, Layer, ManagedRuntime, type Scope } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HistoryActionCoordinator } from "../src/historyActions.ts";
 import { SessionIndex } from "../src/persistence.ts";
@@ -9,7 +11,16 @@ import { SessionImageStore } from "../src/sessionImages.ts";
 import { forkSessionAttachmentStores } from "../src/sessionAttachmentLifecycle.ts";
 import { SessionMutationClaims } from "../src/sessionMutationClaims.ts";
 import { SessionPasteStore } from "../src/sessionPastes.ts";
-import type { SessionManager } from "../src/SessionManager.ts";
+import { ReceiptBus } from "../src/receipts.ts";
+import type { ServerRuntime } from "../src/runtime.ts";
+import { PiHostLive } from "../src/services/piHost.ts";
+import { SessionPushBusesLive, type SessionPushBusHandle } from "../src/services/pushBus.ts";
+import {
+  SessionManagerService,
+  type ManagedSessionRuntime,
+  type SpawnSessionParams,
+} from "../src/services/sessionManager.ts";
+import { SessionManager } from "../src/SessionManager.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -101,17 +112,25 @@ describe("history action durable store reconstruction", () => {
         live = false;
       }),
       resume: vi.fn(async () => source),
-      materializeHistoryFork: vi.fn(async (original: SessionMeta, branchFile: string) => {
-        forkSessionAttachmentStores([images, pastes], original.id, "target");
-        const target: SessionMeta = {
-          ...original,
-          id: "target",
-          createdAt: "later",
-          piSessionFile: branchFile,
-        };
-        index.upsert(target);
-        return { meta: target };
-      }),
+      materializeHistoryFork: vi.fn(
+        async (
+          original: SessionMeta,
+          branchFile: string,
+          _env: Record<string, string> | undefined,
+          forkProvenance: SessionMeta["forkProvenance"],
+        ) => {
+          forkSessionAttachmentStores([images, pastes], original.id, "target");
+          const target: SessionMeta = {
+            ...original,
+            id: "target",
+            createdAt: "later",
+            piSessionFile: branchFile,
+            forkProvenance,
+          };
+          index.upsert(target);
+          return { meta: target };
+        },
+      ),
     };
     const coordinator = new HistoryActionCoordinator(
       manager as unknown as SessionManager,
@@ -139,16 +158,94 @@ describe("history action durable store reconstruction", () => {
       },
     });
 
+    // Source deletion stays allowed and cannot erase target provenance.
+    index.remove("source");
     const restartedIndex = new SessionIndex(dataDir);
     const restartedImages = new SessionImageStore(dataDir);
     const restartedPastes = new SessionPasteStore(dataDir);
+    expect(restartedIndex.find((item) => item.id === "source")).toBeUndefined();
     expect(restartedIndex.find((item) => item.id === "target")).toMatchObject({
       piSessionFile: "/tmp/branch.jsonl",
+      forkProvenance: {
+        version: 1,
+        sourceSessionId: "source",
+        sourceEntryId: "chosen",
+        sourceTitle: "Untitled chat",
+        recapTruncated: false,
+      },
     });
     expect(restartedImages.promptImages("target", "chosen")).toEqual(imagePayloads);
     expect(restartedPastes.promptProjection("target", "chosen")).toEqual({
       transcriptText: compact,
       pastes: [{ id: 1, marker, text: pasteText }],
     });
+  });
+
+  it("publishes provenance through the real materializer into the durable session index", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "history-materialize-store-"));
+    roots.push(dataDir);
+    const index = new SessionIndex(dataDir);
+    const bus: SessionPushBusHandle = {
+      lastSeq: Effect.succeed(0),
+      append: () => Effect.succeed({ seq: 0, event: {} as DomainEvent }),
+      replayFrom: () => Effect.succeed(null),
+      subscribe: () => Effect.succeed(Effect.void),
+      unsafeAppend: () => ({ seq: 0, event: {} as DomainEvent }),
+      unsafeLastSeq: () => 0,
+    };
+    const spawn = (
+      params: SpawnSessionParams,
+    ): Effect.Effect<ManagedSessionRuntime, never, Scope.Scope> =>
+      Effect.succeed({
+        meta: params.meta,
+        bus,
+        ingest: Effect.void,
+        seedFromHistory: Effect.void,
+        seedSyntheticCells: () => Effect.void,
+        restorePlan: () => Effect.void,
+        ensureExitHandled: Effect.void,
+      } as unknown as ManagedSessionRuntime);
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(
+        Layer.succeed(SessionManagerService, { spawn }),
+        SessionPushBusesLive,
+        PiHostLive,
+      ),
+    ) as ServerRuntime;
+    const provenance: NonNullable<SessionMeta["forkProvenance"]> = {
+      version: 1,
+      sourceSessionId: "source",
+      sourceEntryId: "chosen",
+      sourceTitle: "Captured source",
+      recap: "User:\nEarlier prompt",
+      recapTruncated: false,
+    };
+    try {
+      const manager = new SessionManager(runtime, new ReceiptBus(false), (meta) =>
+        index.upsert(meta),
+      );
+      const target = await manager.materializeHistoryFork(
+        {
+          id: "source",
+          cwd: "/tmp/project",
+          createdAt: "now",
+          title: "Current source",
+          piSessionFile: "/tmp/source.jsonl",
+        },
+        "/tmp/branch.jsonl",
+        undefined,
+        provenance,
+      );
+
+      expect(new SessionIndex(dataDir).find((item) => item.id === target.meta.id)).toMatchObject({
+        id: target.meta.id,
+        title: "Current source (fork)",
+        piSessionFile: "/tmp/branch.jsonl",
+        forkProvenance: provenance,
+      });
+      await manager.destroy(target.meta.id);
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

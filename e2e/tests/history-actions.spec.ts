@@ -26,6 +26,10 @@ const send = async (page: Page, text: string): Promise<void> => {
   await waitIdle(page);
 };
 
+// Both compact and expanded session panels stay mounted during the native-style
+// transition. Navigation must target the one currently presented to the user.
+const visibleChatList = (page: Page) => page.getByTestId("chat-list").filter({ visible: true });
+
 test("Fork creates and selects an editable target draft and focuses its composer", async ({
   page,
 }) => {
@@ -72,10 +76,43 @@ test("Fork creates and selects an editable target draft and focuses its composer
   expect(targetAfter.piSessionFile).not.toBe(sourceBefore.piSessionFile);
   expect(targetAfter.worktreePath).toBeUndefined();
   expect(targetAfter.worktreeIdentity).toBeUndefined();
-  const resumedSource = await page.request.post(
-    `${harness.baseUrl}/sessions/${sourceBefore.id}/resume`,
+
+  // Provenance is published with the target and remains usable across reload.
+  const card = page.getByTestId("fork-provenance-card");
+  await expect(card).toBeVisible();
+  await page.reload();
+  await expect(card).toBeVisible();
+  const recapTrigger = card.getByRole("button", { name: "View recap" });
+  await recapTrigger.focus();
+  await recapTrigger.click();
+  await expect(page.getByRole("dialog", { name: "Inherited conversation recap" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("fork-recap-dialog")).toHaveCount(0);
+  await expect(recapTrigger).toBeFocused();
+
+  // The durable immediate-source id uses the existing session switch path.
+  await card.getByRole("button", { name: "Open source" }).click();
+  await expect(visibleChatList(page).getByTestId(`chat-${sourceBefore.id}`)).toHaveAttribute(
+    "data-active",
+    "true",
   );
-  expect(resumedSource.ok()).toBe(true);
+  await visibleChatList(page).getByTestId(`chat-${targetAfter.id}`).click();
+  await expect(visibleChatList(page).getByTestId(`chat-${targetAfter.id}`)).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+
+  // Source deletion is allowed; the captured title/recap remain honest and
+  // durable on the independently owned target.
+  const deleted = await page.request.delete(`${harness.baseUrl}/sessions/${sourceBefore.id}`);
+  expect(deleted.ok()).toBe(true);
+  await page.reload();
+  await expect(page.getByTestId("fork-provenance-card")).toContainText(
+    "Source chat is no longer available.",
+  );
+  await expect(page.getByRole("button", { name: "Open source" })).toHaveCount(0);
+  await page.getByRole("button", { name: "View recap" }).click();
+  await expect(page.getByRole("dialog", { name: "Inherited conversation recap" })).toBeVisible();
 });
 
 test("DELETE and merge lose deterministically to an already-started history transaction", async ({

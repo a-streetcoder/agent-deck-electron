@@ -282,6 +282,26 @@ export const SessionPlanItem = Schema.mutable(
 );
 export type SessionPlanItem = typeof SessionPlanItem.Type;
 
+/** Durable snapshot of the immediate source of a stable-entry history fork. */
+export const ForkProvenance = Schema.mutable(
+  Schema.Struct({
+    version: Schema.Literal(1),
+    sourceSessionId: Schema.String,
+    sourceEntryId: Schema.String,
+    sourceTitle: Schema.String,
+    recap: Schema.String,
+    recapTruncated: Schema.Boolean,
+  }),
+);
+export type ForkProvenance = typeof ForkProvenance.Type;
+// Durable indexes predate runtime schemas and may contain a future producer's
+// version. Keep SessionMeta frames decodable; renderer consumers validate the
+// optional payload before rendering or acting on it.
+const ForkProvenanceFromSelf: Schema.Schema<ForkProvenance> = Schema.declare(
+  (_input: unknown): _input is ForkProvenance => true,
+  { identifier: "ForkProvenancePassThrough" },
+);
+
 export const SessionMeta = Schema.mutable(
   Schema.Struct({
     id: Schema.String,
@@ -340,6 +360,9 @@ export const SessionMeta = Schema.mutable(
     /** Internal durable marker for a retained Loop review session. The renderer
      * may observe this capability flag but cannot choose its diff revision. */
     loopReviewRunId: Schema.optional(Schema.String),
+    /** Immediate-source evidence for stable-entry forks only. Captured before
+     * publication so it survives restart, source rename, and source deletion. */
+    forkProvenance: Schema.optional(ForkProvenanceFromSelf),
   }),
 );
 export type SessionMeta = typeof SessionMeta.Type;
