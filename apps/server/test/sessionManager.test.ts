@@ -232,6 +232,43 @@ describe("child transcript reconstruction ownership", () => {
 });
 
 describe("durable generic child lifecycle", () => {
+  it("never spawns child Pi or falls back to parent cwd when worktree preparation rejects", async () => {
+    const { piHost } = makeFakePiHost();
+    const spawn = vi.fn(piHost.spawn);
+    const dataDir = makeTempDir();
+    const store = new SubagentRunStore(dataDir, () => {});
+    const parentCwd = makeTempDir();
+    const params = makeParams({
+      meta: {
+        id: randomUUID(),
+        cwd: parentCwd,
+        createdAt: new Date().toISOString(),
+      },
+      spawn: { binPath: process.execPath, args: [FIXTURE], cwd: parentCwd },
+      childRuns: {
+        create: (record) => store.create(record),
+        update: (id, patch) => store.update(id, patch),
+        prepareWorktree: vi.fn().mockRejectedValue(new Error("allocation rejected")),
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime({ spawn }, buses, params);
+          const exit = yield* Effect.exit(
+            rt.runChildAgent("must isolate", undefined, undefined, undefined, {
+              source: "parallel",
+              worktree: true,
+            }),
+          );
+          expect(exit._tag).toBe("Failure");
+          expect(spawn).toHaveBeenCalledTimes(1);
+          expect(spawn.mock.calls[0]![0].cwd).toBe(parentCwd);
+        }),
+      ),
+    );
+  });
+
   it("stops a running child with its parent scope and durably restores partial output + metadata", async () => {
     const { piHost, pids } = makeFakePiHost();
     const dataDir = makeTempDir();

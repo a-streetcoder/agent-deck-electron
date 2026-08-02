@@ -111,14 +111,31 @@ describe("managed_subagent continuation bridge contract", () => {
     const bridge = new BridgeRegistry();
     registerDeckBridgeTools(bridge, sessions);
 
+    const spec = bridge.specs().find((candidate) => candidate.name === "managed_parallel")!;
+    expect((spec.parameters.properties as Record<string, unknown>).worktree).toBeTruthy();
+
     await dispatch(bridge, "managed_parallel", { tasks: [{ task: "one" }] });
-    expect(sessions.runSubagent).toHaveBeenCalledWith(
+    expect(sessions.runSubagent).toHaveBeenLastCalledWith(
       expect.any(String),
       "one",
       undefined,
       undefined,
       undefined,
       "parallel",
+      false,
+    );
+    await dispatch(bridge, "managed_parallel", {
+      tasks: [{ task: "isolated" }],
+      worktree: true,
+    });
+    expect(sessions.runSubagent).toHaveBeenLastCalledWith(
+      expect.any(String),
+      "isolated",
+      undefined,
+      undefined,
+      undefined,
+      "parallel",
+      true,
     );
   });
 });

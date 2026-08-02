@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -44,15 +45,28 @@ function isChildRequest(body: ChatCompletionRequest): boolean {
 
 beforeAll(async () => {
   mock = await startMockProvider({
+    chunkDelayMs: 10,
     toolCall: (_lastUser, body) => {
-      if (isChildRequest(body) || body.messages.some((m) => m.role === "tool")) return null;
-      // The BETA task delegates to the named reviewer-bot; ALPHA is anonymous.
+      const hasToolResult = body.messages.some((m) => m.role === "tool");
+      if (isChildRequest(body)) {
+        if (hasToolResult) return null;
+        const sys = systemText(body);
+        return {
+          name: "write",
+          arguments: {
+            path: "child-output.txt",
+            content: sys.includes("TASK_ALPHA") ? "alpha isolated\n" : "beta isolated\n",
+          },
+        };
+      }
+      if (hasToolResult) return null;
       return {
         name: "managed_parallel",
         arguments: {
+          worktree: true,
           tasks: [
-            { task: "TASK_ALPHA: analyze alpha" },
-            { task: "TASK_BETA: analyze beta", agent: "reviewer-bot" },
+            { task: "TASK_ALPHA: write alpha" },
+            { task: "TASK_BETA: write beta", agent: "reviewer-bot" },
           ],
         },
       };
@@ -60,8 +74,10 @@ beforeAll(async () => {
     // Each child is identified by its task text in the system prompt.
     reply: (_lastUser, body) => {
       const sys = systemText(body);
-      if (sys.includes("TASK_ALPHA")) return "RESULT_ALPHA_SENTINEL";
-      if (sys.includes("TASK_BETA")) return "RESULT_BETA_SENTINEL";
+      if (sys.includes("TASK_ALPHA"))
+        return "RESULT_ALPHA_SENTINEL: isolated writer completed with retained evidence.";
+      if (sys.includes("TASK_BETA"))
+        return "RESULT_BETA_SENTINEL: isolated writer completed with retained evidence.";
       return "Delegated to parallel subagents.";
     },
   });
@@ -72,7 +88,24 @@ beforeAll(async () => {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
-    `---\nname: reviewer-bot\ndescription: Reviewer\n---\n\n${PERSONA_SENTINEL}\n`,
+    `---\nname: reviewer-bot\ndescription: Reviewer\ntools: write\n---\n\n${PERSONA_SENTINEL}\n`,
+  );
+
+  execFileSync("git", ["init", "-b", "main"], { cwd: project });
+  writeFileSync(path.join(project, "parent-sentinel.txt"), "parent unchanged\n");
+  execFileSync("git", ["add", "."], { cwd: project });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Agent Deck Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial",
+    ],
+    { cwd: project },
   );
 
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: tmpHome });
@@ -111,7 +144,17 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     expect(response.status).toBe(201);
     const { session } = (await response.json()) as { session: { id: string } };
 
-    await server.sessions.get(session.id)!.prompt("run both analyses in parallel");
+    const orderedEvents: Array<{ seq: number; cellId: string; delta: string }> = [];
+    const unsubscribe = server.sessions.get(session.id)!.bus.subscribe((stamped) => {
+      if (stamped.event.type === "subagent_delta") {
+        orderedEvents.push({
+          seq: stamped.seq,
+          cellId: stamped.event.cellId,
+          delta: stamped.event.delta,
+        });
+      }
+    });
+    await server.sessions.get(session.id)!.prompt("run both writers in parallel worktrees");
     await server.receipts.waitFor("idle", session.id);
 
     // Both child tasks actually ran (two distinct child requests hit the provider).
@@ -119,12 +162,18 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     expect(childSystems.some((s) => s.includes("TASK_ALPHA"))).toBe(true);
     expect(childSystems.some((s) => s.includes("TASK_BETA"))).toBe(true);
 
-    // The BETA task delegated to reviewer-bot, so ITS child adopted the persona;
-    // the ALPHA (anonymous) child did not.
+    unsubscribe();
+
+    // Preserve anonymous + named delegation while both writer children retain
+    // ordered, genuinely incremental parent-card deltas.
     const betaChild = childSystems.find((s) => s.includes("TASK_BETA"))!;
     const alphaChild = childSystems.find((s) => s.includes("TASK_ALPHA"))!;
     expect(betaChild).toContain(PERSONA_SENTINEL);
     expect(alphaChild).not.toContain(PERSONA_SENTINEL);
+    expect(orderedEvents.length).toBeGreaterThan(2);
+    expect(orderedEvents.map((event) => event.seq)).toEqual(
+      [...orderedEvents.map((event) => event.seq)].sort((a, b) => a - b),
+    );
 
     // The parent received BOTH results, combined in the tool result.
     const followUp = mock.requests[mock.requests.length - 1]!;
@@ -132,7 +181,8 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     expect(toolText).toContain("RESULT_ALPHA_SENTINEL");
     expect(toolText).toContain("RESULT_BETA_SENTINEL");
 
-    // Two subagent cells; exactly the named one records agentName.
+    // Two subagent cells and two distinct retained detached worktrees. Both
+    // wrote the same relative path without touching the parent checkout.
     const cells = server.sessions
       .get(session.id)!
       .snapshot()
@@ -140,10 +190,34 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     expect(cells).toHaveLength(2);
     expect(cells.filter((c) => c.agentName === "reviewer-bot")).toHaveLength(1);
     expect(cells.filter((c) => c.agentName === undefined)).toHaveLength(1);
+    for (const cell of cells) {
+      const deltas = orderedEvents.filter((event) => event.cellId === cell.id);
+      expect(deltas.length).toBeGreaterThan(1);
+      expect(deltas.map((event) => event.seq)).toEqual(
+        [...deltas.map((event) => event.seq)].sort((a, b) => a - b),
+      );
+      expect(deltas.map((event) => event.delta).join(""), cell.task).toBe(cell.text);
+    }
     const durableIds = cells.map((cell) => cell.id);
     expect(new Set(durableIds).size).toBe(2);
+    const persisted = JSON.parse(
+      readFileSync(path.join(dataDir, "subagent-runs.json"), "utf8"),
+    ) as {
+      runs: Array<{ id: string; worktreePath?: string; worktreeBaseCommit?: string }>;
+    };
+    const worktreeRuns = persisted.runs.filter((run) => durableIds.includes(run.id));
+    const worktreePaths = worktreeRuns.map((run) => run.worktreePath!);
+    expect(new Set(worktreePaths).size).toBe(2);
+    expect(worktreeRuns.every((run) => Boolean(run.worktreeBaseCommit))).toBe(true);
+    expect(readFileSync(path.join(worktreePaths[0]!, "child-output.txt"), "utf8")).not.toBe(
+      readFileSync(path.join(worktreePaths[1]!, "child-output.txt"), "utf8"),
+    );
+    expect(existsSync(path.join(project, "child-output.txt"))).toBe(false);
+    expect(readFileSync(path.join(project, "parent-sentinel.txt"), "utf8")).toBe(
+      "parent unchanged\n",
+    );
 
-    // Completed generic runs survive a full server restart and are hydrated
+    // Completed generic runs and their worktree ownership proof survive a full server restart.
     // exactly once alongside Pi's canonical parent history.
     await server.close();
     server = await startServer({ dataDir });
@@ -160,7 +234,19 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     // must preserve the same identities, not impose a new ordering contract.
     expect(hydrated.map((cell) => cell.id)).toEqual(expect.arrayContaining(durableIds));
     expect(hydrated.map((cell) => cell.text)).toEqual(
-      expect.arrayContaining(["RESULT_ALPHA_SENTINEL", "RESULT_BETA_SENTINEL"]),
+      expect.arrayContaining([
+        "RESULT_ALPHA_SENTINEL: isolated writer completed with retained evidence.",
+        "RESULT_BETA_SENTINEL: isolated writer completed with retained evidence.",
+      ]),
     );
+    const deleted = await fetch(`http://127.0.0.1:${server.port}/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(worktreePaths.every((worktreePath) => !existsSync(worktreePath))).toBe(true);
+    const afterDelete = JSON.parse(
+      readFileSync(path.join(dataDir, "subagent-runs.json"), "utf8"),
+    ) as { runs: Array<{ id: string }> };
+    expect(afterDelete.runs.some((run) => durableIds.includes(run.id))).toBe(false);
   });
 });

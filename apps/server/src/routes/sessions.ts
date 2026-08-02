@@ -437,7 +437,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // stale registration for another branch must never be silently pruned.
       // Missing + no registration is the idempotent post-prune/crash case; a
       // present checkout still requires an exact matching registration.
-      let registration: { path: string; branch: string } | undefined;
+      let registration: { path: string; branch?: string } | undefined;
       try {
         registration = await gitWorktreeRegistrationAtPath(project.path, meta.worktreePath);
       } catch {
@@ -490,6 +490,19 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // Resolve parent bridge waits before destroying their transcript owner.
     askUser.cancelSession(id);
     await sessions.destroy(id);
+    // Child worktrees are rooted in the parent's authoritative checkout. Remove
+    // them after all child scopes settle but before an isolated parent checkout
+    // itself can be deleted. Any proof/cleanup failure retains every remaining
+    // child record, artifact, and parent session row for a safe retry.
+    try {
+      await sessions.removeSubagentRuns?.(id);
+    } catch {
+      return reply.status(409).send({
+        code: "subagent_worktree_cleanup_failed",
+        error:
+          "The session was stopped, but app-owned child cleanup could not complete safely. Metadata for every unfinished child was retained; a worktree already marked physically removed may remain removed. Resolve the Git/worktree issue and retry deletion.",
+      });
+    }
     // For an ordinary isolated session, physical deletion must succeed through the held
     // native root before Git metadata or persisted session metadata is removed.
     // A forged/stale persisted path therefore fails honestly and remains visible
@@ -518,7 +531,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
     sessions.removeLoopSessionSnapshot(id);
-    sessions.removeSubagentRuns?.(id);
     index.remove(id);
     bridgeTokens.delete(id);
     // Image ownership is removed only after every authoritative session deletion

@@ -158,6 +158,8 @@ export interface SpawnSessionParams {
       id: string,
       patch: Partial<Omit<SubagentRunRecord, "id" | "parentSessionId" | "createdAt">>,
     ) => void;
+    prepareWorktree?: (id: string, parentCwd: string) => Promise<string>;
+    validateWorktreeForSpawn?: (id: string) => Promise<string>;
     prepareTurn?: (
       record: SubagentRunRecord,
       systemPrompt: string,
@@ -405,6 +407,9 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
 /** Purpose-built child capability restriction. Omitted preserves legacy behavior. */
 export type ChildToolPolicy = "configured" | "readOnly" | "none";
 const CHILD_READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+/** An explicit isolated-write request gives an anonymous child only the narrow
+ * built-ins needed to inspect and edit that retained checkout. */
+const ANONYMOUS_WORKTREE_TOOLS = ["read", "write", "edit"];
 
 /** Pure capability boundary, exported for focused policy tests. */
 export function resolveChildTools(
@@ -984,6 +989,8 @@ export interface ChildRunOptions {
   artifactRootId?: string;
   artifactRootToken?: string;
   source: SubagentRunSource;
+  /** Fresh parallel children only; continuation and single-child callers omit it. */
+  worktree?: boolean;
 }
 
 export interface ChildRunResult {
@@ -1065,6 +1072,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const durable = toolPolicy === undefined ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
     let artifactSessionsDirectory: string | undefined;
+    let childCwd = meta.cwd;
     if (durable) {
       const baseRecord: SubagentRunRecord = {
         id: runId,
@@ -1247,6 +1255,19 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             Effect.orDie,
           );
         });
+        if (runOptions?.worktree) {
+          if (isContinuation) {
+            return yield* Effect.fail(new Error("continued subagents cannot allocate worktrees"));
+          }
+          if (!durable?.prepareWorktree) {
+            return yield* Effect.fail(new Error("subagent worktree persistence is unavailable"));
+          }
+          childCwd = yield* Effect.tryPromise({
+            try: () => durable.prepareWorktree!(runId, meta.cwd),
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          });
+        }
+
         // Constrained report-only children never receive a bridge extension:
         // even contact_supervisor mutates parent state and is outside policy.
         const childBridge =
@@ -1270,7 +1291,20 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         const promptFile = join(promptDir, "system.md");
         writeFileSync(promptFile, effectiveSystemPrompt);
 
-        const childTools = resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
+        const childTools =
+          runOptions?.worktree && !resolved
+            ? ANONYMOUS_WORKTREE_TOOLS
+            : resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
+
+        if (runOptions?.worktree) {
+          if (!durable?.validateWorktreeForSpawn) {
+            return yield* Effect.fail(new Error("subagent worktree validation is unavailable"));
+          }
+          childCwd = yield* Effect.tryPromise({
+            try: () => durable.validateWorktreeForSpawn!(runId),
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          });
+        }
 
         const child = yield* piHost.spawn({
           binPath: resolvePiBinary().path,
@@ -1291,7 +1325,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               ? [...(helperContext.extensions ?? []), childBridge.extension]
               : helperContext.extensions,
           }),
-          cwd: meta.cwd,
+          cwd: childCwd,
           env: helperContext.env,
           requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
         });

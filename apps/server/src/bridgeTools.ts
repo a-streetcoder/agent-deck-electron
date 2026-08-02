@@ -82,30 +82,38 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
 
   // Fan out several subagents at once. Each runs as its own child pi; the count
   // is capped so a single call can't spawn an unbounded number of processes.
-  const parallelParams = z.object({
-    tasks: z
-      .array(
-        // `.strict()` matches the item schema's additionalProperties:false, so an
-        // unexpected field is rejected rather than silently stripped.
-        z
-          .object({
-            task: z.string().trim().min(1),
-            agent: z.string().trim().min(1).optional(),
-          })
-          .strict(),
-      )
-      .min(1)
-      .max(8),
-  });
+  const parallelParams = z
+    .object({
+      worktree: z.boolean().optional(),
+      tasks: z
+        .array(
+          // `.strict()` matches the item schema's additionalProperties:false, so an
+          // unexpected field is rejected rather than silently stripped.
+          z
+            .object({
+              task: z.string().trim().min(1),
+              agent: z.string().trim().min(1).optional(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(8),
+    })
+    .strict();
   bridge.register(
     {
       name: "managed_parallel",
       label: "Parallel subagents",
       description:
-        "Run several self-contained tasks in parallel, each in its own fresh subagent, and get all their results back together. Use when the tasks are independent. Each task may optionally name an `agent` to delegate to (it adopts that agent's persona).",
+        "Run several self-contained tasks in parallel, each in its own fresh subagent, and get all their results back together. Use when the tasks are independent. Set top-level `worktree: true` to require a distinct app-owned detached Git worktree for every child; allocation failures never fall back to the parent checkout. Each task may optionally name an `agent` to delegate to (it adopts that agent's persona).",
       parameters: {
         type: "object",
         properties: {
+          worktree: {
+            type: "boolean",
+            description:
+              "Optional. When true, every child must run in its own retained app-owned detached Git worktree. Defaults to false.",
+          },
           tasks: {
             type: "array",
             items: {
@@ -132,7 +140,8 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
         required: ["tasks"],
         additionalProperties: false,
       },
-      promptSnippet: "managed_parallel — run several independent tasks in parallel subagents.",
+      promptSnippet:
+        "managed_parallel(tasks, worktree?) — run independent tasks in parallel; worktree:true isolates every child checkout.",
     },
     async (params, ctx) => {
       const parsed = parallelParams.safeParse(params);
@@ -145,7 +154,15 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       // allSettled: one failing subagent doesn't drop the others' results.
       const settled = await Promise.allSettled(
         parsed.data.tasks.map((t) =>
-          sessions.runSubagent(ctx.sessionId, t.task, t.agent, undefined, undefined, "parallel"),
+          sessions.runSubagent(
+            ctx.sessionId,
+            t.task,
+            t.agent,
+            undefined,
+            undefined,
+            "parallel",
+            parsed.data.worktree ?? false,
+          ),
         ),
       );
       const anyOk = settled.some((r) => r.status === "fulfilled");

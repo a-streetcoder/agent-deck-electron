@@ -626,6 +626,38 @@ export async function gitWorktreeAdd(
   await runGit(projectDir, ["worktree", "add", targetPath, branch]);
 }
 
+/** Add a detached worktree at one immutable commit. Generic parallel children
+ * intentionally own no branch and have no coupling to session/Loop refs. */
+export async function gitDetachedWorktreeAdd(
+  projectDir: string,
+  targetPath: string,
+  commit: string,
+): Promise<void> {
+  validateGitObjectId(commit);
+  await runGit(projectDir, ["worktree", "add", "--detach", targetPath, commit]);
+}
+
+/** Prove the exact checkout root and immutable HEAD from which an isolated child
+ * may be forked. A subdirectory cwd is rejected rather than silently changing
+ * the child's working-directory semantics. */
+export async function gitWorktreeSource(cwd: string): Promise<{
+  repositoryRoot: string;
+  repositoryIdentity: string;
+  baseCommit: string;
+}> {
+  const repositoryRoot = (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  if ((await canonicalWorktreePath(repositoryRoot)) !== (await canonicalWorktreePath(cwd))) {
+    throw new Error("subagent worktree source must be the repository root");
+  }
+  const baseCommit = await gitCommitOid(cwd, "HEAD");
+  validateGitObjectId(baseCommit);
+  return {
+    repositoryRoot,
+    repositoryIdentity: await gitRepositoryIdentity(cwd),
+    baseCommit,
+  };
+}
+
 /** Delete a branch only when the caller holds createSessionWorktree's ownership
  * proof and the name is in Agent Deck's private namespace. Throws on failure so
  * transaction callers can log it without masking their primary typed error. */
@@ -729,7 +761,10 @@ export interface OwnedLoopWorktreeProof {
 
 export interface GitWorktreeRegistration {
   path: string;
-  branch: string;
+  /** Present for branch worktrees; detached registrations intentionally omit it. */
+  branch?: string;
+  commit?: string;
+  detached?: boolean;
 }
 
 /**
@@ -774,6 +809,19 @@ export async function gitWorktreeRegistrationMatches(
   return (await gitWorktreeRegistrationAtPath(projectDir, targetPath))?.branch === expectedBranch;
 }
 
+export async function gitDetachedWorktreeRegistrationMatches(
+  projectDir: string,
+  targetPath: string,
+  expectedCommit: string,
+): Promise<boolean> {
+  const registration = await gitWorktreeRegistrationAtPath(projectDir, targetPath);
+  return Boolean(
+    registration?.detached &&
+      registration.branch === undefined &&
+      registration.commit === expectedCommit,
+  );
+}
+
 export async function gitWorktreeRegistrations(
   projectDir: string,
 ): Promise<GitWorktreeRegistration[]> {
@@ -783,9 +831,18 @@ export async function gitWorktreeRegistrations(
     .map((record) => record.split("\0"))
     .flatMap((fields) => {
       const worktree = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+      const head = fields.find((field) => field.startsWith("HEAD "))?.slice(5);
       const branchRef = fields.find((field) => field.startsWith("branch refs/heads/"));
-      if (!worktree || !branchRef) return [];
-      return [{ path: worktree, branch: branchRef.slice("branch refs/heads/".length) }];
+      const detached = fields.includes("detached");
+      if (!worktree || !head || (!branchRef && !detached)) return [];
+      return [
+        {
+          path: worktree,
+          ...(branchRef ? { branch: branchRef.slice("branch refs/heads/".length) } : {}),
+          commit: head,
+          detached,
+        },
+      ];
     });
 }
 

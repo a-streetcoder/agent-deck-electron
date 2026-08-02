@@ -1,9 +1,23 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { emptyTranscript } from "@agent-deck/domain";
+import { SessionWorktreeStore } from "@agent-deck/loop-catalog-native";
 import { describe, expect, it, vi } from "vitest";
+import { gitDetachedWorktreeAdd, gitWorktreeSource } from "../src/git.ts";
 import { SubagentRunStore, type SubagentRunRecord } from "../src/subagentRunStore.ts";
 
 const PARENT_A = randomUUID();
@@ -43,6 +57,405 @@ describe("SubagentRunStore", () => {
     expect(store.cells(PARENT_A)[0]?.artifactRootId).toBe(run.id);
     store.removeParent(PARENT_A);
     expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);
+  });
+
+  it("allocates distinct detached child worktrees, retains restart proof, and safely deletes them", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktrees-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-repo-space -"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "parent.txt"), "unchanged\n");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const first = record({ source: "parallel" });
+    const second = record({ source: "parallel" });
+    for (const run of [first, second]) {
+      const allocation = store.prepareTurn(run, "system");
+      store.create({
+        ...run,
+        artifactRootId: allocation.artifactRootId,
+        artifactRootToken: allocation.identityToken,
+        currentTurnId: allocation.turnId,
+      });
+    }
+    const [firstPath, secondPath] = await Promise.all([
+      store.prepareWorktree(first.id, repo),
+      store.prepareWorktree(second.id, repo),
+    ]);
+    expect(firstPath).not.toBe(secondPath);
+    expect(existsSync(path.join(repo, "child.txt"))).toBe(false);
+    writeFileSync(path.join(firstPath, "child.txt"), "first");
+    writeFileSync(path.join(secondPath, "child.txt"), "second");
+    execFileSync("git", ["add", "child.txt"], { cwd: firstPath });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "child"],
+      { cwd: firstPath },
+    );
+    expect(
+      execFileSync("git", ["rev-parse", "HEAD"], { cwd: firstPath, encoding: "utf8" }).trim(),
+    ).not.toBe(store.get(first.id)?.worktreeBaseCommit);
+
+    const restarted = new SubagentRunStore(dataDir, vi.fn());
+    expect(restarted.get(first.id)).toEqual(
+      expect.objectContaining({
+        worktreePath: firstPath,
+        worktreeParentRepository: realpathSync(repo),
+        worktreeBaseCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+      }),
+    );
+    await restarted.removeParent(PARENT_A);
+    expect(existsSync(firstPath)).toBe(false);
+    expect(existsSync(secondPath)).toBe(false);
+    expect(restarted.list(PARENT_A)).toEqual([]);
+  });
+
+  it("rolls back a reserved native leaf when ownership persistence fails", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-persist-fail-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-persist-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    let rejectWrite = false;
+    const store = new SubagentRunStore(dataDir, vi.fn(), {
+      syncFile: () => {
+        if (rejectWrite) throw new Error("injected metadata failure");
+      },
+      syncDirectory: () => {},
+    });
+    const run = record({ source: "parallel" });
+    store.create(run);
+    rejectWrite = true;
+
+    await expect(store.prepareWorktree(run.id, repo)).rejects.toThrow("injected metadata failure");
+    expect(readdirSync(path.join(dataDir, "session-worktrees"))).toEqual([]);
+    expect(store.get(run.id)?.worktreePath).toBeUndefined();
+  });
+
+  it("retains retryable cleanup proof when metadata rename succeeded but directory fsync failed", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-post-rename-fail-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-post-rename-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    let rejectDirectorySync = false;
+    const store = new SubagentRunStore(dataDir, vi.fn(), {
+      syncFile: () => {},
+      syncDirectory: () => {
+        if (rejectDirectorySync) throw new Error("injected directory fsync failure");
+      },
+    });
+    const run = record({ source: "parallel" });
+    store.create(run);
+    rejectDirectorySync = true;
+
+    await expect(store.prepareWorktree(run.id, repo)).rejects.toBeTruthy();
+    expect(readdirSync(path.join(dataDir, "session-worktrees"))).toEqual([]);
+    expect(store.get(run.id)).toEqual(
+      expect.objectContaining({ worktreeState: "reserved", worktreeCleanup: "physical_removed" }),
+    );
+    rejectDirectorySync = false;
+    await store.removeParent(PARENT_A);
+    expect(store.get(run.id)).toBeUndefined();
+  });
+
+  it("retries idempotently from a durable physical-removal marker", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-cleanup-marker-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-marker-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    store.create(run);
+    const worktree = await store.prepareWorktree(run.id, repo);
+    const owned = store.get(run.id)!;
+    await new SessionWorktreeStore(dataDir).deleteWorktree(worktree, owned.worktreeIdentity!);
+    store.update(run.id, { worktreeCleanup: "physical_removed" });
+    execFileSync("git", ["worktree", "prune", "--expire", "now"], { cwd: repo });
+
+    const restarted = new SubagentRunStore(dataDir, vi.fn());
+    await restarted.removeParent(PARENT_A);
+    expect(restarted.get(run.id)).toBeUndefined();
+  });
+
+  it("recovers a crash after physical removal but before marker persistence", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-pre-marker-crash-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-pre-marker-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    store.create(run);
+    const worktree = await store.prepareWorktree(run.id, repo);
+    const owned = store.get(run.id)!;
+    await new SessionWorktreeStore(dataDir).deleteWorktree(worktree, owned.worktreeIdentity!);
+    expect(store.get(run.id)?.worktreeCleanup).toBeUndefined();
+
+    const restarted = new SubagentRunStore(dataDir, vi.fn());
+    await restarted.removeParent(PARENT_A);
+    expect(restarted.get(run.id)).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects parent repository path replacement before Pi spawn",
+    async () => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-parent-replaced-"));
+      const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-parent-repo-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+      writeFileSync(path.join(repo, "base"), "base");
+      execFileSync("git", ["add", "."], { cwd: repo });
+      execFileSync(
+        "git",
+        ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+        { cwd: repo },
+      );
+      const store = new SubagentRunStore(dataDir, vi.fn());
+      const run = record({ source: "parallel" });
+      store.create(run);
+      await store.prepareWorktree(run.id, repo);
+
+      const moved = `${repo}-moved`;
+      const replacement = mkdtempSync(path.join(tmpdir(), "subagent-worktree-other-repo-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: replacement });
+      writeFileSync(path.join(replacement, "other"), "other");
+      execFileSync("git", ["add", "."], { cwd: replacement });
+      execFileSync(
+        "git",
+        ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "other"],
+        { cwd: replacement },
+      );
+      renameSync(repo, moved);
+      symlinkSync(replacement, repo, "dir");
+
+      await expect(store.validateWorktreeForSpawn(run.id)).rejects.toThrow(
+        "Git ownership changed before spawn",
+      );
+    },
+  );
+
+  it("recovers reserved state after Git add won the registered-state crash window", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-post-add-crash-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-post-add-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    store.create(run);
+    const source = await gitWorktreeSource(repo);
+    const native = new SessionWorktreeStore(dataDir);
+    const target = path.join(native.rootPath, randomUUID().replaceAll("-", "").slice(0, 8));
+    const identity = native.reserveWorktree(target);
+    store.update(run.id, {
+      worktreePath: target,
+      worktreeIdentity: identity,
+      worktreeParentRepository: source.repositoryRoot,
+      worktreeRepositoryIdentity: source.repositoryIdentity,
+      worktreeBaseCommit: source.baseCommit,
+      worktreeState: "reserved",
+    });
+    await gitDetachedWorktreeAdd(source.repositoryRoot, target, source.baseCommit);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }),
+    ).toContain(target);
+
+    const restarted = new SubagentRunStore(dataDir, vi.fn());
+    await restarted.removeParent(PARENT_A);
+    expect(restarted.get(run.id)).toBeUndefined();
+    expect(existsSync(target)).toBe(false);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }),
+    ).not.toContain(target);
+  });
+
+  it("serializes parent deletion against a deferred in-flight allocation", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-delete-race-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-delete-race-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const store = new SubagentRunStore(dataDir, vi.fn(), undefined, {
+      beforeGitWorktreeAdd: () => gate,
+    });
+    const run = record({ source: "parallel" });
+    const artifact = store.prepareTurn(run, "system");
+    store.create({
+      ...run,
+      artifactRootId: artifact.artifactRootId,
+      artifactRootToken: artifact.identityToken,
+      currentTurnId: artifact.turnId,
+    });
+    const allocation = store.prepareWorktree(run.id, repo);
+    await vi.waitFor(() => expect(store.get(run.id)?.worktreeState).toBe("reserved"));
+    const target = store.get(run.id)!.worktreePath!;
+    let deletionSettled = false;
+    const deletion = store.removeParent(PARENT_A).finally(() => {
+      deletionSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(deletionSettled).toBe(false);
+    release();
+
+    await expect(allocation).rejects.toThrow("deleted during worktree allocation");
+    await deletion;
+    expect(store.get(run.id)).toBeUndefined();
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }),
+    ).not.toContain(target);
+  });
+
+  it("retains an isolated worktree as review evidence after cancellation and restart", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-cancelled-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-cancel-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    const allocation = store.prepareTurn(run, "system");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+    const worktree = await store.prepareWorktree(run.id, repo);
+    const stoppedAt = new Date().toISOString();
+    store.update(run.id, {
+      status: "stopped",
+      updatedAt: stoppedAt,
+      completedAt: stoppedAt,
+      error: "Subagent run was stopped before completion.",
+    });
+
+    const restarted = new SubagentRunStore(dataDir, vi.fn());
+    expect(restarted.get(run.id)).toEqual(
+      expect.objectContaining({ status: "stopped", worktreePath: worktree }),
+    );
+    expect(existsSync(worktree)).toBe(true);
+    await restarted.removeParent(PARENT_A);
+  });
+
+  it("fails closed outside Git before allocating a worktree or starting evidence", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-nongit-"));
+    const nonGit = mkdtempSync(path.join(tmpdir(), "subagent-worktree-source-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    const allocation = store.prepareTurn(run, "system");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+    await expect(store.prepareWorktree(run.id, nonGit)).rejects.toBeTruthy();
+    expect(store.get(run.id)?.worktreePath).toBeUndefined();
+    expect(readdirSync(path.join(dataDir, "session-worktrees"))).toEqual([]);
+  });
+
+  it("preflights all siblings before a later unsafe child can remove an earlier worktree", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-sibling-preflight-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-sibling-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const first = record({ source: "parallel" });
+    const second = record({ source: "parallel" });
+    store.create(first);
+    store.create(second);
+    const firstPath = await store.prepareWorktree(first.id, repo);
+    const secondPath = await store.prepareWorktree(second.id, repo);
+    rmSync(secondPath, { recursive: true, force: true });
+    mkdirSync(secondPath);
+
+    await expect(store.removeParent(PARENT_A)).rejects.toBeTruthy();
+    expect(existsSync(firstPath)).toBe(true);
+    expect(store.get(first.id)?.worktreeCleanup).toBeUndefined();
+    expect(store.get(second.id)?.worktreePath).toBe(secondPath);
+  });
+
+  it("retains records and artifacts when worktree identity no longer proves safe deletion", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktree-replaced-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-repo-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(path.join(repo, "base"), "base");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base"],
+      { cwd: repo },
+    );
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ source: "parallel" });
+    const allocation = store.prepareTurn(run, "system");
+    store.create({
+      ...run,
+      artifactRootId: allocation.artifactRootId,
+      artifactRootToken: allocation.identityToken,
+      currentTurnId: allocation.turnId,
+    });
+    const worktree = await store.prepareWorktree(run.id, repo);
+    rmSync(worktree, { recursive: true, force: true });
+    mkdirSync(worktree);
+    writeFileSync(path.join(worktree, "foreign"), "retain");
+
+    await expect(store.removeParent(PARENT_A)).rejects.toBeTruthy();
+    expect(store.get(run.id)?.worktreePath).toBe(worktree);
+    expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(true);
+    expect(existsSync(path.join(worktree, "foreign"))).toBe(true);
   });
 
   it("retains a valid allocation when metadata commit never happened", () => {
@@ -246,16 +659,19 @@ describe("SubagentRunStore", () => {
       expect.objectContaining({ source: "single", sessionFile }),
     );
 
-    const legacyDir = mkdtempSync(path.join(tmpdir(), "subagent-legacy-v1-"));
-    const legacy = record();
-    writeFileSync(
-      path.join(legacyDir, "subagent-runs.json"),
-      `${JSON.stringify({ version: 1, runs: [legacy] })}\n`,
-    );
-    const restoredLegacy = new SubagentRunStore(legacyDir, vi.fn()).get(legacy.id)!;
-    expect(restoredLegacy.id).toBe(legacy.id);
-    expect(restoredLegacy.source).toBeUndefined();
-    expect(restoredLegacy.sessionFile).toBeUndefined();
+    for (const version of [1, 2] as const) {
+      const legacyDir = mkdtempSync(path.join(tmpdir(), `subagent-legacy-v${version}-`));
+      const completedAt = new Date().toISOString();
+      const legacy = record({ status: "completed", updatedAt: completedAt, completedAt });
+      const serialized = `${JSON.stringify({ version, runs: [legacy] })}\n`;
+      const file = path.join(legacyDir, "subagent-runs.json");
+      writeFileSync(file, serialized);
+      const restoredLegacy = new SubagentRunStore(legacyDir, vi.fn()).get(legacy.id)!;
+      expect(restoredLegacy.id).toBe(legacy.id);
+      expect(restoredLegacy.source).toBeUndefined();
+      expect(restoredLegacy.sessionFile).toBeUndefined();
+      expect(readFileSync(file, "utf8")).toBe(serialized);
+    }
   });
 
   it("atomically corrects active-at-restart records to interrupted", () => {

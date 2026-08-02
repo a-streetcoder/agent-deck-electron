@@ -657,6 +657,8 @@ export class SessionManager {
             childRuns: {
               create: (record) => this.subagentRuns!.create(record),
               update: (id, patch) => this.subagentRuns!.update(id, patch),
+              prepareWorktree: (id, parentCwd) => this.subagentRuns!.prepareWorktree(id, parentCwd),
+              validateWorktreeForSpawn: (id) => this.subagentRuns!.validateWorktreeForSpawn(id),
               prepareTurn: (record, systemPrompt, continuation) =>
                 this.subagentRuns!.prepareTurn(record, systemPrompt, continuation),
               writeOutput: (id, output, error) => this.subagentRuns!.writeOutput(id, output, error),
@@ -756,8 +758,8 @@ export class SessionManager {
   }
 
   /** Remove only runs owned by a deleted parent, after destroy() settled children. */
-  removeSubagentRuns(sessionId: string): void {
-    this.subagentRuns?.removeParent(sessionId);
+  async removeSubagentRuns(sessionId: string): Promise<void> {
+    await this.subagentRuns?.removeParent(sessionId);
   }
 
   async subagentTranscript(
@@ -829,10 +831,16 @@ export class SessionManager {
     toolPolicy?: ChildToolPolicy,
     overrides?: ChildLaunchOverrides,
     source: "single" | "parallel" = "single",
+    worktree = false,
   ): Promise<string> {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
-    return (await parent.runChildAgent(task, agentName, toolPolicy, overrides, { source })).text;
+    return (
+      await parent.runChildAgent(task, agentName, toolPolicy, overrides, {
+        source,
+        ...(worktree ? { worktree: true } : {}),
+      })
+    ).text;
   }
 
   /** Generic managed_subagent entrypoint. Continuations are validated and
