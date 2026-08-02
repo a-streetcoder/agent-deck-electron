@@ -261,6 +261,22 @@ export class SubagentRunStore {
     this.reconcileArtifacts();
   }
 
+  close(): void {
+    const errors: unknown[] = [];
+    try {
+      this.artifacts.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.worktrees.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "subagent run store close failed");
+  }
+
   list(parentSessionId: string): SubagentRunRecord[] {
     return this.state.runs
       .filter((run) => run.parentSessionId === parentSessionId)

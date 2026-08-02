@@ -825,6 +825,10 @@ export function createRpcConnection(deps: {
 
 export interface RpcEndpoint {
   wss: WebSocketServer;
+  /** Reject later frames and ask every current client to close. */
+  closeAdmission(): void;
+  /** Settle operations dispatched before admission closed. */
+  drain(): Promise<void>;
   /** Push a server message to every connected RPC client (wrapped as a frame). */
   broadcast: (message: ServerMessage) => void;
   /** Push a diff notification to every connected RPC client (Slice 9). */
@@ -858,6 +862,8 @@ export function setupRpcEndpoint(deps: {
 
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<WebSocket>();
+  const inFlight = new Set<Promise<void>>();
+  let admissionClosed = false;
 
   const sendTo = (socket: WebSocket, frame: RpcServerFrame): void => {
     if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(frame));
@@ -870,6 +876,10 @@ export function setupRpcEndpoint(deps: {
   };
 
   wss.on("connection", (socket: WebSocket) => {
+    if (admissionClosed) {
+      socket.close(1012, "Server shutting down");
+      return;
+    }
     clients.add(socket);
     const connection = createRpcConnection({
       sessions,
@@ -891,9 +901,28 @@ export function setupRpcEndpoint(deps: {
       connection.close();
     });
     socket.on("message", (raw: Buffer) => {
-      void connection.handleMessage(raw.toString("utf8"));
+      if (admissionClosed) {
+        socket.close(1012, "Server shutting down");
+        return;
+      }
+      const operation = connection.handleMessage(raw.toString("utf8"));
+      inFlight.add(operation);
+      void operation
+        .catch(() => {})
+        .finally(() => {
+          inFlight.delete(operation);
+        });
     });
   });
 
-  return { wss, broadcast, broadcastDiff };
+  const closeAdmission = (): void => {
+    if (admissionClosed) return;
+    admissionClosed = true;
+    for (const client of clients) client.close(1012, "Server shutting down");
+  };
+  const drain = async (): Promise<void> => {
+    await Promise.allSettled([...inFlight]);
+  };
+
+  return { wss, closeAdmission, drain, broadcast, broadcastDiff };
 }

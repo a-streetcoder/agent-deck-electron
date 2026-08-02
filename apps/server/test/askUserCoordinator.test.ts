@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AskUserCoordinator, askUserParamsSchema } from "../src/askUserCoordinator.ts";
 import type { SessionManager } from "../src/SessionManager.ts";
 
-function harness() {
+function harness(options: { closeFailure?: boolean } = {}) {
   const opened: unknown[] = [];
   const answered: unknown[] = [];
   const closed: unknown[] = [];
@@ -10,7 +10,10 @@ function harness() {
   const session = {
     openAskUser: (cell: unknown) => opened.push(cell),
     answerAskUser: (...args: unknown[]) => answered.push(args),
-    closeAskUser: (...args: unknown[]) => closed.push(args),
+    closeAskUser: (...args: unknown[]) => {
+      closed.push(args);
+      if (options.closeFailure) throw new Error("projection failed");
+    },
     onExit: (listener: () => void) => {
       exitListeners.add(listener);
       return () => exitListeners.delete(listener);
@@ -89,6 +92,17 @@ describe("AskUserCoordinator", () => {
     h.coordinator.cancelSession("session-a");
     expect((await first).details).toMatchObject({ status: "cancelled" });
     expect((await second).details).toMatchObject({ status: "cancelled" });
+    expect(h.exitListeners.size).toBe(0);
+  });
+
+  it("settles shutdown waits even when cancellation projection fails", async () => {
+    const h = harness({ closeFailure: true });
+    const first = h.coordinator.ask("session-a", "token-a", params());
+    const second = h.coordinator.ask("session-a", "token-a", params());
+
+    expect(() => h.coordinator.close()).toThrow(AggregateError);
+    await expect(first).resolves.toMatchObject({ details: { status: "cancelled" } });
+    await expect(second).resolves.toMatchObject({ details: { status: "cancelled" } });
     expect(h.exitListeners.size).toBe(0);
   });
 

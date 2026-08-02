@@ -27,6 +27,7 @@ import {
   readResourceCatalogFile,
   SessionWorktreeStore,
   scanLoopCatalog,
+  SubagentArtifactStore,
   writeResourceCatalogFile,
 } from "../src/index.ts";
 import type { ResourceCatalogCapabilityError } from "../src/index.ts";
@@ -152,6 +153,29 @@ describe("native Loop catalog binding", () => {
     }
     store.deleteRepository("owner-repo");
     expect(() => statSync(path.join(root, "owner-repo"))).toThrow();
+  });
+
+  it("closes held native roots idempotently and rejects later capability use", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "native-store-close-"));
+    const worktrees = new SessionWorktreeStore(home);
+    const artifacts = new SubagentArtifactStore(home);
+    const target = path.join(worktrees.rootPath, "a1b2c3d4");
+
+    worktrees.close();
+    artifacts.close();
+    worktrees.close();
+    artifacts.close();
+
+    expect(() => worktrees.rootPath).toThrow(
+      expect.objectContaining({ code: "SESSION_WORKTREE_IO" }),
+    );
+    expect(() => worktrees.reserveWorktree(target)).toThrow(
+      expect.objectContaining({ code: "SESSION_WORKTREE_IO" }),
+    );
+    expect(() => artifacts.listRoots()).toThrow(
+      expect.objectContaining({ code: "SUBAGENT_ARTIFACT_IO" }),
+    );
+    expect(() => rmSync(home, { recursive: true })).not.toThrow();
   });
 
   it("reserves only a new empty generated leaf and leaves collisions untouched", async () => {

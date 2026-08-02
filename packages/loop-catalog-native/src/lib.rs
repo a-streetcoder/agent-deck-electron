@@ -1895,7 +1895,7 @@ impl Task for SessionWorktreeDeleteTask {
 
 #[napi]
 pub struct SessionWorktreeStore {
-    root: Dir,
+    root: Option<Dir>,
     // Verbatim path obtained from the held handle; retained as native authority.
     root_path: String,
     // Conventional absolute spelling for Node and Git for Windows.
@@ -1965,22 +1965,34 @@ impl SessionWorktreeStore {
             )?;
         validate_session_worktree_root(&root, &root_path, &root_identity)?;
         Ok(Self {
-            root,
+            root: Some(root),
             root_path,
             exposed_root_path,
             root_identity,
         })
     }
 
+    fn open_root(&self) -> Result<&Dir> {
+        self.root.as_ref().ok_or_else(|| {
+            session_worktree_error("SESSION_WORKTREE_IO", "session worktree store is closed")
+        })
+    }
+
+    #[napi]
+    pub fn close(&mut self) {
+        self.root.take();
+    }
+
     #[napi(getter)]
-    pub fn root_path(&self) -> String {
-        self.exposed_root_path.clone()
+    pub fn root_path(&self) -> Result<String> {
+        self.open_root()?;
+        Ok(self.exposed_root_path.clone())
     }
 
     #[napi]
     pub fn reserve_worktree(&self, target_path: String) -> Result<String> {
         reserve_session_worktree(
-            &self.root,
+            self.open_root()?,
             &self.root_path,
             &self.root_identity,
             &target_path,
@@ -1990,7 +2002,7 @@ impl SessionWorktreeStore {
     #[napi]
     pub fn capture_worktree_identity(&self, target_path: String) -> Result<String> {
         capture_session_worktree_identity(
-            &self.root,
+            self.open_root()?,
             &self.root_path,
             &self.root_identity,
             &target_path,
@@ -2007,7 +2019,10 @@ impl SessionWorktreeStore {
         // worker queue, while deletion itself remains off the Node event loop.
         validate_session_worktree_target(&self.root_path, &target_path)?;
         Ok(AsyncTask::new(SessionWorktreeDeleteTask {
-            root: self.root.try_clone().map_err(map_session_worktree_io)?,
+            root: self
+                .open_root()?
+                .try_clone()
+                .map_err(map_session_worktree_io)?,
             root_path: self.root_path.clone(),
             root_identity: self.root_identity.clone(),
             target_path,
@@ -4745,7 +4760,7 @@ pub struct SubagentArtifactAllocation {
 /// Descriptor-relative capability for durable generic subagent evidence.
 #[napi]
 pub struct SubagentArtifactStore {
-    root: Dir,
+    root: Option<Dir>,
     root_path: String,
     root_identity: StableFileIdentity,
 }
@@ -4774,17 +4789,29 @@ impl SubagentArtifactStore {
         let root_identity = cap_file_identity(&root.dir_metadata().map_err(map_resource_io)?)?;
         validate_subagent_root(&root, &root_path, &root_identity)?;
         Ok(Self {
-            root,
+            root: Some(root),
             root_path,
             root_identity,
         })
     }
 
+    fn open_root(&self) -> Result<&Dir> {
+        self.root.as_ref().ok_or_else(|| {
+            subagent_error("SUBAGENT_ARTIFACT_IO", "subagent artifact store is closed")
+        })
+    }
+
+    #[napi]
+    pub fn close(&mut self) {
+        self.root.take();
+    }
+
     #[napi]
     pub fn list_roots(&self) -> Result<Vec<SubagentArtifactRoot>> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
         let mut roots = Vec::new();
-        for entry in self.root.entries().map_err(map_resource_io)? {
+        for entry in root.entries().map_err(map_resource_io)? {
             let name = entry
                 .map_err(map_resource_io)?
                 .file_name()
@@ -4793,7 +4820,7 @@ impl SubagentArtifactStore {
             if !valid_uuid_leaf(&name) {
                 continue;
             }
-            let metadata = self.root.symlink_metadata(&name).map_err(map_resource_io)?;
+            let metadata = root.symlink_metadata(&name).map_err(map_resource_io)?;
             if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
                 return Err(subagent_error(
                     "SUBAGENT_ARTIFACT_UNSAFE",
@@ -4821,7 +4848,8 @@ impl SubagentArtifactStore {
         input: String,
         system_prompt: String,
     ) -> Result<SubagentArtifactAllocation> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
         if !valid_uuid_leaf(&run_id) || !valid_uuid_leaf(&turn_id) {
             return Err(subagent_error(
                 "SUBAGENT_ARTIFACT_INVALID_ID",
@@ -4830,7 +4858,7 @@ impl SubagentArtifactStore {
         }
         let is_continuation = existing_identity_token.is_some();
         let (run, identity_token, turn, turn_path) = if let Some(token) = existing_identity_token {
-            let run = open_owned_subagent_run(&self.root, &run_id, &token)?;
+            let run = open_owned_subagent_run(root, &run_id, &token)?;
             let turns = open_child_dir(&run, "turns", true)
                 .map_err(map_resource_io)?
                 .unwrap();
@@ -4851,15 +4879,15 @@ impl SubagentArtifactStore {
                 .join(&turn_id);
             (run, token, turn, turn_path)
         } else {
-            if self.root.symlink_metadata(&run_id).is_ok() {
+            if root.symlink_metadata(&run_id).is_ok() {
                 return Err(subagent_error(
                     "SUBAGENT_ARTIFACT_EXISTS",
                     "run root already exists",
                 ));
             }
-            self.root.create_dir(&run_id).map_err(map_resource_io)?;
-            sync_dir(&self.root).map_err(map_resource_io)?;
-            let run = open_child_dir(&self.root, &run_id, false)
+            root.create_dir(&run_id).map_err(map_resource_io)?;
+            sync_dir(root).map_err(map_resource_io)?;
+            let run = open_child_dir(root, &run_id, false)
                 .map_err(map_resource_io)?
                 .unwrap();
             #[cfg(unix)]
@@ -4924,8 +4952,9 @@ impl SubagentArtifactStore {
         turn_id: String,
         output: String,
     ) -> Result<()> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
-        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(root, &run_id, &identity_token)?;
         let turn = if run.symlink_metadata("manifest.json").is_ok()
             && run_id.eq_ignore_ascii_case(&turn_id)
         {
@@ -4948,8 +4977,9 @@ impl SubagentArtifactStore {
         identity_token: String,
         session_file: String,
     ) -> Result<String> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
-        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(root, &run_id, &identity_token)?;
         let sessions = open_child_dir(&run, "sessions", false)
             .map_err(map_resource_io)?
             .ok_or_else(|| subagent_error("SUBAGENT_ARTIFACT_NOT_FOUND", "sessions missing"))?;
@@ -4997,8 +5027,9 @@ impl SubagentArtifactStore {
 
     #[napi]
     pub fn reveal_directory(&self, run_id: String, identity_token: String) -> Result<String> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
-        let _run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
+        let _run = open_owned_subagent_run(root, &run_id, &identity_token)?;
         Ok(std::path::Path::new(&self.root_path)
             .join(run_id)
             .to_string_lossy()
@@ -5007,12 +5038,13 @@ impl SubagentArtifactStore {
 
     #[napi]
     pub fn delete_run(&self, run_id: String, identity_token: String) -> Result<()> {
-        validate_subagent_root(&self.root, &self.root_path, &self.root_identity)?;
-        let run = open_owned_subagent_run(&self.root, &run_id, &identity_token)?;
+        let root = self.open_root()?;
+        validate_subagent_root(root, &self.root_path, &self.root_identity)?;
+        let run = open_owned_subagent_run(root, &run_id, &identity_token)?;
         clear_owned_subagent_directory(&run)?;
         let held_metadata = run.dir_metadata().map_err(map_resource_io)?;
         drop(run);
-        let current = self.root.symlink_metadata(&run_id).map_err(|error| {
+        let current = root.symlink_metadata(&run_id).map_err(|error| {
             if error.kind() == ErrorKind::NotFound {
                 subagent_error(
                     "SUBAGENT_ARTIFACT_NOT_FOUND",
@@ -5031,8 +5063,8 @@ impl SubagentArtifactStore {
                 "run root changed before final deletion",
             ));
         }
-        self.root.remove_dir(&run_id).map_err(map_resource_io)?;
-        sync_dir(&self.root).map_err(map_resource_io)
+        root.remove_dir(&run_id).map_err(map_resource_io)?;
+        sync_dir(root).map_err(map_resource_io)
     }
 }
 
@@ -5044,6 +5076,27 @@ mod tests {
 
     fn home() -> TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn closed_subagent_artifact_store_releases_root_and_fails_closed() {
+        let data = home();
+        let root = data.path().join(SUBAGENT_ROOT);
+        let mut store =
+            SubagentArtifactStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+
+        store.close();
+        store.close();
+
+        let error = match store.list_roots() {
+            Err(error) => error,
+            Ok(_) => panic!("closed artifact store allowed root listing"),
+        };
+        assert!(
+            error.reason.starts_with("SUBAGENT_ARTIFACT_IO:"),
+            "{error:?}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -6618,6 +6671,27 @@ mod tests {
     }
 
     #[test]
+    fn closed_session_worktree_store_releases_root_and_fails_closed() {
+        let data = home();
+        let root = data.path().join(SESSION_WORKTREE_ROOT);
+        let mut store =
+            SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
+        let target = std::path::Path::new(&store.root_path).join("a1b2c3d4");
+
+        store.close();
+        store.close();
+
+        let error = store
+            .reserve_worktree(target.to_string_lossy().into_owned())
+            .unwrap_err();
+        assert!(
+            error.reason.starts_with("SESSION_WORKTREE_IO:"),
+            "{error:?}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn session_worktree_reservation_capture_failure_removes_only_empty_created_leaf() {
         let data = home();
         let store = SessionWorktreeStore::new(data.path().to_string_lossy().into_owned()).unwrap();
@@ -6625,7 +6699,7 @@ mod tests {
         RESERVATION_FAILURE_HOOK.with(|hook| hook.set(1));
 
         let error = reserve_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6644,7 +6718,7 @@ mod tests {
         RESERVATION_FAILURE_HOOK.with(|hook| hook.set(3));
 
         let error = reserve_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6664,7 +6738,7 @@ mod tests {
         RESERVATION_FAILURE_HOOK.with(|hook| hook.set(2));
 
         let error = reserve_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6692,14 +6766,14 @@ mod tests {
         std::os::unix::fs::symlink(&outside, target.join("nested/link")).unwrap();
 
         let identity = capture_session_worktree_identity(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
         )
         .unwrap();
         delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6712,7 +6786,7 @@ mod tests {
             "safe"
         );
         delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6720,7 +6794,7 @@ mod tests {
         )
         .unwrap();
         let error = delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &outside.to_string_lossy(),
@@ -6751,14 +6825,14 @@ mod tests {
         );
 
         let identity = capture_session_worktree_identity(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
         )
         .unwrap();
         delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6795,14 +6869,14 @@ mod tests {
         fs::write(unrelated.join("sentinel"), "unrelated").unwrap();
 
         let identity = capture_session_worktree_identity(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
         )
         .unwrap();
         let first = delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6823,7 +6897,7 @@ mod tests {
             .unwrap();
 
         let retry = delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6839,7 +6913,7 @@ mod tests {
 
         fs::remove_file(quarantine.join("busy-fifo")).unwrap();
         delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &target.to_string_lossy(),
@@ -6861,7 +6935,7 @@ mod tests {
         let original = std::path::Path::new(&store.root_path).join("cafebabe");
         fs::create_dir(&original).unwrap();
         let identity = capture_session_worktree_identity(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &original.to_string_lossy(),
@@ -6874,7 +6948,7 @@ mod tests {
         let replacement = std::path::Path::new(&store.root_path).join("deadbeef");
         fs::create_dir(&replacement).unwrap();
         let error = delete_session_worktree(
-            &store.root,
+            store.open_root().unwrap(),
             &store.root_path,
             &store.root_identity,
             &replacement.to_string_lossy(),

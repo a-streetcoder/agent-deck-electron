@@ -139,6 +139,7 @@ interface NativeManagedSkillRepositoryStore {
 
 interface NativeSessionWorktreeStore {
   readonly rootPath: string;
+  close(): void;
   reserveWorktree(targetPath: string): string;
   captureWorktreeIdentity(targetPath: string): string;
   deleteWorktree(targetPath: string, identityToken: string): Promise<void>;
@@ -154,6 +155,7 @@ export interface SubagentArtifactAllocation {
 }
 
 interface NativeSubagentArtifactStore {
+  close(): void;
   listRoots(): Array<{ artifactRootId: string; identityToken: string }>;
   allocateTurn(
     runId: string,
@@ -518,7 +520,11 @@ export class SessionWorktreeStore {
   }
 
   get rootPath(): string {
-    return this.native.rootPath;
+    return invokeSessionWorktree(() => this.native.rootPath);
+  }
+
+  close(): void {
+    invokeSessionWorktree(() => this.native.close());
   }
 
   reserveWorktree(targetPath: string): string {
@@ -541,6 +547,10 @@ export class SubagentArtifactStore {
     this.native = invokeSubagentArtifact(
       () => new (loadBinding("subagent").SubagentArtifactStore)(dataDir),
     );
+  }
+
+  close(): void {
+    invokeSubagentArtifact(() => this.native.close());
   }
 
   listRoots(): Array<{ artifactRootId: string; identityToken: string }> {

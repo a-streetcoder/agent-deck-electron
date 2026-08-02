@@ -236,11 +236,21 @@ export class AskUserCoordinator {
   }
 
   close(): void {
+    const errors: unknown[] = [];
     for (const pending of [...this.pending.values()]) {
-      this.sessions
-        .get(pending.sessionId)
-        ?.closeAskUser(pending.id, "cancelled", "The server is shutting down.");
-      pending.settle(content({ status: "cancelled", reason: "The server is shutting down." }));
+      try {
+        this.sessions
+          .get(pending.sessionId)
+          ?.closeAskUser(pending.id, "cancelled", "The server is shutting down.");
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        // The admitted /bridge request must settle even if projecting the
+        // cancellation into one session's transcript fails.
+        pending.settle(content({ status: "cancelled", reason: "The server is shutting down." }));
+      }
     }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "ask_user shutdown failed");
   }
 }

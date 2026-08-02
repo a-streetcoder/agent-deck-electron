@@ -749,6 +749,65 @@ async function initServer(
 
   const fastify = Fastify({ logger: false });
 
+  // Shutdown admission barrier. Requests admitted before shutdown are allowed
+  // to finish, including create/resume transactions that publish a session only
+  // near the end of their handler. Once closing begins, later HTTP requests fail
+  // with a stable response and the close path waits for every admitted handler
+  // before SessionManager snapshots its owned sessions.
+  let shuttingDown = false;
+  let admittedRequests = 0;
+  let admissionDrain: Promise<void> | undefined;
+  let resolveAdmissionDrain: (() => void) | undefined;
+  const requestReleases = new WeakMap<object, () => void>();
+  fastify.addHook("onRequest", async (request, reply) => {
+    if (shuttingDown) {
+      return reply.status(503).send({
+        code: "server_shutting_down",
+        error: "Agent Deck server is shutting down.",
+      });
+    }
+    admittedRequests += 1;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      requestReleases.delete(request);
+      admittedRequests -= 1;
+      if (admittedRequests === 0) {
+        resolveAdmissionDrain?.();
+        resolveAdmissionDrain = undefined;
+      }
+    };
+    requestReleases.set(request, release);
+  });
+  // onSend runs only after the route handler has settled, unlike socket abort/
+  // close signals: an HTTP client may disconnect while an accepted create is
+  // still publishing its session. The later hooks are idempotent fallbacks for
+  // error and transport completion paths.
+  fastify.addHook("onSend", async (request, _reply, payload) => {
+    requestReleases.get(request)?.();
+    return payload;
+  });
+  fastify.addHook("onError", async (request) => {
+    requestReleases.get(request)?.();
+  });
+  fastify.addHook("onResponse", async (request) => {
+    requestReleases.get(request)?.();
+  });
+  const closeHttpAdmission = (): void => {
+    shuttingDown = true;
+  };
+  const drainHttpRequests = (): Promise<void> => {
+    if (admissionDrain) return admissionDrain;
+    admissionDrain =
+      admittedRequests === 0
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            resolveAdmissionDrain = resolve;
+          });
+    return admissionDrain;
+  };
+
   if (options.staticDir) {
     await fastify.register(fastifyStatic, { root: options.staticDir });
   }
@@ -845,6 +904,8 @@ async function initServer(
     },
   });
   const {
+    closeAdmission: closeWebSocketAdmission,
+    drain: drainWebSocketOperations,
     close: closeWebSockets,
     broadcast: wsBroadcast,
     broadcastDiff: wsBroadcastDiff,
@@ -956,16 +1017,10 @@ async function initServer(
   // pi subprocess is always local, so loopback is correct regardless of host.
   bridgeAddress.endpoint = `http://127.0.0.1:${port}/bridge`;
 
-  return {
-    fastify,
-    port,
-    sessions,
-    receipts,
-    bridge,
-    supervisor,
-    askUser,
-    runtime: effectRuntime,
-    close: async () => {
+  let closePromise: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = (async () => {
       // Teardown is fault-tolerant: one failing subsystem must not stop the
       // rest from closing, and the Effect runtime's finalizers (scoped
       // services, Slice 4+) must run even when an earlier step throws — hence
@@ -979,9 +1034,20 @@ async function initServer(
         }
       };
       try {
+        // Close both admission paths synchronously in one event-loop turn.
+        // Existing sockets are asked to close and later frames/upgrades fail.
+        closeHttpAdmission();
+        closeWebSocketAdmission();
         await step(() => resourceWatcher.close());
-        // Settle bridge waits while their owning sessions/transcript buses still exist.
+        // Settle blocking bridge waits before draining their admitted requests.
         await step(() => askUser.close());
+        // First pass stops every session visible when shutdown began. Session
+        // teardown also settles child supervisor bridge calls.
+        await step(() => sessions.stopAll());
+        // Pre-admitted HTTP handlers and already-dispatched WS frames may now
+        // finish rollback/publication without deadlocking on stopped sessions.
+        await step(() => Promise.all([drainHttpRequests(), drainWebSocketOperations()]));
+        // Catch a resume/rebind published after the first stopAll snapshot.
         await step(() => sessions.stopAll());
         await step(() => mcp.close());
         await step(() => closeWebSockets());
@@ -993,12 +1059,30 @@ async function initServer(
         // tree-kill every dev server before dispose().
         await step(() => scripts.closeAll());
         await step(() => fastify.close());
+        // Sessions and the transport are stopped, so no new native filesystem
+        // operations can begin. Release each held root independently before the
+        // app-data owner is allowed to remove it (notably on Windows).
+        await step(() => subagentRuns.close());
+        await step(() => sessionWorktreeStore.close());
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).
         await effectRuntime.dispose();
       }
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "agent-deck server close failed");
-    },
+    })();
+    return closePromise;
+  };
+
+  return {
+    fastify,
+    port,
+    sessions,
+    receipts,
+    bridge,
+    supervisor,
+    askUser,
+    runtime: effectRuntime,
+    close,
   };
 }

@@ -39,6 +39,17 @@ describe("session worktree startup boundary", () => {
     );
   });
 
+  it("releases native roots on close while the closed server remains referenced", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "session-worktree-close-"));
+    const closedServer = await startServer({ dataDir });
+
+    await closedServer.close();
+
+    rmSync(path.join(dataDir, "session-worktrees"), { recursive: true });
+    rmSync(path.join(dataDir, "Subagent Runs"), { recursive: true });
+    rmSync(dataDir, { recursive: true });
+  });
+
   it("refuses a linked explicit data directory without touching its target", async () => {
     const parent = mkdtempSync(path.join(tmpdir(), "session-worktree-linked-data-"));
     const outside = mkdtempSync(path.join(tmpdir(), "session-worktree-linked-target-"));

@@ -19,7 +19,11 @@ export interface WebSocketLayer {
   broadcast: (message: ServerMessage) => void;
   /** Push a diff notification to every connected RPC client (Slice 9). */
   broadcastDiff: (message: DiffPush) => void;
-  /** Close the `/rpc` socket server. */
+  /** Atomically reject upgrades/frames and close current clients. */
+  closeAdmission: () => void;
+  /** Settle every frame dispatched before admission closed. */
+  drain: () => Promise<void>;
+  /** Force-close the `/rpc` socket server after dispatched work drains. */
   close: () => void;
 }
 
@@ -80,14 +84,21 @@ export function setupWebSocket(deps: {
     }
   };
 
+  let admissionClosed = false;
   fastify.server.on("upgrade", (request: IncomingMessage, socket, head) => {
-    if (!isTrustedOrigin(request.headers.origin, request.headers.host)) {
+    if (admissionClosed || !isTrustedOrigin(request.headers.origin, request.headers.host)) {
       socket.destroy();
       return;
     }
     // Only `/rpc` (the Effect-RPC frames) is accepted; anything else is rejected.
     if (request.url === RPC_WS_PATH) {
-      rpc.wss.handleUpgrade(request, socket, head, (ws) => rpc.wss.emit("connection", ws, request));
+      rpc.wss.handleUpgrade(request, socket, head, (ws) => {
+        if (admissionClosed) {
+          ws.close(1012, "Server shutting down");
+          return;
+        }
+        rpc.wss.emit("connection", ws, request);
+      });
     } else {
       socket.destroy();
     }
@@ -96,6 +107,12 @@ export function setupWebSocket(deps: {
   return {
     broadcast: rpc.broadcast,
     broadcastDiff: rpc.broadcastDiff,
+    closeAdmission: () => {
+      if (admissionClosed) return;
+      admissionClosed = true;
+      rpc.closeAdmission();
+    },
+    drain: rpc.drain,
     close: () => {
       // `wss.close()` with `noServer: true` does NOT destroy accepted client
       // sockets — it only waits for them to leave. Terminate them so every
