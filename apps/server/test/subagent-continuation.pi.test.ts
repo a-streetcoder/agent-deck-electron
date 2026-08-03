@@ -25,13 +25,19 @@ const home = mkdtempSync(path.join(tmpdir(), "pi-home-continuation-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-subagent-continuation-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "deck-subagent-continuation-"));
 const childRequests: ChatCompletionRequest[] = [];
+const CONTINUATION_COMPLETION_TIMEOUT_MS = 60_000;
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 30_000): Promise<void> {
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = CONTINUATION_COMPLETION_TIMEOUT_MS,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  if (!predicate()) throw new Error("timed out waiting for continuation completion");
+  if (!predicate()) {
+    throw new Error(`timed out waiting ${timeoutMs}ms for continuation completion`);
+  }
 }
 
 function systemText(body: ChatCompletionRequest): string {
@@ -182,5 +188,8 @@ describe("managed_subagent real-Pi continuation", () => {
     expect(path.dirname(run.sessionFile)).toBe(path.join(root, "sessions"));
     expect(lstatSync(run.sessionFile).isFile()).toBe(true);
     expect(readdirSync(path.join(root, "turns"))).toEqual([run.currentTurnId]);
-  });
+    // The continuation poll stays at half the product's 120-second subagent
+    // timeout; this outer bound leaves the first turn and final assertions
+    // headroom instead of letting Vitest's 60-second default preempt the poll.
+  }, 90_000);
 });
