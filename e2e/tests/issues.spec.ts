@@ -40,6 +40,16 @@ elif [ "$state" = "closed" ]; then
 cat <<'JSON'
 [{"number":9,"title":"Old flux leak (fixed)","state":"CLOSED","url":"https://github.com/x/y/issues/9","labels":[]}]
 JSON
+elif [ "$state" = "all" ]; then
+# Sentinel fixture: 51 rows let the server prove truncation while exposing 50.
+printf '['
+i=1
+while [ "$i" -le 51 ]; do
+  [ "$i" -gt 1 ] && printf ','
+  printf '{"number":%s,"title":"Issue %s with a deliberately long title for narrow layouts","state":"OPEN","url":"https://github.com/x/y/issues/%s","labels":[]}' "$i" "$i" "$i"
+  i=$((i + 1))
+done
+printf ']'
 else
 cat <<'JSON'
 [{"number":7,"title":"Fix the flux capacitor","state":"OPEN","url":"https://github.com/x/y/issues/7","labels":[{"name":"bug"}],"author":{"login":"doc"},"updatedAt":"2026-02-01T09:30:00Z"}]
@@ -116,6 +126,36 @@ test("opens an issue's detail and starts a seeded session from it", async ({ pag
   await page.getByTestId("issue-7").click();
   await page.getByTestId("issue-open-in-pi").click();
   await expect(page.getByTestId("composer-input")).toHaveValue(/issue #7: Fix the flux capacitor/);
+});
+
+test("discloses a truncated list accessibly without disrupting narrow-layout search", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 420, height: 760 });
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-issues").click();
+  await page.getByTestId("issues-state-all").click();
+
+  const notice = page.getByTestId("issues-incomplete-results");
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute("role", "status");
+  await expect(notice).toContainText("first 50 issues returned by GitHub");
+  await expect(notice).toContainText(
+    "Search and label, assignee, and author filters apply only to these results",
+  );
+  await expect(page.locator('[data-testid^="issue-"]')).toHaveCount(50);
+  const noticeBox = await notice.boundingBox();
+  expect(noticeBox).not.toBeNull();
+  expect(noticeBox!.x).toBeGreaterThanOrEqual(0);
+  expect(noticeBox!.x + noticeBox!.width).toBeLessThanOrEqual(420);
+
+  const search = page.getByTestId("issues-search");
+  await search.focus();
+  await search.pressSequentially("Issue 50");
+  await expect(search).toBeFocused();
+  await expect(page.getByTestId("issue-50")).toBeVisible();
+  await expect(page.getByTestId("issue-1")).toHaveCount(0);
 });
 
 test("the Open / Closed filter re-queries gh for the chosen state", async ({ page }) => {

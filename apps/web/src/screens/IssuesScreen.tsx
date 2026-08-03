@@ -82,6 +82,7 @@ export function IssuesScreen() {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [error, setLocalError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [incompleteResults, setIncompleteResults] = useState(false);
   // Native Issues screen's Open / Closed / All segmented filter.
   const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
   // Native client-side facet filters (AppViewModel.filteredBoardItems): labels
@@ -98,6 +99,20 @@ export function IssuesScreen() {
   // Monotonic request token: a slow fetch for a stale project/filter must not
   // clobber the result of a newer one (the filter buttons stay clickable).
   const reqRef = useRef(0);
+  // Update query ownership in the synchronous commit phase, before the load
+  // effect for a changed project/state starts. This closes the window where the
+  // previous request could otherwise settle after the new query commits but
+  // before reqRef bumps, without mutating refs during render.
+  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}`;
+  const queryEpochRef = useRef({ key: renderedQueryKey, epoch: 0 });
+  useLayoutEffect(() => {
+    if (queryEpochRef.current.key !== renderedQueryKey) {
+      queryEpochRef.current = {
+        key: renderedQueryKey,
+        epoch: queryEpochRef.current.epoch + 1,
+      };
+    }
+  }, [renderedQueryKey]);
   // The open issue detail pane (native GitHubIssueDetailView), or null for the list.
   const [detail, setDetail] = useState<IssueDetail | null>(null);
   const [detailNumber, setDetailNumber] = useState<number | null>(null);
@@ -107,18 +122,38 @@ export function IssuesScreen() {
   const load = useCallback(
     async (projectId: string): Promise<void> => {
       const req = ++reqRef.current;
+      const requestQueryKey = `${projectId}\u0000${stateFilter}`;
+      const requestQueryEpoch = queryEpochRef.current.epoch;
+      const ownsCurrentQuery = (): boolean =>
+        reqRef.current === req &&
+        queryEpochRef.current.key === requestQueryKey &&
+        queryEpochRef.current.epoch === requestQueryEpoch;
       setLoading(true);
       setLocalError(null);
+      // A previous result's truncation status never describes the request now
+      // in flight, so remove it before the loading state can paint.
+      setIncompleteResults(false);
       try {
         const response = await fetch(
           `/projects/${encodeURIComponent(projectId)}/issues?state=${stateFilter}`,
         );
-        const data = (await response.json()) as { issues?: Issue[]; error?: string };
-        if (reqRef.current !== req) return; // a newer load superseded this one
+        const data = (await response.json()) as {
+          issues?: Issue[];
+          incompleteResults?: boolean;
+          error?: string;
+        };
+        if (!ownsCurrentQuery()) return; // a newer request or rendered query superseded this one
+        const nextError = data.error ?? (response.ok ? null : "Couldn't load issues.");
         setIssues(data.issues ?? []);
-        setLocalError(data.error ?? (response.ok ? null : "Couldn't load issues."));
+        setLocalError(nextError);
+        setIncompleteResults(nextError === null && data.incompleteResults === true);
+      } catch {
+        if (!ownsCurrentQuery()) return;
+        setIssues([]);
+        setLocalError("Couldn't load issues.");
+        setIncompleteResults(false);
       } finally {
-        if (reqRef.current === req) setLoading(false);
+        if (ownsCurrentQuery()) setLoading(false);
       }
     },
     [stateFilter],
@@ -140,6 +175,7 @@ export function IssuesScreen() {
     setDetail(null);
     setDetailError(null);
     setLocalError(null);
+    setIncompleteResults(false);
     // The old repo's labels/assignees/authors don't apply to the new one.
     setLabelFilters([]);
     setAssigneeFilter(null);
@@ -297,7 +333,7 @@ export function IssuesScreen() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="issues-screen">
+    <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6" data-testid="issues-screen">
       <div className="mx-auto max-w-3xl">
         {detailNumber !== null ? (
           <div data-testid="issue-detail">
@@ -437,19 +473,19 @@ export function IssuesScreen() {
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between pb-1">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col items-stretch gap-2 pb-1 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-2">
                 <CircleDot size={16} className="text-text-secondary" aria-hidden />
                 <h2
-                  className="text-base font-semibold text-text-primary"
+                  className="min-w-0 break-words text-base font-semibold text-text-primary"
                   style={{ fontStretch: "expanded" }}
                 >
                   {project.name} · Issues
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                 <div
-                  className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+                  className="flex origin-left scale-[0.85] items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5 sm:scale-100"
                   role="group"
                   aria-label="Filter issues by state"
                 >
@@ -464,7 +500,13 @@ export function IssuesScreen() {
                           ? "bg-selection text-text-primary"
                           : "text-text-muted hover:text-text-primary",
                       )}
-                      onClick={() => setStateFilter(s)}
+                      onClick={() => {
+                        if (s === stateFilter) return;
+                        // Clear synchronously with the query change rather than
+                        // leaving the previous state's notice until the effect runs.
+                        setIncompleteResults(false);
+                        setStateFilter(s);
+                      }}
                     >
                       {s}
                     </ControlButton>
@@ -497,6 +539,18 @@ export function IssuesScreen() {
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
+            ) : null}
+
+            {incompleteResults && !loading && !error ? (
+              <div
+                className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-xs text-text-secondary"
+                data-testid="issues-incomplete-results"
+                role="status"
+                aria-live="polite"
+              >
+                Showing the first 50 issues returned by GitHub. Search and label, assignee, and
+                author filters apply only to these results.
+              </div>
             ) : null}
 
             {/* Native label + assignee + author facet filters (client-side over

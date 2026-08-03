@@ -15,6 +15,7 @@ import type { ProjectMeta } from "@agent-deck/contracts";
 import { detectProjectType, discoverProjects } from "@agent-deck/resources";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
+import { normalizeGitHubIssueList, type RawGitHubIssueListRow } from "../githubIssues.ts";
 import {
   INSTRUCTIONS_MAX,
   RESOURCE_NAME,
@@ -250,35 +251,18 @@ export function registerProjectRoutes(ctx: ServerContext): void {
           // without a per-filter re-query.
           "number,title,state,url,labels,assignees,author,updatedAt",
           "--limit",
-          "50",
+          // Fetch one sentinel beyond the visible cap so the response can
+          // truthfully disclose truncation without introducing pagination.
+          "51",
         ],
         { cwd: project.path, timeout: 15_000, maxBuffer: 8_000_000 },
       );
-      const raw = JSON.parse(stdout) as Array<{
-        number: number;
-        title: string;
-        state: string;
-        url: string;
-        labels?: Array<{ name: string }>;
-        assignees?: Array<{ login: string }>;
-        author?: { login: string } | null;
-        updatedAt?: string;
-      }>;
-      return {
-        issues: raw.map((i) => ({
-          number: i.number,
-          title: i.title,
-          state: i.state,
-          url: i.url,
-          labels: (i.labels ?? []).map((l) => l.name),
-          assignees: (i.assignees ?? []).map((a) => a.login),
-          author: i.author?.login ?? null,
-          updatedAt: i.updatedAt ?? null,
-        })),
-      };
+      const raw = JSON.parse(stdout) as RawGitHubIssueListRow[];
+      return normalizeGitHubIssueList(raw);
     } catch {
       return {
         issues: [],
+        incompleteResults: false,
         error:
           "Couldn't list issues — needs the gh CLI installed, authenticated, and a GitHub remote.",
       };
