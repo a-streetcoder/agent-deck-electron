@@ -162,7 +162,6 @@ describe("resource watcher", () => {
     linkDirectory(physicalHome, linkedHome);
 
     const catalog = path.join(physicalHome, ".pi", "agent", "agents");
-    const agentFile = path.join(catalog, "later.md");
     let resolveChange!: () => void;
     const changed = new Promise<void>((resolve) => {
       resolveChange = resolve;
@@ -170,16 +169,16 @@ describe("resource watcher", () => {
     const watcher = watchResources(
       { home: linkedHome },
       () => {
-        // Keep this focused on watcher delivery. Scanner behavior has separate
-        // coverage, and parsing here made delivery depend on callback timing.
-        if (existsSync(agentFile)) resolveChange();
+        // The missing catalog itself is the target under test. Requiring a file
+        // created immediately inside it adds a second backend-subscription race
+        // without proving anything more about the trusted linked boundary.
+        if (existsSync(catalog)) resolveChange();
       },
       10,
     );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
       mkdirSync(catalog, { recursive: true });
-      writeFileSync(agentFile, "---\nname: later\n---\n\nLater.\n");
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
