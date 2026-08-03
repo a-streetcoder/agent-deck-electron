@@ -174,9 +174,9 @@ function AgentDetail({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="agent-detail">
-      <div className="flex items-start gap-4 max-[900px]:flex-wrap">
+      <div className="flex flex-wrap items-start gap-4">
         <AgentAvatar agent={agent} size={56} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[180px] flex-1">
           <div className="flex items-center gap-2">
             {renameValue !== null ? (
               <>
@@ -227,7 +227,7 @@ function AgentDetail({
             <p className="mt-0.5 text-sm text-text-secondary">{agent.description}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2 max-[900px]:w-full max-[900px]:flex-wrap max-[900px]:justify-end">
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-[900px]:w-full">
           {currentProject && !agent.shadowed ? (
             <ControlButton
               data-testid={`default-agent-${agent.name}`}
