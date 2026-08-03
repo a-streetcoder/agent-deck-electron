@@ -3,8 +3,9 @@ import {
   ControlInput,
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Globe, MessageSquareText, Pencil, Plus, Trash2, X } from "lucide-react";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Globe, MessageSquareText, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { PromptInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
@@ -45,6 +46,22 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
+export function filterPrompts(prompts: PromptInfo[], search: string): PromptInfo[] {
+  const query = search.trim().toLowerCase();
+  if (!query) return prompts;
+
+  return prompts.filter((prompt) =>
+    [
+      prompt.name,
+      prompt.invocation,
+      prompt.description,
+      prompt.scope,
+      prompt.filePath,
+      prompt.body,
+    ].some((field) => field?.toLowerCase().includes(query)),
+  );
+}
+
 interface Draft {
   name: string;
   description: string;
@@ -64,6 +81,7 @@ export function PromptsScreen() {
   const projects = useAppStore((state) => state.projects);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
   const [promptsLoaded, setPromptsLoaded] = useState(false);
+  const [search, setSearch] = useState("");
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const resourceRequest = useAppStore((state) => state.resourceCommandRequest);
   const selectedPromptFilePath = useAppStore((state) => state.selectedPromptFilePath);
@@ -80,6 +98,8 @@ export function PromptsScreen() {
     scope: PromptInfo["scope"];
     value: string;
   } | null>(null);
+  const visiblePrompts = useMemo(() => filterPrompts(prompts, search), [prompts, search]);
+  const hasSearchQuery = search.trim().length > 0;
 
   const load = useCallback(async (): Promise<void> => {
     const projectId = currentProjectId;
@@ -338,6 +358,20 @@ export function PromptsScreen() {
           commands. Project prompts override global ones of the same name.
         </p>
 
+        <AppTextField
+          data-testid="prompt-search"
+          className="mb-3"
+          aria-label="Search prompt templates"
+          placeholder="Search prompts"
+          value={search}
+          onChange={setSearch}
+          leadingIcon={<Search aria-hidden />}
+          showClear
+          clearLabel="Clear prompt search"
+          autoComplete="off"
+          spellCheck={false}
+        />
+
         {draft ? (
           <div
             className="mb-4 space-y-2 rounded-2xl border border-border-strong bg-surface-elevated p-4"
@@ -453,7 +487,7 @@ export function PromptsScreen() {
           role="list"
           aria-label="Prompt templates"
         >
-          {prompts.map((prompt) => (
+          {visiblePrompts.map((prompt) => (
             <div
               key={prompt.filePath}
               data-prompt-name={prompt.name}
@@ -602,7 +636,16 @@ export function PromptsScreen() {
               )}
             </div>
           ))}
-          {prompts.length === 0 && !draft ? (
+          {promptsLoaded && prompts.length > 0 && hasSearchQuery && visiblePrompts.length === 0 ? (
+            <div
+              className="py-8 text-center text-sm text-text-muted"
+              data-testid="prompt-search-empty"
+              role="status"
+            >
+              No prompt templates match your search.
+            </div>
+          ) : null}
+          {promptsLoaded && prompts.length === 0 && !draft ? (
             <div className="py-8 text-center text-sm text-text-muted">
               No prompt templates yet. Create one to use it as a slash command.
             </div>
