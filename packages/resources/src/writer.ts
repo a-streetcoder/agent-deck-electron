@@ -373,13 +373,15 @@ export function writeAgentFile(
   scope: WritableScope,
   name: string,
   edit: AgentEdit,
+  options: { createOnly?: boolean; baseContent?: string } = {},
 ): string {
   const filePath = agentFilePath(roots, scope, name);
   let frontmatter: Record<string, unknown> = {};
   let body = "";
   const existingContent = secureReadIfPresent(roots, filePath);
-  if (existingContent !== undefined) {
-    const existing = parseFrontmatter(existingContent);
+  const startingContent = existingContent ?? options.baseContent;
+  if (startingContent !== undefined) {
+    const existing = parseFrontmatter(startingContent);
     frontmatter = { ...existing.frontmatter };
     body = existing.body.trim();
   }
@@ -413,7 +415,12 @@ export function writeAgentFile(
   }
   if (edit.body !== undefined) body = edit.body.trim();
 
-  secureWrite(roots, filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);
+  secureWrite(
+    roots,
+    filePath,
+    `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`,
+    options.createOnly,
+  );
   return filePath;
 }
 

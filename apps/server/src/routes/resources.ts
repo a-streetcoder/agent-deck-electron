@@ -8,6 +8,7 @@ import {
   deleteAgentFile,
   deletePromptFile,
   mergeWithUnmanagedOverrideFields,
+  materializeBuiltinAgentOverrideContent,
   parseAgentFile,
   readAgentOverrides,
   renameAgentFile,
@@ -56,6 +57,9 @@ const agentEditBody = z.object({
   scope: writableAgentScope,
   name: RESOURCE_NAME,
   edit: agentEditFields,
+  /** Create a custom agent from immutable builtin bytes. The existing PUT route
+   * remains the sole write path; the writer claims the destination exclusively. */
+  createFromBuiltin: RESOURCE_NAME.optional(),
 });
 
 const skillEditBody = z.object({
@@ -835,9 +839,12 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   fastify.put("/resources/agents", async (request, reply) => {
     const parsed = agentEditBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    const { projectId, scope, name, edit } = parsed.data;
+    const { projectId, scope, name, edit, createFromBuiltin } = parsed.data;
     const roots = rootsFor(projectId);
     try {
+      if (createFromBuiltin && scope !== "global") {
+        return reply.status(400).send({ error: "Builtin replacements must be global agents." });
+      }
       if (scope === "builtin") {
         const builtinFile = nodePath.join(BUILTIN_AGENTS_DIR, `${name}.md`);
         if (!existsSync(builtinFile)) {
@@ -855,7 +862,21 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         if (scope === "project" && !roots.projectPath) {
           return reply.status(400).send({ error: "projectId required for project scope" });
         }
-        writeAgentFile(roots, scope, name, edit);
+        let baseContent: string | undefined;
+        if (createFromBuiltin) {
+          const builtinFile = nodePath.join(BUILTIN_AGENTS_DIR, `${createFromBuiltin}.md`);
+          if (!existsSync(builtinFile)) {
+            return reply.status(404).send({ error: `unknown builtin agent: ${createFromBuiltin}` });
+          }
+          baseContent = materializeBuiltinAgentOverrideContent(
+            readFileSync(builtinFile, "utf8"),
+            readAgentOverrides(roots)[createFromBuiltin],
+          );
+        }
+        writeAgentFile(roots, scope, name, edit, {
+          createOnly: createFromBuiltin !== undefined,
+          baseContent,
+        });
       }
     } catch (error) {
       if (error instanceof Error && error.message === "agent_ambiguous") {

@@ -1,6 +1,17 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useState } from "react";
-import { Check, Pencil, Power, PowerOff, Plus, Star, Tag, Trash2, X } from "lucide-react";
+import {
+  Check,
+  Pencil,
+  Power,
+  PowerOff,
+  Plus,
+  RefreshCw,
+  Star,
+  Tag,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   agentMatchesFilter,
   AGENT_FILTERS,
@@ -134,7 +145,17 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
   );
 }
 
-function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }) {
+function AgentDetail({
+  agent,
+  canCreateReplacement,
+  onCreateReplacement,
+  onEdit,
+}: {
+  agent: AgentInfo;
+  canCreateReplacement: boolean;
+  onCreateReplacement: () => void;
+  onEdit: () => void;
+}) {
   const projects = useAppStore((state) => state.projects);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const currentProject = projects.find((p) => p.id === currentProjectId);
@@ -153,7 +174,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="agent-detail">
-      <div className="flex items-start gap-4">
+      <div className="flex items-start gap-4 max-[900px]:flex-wrap">
         <AgentAvatar agent={agent} size={56} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -206,7 +227,7 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
             <p className="mt-0.5 text-sm text-text-secondary">{agent.description}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 max-[900px]:w-full max-[900px]:flex-wrap max-[900px]:justify-end">
           {currentProject && !agent.shadowed ? (
             <ControlButton
               data-testid={`default-agent-${agent.name}`}
@@ -227,6 +248,17 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
             </ControlButton>
           ) : null}
           <>
+            {canCreateReplacement ? (
+              <ControlButton
+                data-testid="agent-create-replacement"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                title="Create an editable global custom agent from this builtin"
+                onClick={onCreateReplacement}
+              >
+                <RefreshCw size={12} />
+                Replacement
+              </ControlButton>
+            ) : null}
             <ControlButton
               data-testid="agent-disable"
               className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
@@ -297,6 +329,17 @@ function AgentDetail({ agent, onEdit }: { agent: AgentInfo; onEdit: () => void }
       </div>
 
       <div className="mt-5 space-y-4">
+        {canCreateReplacement ? (
+          <div
+            className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+            data-testid="agent-replacement-description"
+          >
+            <p className="text-sm text-text-secondary">
+              Use Replacement to create a global custom agent seeded from this bundled agent. The
+              builtin stays unchanged.
+            </p>
+          </div>
+        ) : null}
         {agent.whenToUse ? (
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
             <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
@@ -390,7 +433,9 @@ export function AgentsScreen() {
   const [filter, setFilter] = useState<AgentFilter>("all");
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(selectedAgentFilePath);
-  const [editing, setEditing] = useState<AgentInfo | null | "new">(null);
+  const [editing, setEditing] = useState<AgentInfo | null | "new" | { replacement: AgentInfo }>(
+    null,
+  );
 
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -461,11 +506,15 @@ export function AgentsScreen() {
     setSelectedKey(filePath);
     useAppStore.getState().setSelectedAgentFilePath(filePath);
   };
+  const replacementSeed =
+    typeof editing === "object" && editing !== null && "replacement" in editing
+      ? editing.replacement
+      : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1" data-testid="agents-screen">
+    <div className="flex min-h-0 flex-1 max-[900px]:flex-col" data-testid="agents-screen">
       {/* List pane — native fixed 42% split. */}
-      <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle">
+      <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle max-[900px]:h-[38%] max-[900px]:w-full max-[900px]:min-w-0 max-[900px]:border-b max-[900px]:border-r-0">
         <div className="space-y-2 px-3 pb-2 pt-3">
           <div className="flex items-center gap-2">
             <ControlInput
@@ -553,7 +602,20 @@ export function AgentsScreen() {
 
       {/* Detail pane */}
       {selected ? (
-        <AgentDetail agent={selected} onEdit={() => setEditing(selected)} />
+        <AgentDetail
+          agent={selected}
+          canCreateReplacement={
+            selected.scope === "builtin" &&
+            !selected.shadowed &&
+            !agents.some(
+              (agent) =>
+                agent.name === selected.name &&
+                (agent.scope === "global" || agent.scope === "project"),
+            )
+          }
+          onCreateReplacement={() => setEditing({ replacement: selected })}
+          onEdit={() => setEditing(selected)}
+        />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
           Select an agent.
@@ -562,7 +624,8 @@ export function AgentsScreen() {
 
       {editing !== null ? (
         <AgentEditSheet
-          agent={editing === "new" ? null : editing}
+          agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
+          createFromBuiltin={replacementSeed}
           onClose={() => setEditing(null)}
         />
       ) : null}

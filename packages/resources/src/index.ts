@@ -54,6 +54,7 @@ export {
   type AgentEdit,
   type AgentOverride,
 } from "./overrides.ts";
+export { materializeBuiltinAgentOverrideContent } from "./agentReplacement.ts";
 export {
   writeAgentFile,
   writeSkillFile,

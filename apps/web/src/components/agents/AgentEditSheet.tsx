@@ -33,26 +33,33 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 export function AgentEditSheet({
   agent,
+  createFromBuiltin,
   onClose,
 }: {
   /** Existing agent, or null to create a new one. */
   agent: AgentInfo | null;
+  /** A pristine builtin used as the seed for a create-only global custom agent. */
+  createFromBuiltin?: AgentInfo;
   onClose: () => void;
 }) {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const seed = agent ?? createFromBuiltin;
+  const isReplacement = createFromBuiltin !== undefined;
   const [tab, setTab] = useState<EditTab>("config");
-  const [name, setName] = useState(agent?.name ?? "");
-  const [scope, setScope] = useState<ResourceScope>(agent?.scope ?? "global");
-  const [description, setDescription] = useState(agent?.description ?? "");
-  const [whenToUse, setWhenToUse] = useState(agent?.whenToUse ?? "");
-  const [model, setModel] = useState(agent?.model ?? "");
-  const [fallbackModels, setFallbackModels] = useState((agent?.fallbackModels ?? []).join(", "));
-  const [thinking, setThinking] = useState(agent?.thinking ?? "");
-  const [mode, setMode] = useState<"replace" | "append">(agent?.systemPromptMode ?? "replace");
-  const [tools, setTools] = useState((agent?.tools ?? []).join(", "));
-  const [skills, setSkills] = useState((agent?.skills ?? []).join(", "));
-  const [mcpServers, setMcpServers] = useState((agent?.mcpServers ?? []).join(", "));
-  const [body, setBody] = useState(agent?.body ?? "");
+  const [name, setName] = useState(seed?.name ?? "");
+  const [scope, setScope] = useState<ResourceScope>(
+    isReplacement ? "global" : (agent?.scope ?? "global"),
+  );
+  const [description, setDescription] = useState(seed?.description ?? "");
+  const [whenToUse, setWhenToUse] = useState(seed?.whenToUse ?? "");
+  const [model, setModel] = useState(seed?.model ?? "");
+  const [fallbackModels, setFallbackModels] = useState((seed?.fallbackModels ?? []).join(", "));
+  const [thinking, setThinking] = useState(seed?.thinking ?? "");
+  const [mode, setMode] = useState<"replace" | "append">(seed?.systemPromptMode ?? "replace");
+  const [tools, setTools] = useState((seed?.tools ?? []).join(", "));
+  const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
+  const [mcpServers, setMcpServers] = useState((seed?.mcpServers ?? []).join(", "));
+  const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -62,18 +69,22 @@ export function AgentEditSheet({
   // detection (backdrop/Escape only dismiss when clean) and for the
   // conflict check before save.
   const initial = useRef({
-    description: agent?.description ?? "",
-    whenToUse: agent?.whenToUse ?? "",
-    model: agent?.model ?? "",
-    fallbackModels: (agent?.fallbackModels ?? []).join(", "),
-    thinking: agent?.thinking ?? "",
-    mode: agent?.systemPromptMode ?? "replace",
-    tools: (agent?.tools ?? []).join(", "),
-    skills: (agent?.skills ?? []).join(", "),
-    mcpServers: (agent?.mcpServers ?? []).join(", "),
-    body: agent?.body ?? "",
+    name: seed?.name ?? "",
+    scope: isReplacement ? "global" : (agent?.scope ?? "global"),
+    description: seed?.description ?? "",
+    whenToUse: seed?.whenToUse ?? "",
+    model: seed?.model ?? "",
+    fallbackModels: (seed?.fallbackModels ?? []).join(", "),
+    thinking: seed?.thinking ?? "",
+    mode: seed?.systemPromptMode ?? "replace",
+    tools: (seed?.tools ?? []).join(", "),
+    skills: (seed?.skills ?? []).join(", "),
+    mcpServers: (seed?.mcpServers ?? []).join(", "),
+    body: seed?.body ?? "",
   }).current;
   const dirty =
+    name !== initial.name ||
+    scope !== initial.scope ||
     description !== initial.description ||
     whenToUse !== initial.whenToUse ||
     model !== initial.model ||
@@ -83,8 +94,7 @@ export function AgentEditSheet({
     tools !== initial.tools ||
     skills !== initial.skills ||
     mcpServers !== initial.mcpServers ||
-    body !== initial.body ||
-    (!agent && name.trim() !== "");
+    body !== initial.body;
 
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -97,9 +107,8 @@ export function AgentEditSheet({
       [...dialog.querySelectorAll<HTMLElement>("button, input, select, textarea")].filter(
         (el) => !el.hasAttribute("disabled"),
       );
-    // New agents need a name before they can be saved. The tab strip appears
-    // before the form fields in DOM order, so selecting the second generic
-    // focusable would incorrectly land on Config instead.
+    // Create flows need a name before they can be saved. The tab strip appears
+    // before the form fields in DOM order, so focus the seeded/editable name.
     (nameInputRef.current ?? focusables()[1])?.focus();
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape" && !dirtyRef.current) {
@@ -169,6 +178,7 @@ export function AgentEditSheet({
           projectId: currentProjectId ?? undefined,
           scope: agent ? agent.scope : scope,
           name: agent ? agent.name : name.trim(),
+          createFromBuiltin: createFromBuiltin?.name,
           edit: {
             description,
             whenToUse,
@@ -207,7 +217,13 @@ export function AgentEditSheet({
         data-testid="agent-editor"
         role="dialog"
         aria-modal="true"
-        aria-label={agent ? `Edit ${agent.name}` : "New agent"}
+        aria-label={
+          agent
+            ? `Edit ${agent.name}`
+            : isReplacement
+              ? `Create global replacement for ${createFromBuiltin.name}`
+              : "New agent"
+        }
       >
         {/* Sheet header: tinted icon tile + title + Done (native AppSheetHeader). */}
         <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3">
@@ -217,9 +233,17 @@ export function AgentEditSheet({
               className="truncate text-sm font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
-              {agent ? `Edit ${agent.name}` : "New Agent"}
+              {agent
+                ? `Edit ${agent.name}`
+                : isReplacement
+                  ? "New Custom Agent · Global"
+                  : "New Agent"}
             </div>
-            {isBuiltin ? (
+            {isReplacement ? (
+              <div className="text-xs text-text-muted">
+                Seeded from builtin; saving creates a separate global file.
+              </div>
+            ) : isBuiltin ? (
               <div className="text-xs" style={{ color: "var(--color-warning)" }}>
                 builtin — saved as override, file untouched
               </div>
@@ -271,15 +295,25 @@ export function AgentEditSheet({
                   </label>
                   <label className="text-xs text-text-muted">
                     Scope
-                    <ControlSelect
-                      data-testid="editor-scope"
-                      className={inputClass}
-                      value={scope}
-                      onChange={(e) => setScope(e.target.value as ResourceScope)}
-                    >
-                      <option value="global">global</option>
-                      <option value="library">library</option>
-                    </ControlSelect>
+                    {isReplacement ? (
+                      <ControlInput
+                        data-testid="editor-scope"
+                        className={inputClass}
+                        value="global"
+                        readOnly
+                        aria-description="Builtin replacements are saved as global custom agents"
+                      />
+                    ) : (
+                      <ControlSelect
+                        data-testid="editor-scope"
+                        className={inputClass}
+                        value={scope}
+                        onChange={(e) => setScope(e.target.value as ResourceScope)}
+                      >
+                        <option value="global">global</option>
+                        <option value="library">library</option>
+                      </ControlSelect>
+                    )}
                   </label>
                 </div>
               ) : null}

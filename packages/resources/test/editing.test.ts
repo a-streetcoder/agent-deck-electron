@@ -10,7 +10,8 @@ import {
   readAgentOverrides,
   writeBuiltinAgentOverride,
 } from "../src/overrides.ts";
-import { scanAgents } from "../src/scanner.ts";
+import { materializeBuiltinAgentOverrideContent } from "../src/agentReplacement.ts";
+import { parseAgentFile, scanAgents } from "../src/scanner.ts";
 import {
   deleteAgentFile,
   importSkillsFromClone,
@@ -121,6 +122,58 @@ describe("agent/skill file writer", () => {
     expect(writeAgentFile({ home: legacyHome }, "global", "legacy", { body: "Legacy." })).toBe(
       path.join(legacyHome, ".agents", "legacy.md"),
     );
+  });
+
+  it("materializes managed and unmanaged global override fields for a replacement", () => {
+    const builtin = readFileSync(path.join(BUILTIN_AGENTS_DIR, "coder.md"), "utf8");
+    const materialized = materializeBuiltinAgentOverrideContent(builtin, {
+      description: "Effective coder",
+      whenToUse: false,
+      tools: ["read", "grep"],
+      systemPrompt: "Effective overridden prompt.",
+      defaultExpectedOutcome: "reportOnly",
+      interactive: true,
+      defaultProgress: false,
+    });
+    const effective = parseAgentFile("coder.md", materialized, "builtin");
+    expect(effective).toMatchObject({
+      name: "coder",
+      description: "Effective coder",
+      tools: ["read", "grep"],
+      body: "Effective overridden prompt.",
+    });
+    expect(effective.whenToUse).toBeUndefined();
+    expect(materialized).toContain("defaultExpectedOutcome: reportOnly");
+    expect(materialized).toContain("interactive: true");
+    expect(materialized).not.toContain("defaultProgress:");
+  });
+
+  it("creates from builtin content without clobbering a colliding custom agent", () => {
+    const home = makeHome();
+    const roots = { home };
+    const builtin = readFileSync(path.join(BUILTIN_AGENTS_DIR, "reviewer.md"), "utf8");
+    const filePath = writeAgentFile(
+      roots,
+      "global",
+      "reviewer",
+      { description: "My reviewer" },
+      { createOnly: true, baseContent: builtin },
+    );
+    const created = readFileSync(filePath, "utf8");
+    expect(created).toContain("description: My reviewer");
+    expect(created).toContain("defaultExpectedOutcome: reportOnly");
+    expect(created).toContain("You are `reviewer`");
+
+    expect(() =>
+      writeAgentFile(
+        roots,
+        "global",
+        "reviewer",
+        { body: "clobbered" },
+        { createOnly: true, baseContent: builtin },
+      ),
+    ).toThrow();
+    expect(readFileSync(filePath, "utf8")).toBe(created);
   });
 
   it("edits an existing modern agent in place even when ~/.agents exists", () => {
