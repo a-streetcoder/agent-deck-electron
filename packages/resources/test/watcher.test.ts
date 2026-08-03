@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { projectWatchDirs, watchDirs } from "../src/paths.ts";
-import { scanAgents } from "../src/scanner.ts";
 import {
   addResourceWatchPaths,
   ensureDirs,
@@ -621,6 +620,8 @@ describe("resource watcher", () => {
 
   it("observes a catalog created after watching starts", async () => {
     const root = home();
+    const catalog = path.join(root, ".pi", "agent", "agents", "nested");
+    const agentFile = path.join(catalog, "later.md");
     let resolveChange!: () => void;
     const changed = new Promise<void>((resolve) => {
       resolveChange = resolve;
@@ -628,15 +629,16 @@ describe("resource watcher", () => {
     const watcher = watchResources(
       { home: root },
       () => {
-        if (scanAgents({ home: root }).some((agent) => agent.name === "later")) resolveChange();
+        // Scanner behavior has separate coverage; this assertion only needs to
+        // prove that an event created after readiness reaches the callback.
+        if (existsSync(agentFile)) resolveChange();
       },
       10,
     );
     try {
       await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      const catalog = path.join(root, ".pi", "agent", "agents", "nested");
       mkdirSync(catalog, { recursive: true });
-      writeFileSync(path.join(catalog, "later.md"), "---\nname: later\n---\n\nLater.\n");
+      writeFileSync(agentFile, "---\nname: later\n---\n\nLater.\n");
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>

@@ -140,13 +140,23 @@ test("signs in to an OAuth http server: open link, paste code, becomes authorize
   // Script the MCP endpoints so the OAuth flow (needs-auth → login URL → callback
   // → authorized) is exercised hermetically, without a real MCP provider.
   let authorized = false;
+  let assignedServerIds: string[] = [];
   let callbackBody: { code?: string; state?: string } | undefined;
 
+  await page.route(/\/projects\/[^/?]+$/, async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    const patch = route.request().postDataJSON() as { assignedMcpServers?: string[] };
+    const assignmentResponse = await route.fetch();
+    if (assignmentResponse.ok()) assignedServerIds = patch.assignedMcpServers ?? [];
+    await route.fulfill({ response: assignmentResponse });
+  });
   await page.route(/\/mcp(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({
       status: 200,
       json: {
+        assignedServerIds,
+        missingAssignedServerIds: [],
         servers: [
           {
             id: "authsrv",
