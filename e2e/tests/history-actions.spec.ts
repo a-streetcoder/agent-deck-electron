@@ -187,3 +187,47 @@ test("Re-run traps confirmation focus, restores on Escape, keeps one row, and ge
   expect(activeAfter.id).toBe(activeBefore.id);
   expect(activeAfter.piSessionFile).not.toBe(activeBefore.piSessionFile);
 });
+
+test("Copy uses one gutter action per seeded user or assistant message", async ({ page }) => {
+  await page.addInitScript(() => {
+    const browser = globalThis as typeof globalThis & {
+      navigator: object;
+      transcriptCopiedText?: string;
+    };
+    Object.defineProperty(browser.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          browser.transcriptCopiedText = text;
+        },
+      },
+    });
+  });
+  await page.setViewportSize({ width: 720, height: 640 });
+  await page.goto(harness.baseUrl);
+  await waitIdle(page);
+  const prompt = `copy this exact narrow message ${"without-clipping-".repeat(18)}`;
+  await send(page, prompt);
+
+  const assistant = page.getByTestId("assistant-cell").last();
+  await expect(assistant).toHaveAttribute("data-streaming", "false", { timeout: 60_000 });
+
+  const user = page.getByTestId("user-cell").filter({ hasText: prompt });
+  const userCopy = user.getByTestId("message-copy");
+  await expect(userCopy).toHaveCount(1);
+  await user.hover();
+  await expect(userCopy).toBeVisible();
+  await userCopy.click();
+  await expect(userCopy).toHaveAccessibleName("Copied");
+  expect(
+    await page.evaluate(
+      () =>
+        (globalThis as typeof globalThis & { transcriptCopiedText?: string }).transcriptCopiedText,
+    ),
+  ).toBe(prompt);
+
+  const assistantCopy = assistant.locator("..").getByTestId("message-copy");
+  await expect(assistantCopy).toHaveCount(1);
+  await assistant.hover();
+  await expect(assistantCopy).toBeVisible();
+});

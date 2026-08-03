@@ -10,8 +10,152 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
   delete window.agentDeck;
   useAppStore.setState({ session: null });
+});
+
+describe("per-message copy actions", () => {
+  const clipboard = (writeText = vi.fn().mockResolvedValue(undefined)) => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    return writeText;
+  };
+
+  it("copies exact user text without requiring a stable entry or including attachments", async () => {
+    const writeText = clipboard();
+    const text = `  Keep markdown **exact**.\n${"long line ".repeat(2_000)}\n`;
+    render(
+      <CellView
+        cell={{
+          kind: "user",
+          id: "user-copy",
+          text,
+          files: [{ name: "private.txt", path: "/private/private.txt" }],
+        }}
+      />,
+    );
+
+    const copy = screen.getByRole("button", { name: "Copy message" });
+    expect(copy.getAttribute("tabindex")).toBeNull();
+    expect(copy.getAttribute("data-side")).toBe("leading");
+    expect(copy.className).toContain("right-full");
+    expect(copy.className).toContain("pointer-events-none");
+    expect(copy.className).toContain("group-hover/message:pointer-events-auto");
+    fireEvent.click(copy);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(text));
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("private.txt"));
+    expect(screen.getByRole("button", { name: "Copied" }).getAttribute("data-state")).toBe(
+      "copied",
+    );
+  });
+
+  it("offers one trailing action and joins visible assistant text blocks canonically", async () => {
+    const writeText = clipboard();
+    const first = "First answer\n\n```ts\nconst exact = true;\n```";
+    const second = "Streaming **canonical";
+    render(
+      <CellView
+        cell={{
+          kind: "assistant",
+          id: "assistant-copy",
+          streaming: true,
+          errorMessage: "status metadata",
+          blocks: [
+            { kind: "thinking", contentIndex: 0, text: "private reasoning", done: true },
+            { kind: "text", contentIndex: 1, text: first, done: true },
+            { kind: "text", contentIndex: 2, text: second, done: false },
+          ],
+        }}
+      />,
+    );
+
+    const copy = screen.getByRole("button", { name: "Copy message" });
+    expect(screen.getAllByTestId("message-copy")).toHaveLength(1);
+    expect(copy.getAttribute("data-side")).toBe("trailing");
+    expect(copy.className).toContain("left-full");
+    expect(copy.className).toContain("pointer-events-none");
+    expect(copy.className).toContain("group-focus-within/message:pointer-events-auto");
+    fireEvent.click(copy);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${first}\n\n${second}`));
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("private reasoning"));
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("status metadata"));
+  });
+
+  it("stays tabbable while hidden and activates from the keyboard without layout space", async () => {
+    const writeText = clipboard();
+    render(<CellView cell={{ kind: "user", id: "keyboard-copy", text: "Keyboard copy" }} />);
+
+    const copy = screen.getByRole("button", { name: "Copy message" });
+    expect(copy.className).toContain("absolute");
+    expect(copy.className).toContain("opacity-0");
+    expect(copy.className).toContain("focus:opacity-100");
+    expect(copy.className).toContain("focus:pointer-events-auto");
+
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    copy.focus();
+    expect(document.activeElement).toBe(copy);
+    fireEvent.keyDown(copy, { key: "Enter" });
+    copy.click();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Keyboard copy"));
+    expect(screen.getByRole("button", { name: "Copied" })).toBe(copy);
+  });
+
+  it("does not offer copy for missing or empty message content", () => {
+    const view = render(
+      <CellView
+        cell={{ kind: "assistant", id: "missing-assistant", streaming: false, blocks: [] }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    view.rerender(<CellView cell={{ kind: "user", id: "empty-user", text: "" }} />);
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    view.rerender(
+      <CellView
+        cell={{
+          kind: "assistant",
+          id: "empty-assistant",
+          streaming: false,
+          blocks: [{ kind: "text", contentIndex: 0, text: "", done: true }],
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+  });
+
+  it("keeps idle feedback when the clipboard rejects the write", async () => {
+    const writeText = clipboard(vi.fn().mockRejectedValue(new Error("denied")));
+    render(<CellView cell={{ kind: "user", id: "rejected-copy", text: "Retry me" }} />);
+
+    const copy = screen.getByRole("button", { name: "Copy message" });
+    fireEvent.click(copy);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Retry me"));
+    expect(copy.getAttribute("data-state")).toBe("idle");
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+  });
+
+  it("coexists with stable-entry Fork and Re-run while remaining available without one", () => {
+    useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
+    const view = render(
+      <CellView
+        cell={{ kind: "user", id: "history-copy", entryId: "entry-1", text: "Try this" }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Fork before this message" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Re-run from this message" })).toBeTruthy();
+
+    view.rerender(<CellView cell={{ kind: "user", id: "live-copy", text: "Try this" }} />);
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Fork before this message" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Re-run from this message" })).toBeNull();
+  });
 });
 
 describe("historic user message actions", () => {

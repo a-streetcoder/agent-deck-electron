@@ -1,5 +1,6 @@
+import { AppCopyButton } from "@/design-system/components/AppCopyButton";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FolderOpen, GitFork, MessageSquareText, RotateCcw, Send } from "lucide-react";
 import {
   memoryToolCardLabel,
@@ -526,6 +527,35 @@ function UserHistoryActions({ entryId }: { entryId: string }) {
   );
 }
 
+function CopyableMessage({
+  text,
+  side,
+  children,
+}: {
+  text: string;
+  side: "leading" | "trailing";
+  children: ReactNode;
+}) {
+  return (
+    <div className="group/message relative">
+      {children}
+      <AppCopyButton
+        text={text}
+        aria-label="Copy message"
+        className={
+          "pointer-events-none absolute top-0 opacity-0 " +
+          "group-hover/message:pointer-events-auto group-hover/message:opacity-100 " +
+          "group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100 " +
+          "focus:pointer-events-auto focus:opacity-100 " +
+          (side === "leading" ? "right-full" : "left-full")
+        }
+        data-side={side}
+        data-testid="message-copy"
+      />
+    </div>
+  );
+}
+
 function UserCellView({
   cell,
   showImages,
@@ -619,7 +649,13 @@ function UserCellView({
     <div className="flex justify-end" data-testid="user-cell">
       <div className="max-w-[80%] space-y-2">
         {visibleText || attachments.length > 0 ? (
-          <MessageBubble role="user" text={visibleText} attachments={attachments} />
+          cell.text ? (
+            <CopyableMessage text={cell.text} side="leading">
+              <MessageBubble role="user" text={visibleText} attachments={attachments} />
+            </CopyableMessage>
+          ) : (
+            <MessageBubble role="user" text={visibleText} attachments={attachments} />
+          )
         ) : null}
         {showImages && items.length ? (
           <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
@@ -675,6 +711,50 @@ function UserCellView({
   );
 }
 
+function AssistantCellView({
+  cell,
+  transcriptVisibility,
+}: {
+  cell: Extract<TranscriptCell, { kind: "assistant" }>;
+  transcriptVisibility: TranscriptVisibilitySettings;
+}) {
+  const visibleBlocks = visibleAssistantBlocks(cell.blocks, transcriptVisibility);
+  const copyText = visibleBlocks
+    .filter((block) => block.kind === "text" && block.text)
+    .map((block) => block.text)
+    .join("\n\n");
+  const content = (
+    <div
+      className="space-y-2"
+      data-testid="assistant-cell"
+      data-streaming={cell.streaming ? "true" : "false"}
+    >
+      {visibleBlocks.map((block) =>
+        block.kind === "thinking" ? (
+          <MessageBubble
+            key={block.contentIndex}
+            role="thinking"
+            text={block.done ? block.text : balance(block.text)}
+          />
+        ) : (
+          <div key={block.contentIndex} data-testid="assistant-text">
+            <MessageBubble role="assistant" text={block.done ? block.text : balance(block.text)} />
+          </div>
+        ),
+      )}
+      {cell.errorMessage ? <MessageBubble role="error" text={cell.errorMessage} /> : null}
+    </div>
+  );
+
+  return copyText ? (
+    <CopyableMessage text={copyText} side="trailing">
+      {content}
+    </CopyableMessage>
+  ) : (
+    content
+  );
+}
+
 export function CellView({
   cell,
   editorController,
@@ -688,31 +768,7 @@ export function CellView({
     case "user":
       return <UserCellView cell={cell} showImages={transcriptVisibility.showImages} />;
     case "assistant":
-      return (
-        <div
-          className="space-y-2"
-          data-testid="assistant-cell"
-          data-streaming={cell.streaming ? "true" : "false"}
-        >
-          {visibleAssistantBlocks(cell.blocks, transcriptVisibility).map((block) =>
-            block.kind === "thinking" ? (
-              <MessageBubble
-                key={block.contentIndex}
-                role="thinking"
-                text={block.done ? block.text : balance(block.text)}
-              />
-            ) : (
-              <div key={block.contentIndex} data-testid="assistant-text">
-                <MessageBubble
-                  role="assistant"
-                  text={block.done ? block.text : balance(block.text)}
-                />
-              </div>
-            ),
-          )}
-          {cell.errorMessage ? <MessageBubble role="error" text={cell.errorMessage} /> : null}
-        </div>
-      );
+      return <AssistantCellView cell={cell} transcriptVisibility={transcriptVisibility} />;
     case "tool":
       return <ToolCellView cell={cell} editorController={editorController} />;
     case "subagent":
