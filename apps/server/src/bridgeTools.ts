@@ -4,10 +4,11 @@ import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
+import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
 
 /**
- * The deck-agent bridge tools — managed_subagent, managed_parallel, and the
- * session activity plan — registered on the app bridge at startup. Moved
+ * The parent Deck-agent bridge tools — subagent launch and the session activity
+ * plan — registered on the app bridge at startup. Moved
  * verbatim from server.ts (Slice 2 decomposition).
  */
 export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: SessionManager): void {
@@ -348,6 +349,49 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       if (!session) return { content: "No such session for the plan.", isError: true };
       session.updatePlan(parsed.data.updates);
       return { content: `Plan updated.\n${renderPlan(session.plan)}` };
+    },
+  );
+}
+
+/** Register the parent-only, runtime-only view of unresolved child blockers. */
+export function registerSupervisorListBridgeTool(
+  bridge: BridgeRegistry,
+  supervisor: SupervisorLog,
+): void {
+  const paramsSchema = z.object({}).strict();
+  bridge.register(
+    {
+      name: "list_supervisor_requests",
+      label: "List supervisor requests",
+      description:
+        "List pending questions and decisions from this session's Deck subagents. Call this when supervising delegated work or when a subagent may be blocked. Returns a JSON array; use the requestID with the supervisor answer flow.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      promptSnippet:
+        "list_supervisor_requests() — review pending questions and decisions from this parent session's subagents.",
+    },
+    (params, ctx) => {
+      const parsed = paramsSchema.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid list_supervisor_requests arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      const requests = supervisor
+        .list(ctx.sessionId)
+        .filter((request) => request.status === "pending")
+        .map((request) => ({
+          requestID: request.id,
+          kind: request.method,
+          title: supervisorRequestTitle(request.method, request.title),
+          message: request.message,
+          runID: request.cellId,
+        }));
+      return { content: JSON.stringify(requests) };
     },
   );
 }

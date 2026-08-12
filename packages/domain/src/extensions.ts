@@ -43,6 +43,7 @@ export const BRIDGE_TOOL_NAMES: readonly string[] = [
   "agent_deck_memory_mark_stale",
   "managed_subagent",
   "managed_parallel",
+  "list_supervisor_requests",
   "contact_supervisor",
   "ask_user",
   "set_session_plan",

@@ -427,6 +427,7 @@ const SUBAGENT_TIMEOUT_MS = 120_000;
 const CHILD_FORBIDDEN_TOOLS = new Set([
   "managed_subagent",
   "managed_parallel",
+  "list_supervisor_requests",
   "set_session_plan",
   "update_session_plan",
   "contact_supervisor",

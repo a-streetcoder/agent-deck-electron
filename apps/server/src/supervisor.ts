@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 /**
  * The supervisor channel: a child subagent talks UP to its parent through the
  * `contact_supervisor` bridge tool (native-subagent-bridge.md). This registry
- * records those requests keyed by parent + child. v1 handles only the
- * non-blocking `progress_update`; the blocking methods (need_decision,
- * interview_request) and the parent's list/answer flow are later slices.
+ * records those requests keyed by parent + child. Blocking requests remain
+ * pending until the existing UI/REST answer flow settles them; parent sessions
+ * can inspect their own pending rows through the read-only bridge tool.
  */
 
 export type SupervisorMethod = "progress_update" | "need_decision" | "interview_request";
@@ -16,6 +16,11 @@ export function isBlockingMethod(method: SupervisorMethod): boolean {
 }
 
 export type SupervisorStatus = "recorded" | "pending" | "answered" | "cancelled";
+
+/** Keep model-facing request rows and the existing question card on one fallback. */
+export function supervisorRequestTitle(method: SupervisorMethod, title?: string): string {
+  return title ?? (method === "need_decision" ? "Decision needed" : "Question");
+}
 
 export interface SupervisorRequest {
   id: string;

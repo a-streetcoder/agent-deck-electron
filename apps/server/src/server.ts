@@ -41,7 +41,7 @@ import {
   type NamedAgentLaunch,
   type ServerContext,
 } from "./context.ts";
-import { registerDeckBridgeTools } from "./bridgeTools.ts";
+import { registerDeckBridgeTools, registerSupervisorListBridgeTool } from "./bridgeTools.ts";
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
 import { loadSkillEngineNative } from "./skills/skillEngineNative.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
@@ -599,9 +599,10 @@ async function initServer(
   const askUser = new AskUserCoordinator(sessions, (sessionId) => bridgeTokens.get(sessionId));
   registerAskUserBridgeTool(bridge, askUser);
 
-  // Native subagents + the session activity plan: the deck-agent bridge tools
-  // every parent session gets (moved verbatim to bridgeTools.ts).
+  // Native subagents, supervisor listing, and the session activity plan: the
+  // Deck-agent bridge tools every parent session gets.
   registerDeckBridgeTools(bridge, sessions);
+  registerSupervisorListBridgeTool(bridge, supervisor);
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
   // configuration reloads, and Pi all observe the same user-owned files.

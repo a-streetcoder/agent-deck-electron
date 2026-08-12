@@ -794,12 +794,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       id: "deck_agents",
       displayName: "Deck agents",
       summary:
-        "Lets the agent delegate to your named agents (subagents), run them in parallel, and maintain a session plan; a subagent reports back over a supervisor channel.",
+        "Lets the agent delegate to your named agents (subagents), run them in parallel, review pending supervisor requests, and maintain a session plan; a subagent reports back over a supervisor channel.",
       condition: "Always on for parent sessions",
       match: (name: string): boolean =>
         [
           "managed_subagent",
           "managed_parallel",
+          "list_supervisor_requests",
           "set_session_plan",
           "update_session_plan",
         ].includes(name),

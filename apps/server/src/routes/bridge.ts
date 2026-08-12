@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { buildRecalledMemories, type MemoryStore } from "@agent-deck/memory";
 import { z } from "zod";
-import type { SupervisorMethod } from "../supervisor.ts";
+import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts";
 import type { ServerContext } from "../context.ts";
 
 /** A tool call arriving from a session's generated bridge extension. */
@@ -111,7 +111,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       requestId,
       subagentCellId: route.cellId,
       method,
-      title: title ?? (method === "need_decision" ? "Decision needed" : "Question"),
+      title: supervisorRequestTitle(method, title),
       message,
       options,
     });

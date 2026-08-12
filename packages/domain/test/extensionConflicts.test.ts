@@ -53,6 +53,9 @@ describe("extensionBridgeConflict", () => {
     expect(extensionBridgeConflict(`pi.registerTool({ name: 'managed_subagent' }, fn)`)).toBe(
       "managed_subagent",
     );
+    expect(
+      extensionBridgeConflict(`pi.registerTool({ name: "list_supervisor_requests" }, fn)`),
+    ).toBe("list_supervisor_requests");
   });
 
   it("flags an mcp__ proxy tool literal", () => {
