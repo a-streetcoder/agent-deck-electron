@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type * as domain from "@agent-deck/domain";
 import { Schema } from "effect";
 import type * as contracts from "../src/index.ts";
-import { SessionMeta } from "../src/index.ts";
+import { SessionMeta, SessionModelInfo } from "../src/index.ts";
 
 /**
  * Type-level parity: the Effect-derived types must be mutually assignable with
@@ -53,6 +53,28 @@ describe("contracts ⇄ domain type parity", () => {
     ).toBe(true);
     expect(() =>
       Schema.decodeUnknownSync(SessionMeta)({ ...base, needsAttention: "yes" }),
+    ).toThrow();
+  });
+
+  it("types exact model thinking levels while accepting legacy missing metadata", () => {
+    expect(
+      Schema.decodeUnknownSync(SessionModelInfo)({
+        provider: "anthropic",
+        id: "opus",
+        reasoning: true,
+        supportedThinkingLevels: ["off", "low", "high", "max"],
+      }).supportedThinkingLevels,
+    ).toEqual(["off", "low", "high", "max"]);
+    expect(
+      Schema.decodeUnknownSync(SessionModelInfo)({ provider: "legacy", id: "model" })
+        .supportedThinkingLevels,
+    ).toBeUndefined();
+    expect(() =>
+      Schema.decodeUnknownSync(SessionModelInfo)({
+        provider: "bad",
+        id: "model",
+        supportedThinkingLevels: ["off", "extreme"],
+      }),
     ).toThrow();
   });
 

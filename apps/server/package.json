@@ -22,6 +22,7 @@
     "@agent-deck/memory": "workspace:*",
     "@agent-deck/pi-host": "workspace:*",
     "@agent-deck/resources": "workspace:*",
+    "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "0.82.0",
     "@fastify/static": "8.2.0",
     "effect": "3.22.0",

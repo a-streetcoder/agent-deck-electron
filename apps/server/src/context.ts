@@ -20,7 +20,7 @@ import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export function asThinkingLevel(value: string | undefined): AgentSessionPlan["thinking"] {
   return value && THINKING_LEVELS.has(value) ? (value as AgentSessionPlan["thinking"]) : undefined;

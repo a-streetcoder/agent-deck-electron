@@ -97,6 +97,11 @@ describe("parent plan", () => {
     ]);
   });
 
+  it("passes Pi's max thinking level through launch validation", () => {
+    const args = buildLaunchArgs({ kind: "parent", thinking: "max" });
+    expect(args[args.indexOf("--thinking") + 1]).toBe("max");
+  });
+
   it("bare parent plan is just the base invariant", () => {
     expect(buildLaunchArgs({ kind: "parent" })).toEqual([
       "--mode",

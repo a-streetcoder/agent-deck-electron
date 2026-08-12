@@ -184,6 +184,11 @@ const fixtures: Fixture[] = [
     expected: "accept",
   },
   {
+    name: "set_thinking level max (pinned Pi 0.82.0)",
+    message: { type: "set_thinking", sessionId: "s1", level: "max" },
+    expected: "accept",
+  },
+  {
     name: "ui_response with empty payload record",
     message: { type: "ui_response", sessionId: "s1", response: {} },
     expected: "accept",

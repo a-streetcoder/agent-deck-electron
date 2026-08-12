@@ -205,7 +205,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         gitAutomation: z.boolean().optional(),
         defaultModel: z.string().min(1).nullable().optional(),
         defaultThinking: z
-          .enum(["off", "minimal", "low", "medium", "high", "xhigh"])
+          .enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"])
           .nullable()
           .optional(),
         extensionLoadingMode: z.enum(["useMyExtensions", "agentDeckManaged"]).optional(),

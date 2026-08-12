@@ -66,6 +66,14 @@ afterAll(async () => {
 });
 
 describe("onboarding preferences at session launch", () => {
+  it("accepts and persists pinned Pi's max thinking level through PATCH /settings", async () => {
+    expect((await patchSettings({ defaultThinking: "max" })).status).toBe(200);
+    const response = await fetch(`http://127.0.0.1:${server.port}/settings`);
+    const body = (await response.json()) as { settings: { defaultThinking: string | null } };
+    expect(body.settings.defaultThinking).toBe("max");
+    expect((await patchSettings({ defaultThinking: null })).status).toBe(200);
+  });
+
   it("rejects an invalid thinking level and never clobbers defaultSkills", async () => {
     // A patch that sets one preference must leave the skills array intact.
     expect((await patchSettings({ defaultSkills: ["keeper"] })).status).toBe(200);

@@ -13,7 +13,7 @@ import {
   isKeybindingCommand,
   isValidChord,
 } from "@agent-deck/contracts";
-import { THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
+import { PI_THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
 import { Context, Effect, Layer, Option } from "effect";
 
 /**
@@ -466,7 +466,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           defaultModel: typeof record.defaultModel === "string" ? record.defaultModel : null,
           defaultThinking:
             typeof record.defaultThinking === "string" &&
-            (THINKING_LEVELS as readonly string[]).includes(record.defaultThinking)
+            (PI_THINKING_LEVELS as readonly string[]).includes(record.defaultThinking)
               ? (record.defaultThinking as ThinkingLevel)
               : null,
           extensionLoadingMode:

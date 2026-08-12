@@ -24,6 +24,7 @@ import {
   shouldCollapsePaste,
   thinkingLevelsForModel,
 } from "@agent-deck/domain";
+import type { SessionModelInfo } from "@agent-deck/contracts";
 import {
   EMPTY_COMPOSER_DRAFT,
   pendingComposerTextForSession,
@@ -226,7 +227,11 @@ export function Composer() {
   const pickableAgents = agents.filter((agent) => !agent.shadowed && !agent.disabled);
 
   const [piState, setPiState] = useState<PiComposerState | null>(null);
+  const [piStateStatus, setPiStateStatus] = useState<"loading" | "loaded" | "failed">("loading");
   const [models, setModels] = useState<PiModelInfo[]>([]);
+  const [modelCatalogStatus, setModelCatalogStatus] = useState<"loading" | "loaded" | "failed">(
+    "loading",
+  );
   // Live context-window usage (native session context-usage indicator). null
   // until the first LLM response establishes a token estimate.
   const [contextUsage, setContextUsage] = useState<{
@@ -269,7 +274,8 @@ export function Composer() {
     if (!sessionId) return;
     try {
       const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/state`);
-      if (!response.ok || activeSessionRef.current !== sessionId) return;
+      if (!response.ok) throw new Error("session state unavailable");
+      if (activeSessionRef.current !== sessionId) return;
       const { state } = (await response.json()) as {
         state: { model?: { provider: string; id: string }; thinkingLevel: string };
       };
@@ -279,7 +285,9 @@ export function Composer() {
         modelId: state.model?.id,
         thinkingLevel: state.thinkingLevel,
       });
+      setPiStateStatus("loaded");
     } catch {
+      if (activeSessionRef.current === sessionId) setPiStateStatus("failed");
       // Session may be mid-restart; the next refresh wins.
     }
   }, [sessionId]);
@@ -335,7 +343,9 @@ export function Composer() {
     setSubmitting(false);
     setSubmitStatus(null);
     setPiState(null);
+    setPiStateStatus("loading");
     setModels([]);
+    setModelCatalogStatus("loading");
     setContextUsage(null);
     setSessionTotals(null);
     setExpandedImageId(null);
@@ -343,19 +353,18 @@ export function Composer() {
     if (!sessionId) return;
     void refreshPiState();
     void fetch(`/sessions/${encodeURIComponent(sessionId)}/models`)
-      .then((response) => (response.ok ? response.json() : { models: [] }))
-      .then((data: { models: Array<{ provider: string; id: string; reasoning?: boolean }> }) => {
-        if (activeSessionRef.current === sessionId) {
-          setModels(
-            data.models.map((m) => ({
-              provider: m.provider,
-              id: m.id,
-              reasoning: m.reasoning,
-            })),
-          );
-        }
+      .then(async (response) => {
+        if (!response.ok) throw new Error("model catalog unavailable");
+        return (await response.json()) as { models: SessionModelInfo[] };
       })
-      .catch(() => {});
+      .then((data) => {
+        if (activeSessionRef.current !== sessionId) return;
+        setModels(data.models);
+        setModelCatalogStatus("loaded");
+      })
+      .catch(() => {
+        if (activeSessionRef.current === sessionId) setModelCatalogStatus("failed");
+      });
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       // Invalidate reads at the boundary where this composer stops owning the
@@ -389,13 +398,26 @@ export function Composer() {
   }, [contextRevision, sessionId, refreshStats]);
 
   const suggestions = useSuggestions(sessionId);
-  // The current model gates the thinking ladder: a non-reasoning model offers
-  // only "off" (native supportsThinking fallback). reasoning comes from the
-  // already-fetched models catalog; unknown → full ladder (no flash).
+  // The current model carries Pi's exact supported ladder. Missing metadata
+  // keeps the legacy fallback so an older backend remains usable.
   const currentModel = models.find(
     (m) => m.provider === piState?.provider && m.id === piState?.modelId,
   );
-  const thinkingLevels = thinkingLevelsForModel(currentModel?.reasoning);
+  const thinkingLevels = currentModel
+    ? thinkingLevelsForModel(currentModel.reasoning, currentModel.supportedThinkingLevels)
+    : [];
+  const thinkingMetadataStatus =
+    piStateStatus === "failed" || modelCatalogStatus === "failed"
+      ? "unavailable"
+      : piStateStatus === "loading" ||
+          modelCatalogStatus === "loading" ||
+          !piState?.provider ||
+          !piState.modelId
+        ? "loading"
+        : !currentModel ||
+            (currentModel.reasoning !== false && currentModel.supportedThinkingLevels?.length === 0)
+          ? "unavailable"
+          : "known";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Full-size preview overlay: the id of the pending image being expanded, or
   // null. Cleared when its image is removed so a stale id can't reopen it.
@@ -1002,6 +1024,7 @@ export function Composer() {
           <ThinkingChip
             state={piState}
             levels={thinkingLevels}
+            metadataStatus={thinkingMetadataStatus}
             disabled={running}
             onSelect={(level) => {
               if (runningRef.current) return;

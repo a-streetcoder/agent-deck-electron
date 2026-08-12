@@ -1,3 +1,5 @@
+import type { RpcCommand } from "@earendil-works/pi-coding-agent";
+
 /**
  * Typed launch plans for the three M1 pi subprocess shapes, mirroring the native
  * app's four production launch paths (commit helper arrives with ship support).
@@ -9,7 +11,8 @@
  * and re-enables ONLY explicitly assigned resources.
  */
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+/** Accepted launch values follow the pinned Pi RPC command, including `max`. */
+export type ThinkingLevel = Extract<RpcCommand, { type: "set_thinking_level" }>["level"];
 
 export interface ModelSelection {
   provider?: string;

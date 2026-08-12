@@ -75,6 +75,12 @@ describe("SettingsStore onboarding preferences", () => {
     expect(reloaded.defaultSkills).toEqual([]);
   });
 
+  it("round-trips pinned Pi's max default thinking level", () => {
+    const dir = freshDir();
+    new SettingsStore(dir).update({ defaultThinking: "max" });
+    expect(new SettingsStore(dir).get().defaultThinking).toBe("max");
+  });
+
   it("clears defaultModel/defaultThinking back to null", () => {
     const dir = freshDir();
     const store = new SettingsStore(dir);

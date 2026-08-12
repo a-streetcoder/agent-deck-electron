@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
-import type { ProjectMeta } from "@agent-deck/contracts";
+import type { ProjectMeta, SessionModelInfo } from "@agent-deck/contracts";
 import type { PromptInfo } from "@agent-deck/domain";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
 import { z } from "zod";
 import {
@@ -210,10 +211,16 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // Mark models the user hid from the picker (app-level, native "Disabled").
       const disabled = new Set(settings.get().disabledModels);
       return {
-        models: models.map((m) => ({
-          ...m,
-          disabled: disabled.has(`${m.provider}:${m.id}`),
-        })),
+        models: models.map(
+          (model) =>
+            ({
+              // Preserve the existing Pi catalog payload for older clients.
+              ...model,
+              // Pi owns model/provider-specific omissions (including xhigh/max).
+              supportedThinkingLevels: getSupportedThinkingLevels(model),
+              disabled: disabled.has(`${model.provider}:${model.id}`),
+            }) satisfies SessionModelInfo,
+        ),
       };
     } catch (error) {
       return reply.status(500).send({ error: String(error) });

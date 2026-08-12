@@ -71,8 +71,34 @@ export const PasteAttachment = Schema.Struct({
 });
 export type PasteAttachment = typeof PasteAttachment.Type;
 
-export const ThinkingLevel = Schema.Literal("off", "minimal", "low", "medium", "high", "xhigh");
+export const ThinkingLevel = Schema.Literal(
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+);
 export type ThinkingLevel = typeof ThinkingLevel.Type;
+
+/** Extensible model-picker projection layered onto Pi's catalog object.
+ * `supportedThinkingLevels` is optional so renderers remain compatible with
+ * servers predating per-model metadata. The server does not decode this response
+ * through the schema: it spreads Pi's catalog object and retains additional Pi
+ * fields while consumers depend only on this narrow typed projection. */
+export const SessionModelInfo = Schema.mutable(
+  Schema.Struct({
+    provider: Schema.String,
+    id: Schema.String,
+    reasoning: Schema.optional(Schema.Boolean),
+    supportedThinkingLevels: Schema.optional(
+      Schema.mutable(Schema.Array(ThinkingLevel)).pipe(Schema.minItems(1)),
+    ),
+    disabled: Schema.optional(Schema.Boolean),
+  }),
+);
+export type SessionModelInfo = typeof SessionModelInfo.Type & Record<string, unknown>;
 
 /** How Pi handles a prompt submitted while it is already streaming. */
 export const StreamingBehavior = Schema.Literal("steer", "followUp");

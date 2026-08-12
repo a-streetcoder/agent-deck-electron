@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   MOCK_MODEL_ID,
+  MOCK_NOREASON_MODEL_ID,
   MOCK_PROVIDER_ID,
   startMockProvider,
   writeMockProviderExtension,
@@ -27,10 +28,22 @@ const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
 
 let sessionId: string;
 
-async function fetchModels(): Promise<Array<{ provider: string; id: string; disabled?: boolean }>> {
+async function fetchModels(): Promise<
+  Array<{
+    provider: string;
+    id: string;
+    disabled?: boolean;
+    supportedThinkingLevels?: string[];
+  }>
+> {
   const res = await fetch(`http://127.0.0.1:${server.port}/sessions/${sessionId}/models`);
   const { models } = (await res.json()) as {
-    models: Array<{ provider: string; id: string; disabled?: boolean }>;
+    models: Array<{
+      provider: string;
+      id: string;
+      disabled?: boolean;
+      supportedThinkingLevels?: string[];
+    }>;
   };
   return models;
 }
@@ -67,6 +80,21 @@ afterAll(async () => {
 });
 
 describe("model enable/disable curation", () => {
+  it("preserves pinned Pi's exact per-model thinking levels", async () => {
+    const models = await fetchModels();
+    expect(models.find((model) => model.id === MOCK_MODEL_ID)?.supportedThinkingLevels).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      models.find((model) => model.id === MOCK_NOREASON_MODEL_ID)?.supportedThinkingLevels,
+    ).toEqual(["off"]);
+  });
+
   it("marks a model disabled after hiding it, and enabled after showing it again", async () => {
     // The mock model is available and enabled by default.
     const before = (await fetchModels()).find((m) => m.id === MOCK_MODEL_ID);

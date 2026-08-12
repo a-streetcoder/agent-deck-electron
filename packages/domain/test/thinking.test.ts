@@ -6,11 +6,26 @@ describe("thinkingLevelsForModel", () => {
     expect(thinkingLevelsForModel(true)).toEqual([...THINKING_LEVELS]);
   });
 
-  it("restricts a non-reasoning model to 'off' only (native supportsThinking fallback)", () => {
-    expect(thinkingLevelsForModel(false)).toEqual(["off"]);
+  it("preserves an exact reported subset, including max only when present", () => {
+    expect(thinkingLevelsForModel(true, ["off", "low", "high", "max"])).toEqual([
+      "off",
+      "low",
+      "high",
+      "max",
+    ]);
   });
 
-  it("defaults to the full ladder when reasoning is unknown (no flash to 'off' while loading)", () => {
+  it("restricts a non-reasoning model to off even if inconsistent metadata is supplied", () => {
+    expect(thinkingLevelsForModel(false, ["off", "max"])).toEqual(["off"]);
+    expect(thinkingLevelsForModel(false, [])).toEqual(["off"]);
+  });
+
+  it("preserves an empty reasoning-model result instead of inventing levels", () => {
+    expect(thinkingLevelsForModel(true, [])).toEqual([]);
+  });
+
+  it("uses the legacy ladder without guessing max when metadata is missing", () => {
     expect(thinkingLevelsForModel(undefined)).toEqual([...THINKING_LEVELS]);
+    expect(thinkingLevelsForModel(undefined)).not.toContain("max");
   });
 });

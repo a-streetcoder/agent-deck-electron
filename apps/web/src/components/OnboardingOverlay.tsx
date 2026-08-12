@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { THINKING_LEVELS } from "@agent-deck/domain";
+import { PI_THINKING_LEVELS } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { ProvidersScreen } from "../screens/ProvidersScreen.tsx";
 import { useAppStore, type AppView } from "../state/store.ts";
@@ -923,12 +923,15 @@ export function OnboardingOverlay() {
                       }
                     >
                       <option value="">Pi&apos;s default</option>
-                      {THINKING_LEVELS.map((level) => (
+                      {PI_THINKING_LEVELS.map((level) => (
                         <option key={level} value={level}>
                           {level}
                         </option>
                       ))}
                     </ControlSelect>
+                    <p className="mt-1 text-xs text-text-muted">
+                      Applied when supported by the selected model; Pi may clamp unsupported levels.
+                    </p>
                   </div>
                 </>
               ) : (

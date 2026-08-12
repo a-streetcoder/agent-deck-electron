@@ -1,6 +1,7 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Brain, ChevronDown, Cpu, Square } from "lucide-react";
+import type { SessionModelInfo } from "@agent-deck/contracts";
 import { THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { ProviderLogo } from "../ProviderLogo.tsx";
@@ -11,12 +12,7 @@ import { ProviderLogo } from "../ProviderLogo.tsx";
  * and a prominent circular send/stop button with a symbol swap.
  */
 
-export interface PiModelInfo {
-  provider: string;
-  id: string;
-  /** pi ModelInfo.reasoning — gates the thinking-level ladder (see ThinkingChip). */
-  reasoning?: boolean;
-}
+export type PiModelInfo = SessionModelInfo;
 
 export interface PiComposerState {
   provider?: string;
@@ -147,45 +143,94 @@ export function ModelChip({
 export function ThinkingChip({
   state,
   levels = THINKING_LEVELS,
+  metadataStatus = "known",
   onSelect,
   disabled = false,
 }: {
   state: PiComposerState | null;
-  /** Levels the current model supports; a non-reasoning model offers only "off". */
+  /** Exact levels the current model supports, as computed by pinned Pi. */
   levels?: readonly ThinkingLevel[];
+  /** Unknown metadata never speculates about availability or opens a stale menu. */
+  metadataStatus?: "loading" | "known" | "unavailable";
   onSelect: (level: ThinkingLevel) => void;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const pickerDisabled = disabled || metadataStatus !== "known" || levels.length === 0;
   const ref = useDismiss(() => setOpen(false));
   useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
+    if (pickerDisabled) setOpen(false);
+  }, [pickerDisabled]);
 
-  // Native `displayLevel`: when the active level isn't one the current model
-  // supports (e.g. after switching to a non-reasoning model), surface it as
-  // "{level} unavailable" rather than silently showing an unpickable value.
   const current = state?.thinkingLevel;
+  const availabilityKnown = metadataStatus === "known" && levels.length > 0;
   const label =
     current == null
       ? "thinking"
-      : (levels as readonly string[]).includes(current)
-        ? current
-        : `${current} unavailable`;
+      : metadataStatus === "unavailable" || (metadataStatus === "known" && levels.length === 0)
+        ? `${current} · levels unavailable`
+        : availabilityKnown && !(levels as readonly string[]).includes(current)
+          ? `${current} unavailable`
+          : current;
+  const title =
+    metadataStatus === "loading"
+      ? "Thinking levels are loading"
+      : metadataStatus === "unavailable" || levels.length === 0
+        ? "Thinking levels are unavailable for this model; retry by reopening the session"
+        : "Thinking level";
+
+  const openAt = (index: number): void => {
+    if (pickerDisabled) return;
+    const bounded = Math.max(0, Math.min(index, levels.length - 1));
+    setFocusedIndex(bounded);
+    setOpen(true);
+    requestAnimationFrame(() => optionRefs.current[bounded]?.focus());
+  };
+  const select = (level: ThinkingLevel): void => {
+    if (pickerDisabled) return;
+    setOpen(false);
+    onSelect(level);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
 
   return (
     <div className="relative" ref={ref}>
       <ControlButton
+        ref={triggerRef}
         data-testid="thinking-chip"
-        className={chipClass(open)}
-        title="Thinking level"
+        className={cn(
+          chipClass(open),
+          pickerDisabled &&
+            !disabled &&
+            "cursor-not-allowed opacity-60 focus-visible:ring-2 focus-visible:ring-accent",
+        )}
+        title={title}
+        aria-label={title}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-disabled={pickerDisabled}
+        aria-busy={metadataStatus === "loading" || undefined}
         disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (pickerDisabled) return;
+          if (open) setOpen(false);
+          else openAt(Math.max(0, levels.indexOf(current as ThinkingLevel)));
+        }}
+        onKeyDown={(event) => {
+          if (pickerDisabled) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openAt(event.key === "ArrowDown" ? 0 : levels.length - 1);
+          }
+        }}
       >
         <Brain size={12} />
-        <span data-testid="thinking-chip-label">{label}</span>
+        <span data-testid="thinking-chip-label" className="max-w-[16ch] truncate" title={label}>
+          {label}
+        </span>
         <ChevronDown size={11} className="opacity-60" />
       </ControlButton>
       {open ? (
@@ -195,23 +240,42 @@ export function ThinkingChip({
           aria-label="Thinking level"
           className="absolute bottom-full left-0 z-20 mb-1.5 w-36 rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
-          {levels.map((level) => (
+          {levels.map((level, index) => (
             <ControlButton
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
               key={level}
+              role="option"
+              aria-selected={level === state?.thinkingLevel}
+              tabIndex={index === focusedIndex ? 0 : -1}
               data-testid={`thinking-option-${level}`}
               className={cn(
-                "block w-full rounded-md px-2 py-1 text-left text-xs",
-                "disabled:cursor-not-allowed disabled:opacity-40",
+                "block w-full rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent",
                 level === state?.thinkingLevel
                   ? "bg-selection text-text-primary"
                   : "text-text-secondary hover:bg-hover",
               )}
-              disabled={disabled}
-              onClick={() => {
-                if (disabled) return;
-                setOpen(false);
-                onSelect(level);
+              onFocus={() => setFocusedIndex(index)}
+              onKeyDown={(event) => {
+                let next: number | undefined;
+                if (event.key === "ArrowDown") next = (index + 1) % levels.length;
+                else if (event.key === "ArrowUp")
+                  next = (index - 1 + levels.length) % levels.length;
+                else if (event.key === "Home") next = 0;
+                else if (event.key === "End") next = levels.length - 1;
+                else if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  select(level);
+                  return;
+                }
+                if (next !== undefined) {
+                  event.preventDefault();
+                  setFocusedIndex(next);
+                  optionRefs.current[next]?.focus();
+                }
               }}
+              onClick={() => select(level)}
             >
               {level}
             </ControlButton>

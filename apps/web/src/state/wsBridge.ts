@@ -8,6 +8,7 @@ import type {
   ServerMessage,
   SessionMeta,
   TerminalPush,
+  ThinkingLevel,
 } from "@agent-deck/contracts";
 import { reduceTranscript } from "@agent-deck/domain";
 import type {
@@ -1314,9 +1315,7 @@ export function sendSetModel(provider: string, modelId: string): void {
   }
 }
 
-export function sendSetThinking(
-  level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
-): void {
+export function sendSetThinking(level: ThinkingLevel): void {
   if (currentSessionId) {
     sendCompatibleCommand({ type: "set_thinking", sessionId: currentSessionId, level });
   }
