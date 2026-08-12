@@ -19,7 +19,7 @@ const resourceMocks = vi.hoisted(() => ({
 
 const gitMocks = vi.hoisted(() => ({
   canonicalWorktreePath: vi.fn(),
-  createSessionWorktree: vi.fn(),
+  createSessionWorktreeWithBranchRetries: vi.fn(),
   gitWorktreePrune: vi.fn(),
   gitWorktreeRegistrationAtPath: vi.fn(),
   gitWorktreeRegistrationMatches: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("@agent-deck/resources", () => ({
 vi.mock("../src/git.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof GitModule>()),
   canonicalWorktreePath: gitMocks.canonicalWorktreePath,
-  createSessionWorktree: gitMocks.createSessionWorktree,
+  createSessionWorktreeWithBranchRetries: gitMocks.createSessionWorktreeWithBranchRetries,
   gitWorktreePrune: gitMocks.gitWorktreePrune,
   gitWorktreeRegistrationAtPath: gitMocks.gitWorktreeRegistrationAtPath,
   gitWorktreeRegistrationMatches: gitMocks.gitWorktreeRegistrationMatches,
@@ -69,7 +69,7 @@ vi.mock("../src/git.ts", async (importOriginal) => ({
   gitWorktreeRegistrations: gitMocks.gitWorktreeRegistrations,
 }));
 
-import { SessionWorktreeAddError } from "../src/git.ts";
+import { SessionWorktreeAddError, SessionWorktreeBranchExhaustedError } from "../src/git.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
 
@@ -232,7 +232,7 @@ beforeEach(() => {
   gitMocks.canonicalWorktreePath
     .mockReset()
     .mockImplementation(async (candidate: string) => path.resolve(candidate));
-  gitMocks.createSessionWorktree.mockReset();
+  gitMocks.createSessionWorktreeWithBranchRetries.mockReset();
   gitMocks.gitWorktreePrune.mockReset().mockResolvedValue(undefined);
   gitMocks.gitWorktreeRegistrationAtPath.mockReset().mockResolvedValue({
     path: WORKTREE_PATH,
@@ -261,7 +261,7 @@ beforeEach(() => {
     { path: PROJECT_PATH, branch: "main" },
     { path: WORKTREE_PATH, branch: "agent-deck/session-a1b2c3d4" },
   ]);
-  gitMocks.createSessionWorktree.mockResolvedValue({
+  gitMocks.createSessionWorktreeWithBranchRetries.mockResolvedValue({
     path: WORKTREE_PATH,
     branch: "agent-deck/session-allocated",
     sourceBranch: "main",
@@ -400,7 +400,7 @@ describe("GET /sessions/:id/files", () => {
 
 describe("POST /sessions worktree transaction", () => {
   it("returns a typed 409 and creates no state when mandatory allocation fails", async () => {
-    gitMocks.createSessionWorktree.mockRejectedValue(
+    gitMocks.createSessionWorktreeWithBranchRetries.mockRejectedValue(
       new Error("detached HEAD — check out a branch first"),
     );
     const { fastify, state, sessions } = makeRoute();
@@ -429,6 +429,31 @@ describe("POST /sessions worktree transaction", () => {
       "v1:0000000000000001:0000000000000002",
     );
     expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).toHaveBeenCalledOnce();
+    await fastify.close();
+  });
+
+  it("returns the typed isolation failure when all branch candidates are exhausted", async () => {
+    gitMocks.createSessionWorktreeWithBranchRetries.mockRejectedValue(
+      new SessionWorktreeBranchExhaustedError("agent-deck/session-generated", 50),
+    );
+    const { fastify, state, sessions } = makeRoute();
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "worktree_isolation_failed" });
+    expect(response.json().error).toContain("couldn't find a free session branch");
+    expect(response.json().error).toContain("after 50 attempts");
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).toHaveBeenCalledOnce();
+    expect(state.reserveWorktree).toHaveBeenCalledOnce();
+    expect(state.deleteWorktree).toHaveBeenCalledOnce();
+    expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
+    expect(sessions.create).not.toHaveBeenCalled();
     await fastify.close();
   });
 
@@ -445,7 +470,7 @@ describe("POST /sessions worktree transaction", () => {
     });
 
     expect(response.statusCode).toBe(409);
-    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
     expect(state.deleteWorktree).not.toHaveBeenCalled();
     expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
     expect(gitMocks.gitDeleteOwnedWorktreeBranch).not.toHaveBeenCalled();
@@ -453,7 +478,7 @@ describe("POST /sessions worktree transaction", () => {
   });
 
   it("cleans an unregistered partial target with its reservation token", async () => {
-    gitMocks.createSessionWorktree.mockRejectedValue(
+    gitMocks.createSessionWorktreeWithBranchRetries.mockRejectedValue(
       new SessionWorktreeAddError(
         {
           path: WORKTREE_PATH,
@@ -482,7 +507,7 @@ describe("POST /sessions worktree transaction", () => {
   });
 
   it("cleans a registered partial target before pruning its exact registration", async () => {
-    gitMocks.createSessionWorktree.mockRejectedValue(
+    gitMocks.createSessionWorktreeWithBranchRetries.mockRejectedValue(
       new SessionWorktreeAddError(
         {
           path: WORKTREE_PATH,
@@ -520,7 +545,7 @@ describe("POST /sessions worktree transaction", () => {
       payload: { projectId: "project-1", agentName: "blocked" },
     });
     expect(response.statusCode).toBe(409);
-    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
     await fastify.close();
   });
 
@@ -534,7 +559,7 @@ describe("POST /sessions worktree transaction", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(gitMocks.createSessionWorktree).toHaveBeenCalledWith(
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).toHaveBeenCalledWith(
       PROJECT_PATH,
       expect.any(String),
       expect.stringMatching(/^agent-deck\/session-/),
@@ -645,7 +670,7 @@ describe("POST /sessions worktree transaction", () => {
       payload: { projectId: "project-1" },
     });
     expect(response.statusCode).toBe(201);
-    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
     expect(sessions.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: PROJECT_PATH }));
     await fastify.close();
   });
@@ -659,7 +684,7 @@ describe("POST /sessions worktree transaction", () => {
       payload: { cwd: standalone },
     });
     expect(response.statusCode).toBe(201);
-    expect(gitMocks.createSessionWorktree).not.toHaveBeenCalled();
+    expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
     expect(sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: standalone, projectId: undefined }),
     );

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   createLoopWorktree,
   createSessionWorktree,
+  createSessionWorktreeWithBranchRetries,
   gitApplyPatch,
   gitApplyPatchCheck,
   gitBlobAtCommit,
@@ -26,6 +27,7 @@ import {
   gitWorkingTreeClean,
   gitWorktreeRegistrations,
   parseStatus,
+  SessionWorktreeBranchCollisionError,
 } from "../src/git.ts";
 
 function makeRepo(): string {
@@ -402,6 +404,96 @@ describe("Loop worktree review patch", () => {
 });
 
 describe("session worktree branch ownership", () => {
+  it("allocates base-2 with exact ownership when the generated base branch is occupied", async () => {
+    const repo = makeRepo();
+    const target = path.join(mkdtempSync(path.join(tmpdir(), "session-retry-")), "target");
+    const baseBranch = "agent-deck/session-generated";
+    const identityToken = "v1:0000000000000001:0000000000000002";
+    execFileSync("git", ["branch", baseBranch, "main"], { cwd: repo });
+
+    const worktree = await createSessionWorktreeWithBranchRetries(
+      repo,
+      target,
+      baseBranch,
+      identityToken,
+    );
+
+    expect(worktree).toEqual({
+      path: target,
+      branch: `${baseBranch}-2`,
+      sourceBranch: "main",
+      identityToken,
+      branchOwned: true,
+    });
+    expect(await gitWorktreeRegistrationMatches(repo, target, `${baseBranch}-2`)).toBe(true);
+    expect(await gitOwnedWorktreeBranchOid(repo, baseBranch)).toBe(
+      git(repo, ["rev-parse", "main"]).trim(),
+    );
+    expect(await gitOwnedWorktreeBranchOid(repo, `${baseBranch}-2`)).toBe(
+      git(repo, ["rev-parse", "main"]).trim(),
+    );
+  });
+
+  it("exhausts the base through -50 without creating or registering a target", async () => {
+    const repo = makeRepo();
+    const target = path.join(mkdtempSync(path.join(tmpdir(), "session-exhausted-")), "target");
+    const baseBranch = "agent-deck/session-exhausted";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const branch = attempt === 0 ? baseBranch : `${baseBranch}-${attempt + 1}`;
+      execFileSync("git", ["branch", branch, "main"], { cwd: repo });
+    }
+
+    await expect(
+      createSessionWorktreeWithBranchRetries(
+        repo,
+        target,
+        baseBranch,
+        "v1:0000000000000001:0000000000000002",
+      ),
+    ).rejects.toMatchObject({ baseBranch, attempts: 50 });
+
+    expect(existsSync(target)).toBe(false);
+    expect((await gitWorktreeRegistrations(repo)).some((entry) => entry.path === target)).toBe(
+      false,
+    );
+  });
+
+  it("classifies only an exact pre-existing branch as a retryable collision", async () => {
+    const repo = makeRepo();
+    const target = path.join(repo, "unused-target");
+    const branch = "agent-deck/session-pre-existing";
+    execFileSync("git", ["branch", branch, "main"], { cwd: repo });
+
+    await expect(
+      createSessionWorktree(repo, target, branch, "v1:0000000000000001:0000000000000002"),
+    ).rejects.toEqual(expect.any(SessionWorktreeBranchCollisionError));
+
+    expect(branches(repo)).toEqual([branch, "main"]);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("does not classify a non-collision branch failure as retryable", async () => {
+    const repo = makeRepo();
+    const target = path.join(repo, "unused-invalid-target");
+    let failure: unknown;
+
+    try {
+      await createSessionWorktree(
+        repo,
+        target,
+        "agent-deck/session-invalid..name",
+        "v1:0000000000000001:0000000000000002",
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(SessionWorktreeBranchCollisionError);
+    expect(branches(repo)).toEqual(["main"]);
+    expect(existsSync(target)).toBe(false);
+  });
+
   it("returns ownership proof without deleting an occupied target when worktree add fails", async () => {
     const repo = makeRepo();
     const target = path.join(repo, "occupied-target");

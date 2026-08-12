@@ -598,6 +598,30 @@ export class SessionWorktreeAddError extends Error {
   }
 }
 
+/** `git branch` failed and an exact post-failure ref lookup proved that the
+ * requested local branch now exists. The failed attempt owns no ref or files. */
+export class SessionWorktreeBranchCollisionError extends Error {
+  constructor(
+    readonly branch: string,
+    cause: unknown,
+  ) {
+    super(`session worktree branch already exists: ${branch}`, { cause });
+    this.name = "SessionWorktreeBranchCollisionError";
+  }
+}
+
+export class SessionWorktreeBranchExhaustedError extends Error {
+  constructor(
+    readonly baseBranch: string,
+    readonly attempts: number,
+  ) {
+    super(
+      `couldn't find a free session branch starting with ${baseBranch} after ${attempts} attempts`,
+    );
+    this.name = "SessionWorktreeBranchExhaustedError";
+  }
+}
+
 export interface GitWorktree {
   /** The isolated checkout directory. */
   path: string;
@@ -677,10 +701,22 @@ export async function gitOwnedWorktreeBranchOid(
   branch: string,
 ): Promise<string | undefined> {
   if (!branch.startsWith("agent-deck/")) throw new Error("invalid owned worktree branch");
+  const ref = `refs/heads/${branch}`;
   try {
-    return (await runGit(projectDir, ["show-ref", "--hash", `refs/heads/${branch}`])).trim();
+    await runGit(projectDir, ["show-ref", "--verify", "--quiet", ref]);
   } catch (error) {
     if ((error as { code?: unknown }).code === 1) return undefined;
+    throw error;
+  }
+  try {
+    return (await runGit(projectDir, ["show-ref", "--hash", "--verify", ref])).trim();
+  } catch (error) {
+    // The exact ref may disappear between the existence proof and OID read.
+    try {
+      await runGit(projectDir, ["show-ref", "--verify", "--quiet", ref]);
+    } catch (recheckError) {
+      if ((recheckError as { code?: unknown }).code === 1) return undefined;
+    }
     throw error;
   }
 }
@@ -723,9 +759,19 @@ export async function createSessionWorktree(
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
   // `git branch` is atomic: success proves this attempt owns the new ref;
-  // failure (including a pre-existing branch or a concurrent creator) means we
-  // own nothing and therefore must not delete anything.
-  await runGit(projectDir, ["branch", branch, sourceBranch]);
+  // failure means we own nothing and therefore must not delete anything. Retry
+  // policy needs to distinguish an exact branch collision from every other Git
+  // failure without parsing localized stderr, so classify only after proving
+  // the fully-qualified local ref exists.
+  try {
+    await runGit(projectDir, ["branch", branch, sourceBranch]);
+  } catch (error) {
+    const branchExists = await gitOwnedWorktreeBranchOid(projectDir, branch)
+      .then((oid) => oid !== undefined)
+      .catch(() => false);
+    if (branchExists) throw new SessionWorktreeBranchCollisionError(branch, error);
+    throw error;
+  }
   const worktree: GitWorktree = {
     path: targetPath,
     branch,
@@ -742,6 +788,28 @@ export async function createSessionWorktree(
     throw new SessionWorktreeAddError(worktree, error);
   }
   return worktree;
+}
+
+/** Allocate one reserved session target using the native-portable candidate
+ * sequence: the generated base branch, then `-2` through `-50`. Only an exact,
+ * race-safe branch collision is retryable; all other failures retain their
+ * existing cleanup/error path. */
+export async function createSessionWorktreeWithBranchRetries(
+  projectDir: string,
+  targetPath: string,
+  baseBranch: string,
+  identityToken: string,
+  maxAttempts = 50,
+): Promise<GitWorktree> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const branch = attempt === 0 ? baseBranch : `${baseBranch}-${attempt + 1}`;
+    try {
+      return await createSessionWorktree(projectDir, targetPath, branch, identityToken);
+    } catch (error) {
+      if (!(error instanceof SessionWorktreeBranchCollisionError)) throw error;
+    }
+  }
+  throw new SessionWorktreeBranchExhaustedError(baseBranch, maxAttempts);
 }
 
 /**

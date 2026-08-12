@@ -9,7 +9,7 @@ import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
 import { z } from "zod";
 import {
   canonicalWorktreePath,
-  createSessionWorktree,
+  createSessionWorktreeWithBranchRetries,
   gitCheckoutBranch,
   gitCommitAll,
   gitCommitsAhead,
@@ -1483,7 +1483,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         reservationIdentity = sessionWorktreeStore.reserveWorktree(target);
         // Deliberately attempt the operation directly. A repo precheck would
         // collapse unavailable Git/non-repo into a silent primary-cwd fallback.
-        worktree = await createSessionWorktree(
+        // Keep the reservation and native identity stable while trying the base
+        // branch and then numbered candidates. The Git helper retries only an
+        // exact post-failure ref collision; every other failure stops immediately.
+        worktree = await createSessionWorktreeWithBranchRetries(
           project.path,
           target,
           `agent-deck/session-${suffix}`,
