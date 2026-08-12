@@ -101,10 +101,14 @@ function makeSession(
     snapshot: () => opts?.snapshot ?? { seq: 0, state: { cells: [] } },
     ...ops,
   } as unknown as ManagedSession;
+  const triggerPark = (): void => {
+    // Stable ManagedSession lifecycle contract: parking a runtime is not a
+    // terminal session exit and therefore does not notify these listeners.
+  };
   const triggerExit = (): void => {
     for (const listener of [...exitListeners]) listener();
   };
-  return { session, bus, unsubscribe, ops, triggerExit, exitUnhook };
+  return { session, bus, unsubscribe, ops, triggerPark, triggerExit, exitUnhook };
 }
 
 // --- Fake terminal gateway (Slice 8a): scripted PTY handles, no runtime ---
@@ -879,6 +883,17 @@ describe("createRpcConnection terminal ops (Slice 8a)", () => {
     expect(frames).toEqual([]);
   });
 
+  it("keeps terminals through parking and closes them on the later terminal lifecycle exit", async () => {
+    const { session, triggerPark, triggerExit } = makeSession("s1");
+    const { gateway, terminals } = makeTerminalGateway();
+    const { conn } = harness(makeManager({ s1: session }), gateway);
+    await conn.handleMessage(frame(1, { type: "terminal_open", sessionId: "s1" }));
+    triggerPark();
+    expect(terminals[0]!.close).not.toHaveBeenCalled();
+    triggerExit();
+    expect(terminals[0]!.close).toHaveBeenCalledTimes(1);
+  });
+
   it("the owning session's exit tears down that session's terminals only", async () => {
     const { session: s1, triggerExit } = makeSession("s1");
     const { session: s2 } = makeSession("s2");
@@ -1532,6 +1547,20 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     expect(frames).toEqual([
       { kind: "reply", id: 1, ok: false, error: "a script is already running for this session" },
     ]);
+  });
+
+  it("keeps scripts through parking and closes them on the later terminal lifecycle exit", async () => {
+    const { session, triggerPark, triggerExit } = makeSession("s1");
+    const scripts = makeScriptGateway();
+    const { conn } = withScripts({ s1: session }, scripts.gateway);
+    await conn.handleMessage(
+      frame(1, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
+    );
+    const run = scripts.runs[0]!;
+    triggerPark();
+    expect(run.close).not.toHaveBeenCalled();
+    triggerExit();
+    expect(run.close).toHaveBeenCalledTimes(1);
   });
 
   it("a session exit tears down its running scripts (no orphan dev servers)", async () => {

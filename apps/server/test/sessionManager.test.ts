@@ -37,6 +37,7 @@ import {
 import {
   ChildRunError,
   makeManagedSessionRuntime,
+  parkingStateAllowsStop,
   resolveChildTools,
   SessionManagerService,
   SessionManagerServiceLive,
@@ -1307,6 +1308,463 @@ describe("SessionManager Effect service (services/sessionManager.ts)", () => {
     await expectProcessGone(out.helperPid);
     await expectProcessGone(out.mainPid);
   }, 20_000);
+});
+
+describe("idle Pi parking eligibility policy", () => {
+  const eligible = {
+    authoritativeIdle: true,
+    resumableFile: true,
+    terminalFailure: false,
+    pendingExtensionUi: false,
+    pendingAskUser: false,
+    pendingSupervisor: false,
+    pendingUserTurn: false,
+    providerRetry: false,
+    compaction: false,
+    childRun: false,
+    tool: false,
+    transcriptIdle: true,
+    queueAvailable: true,
+    queuedInput: false,
+  };
+
+  it("accepts only the fully proven idle state", () => {
+    expect(parkingStateAllowsStop(eligible)).toBe(true);
+  });
+
+  it.each([
+    ["authoritative idle", { authoritativeIdle: false }],
+    ["resumable file", { resumableFile: false }],
+    ["terminal failure", { terminalFailure: true }],
+    ["extension UI", { pendingExtensionUi: true }],
+    ["ask-user", { pendingAskUser: true }],
+    ["supervisor", { pendingSupervisor: true }],
+    ["pending user turn", { pendingUserTurn: true }],
+    ["provider retry", { providerRetry: true }],
+    ["compaction", { compaction: true }],
+    ["child/subagent", { childRun: true }],
+    ["tool", { tool: true }],
+    ["transcript activity", { transcriptIdle: false }],
+    ["unknown queue", { queueAvailable: false }],
+    ["queued input", { queuedInput: true }],
+  ] as const)("rejects %s", (_label, patch) => {
+    expect(parkingStateAllowsStop({ ...eligible, ...patch })).toBe(false);
+  });
+});
+
+describe("idle Pi parking", () => {
+  it("parks only after authoritative idle and transparently resumes before the next prompt", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const runtime = ManagedRuntime.make(
+      SessionManagerServiceLive.pipe(
+        Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+      ),
+    ) as ServerRuntime;
+    const parked: SessionMeta[] = [];
+    const rebinds: string[] = [];
+    try {
+      const manager = new SessionManager(
+        runtime,
+        new ReceiptBus(false),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => false,
+      );
+      manager.configureIdleParking(
+        null,
+        (meta) => parked.push({ ...meta }),
+        (id) => rebinds.push(id),
+      );
+      const session = manager.create({
+        cwd: process.cwd(),
+        plan: { kind: "parent" },
+        agentName: "Coder",
+      });
+      let terminalExits = 0;
+      session.onExit(() => (terminalExits += 1));
+      expect(
+        session.captureFinalSystemPromptAudit(
+          { text: "old runtime", capturedAt: "2026-01-01T00:00:00.000Z" },
+          5,
+        ),
+      ).toBe(true);
+      await session.prompt("say-hello");
+      await Effect.runPromise(
+        waitUntil(() => session.snapshot().state.cells.some((cell) => cell.kind === "assistant")),
+      );
+      expect(session.snapshot().state.agentStatus).toBe("idle");
+      const initialRuntime = (session as unknown as { rt: ManagedSessionRuntime }).rt;
+      Object.defineProperty(initialRuntime, "parkingEligible", { value: Effect.succeed(true) });
+      manager.configureIdleParking(25);
+      await Effect.runPromise(waitUntil(() => manager.get(session.meta.id)?.isParked === true));
+
+      expect(parked).toHaveLength(1);
+      expect(parked[0]).toEqual(
+        expect.objectContaining({ id: session.meta.id, parkedAt: expect.any(String) }),
+      );
+      expect(parked[0]?.endedAt).toBeUndefined();
+      expect(parked[0]?.status).toBeUndefined();
+      expect(terminalExits).toBe(0);
+      await expectProcessGone(pids[0]!);
+
+      await session.prompt("again");
+      expect(pids).toHaveLength(2);
+      expect(rebinds).toEqual([session.meta.id]);
+      const live = manager.get(session.meta.id)!;
+      expect(live).toBe(session);
+      expect(live.meta.parkedAt).toBeUndefined();
+      expect(
+        live.captureFinalSystemPromptAudit(
+          { text: "new runtime", capturedAt: "2026-01-01T00:01:00.000Z" },
+          1,
+        ),
+      ).toBe(true);
+      expect(live.snapshot().state.cells).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "user", text: "hello world" })]),
+      );
+      await manager.stopAll();
+      expect(terminalExits).toBe(1);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 15_000);
+
+  it.each(["full fork", "materialized history fork", "history rebind"] as const)(
+    "%s arms parking after safe publication and parks after authoritative idle",
+    async (birth) => {
+      const { piHost } = makeFakePiHost();
+      const runtime = ManagedRuntime.make(
+        SessionManagerServiceLive.pipe(
+          Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+        ),
+      ) as ServerRuntime;
+      const dir = makeTempDir();
+      const sourceFile = path.join(dir, "source.jsonl");
+      const targetFile = path.join(dir, "target.jsonl");
+      writeFileSync(sourceFile, "{}\n");
+      writeFileSync(targetFile, "{}\n");
+      try {
+        const manager = new SessionManager(
+          runtime,
+          new ReceiptBus(false),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          () => false,
+        );
+        manager.configureIdleParking(150);
+        const source: SessionMeta = {
+          id: randomUUID(),
+          cwd: process.cwd(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          launchPlan: { kind: "parent" },
+          piSessionFile: sourceFile,
+          parkedAt: "2026-01-01T00:00:00.000Z",
+          agentName: "Coder",
+        };
+        const session =
+          birth === "full fork"
+            ? await manager.fork(source, sourceFile, targetFile)
+            : birth === "materialized history fork"
+              ? await manager.materializeHistoryFork(source, targetFile)
+              : await manager.rebindHistoryDeferred(source, targetFile);
+
+        if (birth !== "full fork") expect(session.meta.parkedAt).toBeUndefined();
+        expect(
+          (
+            session as unknown as {
+              parkingConfig?: { timeoutMs: number | null };
+            }
+          ).parkingConfig?.timeoutMs,
+        ).toBe(150);
+        await session.prompt("say-hello");
+        await Effect.runPromise(
+          waitUntil(() => session.snapshot().state.cells.some((cell) => cell.kind === "assistant")),
+        );
+        expect(session.snapshot().state.agentStatus).toBe("idle");
+        // Eligibility itself is exhaustively tested above and with real runtime
+        // parking. For these birth-path wiring tests, replace only that proof
+        // with an eligible test hook after observing the authoritative idle
+        // transcript boundary, avoiding fake-process event scheduling races.
+        const rt = (session as unknown as { rt: ManagedSessionRuntime }).rt;
+        Object.defineProperty(rt, "parkingEligible", { value: Effect.succeed(true) });
+        manager.configureIdleParking(20);
+        await Effect.runPromise(waitUntil(() => session.isParked));
+        expect(session.meta.parkedAt).toEqual(expect.any(String));
+        expect(session.meta.endedAt).toBeUndefined();
+        await manager.stopAll();
+      } finally {
+        await runtime.dispose();
+      }
+    },
+    15_000,
+  );
+
+  it("keeps a Loop-owned materialized history fork live after authoritative idle", async () => {
+    const { piHost } = makeFakePiHost();
+    const runtime = ManagedRuntime.make(
+      SessionManagerServiceLive.pipe(
+        Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+      ),
+    ) as ServerRuntime;
+    const branchFile = path.join(makeTempDir(), "loop-branch.jsonl");
+    writeFileSync(branchFile, "{}\n");
+    try {
+      const manager = new SessionManager(
+        runtime,
+        new ReceiptBus(false),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => false,
+      );
+      manager.configureIdleParking(10);
+      const session = await manager.materializeHistoryFork(
+        {
+          id: randomUUID(),
+          cwd: process.cwd(),
+          createdAt: new Date().toISOString(),
+          launchPlan: { kind: "parent" },
+          piSessionFile: branchFile,
+          loopReviewRunId: randomUUID(),
+          parkedAt: "2026-01-01T00:00:00.000Z",
+        },
+        branchFile,
+      );
+      expect(session.meta.parkedAt).toBeUndefined();
+      await session.prompt("loop stays live");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(session.isParked).toBe(false);
+      expect(session.isRunning).toBe(true);
+      await manager.stopAll();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it.each(["ask", "supervisor"] as const)(
+    "fails closed with a pending %s request after idle",
+    async (kind) => {
+      const { piHost } = makeFakePiHost();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const params = makeParams();
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            yield* Effect.fork(rt.ingest);
+            yield* rt.prompt("hello");
+            yield* Effect.sleep("100 millis");
+            if (kind === "ask") {
+              yield* rt.openAskUser({
+                kind: "ask_user",
+                id: "ask-user-park",
+                requestId: "park",
+                sessionId: params.meta.id,
+                question: "Wait",
+                options: [],
+                allowMultiple: false,
+                allowFreeform: false,
+                allowComment: false,
+                status: "pending",
+              });
+            } else {
+              yield* rt.openSupervisorQuestion({
+                requestId: "park",
+                subagentCellId: "child",
+                method: "need_decision",
+                title: "Wait",
+              });
+            }
+            expect(yield* rt.parkingEligible).toBe(false);
+          }),
+        ),
+      );
+    },
+  );
+
+  it("does not park a Loop-owned review parent", async () => {
+    const { piHost } = makeFakePiHost();
+    const runtime = ManagedRuntime.make(
+      SessionManagerServiceLive.pipe(
+        Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+      ),
+    ) as ServerRuntime;
+    try {
+      const manager = new SessionManager(
+        runtime,
+        new ReceiptBus(false),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => false,
+      );
+      manager.configureIdleParking(10);
+      const session = manager.create({
+        cwd: process.cwd(),
+        plan: { kind: "parent" },
+        loopReviewRunId: randomUUID(),
+      });
+      await session.prompt("hello");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(session.isParked).toBe(false);
+      expect(session.isRunning).toBe(true);
+      await manager.stopAll();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("makes destroy/stop wait for an in-flight park before publishing terminal exit", async () => {
+    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ServerRuntime;
+    const scope = Effect.runSync(Scope.make());
+    const releaseClose = Effect.runSync(Deferred.make<void>());
+    Effect.runSync(Scope.addFinalizer(scope, Deferred.await(releaseClose)));
+    const bus = Effect.runSync(makeSessionPushBusHandle());
+    const rt = {
+      meta: {
+        id: randomUUID(),
+        cwd: process.cwd(),
+        createdAt: new Date().toISOString(),
+        piSessionFile: FIXTURE,
+      },
+      bus,
+      parkingEligible: Effect.succeed(true),
+      expectParking: Effect.void,
+      cancelParkingExpectation: Effect.void,
+      isRunning: Effect.succeed(true),
+      onExit: () => () => {},
+      ensureExitHandled: Effect.void,
+    } as unknown as ManagedSessionRuntime;
+    const session = new ManagedSession(rt, runtime, scope);
+    let exits = 0;
+    session.onExit(() => (exits += 1));
+    session.configureIdleParking(
+      5,
+      async () => session,
+      () => {},
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    let stopped = false;
+    const stopping = session.stop().then(() => (stopped = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(stopped).toBe(false);
+    expect(exits).toBe(0);
+    Effect.runSync(Deferred.succeed(releaseClose, undefined));
+    await stopping;
+    expect(session.isParked).toBe(true);
+    expect(exits).toBe(1);
+    await runtime.dispose();
+  });
+
+  it("contains timer close failures, resets parking classification, and re-arms", async () => {
+    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ServerRuntime;
+    const scope = Effect.runSync(Scope.make());
+    Effect.runSync(Scope.addFinalizer(scope, Effect.die(new Error("close refused"))));
+    let expected = 0;
+    let cancelled = 0;
+    const bus = Effect.runSync(makeSessionPushBusHandle());
+    const rt = {
+      meta: {
+        id: randomUUID(),
+        cwd: process.cwd(),
+        createdAt: new Date().toISOString(),
+        piSessionFile: FIXTURE,
+      },
+      bus,
+      parkingEligible: Effect.succeed(true),
+      expectParking: Effect.sync(() => (expected += 1)),
+      cancelParkingExpectation: Effect.sync(() => (cancelled += 1)),
+      isRunning: Effect.succeed(true),
+      onExit: () => () => {},
+      ensureExitHandled: Effect.void,
+    } as unknown as ManagedSessionRuntime;
+    const session = new ManagedSession(rt, runtime, scope);
+    session.configureIdleParking(
+      10,
+      async () => session,
+      () => {},
+    );
+    await new Promise((resolve) => setTimeout(resolve, 16));
+    expect(session.isParked).toBe(false);
+    expect(expected).toBe(1);
+    expect(cancelled).toBe(1);
+    expect(
+      (session as unknown as { parkingTimer?: ReturnType<typeof setTimeout> }).parkingTimer,
+    ).toBeDefined();
+    session.configureIdleParking(
+      null,
+      async () => session,
+      () => {},
+    );
+    await runtime.dispose();
+  });
+
+  it("restores a parked placeholder after pre-registration launch failure and permits retry", async () => {
+    const { piHost } = makeFakePiHost();
+    const runtime = ManagedRuntime.make(
+      SessionManagerServiceLive.pipe(
+        Layer.provideMerge(Layer.mergeAll(Layer.succeed(PiHost, piHost), SessionPushBusesLive)),
+      ),
+    ) as ServerRuntime;
+    let failLaunch = false;
+    try {
+      const manager = new SessionManager(
+        runtime,
+        new ReceiptBus(false),
+        undefined,
+        undefined,
+        () => {
+          if (failLaunch) throw new Error("resume launch refused");
+          return undefined;
+        },
+        undefined,
+        undefined,
+        undefined,
+        () => false,
+      );
+      manager.configureIdleParking(null);
+      const session = manager.create({ cwd: process.cwd(), plan: { kind: "parent" } });
+      await session.prompt("say-hello");
+      await Effect.runPromise(
+        waitUntil(() => session.snapshot().state.cells.some((cell) => cell.kind === "assistant")),
+      );
+      const initialRuntime = (session as unknown as { rt: ManagedSessionRuntime }).rt;
+      Object.defineProperty(initialRuntime, "parkingEligible", { value: Effect.succeed(true) });
+      manager.configureIdleParking(20);
+      await Effect.runPromise(waitUntil(() => session.isParked));
+
+      failLaunch = true;
+      const first = manager.resume(session.meta, { kind: "parent" });
+      const second = manager.resume(session.meta, { kind: "parent" });
+      const results = await Promise.allSettled([first, second]);
+      expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(String(results[0].status === "rejected" ? results[0].reason : "")).toContain(
+        "resume launch refused",
+      );
+      expect(manager.get(session.meta.id)).toBe(session);
+      expect(session.isParked).toBe(true);
+
+      failLaunch = false;
+      await expect(manager.resume(session.meta, { kind: "parent" })).resolves.toBe(session);
+      await manager.stopAll();
+    } finally {
+      await runtime.dispose();
+    }
+  }, 15_000);
 });
 
 describe("expected teardown with pending chat RPCs", () => {

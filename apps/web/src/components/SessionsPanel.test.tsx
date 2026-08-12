@@ -6,7 +6,54 @@ import { SessionRow } from "./SessionsPanel.tsx";
 
 afterEach(cleanup);
 
+describe("SessionRow parked status", () => {
+  it("presents parked as resumable rather than ended", () => {
+    render(
+      <SessionRow
+        session={{
+          id: "parked",
+          cwd: "/tmp",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parkedAt: "2026-01-01T00:10:00.000Z",
+        }}
+        displayTitle="Parked chat"
+        active={false}
+        running={false}
+        detailed
+        onSelect={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId("chat-parked");
+    expect(row.getAttribute("data-status")).toBe("parked");
+    expect(row.getAttribute("aria-label")).toContain("resumes on next command");
+    expect(screen.getByTestId("chat-parked-parked").textContent).toContain("Parked");
+  });
+});
+
 describe("SessionRow durable failure state", () => {
+  it("gives failure precedence over stale parked evidence", () => {
+    render(
+      <SessionRow
+        session={{
+          id: "failed-parked",
+          cwd: "/tmp/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parkedAt: "2026-01-01T00:01:00.000Z",
+          status: "failed",
+          lastError: "Provider failed",
+        }}
+        displayTitle="Failed parked chat"
+        active={false}
+        running={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId("chat-failed-parked");
+    expect(row.getAttribute("data-status")).toBe("failed");
+    expect(row.getAttribute("aria-label")).toContain("failed: Provider failed");
+    expect(screen.queryByTestId("chat-parked-failed-parked")).toBeNull();
+  });
+
   it("shows an accessible failure icon/subtitle without ordinary-ended dimming", () => {
     render(
       <SessionRow

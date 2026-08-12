@@ -19,6 +19,8 @@ describe("SettingsStore onboarding preferences", () => {
   it("defaults to native's values", () => {
     const s = new SettingsStore(freshDir()).get();
     expect(s.autoTitle).toBe(true);
+    expect(s.piAgentIdleParkingEnabled).toBe(true);
+    expect(s.piAgentIdleParkingTimeoutMinutes).toBe(10);
     expect(s.worktreeIsolation).toBe(false);
     expect(s.keepWorktreeAfterMerge).toBe(true);
     expect(s.gitAutomation).toBe(true);
@@ -40,6 +42,8 @@ describe("SettingsStore onboarding preferences", () => {
     const dir = freshDir();
     new SettingsStore(dir).update({
       autoTitle: false,
+      piAgentIdleParkingEnabled: false,
+      piAgentIdleParkingTimeoutMinutes: 37,
       worktreeIsolation: true,
       keepWorktreeAfterMerge: false,
       gitAutomation: true,
@@ -57,6 +61,8 @@ describe("SettingsStore onboarding preferences", () => {
     });
     const reloaded = new SettingsStore(dir).get();
     expect(reloaded.autoTitle).toBe(false);
+    expect(reloaded.piAgentIdleParkingEnabled).toBe(false);
+    expect(reloaded.piAgentIdleParkingTimeoutMinutes).toBe(37);
     expect(reloaded.worktreeIsolation).toBe(true);
     expect(reloaded.keepWorktreeAfterMerge).toBe(false);
     expect(reloaded.gitAutomation).toBe(true);
@@ -97,6 +103,8 @@ describe("SettingsStore onboarding preferences", () => {
       path.join(dir, "app-settings.json"),
       JSON.stringify({
         autoTitle: "yes", // not a boolean → default true
+        piAgentIdleParkingEnabled: "yes",
+        piAgentIdleParkingTimeoutMinutes: 121,
         worktreeIsolation: 1, // not a boolean → default false
         keepWorktreeAfterMerge: "no", // not a boolean → default true
         defaultModel: 42, // not a string → null
@@ -111,6 +119,8 @@ describe("SettingsStore onboarding preferences", () => {
     );
     const s = new SettingsStore(dir).get();
     expect(s.autoTitle).toBe(true);
+    expect(s.piAgentIdleParkingEnabled).toBe(true);
+    expect(s.piAgentIdleParkingTimeoutMinutes).toBe(10);
     expect(s.worktreeIsolation).toBe(false);
     expect(s.keepWorktreeAfterMerge).toBe(true);
     expect(s.gitAutomation).toBe(true);

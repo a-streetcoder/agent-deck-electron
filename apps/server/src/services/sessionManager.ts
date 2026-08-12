@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
@@ -266,6 +266,12 @@ export interface ManagedSessionRuntime {
   readonly ensureExitHandled: Effect.Effect<void>;
   /** Mark scope/process teardown as intentional before platform-specific killing. */
   readonly expectTeardown: Effect.Effect<void>;
+  /** Classify teardown as idle parking: no ended/failure/exit/retry side effects. */
+  readonly expectParking: Effect.Effect<void>;
+  /** Roll back parking classification when scope close did not complete. */
+  readonly cancelParkingExpectation: Effect.Effect<void>;
+  /** Fail-closed parking proof from the runtime's authoritative live state. */
+  readonly parkingEligible: Effect.Effect<boolean>;
   /** Facade seam for ordinary resume/history-seed failures. */
   readonly recordFailure: (error: unknown, publish?: boolean) => Effect.Effect<void>;
 
@@ -497,6 +503,44 @@ const pushBusCapacity = (): number | undefined => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 };
 
+export interface ParkingEligibilityState {
+  authoritativeIdle: boolean;
+  resumableFile: boolean;
+  terminalFailure: boolean;
+  pendingExtensionUi: boolean;
+  pendingAskUser: boolean;
+  pendingSupervisor: boolean;
+  pendingUserTurn: boolean;
+  providerRetry: boolean;
+  compaction: boolean;
+  childRun: boolean;
+  tool: boolean;
+  transcriptIdle: boolean;
+  queueAvailable: boolean;
+  queuedInput: boolean;
+}
+
+/** Pure fail-closed policy. Every true exclusion is backed by runtime state the
+ * manager actually owns; unknown/malformed queue state maps to unavailable. */
+export function parkingStateAllowsStop(state: ParkingEligibilityState): boolean {
+  return (
+    state.authoritativeIdle &&
+    state.resumableFile &&
+    !state.terminalFailure &&
+    !state.pendingExtensionUi &&
+    !state.pendingAskUser &&
+    !state.pendingSupervisor &&
+    !state.pendingUserTurn &&
+    !state.providerRetry &&
+    !state.compaction &&
+    !state.childRun &&
+    !state.tool &&
+    state.transcriptIdle &&
+    state.queueAvailable &&
+    !state.queuedInput
+  );
+}
+
 const boundedInteger = (value: unknown, minimum: number, maximum: number): number | undefined =>
   typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum
     ? value
@@ -583,6 +627,13 @@ export const makeManagedSessionRuntime = (
     let currentExit: PiProcessExit | null = null;
     let exitHandled = false;
     let expectedTeardown = false;
+    let expectedParking = false;
+    let authoritativeIdle = false;
+    let compactionInFlight = false;
+    let activeChildRuns = 0;
+    const activeToolCalls = new Set<string>();
+    const pendingAskUser = new Set<string>();
+    const pendingSupervisor = new Set<string>();
     let ingestionStarted = false;
     let pendingProcessExit: PiProcessExit | null = null;
     let pendingProviderFailure: string | undefined;
@@ -662,6 +713,14 @@ export const makeManagedSessionRuntime = (
 
     const runExitHandling = (exit: PiProcessExit): void => {
       if (exitHandled) return;
+      // Parking closes the exact same scoped Pi process tree as stop(), but is
+      // not a conversation lifecycle event. Do not finalize retries, expire
+      // input, publish session_exit, set endedAt/failure, or bump activity.
+      if (expectedParking) {
+        exitHandled = true;
+        cleanupTempDirs();
+        return;
+      }
       const unfinishedRetry = finalizeOpenProviderRetry(
         ingest,
         expectedTeardown
@@ -754,6 +813,7 @@ export const makeManagedSessionRuntime = (
     const applyPiEvent = (piEvent: PiInboundEvent): void => {
       const type = eventType(piEvent);
       if (type === "agent_start") {
+        authoritativeIdle = false;
         clearFailure();
         onMetaChange(meta);
       }
@@ -811,6 +871,13 @@ export const makeManagedSessionRuntime = (
         turnAwaitingProviderRetry = false;
         pendingProviderFailure = undefined;
       }
+      if (type === "tool_execution_start") {
+        const e = piEvent as { toolCallId?: string };
+        if (e.toolCallId) activeToolCalls.add(e.toolCallId);
+      } else if (type === "tool_execution_end") {
+        const e = piEvent as { toolCallId?: string };
+        if (e.toolCallId) activeToolCalls.delete(e.toolCallId);
+      }
       if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
         pendingUiRequests.set(e.id, e.method);
@@ -842,6 +909,7 @@ export const makeManagedSessionRuntime = (
           receipts.emit("assistant_final", meta.id);
         }
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
+          authoritativeIdle = true;
           receipts.emit("idle", meta.id);
           if (pendingUserTurn && !turnAwaitingProviderRetry) {
             if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
@@ -1092,6 +1160,50 @@ export const makeManagedSessionRuntime = (
         // Do not retroactively bless an already-observed crash as intentional.
         if (Option.isNone(yield* handle.exit)) expectedTeardown = true;
       }),
+      expectParking: Effect.gen(function* () {
+        if (Option.isNone(yield* handle.exit)) {
+          expectedTeardown = true;
+          expectedParking = true;
+        }
+      }),
+      cancelParkingExpectation: Effect.gen(function* () {
+        // Never reclassify an exit that has already started. This reset is only
+        // valid while the original process is still live after a failed close.
+        if (Option.isNone(yield* handle.exit)) {
+          expectedTeardown = false;
+          expectedParking = false;
+        }
+      }),
+      parkingEligible: Effect.sync(() => {
+        let resumableFile = false;
+        try {
+          resumableFile = Boolean(
+            meta.piSessionFile &&
+              isAbsolute(meta.piSessionFile) &&
+              lstatSync(meta.piSessionFile).isFile(),
+          );
+        } catch {
+          resumableFile = false;
+        }
+        return parkingStateAllowsStop({
+          authoritativeIdle,
+          resumableFile,
+          terminalFailure: meta.status === "failed",
+          pendingExtensionUi: pendingUiRequests.size > 0,
+          pendingAskUser: pendingAskUser.size > 0,
+          pendingSupervisor: pendingSupervisor.size > 0,
+          pendingUserTurn,
+          providerRetry: turnAwaitingProviderRetry,
+          compaction: compactionInFlight,
+          childRun: activeChildRuns > 0,
+          tool: activeToolCalls.size > 0,
+          transcriptIdle: transcript.agentStatus === "idle",
+          queueAvailable: transcript.pendingInput.status === "available",
+          queuedInput:
+            transcript.pendingInput.steering.length > 0 ||
+            transcript.pendingInput.followUp.length > 0,
+        });
+      }),
       recordFailure: (error, publish = true) => Effect.sync(() => recordFailure(error, publish)),
 
       setPlan: (items) =>
@@ -1115,6 +1227,7 @@ export const makeManagedSessionRuntime = (
         Effect.sync(() => emit({ type: "subagent_progress", cellId, message })),
       openSupervisorQuestion: (req) =>
         Effect.sync(() => {
+          pendingSupervisor.add(req.requestId);
           emit({
             type: "cell_open",
             cell: {
@@ -1132,26 +1245,31 @@ export const makeManagedSessionRuntime = (
           markNeedsAttention();
         }),
       answerSupervisorQuestion: (requestId, answer) =>
-        Effect.sync(() =>
-          emit({ type: "supervisor_answered", cellId: `supervisor-${requestId}`, answer }),
-        ),
+        Effect.sync(() => {
+          pendingSupervisor.delete(requestId);
+          emit({ type: "supervisor_answered", cellId: `supervisor-${requestId}`, answer });
+        }),
       closeSupervisorQuestion: (requestId, reason) =>
-        Effect.sync(() =>
-          emit({ type: "supervisor_closed", cellId: `supervisor-${requestId}`, reason }),
-        ),
+        Effect.sync(() => {
+          pendingSupervisor.delete(requestId);
+          emit({ type: "supervisor_closed", cellId: `supervisor-${requestId}`, reason });
+        }),
       openAskUser: (cell) =>
         Effect.sync(() => {
+          pendingAskUser.add(cell.requestId);
           emit({ type: "cell_open", cell });
           markNeedsAttention();
         }),
       answerAskUser: (requestId, answer) =>
-        Effect.sync(() =>
-          emit({ type: "ask_user_answered", cellId: `ask-user-${requestId}`, answer }),
-        ),
+        Effect.sync(() => {
+          pendingAskUser.delete(requestId);
+          emit({ type: "ask_user_answered", cellId: `ask-user-${requestId}`, answer });
+        }),
       closeAskUser: (requestId, status, reason) =>
-        Effect.sync(() =>
-          emit({ type: "ask_user_closed", cellId: `ask-user-${requestId}`, status, reason }),
-        ),
+        Effect.sync(() => {
+          pendingAskUser.delete(requestId);
+          emit({ type: "ask_user_closed", cellId: `ask-user-${requestId}`, status, reason });
+        }),
       respondToUiRequest: (raw) =>
         Effect.gen(function* () {
           const id = raw.id;
@@ -1205,7 +1323,13 @@ export const makeManagedSessionRuntime = (
           Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
           Effect.orDie,
         ),
-      compact: handle.compact.pipe(Effect.orDie),
+      compact: Effect.sync(() => {
+        compactionInFlight = true;
+      }).pipe(
+        Effect.andThen(handle.compact),
+        Effect.ensuring(Effect.sync(() => (compactionInFlight = false))),
+        Effect.orDie,
+      ),
       abort: Effect.sync(() => {
         currentTurnFailedOrCancelled = true;
         turnAwaitingProviderRetry = false;
@@ -1232,6 +1356,7 @@ export const makeManagedSessionRuntime = (
 
       runChildAgent: (task, agentName, toolPolicy, overrides, runOptions) =>
         Effect.gen(function* () {
+          activeChildRuns += 1;
           // Child execution is owned by the parent session Scope. Parent stop,
           // deletion, and server shutdown therefore interrupt and finalize every
           // child before the parent's teardown completes.
@@ -1251,7 +1376,7 @@ export const makeManagedSessionRuntime = (
             sessionScope,
           );
           return yield* Fiber.join(fiber);
-        }),
+        }).pipe(Effect.ensuring(Effect.sync(() => (activeChildRuns -= 1)))),
 
       onExit: (listener) => {
         if (currentExit) {

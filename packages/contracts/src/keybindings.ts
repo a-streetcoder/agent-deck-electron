@@ -58,6 +58,7 @@ export const KEYBINDING_COMMANDS = [
   "view.loops",
   "view.prompts",
   "view.memory",
+  "view.performance",
   "view.models",
   "view.providers",
   "view.environment",

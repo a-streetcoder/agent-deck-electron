@@ -377,8 +377,11 @@ export const SessionMeta = Schema.mutable(
     title: Schema.optional(Schema.String),
     /** pi's canonical session file — the resume handle. Captured after first turn. */
     piSessionFile: Schema.optional(Schema.String),
-    /** Set when the pi subprocess exits; absent while live. */
+    /** Set when the pi subprocess exits; absent while live or intentionally parked. */
     endedAt: Schema.optional(Schema.String),
+    /** Device-local runtime evidence that the idle Pi process was intentionally
+     * stopped. The session remains resumable and is not ended or failed. */
+    parkedAt: Schema.optional(Schema.String),
     /** Durable user-review marker. Absent on legacy records means false. Only the
      * server may raise it; the renderer may use the acknowledge-only route. */
     needsAttention: Schema.optional(Schema.Boolean),

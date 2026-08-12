@@ -80,6 +80,13 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           : { needsAttention: session.needsAttention === true }),
       };
       if (!validAudit) delete normalized.finalSystemPromptAudit;
+      if (
+        typeof normalized.parkedAt !== "string" ||
+        Number.isNaN(Date.parse(normalized.parkedAt)) ||
+        normalized.endedAt !== undefined
+      ) {
+        delete normalized.parkedAt;
+      }
       return normalized;
     });
   }

@@ -521,6 +521,18 @@ async function initServer(
   const providerLogin = new ProviderLoginManager();
   const projects = new ProjectIndex(dataDir);
   const settings = new SettingsStore(dataDir);
+  const parkingSettings = settings.get();
+  sessions.configureIdleParking(
+    parkingSettings.piAgentIdleParkingEnabled
+      ? parkingSettings.piAgentIdleParkingTimeoutMinutes * 60_000
+      : null,
+    (meta) => {
+      // Parking is runtime resource management, never conversation activity.
+      index.upsert(meta);
+      broadcast({ type: "session_meta", session: meta });
+    },
+    (sessionId) => broadcast({ type: "session_rebind", sessionId }),
+  );
 
   // Resolve a named agent to the launch inputs a session (parent-backed OR a
   // delegated subagent) adopts, scoped to a project. One source of truth for

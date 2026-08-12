@@ -138,12 +138,17 @@ export function SessionRow({
       data-testid={`chat-${session.id}`}
       data-active={active ? "true" : "false"}
       data-needs-attention={session.needsAttention === true ? "true" : "false"}
-      data-status={session.status ?? (session.endedAt ? "ended" : running ? "running" : "idle")}
+      data-status={
+        session.status ??
+        (session.endedAt ? "ended" : session.parkedAt ? "parked" : running ? "running" : "idle")
+      }
       title={session.agentName ? `agent: ${session.agentName}` : undefined}
       aria-label={`${displayTitle}${
         session.status === "failed"
           ? `, failed${session.lastError ? `: ${session.lastError}` : ""}`
-          : ""
+          : session.parkedAt
+            ? ", Parked; resumes on next command"
+            : ""
       }${session.needsAttention === true ? ", needs attention" : ""}`}
       role="button"
       tabIndex={0}
@@ -173,6 +178,14 @@ export function SessionRow({
             <span className="truncate">
               Failed{session.lastError ? ` · ${session.lastError}` : ""}
             </span>
+          </span>
+        ) : null}
+        {session.parkedAt && !session.endedAt && session.status !== "failed" ? (
+          <span
+            className="mt-0.5 truncate text-detail text-text-muted"
+            data-testid={`chat-parked-${session.id}`}
+          >
+            Parked · resumes on next command
           </span>
         ) : null}
         {session.needsAttention === true ? (

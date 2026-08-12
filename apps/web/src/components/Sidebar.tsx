@@ -6,6 +6,7 @@ import {
   FileText,
   Folder,
   GitBranch,
+  Gauge,
   Key,
   MessageSquareText,
   Repeat,
@@ -50,6 +51,7 @@ const WORKSPACE_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = 
 ];
 
 const RUNTIME_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = [
+  { id: "performance", label: "Performance", icon: Gauge },
   { id: "models", label: "Models", icon: Cpu },
   { id: "providers", label: "Providers", icon: ShieldCheck },
   { id: "environment", label: "Environment", icon: Key },

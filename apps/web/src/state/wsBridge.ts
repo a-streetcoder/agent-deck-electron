@@ -740,7 +740,9 @@ async function findOrCreateSession(
     (s) => (s.agentName ?? null) === agentName,
   );
   const existing = scoped.at(-1);
-  if (existing?.endedAt) {
+  // A persisted parked row after server restart has no in-memory Pi owner.
+  // Wake it through the same canonical resume transaction before subscribing.
+  if (existing?.endedAt || existing?.parkedAt) {
     const { session } = await fetchJson<{ session: SessionMeta }>(
       `/sessions/${encodeURIComponent(existing.id)}/resume`,
       { method: "POST" },

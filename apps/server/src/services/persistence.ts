@@ -188,6 +188,10 @@ export interface AppSettings {
    * Commit/Push/Merge actions.
    */
   autoTitle: boolean;
+  /** Stop resumable parent Pi processes after an authoritative idle boundary. */
+  piAgentIdleParkingEnabled: boolean;
+  /** Warm-idle delay. Runtime and HTTP validation constrain this to 1–120. */
+  piAgentIdleParkingTimeoutMinutes: number;
   worktreeIsolation: boolean;
   keepWorktreeAfterMerge: boolean;
   gitAutomation: boolean;
@@ -419,6 +423,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       disabledExtensions: [],
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
+      piAgentIdleParkingEnabled: true,
+      piAgentIdleParkingTimeoutMinutes: 10,
       worktreeIsolation: false,
       keepWorktreeAfterMerge: true,
       gitAutomation: true, // native piAgentGitAutomationEnabled default: git actions shown
@@ -456,6 +462,17 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             : [],
           // Booleans default to the native defaults when absent/mistyped.
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
+          piAgentIdleParkingEnabled:
+            typeof record.piAgentIdleParkingEnabled === "boolean"
+              ? record.piAgentIdleParkingEnabled
+              : true,
+          piAgentIdleParkingTimeoutMinutes:
+            typeof record.piAgentIdleParkingTimeoutMinutes === "number" &&
+            Number.isInteger(record.piAgentIdleParkingTimeoutMinutes) &&
+            record.piAgentIdleParkingTimeoutMinutes >= 1 &&
+            record.piAgentIdleParkingTimeoutMinutes <= 120
+              ? record.piAgentIdleParkingTimeoutMinutes
+              : 10,
           worktreeIsolation:
             typeof record.worktreeIsolation === "boolean" ? record.worktreeIsolation : false,
           keepWorktreeAfterMerge:
@@ -497,6 +514,11 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // exist before collection-v1 and an empty list has identical semantics.
       const persisted: Partial<AppSettings> = { ...value };
       if (value.skillCollections.length === 0) delete persisted.skillCollections;
+      // Keep legacy files byte-stable until the user departs from the shipped
+      // parking defaults; absence means enabled/10 minutes on load.
+      if (value.piAgentIdleParkingEnabled === true) delete persisted.piAgentIdleParkingEnabled;
+      if (value.piAgentIdleParkingTimeoutMinutes === 10)
+        delete persisted.piAgentIdleParkingTimeoutMinutes;
       writeFileSync(tmp, JSON.stringify(persisted, null, 2));
       renameSync(tmp, file);
     };
@@ -703,12 +725,22 @@ export class Persistence extends Context.Tag("agent-deck/server/services/Persist
 
 export const PersistenceLive = Layer.succeed(Persistence, {
   openSessionIndex: (dataDir = defaultDataDir()) =>
-    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json", (session) => ({
-      ...session,
-      ...(session.needsAttention === undefined
-        ? {}
-        : { needsAttention: session.needsAttention === true }),
-    })),
+    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json", (session) => {
+      const normalized = {
+        ...session,
+        ...(session.needsAttention === undefined
+          ? {}
+          : { needsAttention: session.needsAttention === true }),
+      };
+      if (
+        typeof normalized.parkedAt !== "string" ||
+        Number.isNaN(Date.parse(normalized.parkedAt)) ||
+        normalized.endedAt !== undefined
+      ) {
+        delete normalized.parkedAt;
+      }
+      return normalized;
+    }),
   openProjectIndex: (dataDir = defaultDataDir()) =>
     makeJsonArrayStoreHandle<ProjectMeta>(dataDir, "projects.json"),
   openSettingsStore: (dataDir = defaultDataDir()) => makeSettingsStoreHandle(dataDir),

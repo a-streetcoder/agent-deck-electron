@@ -200,6 +200,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // Onboarding preferences (native OnboardingPreferencesView). null clears
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
+        piAgentIdleParkingEnabled: z.boolean().optional(),
+        piAgentIdleParkingTimeoutMinutes: z.number().int().min(1).max(120).optional(),
         worktreeIsolation: z.boolean().optional(),
         keepWorktreeAfterMerge: z.boolean().optional(),
         gitAutomation: z.boolean().optional(),
@@ -261,6 +263,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     const patch: Partial<AppSettings> = {};
     if (d.defaultSkills !== undefined) patch.defaultSkills = d.defaultSkills;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
+    if (d.piAgentIdleParkingEnabled !== undefined)
+      patch.piAgentIdleParkingEnabled = d.piAgentIdleParkingEnabled;
+    if (d.piAgentIdleParkingTimeoutMinutes !== undefined)
+      patch.piAgentIdleParkingTimeoutMinutes = d.piAgentIdleParkingTimeoutMinutes;
     if (d.worktreeIsolation !== undefined) patch.worktreeIsolation = d.worktreeIsolation;
     if (d.keepWorktreeAfterMerge !== undefined)
       patch.keepWorktreeAfterMerge = d.keepWorktreeAfterMerge;
@@ -278,7 +284,18 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // Refine above guarantees every command/chord is valid, so the plain
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
-    return { settings: settings.update(patch) };
+    const updated = settings.update(patch);
+    if (
+      d.piAgentIdleParkingEnabled !== undefined ||
+      d.piAgentIdleParkingTimeoutMinutes !== undefined
+    ) {
+      ctx.sessions.configureIdleParking(
+        updated.piAgentIdleParkingEnabled
+          ? updated.piAgentIdleParkingTimeoutMinutes * 60_000
+          : null,
+      );
+    }
+    return { settings: updated };
   });
 
   // Session-independent model discovery. This runs Pi's exiting --list-models

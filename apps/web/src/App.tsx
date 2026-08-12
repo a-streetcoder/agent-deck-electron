@@ -36,6 +36,7 @@ import { IssuesScreen } from "./screens/IssuesScreen.tsx";
 import { McpScreen } from "./screens/McpScreen.tsx";
 import { MemoryScreen } from "./screens/MemoryScreen.tsx";
 import { ModelsScreen } from "./screens/ModelsScreen.tsx";
+import { PerformanceScreen } from "./screens/PerformanceScreen.tsx";
 import { GitScreen } from "./screens/GitScreen.tsx";
 import { LoopsScreen } from "./screens/LoopsScreen.tsx";
 import { ProjectsScreen } from "./screens/ProjectsScreen.tsx";
@@ -74,6 +75,7 @@ const VIEW_TITLES: Record<string, string> = {
   loops: "Loops",
   prompts: "Prompts",
   models: "Models",
+  performance: "Performance",
   extensions: "Extensions",
   environment: "Environment",
   providers: "Providers",
@@ -217,7 +219,15 @@ export function App() {
 
   // Live transport/activity outrank durable terminal metadata. `agent_end`
   // changes only transcript activity and must not erase a persisted failure.
-  const statusLabel = selectedSessionStatus(connection, agentStatus, session?.status);
+  const parkedStatus =
+    connection === "open" &&
+    agentStatus !== "running" &&
+    session?.status !== "failed" &&
+    Boolean(session?.parkedAt);
+  const statusLabel = parkedStatus
+    ? "Parked · resumes on next command"
+    : selectedSessionStatus(connection, agentStatus, session?.status);
+  const statusToken = parkedStatus ? "parked" : statusLabel;
   const statusColor =
     connection !== "open"
       ? "var(--color-warning)"
@@ -273,11 +283,11 @@ export function App() {
               macDesktop && "[-webkit-app-region:drag]",
             )}
           >
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3">
               <ProjectPicker />
               <div className="h-4 w-px bg-border-subtle" />
               <h1
-                className="text-sm font-semibold text-text-primary"
+                className="min-w-0 truncate text-sm font-semibold text-text-primary"
                 style={{ fontStretch: "expanded" }}
                 data-testid="app-view-title"
               >
@@ -292,7 +302,7 @@ export function App() {
                 </span>
               ) : null}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-3">
               {session && isChat ? <FinalSystemPromptButton /> : null}
               {isChat ? <TranscriptDisplayMenu /> : null}
               {/* Files toggle (Slice 13b): a lazy project-tree browser +
@@ -434,7 +444,7 @@ export function App() {
               <div
                 className="flex items-center gap-2"
                 data-testid="status-indicator"
-                data-status={statusLabel}
+                data-status={statusToken}
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
@@ -494,6 +504,8 @@ export function App() {
                   <LoopsScreen />
                 ) : view === "prompts" ? (
                   <PromptsScreen />
+                ) : view === "performance" ? (
+                  <PerformanceScreen />
                 ) : view === "models" ? (
                   <ModelsScreen />
                 ) : view === "extensions" ? (

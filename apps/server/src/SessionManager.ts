@@ -115,20 +115,62 @@ export interface SessionBusView {
  */
 export class ManagedSession {
   private ingestionStarted = false;
+  private lifecycle: "live" | "parking" | "parked" = "live";
+  private parkingTimer: ReturnType<typeof setTimeout> | undefined;
+  private parkingGeneration = 0;
+  private parkingTransition: Promise<void> | undefined;
+  private resumeParked?: () => Promise<ManagedSession>;
+  private parkingUnsubscribe?: () => void;
+  private readonly exitListeners = new Set<(exit: PiProcessExit) => void>();
+  private runtimeExitUnsubscribe?: () => void;
+  private terminalExit: PiProcessExit | null = null;
+  private parkingConfig?: {
+    timeoutMs: number | null;
+    resume: () => Promise<ManagedSession>;
+    onParked: (meta: SessionMeta) => void;
+  };
   /** Sequence is scoped to this live Pi runtime/extension. A replacement
    * ManagedSession starts at zero while persisted prior-runtime evidence stays. */
   private lastAcceptedPromptAuditSequence = 0;
-  private readonly busView: SessionBusView;
 
   constructor(
-    private readonly rt: ManagedSessionRuntime,
+    private rt: ManagedSessionRuntime,
     private readonly runtime: ServerRuntime,
     /** The session's own Scope: closing it kills pi and settles everything. */
-    private readonly scope: Scope.CloseableScope,
+    private scope: Scope.CloseableScope,
     private readonly enableMetaPublication: () => void = () => {},
   ) {
-    const handle = rt.bus;
-    this.busView = {
+    this.bindRuntimeExit();
+  }
+
+  private bindRuntimeExit(): void {
+    this.runtimeExitUnsubscribe?.();
+    // Some narrow injected legacy runtimes predate the lifecycle callback;
+    // production runtimes always provide it.
+    if (typeof this.rt.onExit !== "function") {
+      this.runtimeExitUnsubscribe = undefined;
+      return;
+    }
+    this.runtimeExitUnsubscribe = this.rt.onExit((exit) => {
+      // Runtime parking deliberately never calls rt listeners. Every callback
+      // reaching this bridge is therefore a terminal lifecycle exit.
+      this.publishTerminalExit(exit);
+    });
+  }
+
+  private publishTerminalExit(exit: PiProcessExit): void {
+    if (this.terminalExit) return;
+    this.terminalExit = exit;
+    for (const listener of this.exitListeners) listener(exit);
+  }
+
+  get meta(): SessionMeta {
+    return this.rt.meta;
+  }
+
+  get bus(): SessionBusView {
+    const handle = this.rt.bus;
+    return {
       subscribe: (subscriber) => {
         const unsubscribe = Effect.runSync(handle.subscribe(subscriber));
         return () => Effect.runSync(unsubscribe);
@@ -140,12 +182,105 @@ export class ManagedSession {
     };
   }
 
-  get meta(): SessionMeta {
-    return this.rt.meta;
+  /** Preserve the stable manager placeholder while transferring ownership of a
+   * fully seeded replacement runtime. The discarded candidate owns nothing
+   * after this synchronous handoff. */
+  adoptRuntimeFrom(candidate: ManagedSession): void {
+    this.parkingGeneration += 1;
+    if (this.parkingTimer) clearTimeout(this.parkingTimer);
+    this.parkingTimer = undefined;
+    this.parkingUnsubscribe?.();
+    this.parkingUnsubscribe = undefined;
+    candidate.runtimeExitUnsubscribe?.();
+    candidate.runtimeExitUnsubscribe = undefined;
+    this.rt = candidate.rt;
+    this.scope = candidate.scope;
+    this.ingestionStarted = candidate.ingestionStarted;
+    this.lastAcceptedPromptAuditSequence = candidate.lastAcceptedPromptAuditSequence;
+    this.terminalExit = null;
+    this.lifecycle = "live";
+    this.bindRuntimeExit();
   }
 
-  get bus(): SessionBusView {
-    return this.busView;
+  get isParked(): boolean {
+    return this.lifecycle === "parked";
+  }
+
+  get currentParkingTransition(): Promise<void> | undefined {
+    return this.parkingTransition;
+  }
+
+  /** Configure/cancel the one generation-checked idle deadline owned by this
+   * session placeholder. A parked placeholder is never warmed merely because
+   * the preference changes; its next Pi-dependent command resumes it. */
+  configureIdleParking(
+    timeoutMs: number | null,
+    resume: () => Promise<ManagedSession>,
+    onParked: (meta: SessionMeta) => void,
+  ): void {
+    this.resumeParked = resume;
+    this.parkingConfig = { timeoutMs, resume, onParked };
+    if (!this.parkingUnsubscribe) {
+      this.parkingUnsubscribe = this.bus.subscribe(({ event }) => {
+        if (event.type === "agent_status" && event.status === "idle" && this.parkingConfig) {
+          const config = this.parkingConfig;
+          this.configureIdleParking(config.timeoutMs, config.resume, config.onParked);
+        }
+      });
+    }
+    this.parkingGeneration += 1;
+    if (this.parkingTimer) clearTimeout(this.parkingTimer);
+    this.parkingTimer = undefined;
+    if (timeoutMs === null || this.lifecycle !== "live") return;
+    const generation = this.parkingGeneration;
+    this.parkingTimer = setTimeout(() => {
+      this.parkingTimer = undefined;
+      if (generation !== this.parkingGeneration || this.lifecycle !== "live") return;
+      this.parkingTransition ??= this.park(onParked)
+        .catch(() => {
+          // Timer work is detached; parking failure remains recoverable and
+          // must never become an unhandled rejection.
+        })
+        .finally(() => {
+          this.parkingTransition = undefined;
+        });
+    }, timeoutMs);
+    this.parkingTimer.unref?.();
+  }
+
+  private async park(onParked: (meta: SessionMeta) => void): Promise<void> {
+    if (this.lifecycle !== "live" || !Effect.runSync(this.rt.parkingEligible)) return;
+    this.lifecycle = "parking";
+    this.parkingGeneration += 1;
+    try {
+      await runPromiseUnwrapped(this.runtime, this.rt.expectParking);
+      await this.runtime.runPromise(Scope.close(this.scope, Exit.void));
+      await runPromiseUnwrapped(this.runtime, this.rt.ensureExitHandled);
+      this.lifecycle = "parked";
+      this.meta.parkedAt = new Date().toISOString();
+      onParked(this.meta);
+    } catch (error) {
+      // A failed close must not advertise a parked process or leave later real
+      // exits classified as parking. If the process remains live, re-arm the
+      // deadline from now; otherwise ordinary exit handling owns the outcome.
+      await runPromiseUnwrapped(this.runtime, this.rt.cancelParkingExpectation).catch(() => {});
+      this.lifecycle = "live";
+      const config = this.parkingConfig;
+      if (config && this.isRunning) {
+        this.configureIdleParking(config.timeoutMs, config.resume, config.onParked);
+      }
+      throw error;
+    }
+  }
+
+  private async piSession(): Promise<ManagedSession> {
+    this.parkingGeneration += 1;
+    if (this.parkingTimer) clearTimeout(this.parkingTimer);
+    this.parkingTimer = undefined;
+    if (this.parkingTransition) await this.parkingTransition;
+    if (this.lifecycle !== "parked") return this;
+    if (!this.resumeParked) throw new Error("parked session cannot be resumed");
+    return await this.resumeParked();
   }
 
   /** Fork the ingestion fiber (idempotent). Create forks immediately; resume/fork
@@ -226,9 +361,10 @@ export class ManagedSession {
     overrides?: ChildLaunchOverrides,
     runOptions?: ChildRunOptions,
   ): Promise<ChildRunResult> {
+    const session = await this.piSession();
     return await runPromiseUnwrapped(
-      this.runtime,
-      this.rt.runChildAgent(task, agentName, toolPolicy, overrides, runOptions),
+      session.runtime,
+      session.rt.runChildAgent(task, agentName, toolPolicy, overrides, runOptions),
     );
   }
 
@@ -253,23 +389,33 @@ export class ManagedSession {
     images?: Parameters<ManagedSessionRuntime["prompt"]>[1],
     streamingBehavior?: Parameters<ManagedSessionRuntime["prompt"]>[2],
   ): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.prompt(message, images, streamingBehavior));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(
+      session.runtime,
+      session.rt.prompt(message, images, streamingBehavior),
+    );
   }
 
   async steer(message: string): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.steer(message));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.steer(message));
   }
 
   async followUp(message: string): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.followUp(message));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.followUp(message));
   }
 
   async compact(): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.compact);
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.compact);
   }
 
   async abort(): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.abort);
+    // Abort of a parked session is already satisfied and must not warm Pi.
+    if (this.lifecycle === "parked") return;
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.abort);
   }
 
   respondToUiRequest(raw: Record<string, unknown>): void {
@@ -277,57 +423,72 @@ export class ManagedSession {
   }
 
   async getCommands(): Promise<Effect.Effect.Success<ManagedSessionRuntime["getCommands"]>> {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getCommands);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getCommands);
   }
 
   async getState(): Promise<Effect.Effect.Success<ManagedSessionRuntime["getState"]>> {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getState);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getState);
   }
 
   async getForkMessages(): Promise<
     Effect.Effect.Success<ManagedSessionRuntime["getForkMessages"]>
   > {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getForkMessages);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getForkMessages);
   }
 
   async getEntries(): Promise<Effect.Effect.Success<ManagedSessionRuntime["getEntries"]>> {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getEntries);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getEntries);
   }
 
   async forkAtEntry(
     entryId: string,
   ): Promise<Effect.Effect.Success<ReturnType<ManagedSessionRuntime["fork"]>>> {
-    return await runPromiseUnwrapped(this.runtime, this.rt.fork(entryId));
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.fork(entryId));
   }
 
   async getSessionStats(): Promise<
     Effect.Effect.Success<ManagedSessionRuntime["getSessionStats"]>
   > {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getSessionStats);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getSessionStats);
   }
 
   async getAvailableModels(): Promise<
     Effect.Effect.Success<ManagedSessionRuntime["getAvailableModels"]>
   > {
-    return await runPromiseUnwrapped(this.runtime, this.rt.getAvailableModels);
+    const session = await this.piSession();
+    return await runPromiseUnwrapped(session.runtime, session.rt.getAvailableModels);
   }
 
   async setModel(provider: string, modelId: string): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.setModel(provider, modelId));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.setModel(provider, modelId));
   }
 
   async setThinkingLevel(
     level: Parameters<ManagedSessionRuntime["setThinkingLevel"]>[0],
   ): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.setThinkingLevel(level));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.setThinkingLevel(level));
   }
 
   onExit(listener: (exit: PiProcessExit) => void): () => void {
-    return this.rt.onExit(listener);
+    if (this.terminalExit) {
+      listener(this.terminalExit);
+      return () => {};
+    }
+    this.exitListeners.add(listener);
+    return () => this.exitListeners.delete(listener);
   }
 
   async rename(title: string): Promise<void> {
-    await runPromiseUnwrapped(this.runtime, this.rt.rename(title));
+    const session = await this.piSession();
+    await runPromiseUnwrapped(session.runtime, session.rt.rename(title));
   }
 
   get piSessionFile(): string | undefined {
@@ -358,6 +519,18 @@ export class ManagedSession {
   }
 
   async stop(): Promise<void> {
+    this.parkingGeneration += 1;
+    if (this.parkingTimer) clearTimeout(this.parkingTimer);
+    this.parkingTimer = undefined;
+    this.parkingUnsubscribe?.();
+    this.parkingUnsubscribe = undefined;
+    if (this.parkingTransition) await this.parkingTransition.catch(() => {});
+    if (this.lifecycle === "parked") {
+      // No Pi remains to produce an exit, but explicit stop/delete/shutdown is
+      // terminal for connection-owned children such as PTYs and scripts.
+      this.publishTerminalExit({ code: 0, signal: null });
+      return;
+    }
     if (this.rt.expectTeardown) {
       await runPromiseUnwrapped(this.runtime, this.rt.expectTeardown);
     }
@@ -368,6 +541,9 @@ export class ManagedSession {
 
 export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
+  private idleParkingTimeoutMs: number | null = null;
+  private onParkingMetaChange: (meta: SessionMeta) => void = () => {};
+  private onParkingRebind: (sessionId: string) => void = () => {};
   /** In-flight resumes by session id — double-resume returns the same promise. */
   private readonly resuming = new Map<string, Promise<ManagedSession>>();
   /** Same-run continuation claims. JS's synchronous Set mutation is the lock. */
@@ -446,6 +622,33 @@ export class SessionManager {
     private readonly expirePendingSessionImages?: (sessionId: string) => void,
   ) {}
 
+  /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
+  configureIdleParking(
+    timeoutMs: number | null,
+    onMetaChange?: (meta: SessionMeta) => void,
+    onRebind?: (sessionId: string) => void,
+  ): void {
+    this.idleParkingTimeoutMs = timeoutMs;
+    if (onMetaChange) this.onParkingMetaChange = onMetaChange;
+    if (onRebind) this.onParkingRebind = onRebind;
+    for (const session of this.sessions.values()) this.configureSessionParking(session);
+  }
+
+  private configureSessionParking(session: ManagedSession): void {
+    // Native applies parking to ordinary top-level chats, including named-agent
+    // chats. Only Loop-owned/review parents retain separate runtime ownership.
+    if (session.meta.loopReviewRunId || session.meta.agentName?.startsWith("Loop ·")) {
+      session.configureIdleParking(null, async () => session, this.onParkingMetaChange);
+      return;
+    }
+    const fallback = (session.meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    session.configureIdleParking(
+      this.idleParkingTimeoutMs,
+      async () => await this.resume(session.meta, fallback),
+      this.onParkingMetaChange,
+    );
+  }
+
   create(options: CreateSessionOptions): ManagedSession {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -472,6 +675,7 @@ export class SessionManager {
       const session = this.launch(meta, options.plan, options.env, options.deferAnnouncement);
       try {
         session.startIngestion();
+        this.configureSessionParking(session);
         return session;
       } catch (error) {
         // startIngestion is normally non-throwing, but an injected/runtime defect
@@ -503,11 +707,25 @@ export class SessionManager {
   ): Promise<ManagedSession> {
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
+    const transitioning = this.sessions.get(meta.id)?.currentParkingTransition;
+    if (transitioning) {
+      const waiting = transitioning.then(async () => {
+        if (this.resuming.get(meta.id) === waiting) this.resuming.delete(meta.id);
+        return await this.resume(meta, fallbackPlan, env);
+      });
+      this.resuming.set(meta.id, waiting);
+      try {
+        return await waiting;
+      } finally {
+        if (this.resuming.get(meta.id) === waiting) this.resuming.delete(meta.id);
+      }
+    }
     // Already live and running → hand it back. launch() would otherwise
     // overwrite the map entry and orphan the old session's still-running pi
     // (the routes guard this too, but the manager must not rely on callers).
     const live = this.sessions.get(meta.id);
     if (live?.isRunning) return live;
+    const parkedPlaceholder = live?.isParked ? live : undefined;
 
     const original = (meta.launchPlan as LaunchPlan | undefined) ?? fallbackPlan;
     let plan: LaunchPlan;
@@ -519,18 +737,28 @@ export class SessionManager {
       plan = original;
     }
 
-    const task = (async () => {
+    // Defer the whole transaction one microtask so the coalescing map is
+    // installed before buildSpawnParams/launch can throw synchronously.
+    const task = Promise.resolve().then(async () => {
       // Naturally-ended sessions remain addressable in the map for snapshot/
       // exit semantics. Close and remove that settled owner before relaunch;
       // destroy keeps it registered if scope close itself fails.
-      if (live) await this.destroy(meta.id);
+      if (live && !parkedPlaceholder) await this.destroy(meta.id);
+      // launch() requires exclusive map ownership. The parked placeholder keeps
+      // the old snapshot for already-held callers while the one candidate is
+      // built and seeded; it is restored on every failure path.
+      if (parkedPlaceholder && this.sessions.get(meta.id) === parkedPlaceholder) {
+        this.sessions.delete(meta.id);
+      }
       const revived: SessionMeta = {
         ...meta,
         endedAt: undefined,
-        ...(meta.streamGeneration ? { streamGeneration: randomUUID() } : {}),
+        parkedAt: undefined,
+        streamGeneration: randomUUID(),
       };
-      const session = this.launch(revived, plan, env);
+      let session: ManagedSession | undefined;
       try {
+        session = this.launch(revived, plan, env);
         await session.seedFromHistory();
         session.seedSyntheticCells([
           ...(this.loopSnapshots?.get(revived.id) ?? []),
@@ -554,22 +782,32 @@ export class SessionManager {
         // spawn) so they apply strictly after the seed.
         session.startIngestion();
         session.clearFailure();
+        if (parkedPlaceholder) {
+          parkedPlaceholder.adoptRuntimeFrom(session);
+          this.sessions.set(revived.id, parkedPlaceholder);
+          session = parkedPlaceholder;
+        }
+        this.configureSessionParking(session);
       } catch (error) {
         // Persist an ordinary resume/history reconstruction failure on the
         // durable session. Teardown then publishes it coherently with endedAt.
-        session.recordFailure(error, false);
-        // launch() already spawned pi and registered the session, but seeding
-        // failed (pi died / getMessages timed out) BEFORE ingestion was forked,
-        // so its exit handling would never run. Tear the half-built session down
-        // — destroy() closes its Scope (killing pi) and runs exit handling
-        // (endedAt, temp-dir cleanup) — instead of leaking a dead session with
-        // an orphaned pi and an unconsumed stdout queue.
+        session?.recordFailure(error, false);
+        // launch() may have failed before registration, or spawned pi and then
+        // failed while seeding. Both paths restore the parked placeholder; a
+        // registered half-build is torn down before ownership is restored.
         await this.destroy(revived.id).catch(() => {});
+        if (parkedPlaceholder && !this.sessions.has(revived.id)) {
+          this.sessions.set(revived.id, parkedPlaceholder);
+        }
         throw error;
       }
       this.onMetaChange(revived);
+      // Rebind only after the replacement bus is fully seeded, adopted, and
+      // authoritative in the manager. Command callers await this transaction,
+      // so accepted prompts cannot precede the client reset signal.
+      this.onParkingRebind(revived.id);
       return session;
-    })();
+    });
     this.resuming.set(meta.id, task);
     try {
       return await task;
@@ -805,6 +1043,8 @@ export class SessionManager {
   trackLoopSession(sessionId: string): () => void {
     const session = this.sessions.get(sessionId);
     if (!session || !this.loopSnapshots) return () => {};
+    // Loop owns the parent runtime until its run/review lifecycle settles.
+    session.configureIdleParking(null, async () => session, this.onParkingMetaChange);
     let timer: NodeJS.Timeout | undefined;
     const persist = (): void => {
       if (timer) clearTimeout(timer);
@@ -1091,6 +1331,7 @@ export class SessionManager {
       if (meta.plan && meta.plan.length > 0) session.restorePlan(meta.plan);
       session.startIngestion();
       this.onMetaChange(meta);
+      this.configureSessionParking(session);
       return session;
     } catch (error) {
       // Launch/seeding failure removes both the half-built Pi owner and the
@@ -1120,6 +1361,7 @@ export class SessionManager {
       createdAt: now,
       updatedAt: now,
       endedAt: undefined,
+      parkedAt: undefined,
       piSessionFile: branchFile,
       title: source.title ? `${source.title} (fork)` : undefined,
       ...(forkProvenance ? { forkProvenance } : {}),
@@ -1166,6 +1408,7 @@ export class SessionManager {
       if (meta.plan?.length) session.restorePlan(meta.plan);
       session.startIngestion();
       this.announceCreated(session);
+      this.configureSessionParking(session);
       return session;
     } catch (error) {
       if (session) await this.destroy(meta.id).catch(() => {});
@@ -1189,6 +1432,7 @@ export class SessionManager {
       ...source,
       piSessionFile: branchFile,
       endedAt: undefined,
+      parkedAt: undefined,
       streamGeneration: randomUUID(),
     };
     // Re-run/fork-at-entry rewrites active ancestry, invalidating retry ordinals
@@ -1211,6 +1455,7 @@ export class SessionManager {
       session.clearFailure();
       session.publishMetaChanges();
       this.onMetaChange(meta);
+      this.configureSessionParking(session);
       return session;
     } catch (error) {
       if (session) await this.destroy(meta.id).catch(() => {});

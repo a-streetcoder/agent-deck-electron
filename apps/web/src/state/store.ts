@@ -127,6 +127,7 @@ export type AppView =
   | "providers"
   | "memory"
   | "mcp"
+  | "performance"
   | "doctor";
 
 export type ToastKind = "success" | "error" | "info";

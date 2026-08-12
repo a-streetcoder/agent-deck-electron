@@ -67,6 +67,40 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(new SessionIndex(dir).list()[0]?.needsAttention).toBe(false);
   });
 
+  it("normalizes parkedAt as valid non-terminal device-local evidence", () => {
+    const dir = freshCopy();
+    const file = path.join(dir, "sessions.json");
+    const rows = JSON.parse(readFileSync(file, "utf8")) as SessionMeta[];
+    rows.push(
+      {
+        id: "valid-parked",
+        cwd: "/tmp",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        parkedAt: "2026-01-01T00:10:00.000Z",
+      },
+      {
+        id: "invalid-parked",
+        cwd: "/tmp",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        parkedAt: "not-a-date",
+      },
+      {
+        id: "ended-parked",
+        cwd: "/tmp",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        endedAt: "2026-01-01T00:20:00.000Z",
+        parkedAt: "2026-01-01T00:10:00.000Z",
+      },
+    );
+    writeFileSync(file, JSON.stringify(rows));
+    const loaded = new SessionIndex(dir).list();
+    expect(loaded.find((row) => row.id === "valid-parked")?.parkedAt).toBe(
+      "2026-01-01T00:10:00.000Z",
+    );
+    expect(loaded.find((row) => row.id === "invalid-parked")?.parkedAt).toBeUndefined();
+    expect(loaded.find((row) => row.id === "ended-parked")?.parkedAt).toBeUndefined();
+  });
+
   it("persists optional session pin state without rewriting activity time", () => {
     const dir = freshCopy();
     const sessions = new SessionIndex(dir);
