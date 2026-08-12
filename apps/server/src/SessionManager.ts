@@ -115,6 +115,9 @@ export interface SessionBusView {
  */
 export class ManagedSession {
   private ingestionStarted = false;
+  /** Sequence is scoped to this live Pi runtime/extension. A replacement
+   * ManagedSession starts at zero while persisted prior-runtime evidence stays. */
+  private lastAcceptedPromptAuditSequence = 0;
   private readonly busView: SessionBusView;
 
   constructor(
@@ -151,6 +154,18 @@ export class ManagedSession {
     if (this.ingestionStarted) return;
     this.ingestionStarted = true;
     this.runtime.runFork(this.rt.ingest);
+  }
+
+  captureFinalSystemPromptAudit(
+    audit: NonNullable<SessionMeta["finalSystemPromptAudit"]>,
+    sequence: number,
+  ): boolean {
+    if (!Number.isSafeInteger(sequence) || sequence <= this.lastAcceptedPromptAuditSequence) {
+      return false;
+    }
+    this.lastAcceptedPromptAuditSequence = sequence;
+    this.meta.finalSystemPromptAudit = audit;
+    return true;
   }
 
   appendSubagentProgress(cellId: string, message: string): void {
@@ -883,6 +898,22 @@ export class SessionManager {
     return this.sessions.get(id);
   }
 
+  /** Apply the internal Pi prompt-audit callback to the authoritative live
+   * metadata object. This synchronous, narrow mutation is the ownership edge:
+   * route-level shallow snapshots must re-read this object before persisting. */
+  captureFinalSystemPromptAudit(
+    id: string,
+    audit: NonNullable<SessionMeta["finalSystemPromptAudit"]>,
+    sequence: number,
+  ): { accepted: boolean; meta: SessionMeta } | undefined {
+    const session = this.sessions.get(id);
+    if (!session) return undefined;
+    return {
+      accepted: session.captureFinalSystemPromptAudit(audit, sequence),
+      meta: session.meta,
+    };
+  }
+
   /**
    * Run a native subagent for a parent session: launch a child pi with the task
    * (inheriting the parent's provider/model/env) and return its final text.
@@ -1029,6 +1060,9 @@ export class SessionManager {
       title: source.title ? `${source.title} (fork)` : undefined,
       plan: source.plan,
       providerRetries: source.providerRetries,
+      // A simple full-file duplicate retains identical canonical ancestry, so
+      // its latest-turn prompt evidence remains valid (unlike history rewrites).
+      finalSystemPromptAudit: source.finalSystemPromptAudit,
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath
@@ -1098,6 +1132,9 @@ export class SessionManager {
     delete meta.lastError;
     delete meta.providerRetries;
     delete meta.needsAttention;
+    // A history rewrite has not run a turn under the new ancestry yet. Never
+    // present the source turn's audited prompt as evidence for this target.
+    delete meta.finalSystemPromptAudit;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.
@@ -1154,8 +1191,10 @@ export class SessionManager {
       endedAt: undefined,
       streamGeneration: randomUUID(),
     };
-    // Re-run/fork-at-entry rewrites active ancestry, invalidating retry ordinals.
+    // Re-run/fork-at-entry rewrites active ancestry, invalidating retry ordinals
+    // and the prompt evidence captured for the previous active ancestry.
     delete meta.providerRetries;
+    delete meta.finalSystemPromptAudit;
     const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     const plan: LaunchPlan =
       original.kind === "agent"

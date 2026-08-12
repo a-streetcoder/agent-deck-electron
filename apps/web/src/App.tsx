@@ -27,6 +27,7 @@ import { TerminalDrawer } from "./components/TerminalDrawer.tsx";
 import { Toaster } from "./components/Toaster.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { TranscriptDisplayMenu } from "./components/TranscriptDisplayMenu.tsx";
+import { FinalSystemPromptButton } from "./components/FinalSystemPromptDialog.tsx";
 import { PiAgentProcessingIndicatorBar } from "@/components/transcript/PiAgentProcessingIndicatorBar";
 import { AgentsScreen } from "./screens/AgentsScreen.tsx";
 import { ExtensionsScreen } from "./screens/ExtensionsScreen.tsx";
@@ -292,6 +293,7 @@ export function App() {
               ) : null}
             </div>
             <div className="flex items-center gap-3">
+              {session && isChat ? <FinalSystemPromptButton /> : null}
               {isChat ? <TranscriptDisplayMenu /> : null}
               {/* Files toggle (Slice 13b): a lazy project-tree browser +
                   read-only preview. Ungated by git — shown for any chat

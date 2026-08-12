@@ -343,6 +343,16 @@ export const ProviderRetryRecord = Schema.mutable(
 );
 export type ProviderRetryRecord = typeof ProviderRetryRecord.Type;
 
+/** Latest exact per-turn system prompt observed by Agent Deck's final Pi hook.
+ * Device-local sensitive audit state: never sync or include in diagnostics. */
+export const FinalSystemPromptAudit = Schema.mutable(
+  Schema.Struct({
+    text: Schema.String,
+    capturedAt: Schema.String,
+  }),
+);
+export type FinalSystemPromptAudit = typeof FinalSystemPromptAudit.Type;
+
 /** Future producers may add live statuses, but this version acts only on failed. */
 const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
   (_input: unknown): _input is "failed" => true,
@@ -378,6 +388,9 @@ export const SessionMeta = Schema.mutable(
     lastError: Schema.optional(Schema.String),
     /** Bounded device-local retry cards that Pi's canonical message history omits. */
     providerRetries: Schema.optional(Schema.mutable(Schema.Array(ProviderRetryRecord))),
+    /** Latest exact runtime system prompt captured after all earlier Pi
+     * before_agent_start augmenters. Sensitive device-local state; never sync. */
+    finalSystemPromptAudit: Schema.optional(FinalSystemPromptAudit),
     /**
      * The LaunchPlan this session was created with (opaque here — typed in
      * pi-host). Persisted so resume relaunches with the same shape: agent

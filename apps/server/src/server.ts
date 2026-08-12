@@ -350,9 +350,11 @@ async function initServer(
         sessionId: meta.id,
         token,
         tools,
-        // Per-turn memory recall via a before_agent_start hook (only meaningful
-        // when memory is on; the launch index carries just titles).
+        // The generated bridge is appended after every provider/user extension.
+        // Its single final hook applies recall first, then captures the exact
+        // chained prompt Pi will use for this turn.
         recall: memoryEnabled,
+        promptAudit: true,
       });
     },
     (cwd, home) => {

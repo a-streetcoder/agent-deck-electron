@@ -1619,6 +1619,10 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         worktreeIdentity: "owned-token",
         worktreeBranch: "agent-deck/source",
         worktreeSourceBranch: "main",
+        finalSystemPromptAudit: {
+          text: "source final prompt",
+          capturedAt: "2026-08-01T10:02:03.000Z",
+        },
         providerRetries: [
           {
             id: "provider-retry-source",
@@ -1641,8 +1645,10 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         piSessionFile: genericFile,
       });
       expect(generic.meta).not.toHaveProperty("worktreePath");
-      // A full-file duplicate preserves the same canonical ancestry and anchors.
+      // A full-file duplicate preserves the same canonical ancestry, prompt
+      // evidence, and retry anchors.
       expect(generic.meta.providerRetries).toEqual(source.providerRetries);
+      expect(generic.meta.finalSystemPromptAudit).toEqual(source.finalSystemPromptAudit);
       const nestedGeneric = await sm.fork(generic.meta, genericFile, nestedGenericFile);
       expect(nestedGeneric.meta).toMatchObject({
         cwd: source.cwd,
@@ -1662,6 +1668,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       expect(captured).not.toHaveProperty("worktreeBranch");
       expect(captured).not.toHaveProperty("worktreeSourceBranch");
       expect(captured).not.toHaveProperty("providerRetries");
+      expect(captured).not.toHaveProperty("finalSystemPromptAudit");
       expect(source).toMatchObject({
         worktreePath: "/private/worktree",
         worktreeIdentity: "owned-token",
@@ -1674,10 +1681,13 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       });
       expect(nested.meta).not.toHaveProperty("worktreePath");
       expect(nested.meta).not.toHaveProperty("providerRetries");
+      expect(nested.meta).not.toHaveProperty("finalSystemPromptAudit");
 
       const rebound = await sm.rebindHistoryDeferred(source, "/tmp/rebound-branch.jsonl");
       expect(rebound.meta).not.toHaveProperty("providerRetries");
+      expect(rebound.meta).not.toHaveProperty("finalSystemPromptAudit");
       expect(source.providerRetries).toHaveLength(1);
+      expect(source.finalSystemPromptAudit?.text).toBe("source final prompt");
       await sm.destroy(rebound.meta.id);
       await sm.destroy(nested.meta.id);
       await sm.destroy(target.meta.id);

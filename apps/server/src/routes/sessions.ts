@@ -414,13 +414,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       if (!current) return reply.status(404).send({ error: "unknown session" });
       if (current.needsAttention !== true) return { session: current };
 
-      const next = { ...current, needsAttention: false as const };
       if (live) live.meta.needsAttention = false;
-      // Delete/history share this claim. Re-prove membership at the write edge so
-      // a future asynchronous extension cannot resurrect a concurrently removed row.
-      if (!sessions.get(id) && !index.find((session) => session.id === id)) {
-        return reply.status(404).send({ error: "unknown session" });
-      }
+      // Delete/history share this claim. Re-prove membership and re-read the
+      // authoritative metadata at the write edge: an internal audit callback may
+      // have added sensitive prompt evidence after this handler's first snapshot.
+      const latest = sessions.get(id)?.meta ?? index.find((session) => session.id === id);
+      if (!latest) return reply.status(404).send({ error: "unknown session" });
+      const next = { ...latest, needsAttention: false as const };
       index.upsert(next);
       broadcast({ type: "session_meta", session: next });
       return { session: next };
@@ -445,11 +445,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       : undefined;
     if (pinnedAt === current.pinnedAt) return { session: current };
 
-    const next = { ...current, pinnedAt };
     if (live) {
       if (pinnedAt) live.meta.pinnedAt = pinnedAt;
       else delete live.meta.pinnedAt;
     }
+    // Re-read immediately before persistence so an internal prompt-audit write
+    // cannot be clobbered by this route's earlier shallow metadata snapshot.
+    const latest = sessions.get(id)?.meta ?? index.find((session) => session.id === id);
+    if (!latest) return reply.status(404).send({ error: "unknown session" });
+    const next = { ...latest, pinnedAt };
     index.upsert(next);
     broadcast({ type: "session_meta", session: next });
     return { session: next };

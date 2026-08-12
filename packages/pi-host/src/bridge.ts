@@ -52,6 +52,13 @@ export interface BridgeExtensionOptions {
    * app has memory recall enabled for this session.
    */
   recall?: boolean;
+  /**
+   * Capture the exact prompt visible to this extension's final
+   * before_agent_start handler. The app bridge is appended after user/provider
+   * extensions, and recall runs first inside the same handler, so this is the
+   * prompt Pi will use for the turn. The callback is internal, not model-callable.
+   */
+  promptAudit?: boolean;
 }
 
 /** The request body the bridge endpoint receives for each tool call. */
@@ -106,6 +113,9 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
   // flag is flipped in the tool_result handler below — which preserves the
   // content and details the app returned (a plain throw would discard both).
   const errorCallIds = new Set();
+  // Per-extension/runtime sequence. A resumed/rebound Pi loads a new extension
+  // and starts again at one; the server fences only within that live owner.
+  let promptAuditSequence = 0;
   for (const t of tools) {
     pi.registerTool({
       name: t.name,
@@ -153,31 +163,70 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
     }
   });
 ${
+  opts.recall || opts.promptAudit
+    ? `  // This extension is appended after every provider/user extension. Pi runs
+  // before_agent_start handlers in extension order, so this is the last prompt
+  // observer. Recall (when enabled) is applied before the audit in this SAME
+  // handler; the captured value is therefore exactly the value returned to Pi.
+  pi.on("before_agent_start", async (event, ctx) => {
+    let finalSystemPrompt = event.systemPrompt ?? ctx.getSystemPrompt();
+${
   opts.recall
-    ? `  // Per-turn memory recall: ask the app for the memories most relevant to this
-  // message and append them to the turn's system prompt. Best-effort — any
-  // failure leaves the prompt unchanged.
-  pi.on("before_agent_start", async (event) => {
-    // Bounded: a hung recall must never stall the turn — abort after 5s.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    ? `    // Recall is best-effort and bounded: a broken bridge must not stall or
+    // otherwise alter the turn.
+    const recallController = new AbortController();
+    const recallTimer = setTimeout(() => recallController.abort(), 5000);
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sessionId, token, tool: "__recall__", toolCallId: "recall", params: { query: event.prompt } }),
-        signal: controller.signal,
+        signal: recallController.signal,
       });
-      if (!res.ok) return undefined;
-      const data = await res.json();
-      const block = data && typeof data.content === "string" ? data.content : "";
-      if (!block) return undefined;
-      return { systemPrompt: event.systemPrompt + "\\n\\n" + block };
+      if (res.ok) {
+        const data = await res.json();
+        const block = data && typeof data.content === "string" ? data.content : "";
+        if (block) finalSystemPrompt += "\\n\\n" + block;
+      }
     } catch (err) {
-      return undefined;
+      // Best-effort: leave the prompt unchanged.
     } finally {
-      clearTimeout(timer);
+      clearTimeout(recallTimer);
     }
+`
+    : ""
+}${
+        opts.promptAudit
+          ? `    // Sensitive, internal audit callback. It is authenticated by this
+    // session's bridge token and is never registered as a model-facing tool.
+    const sequence = ++promptAuditSequence;
+    const auditController = new AbortController();
+    // Await a credible bounded loopback acknowledgement so a normal turn's
+    // capture is durable before its provider call. Failure leaves the previous
+    // successful capture untouched; the monotonic sequence fences late writes.
+    const auditTimer = setTimeout(() => auditController.abort(), 2000);
+    auditTimer.unref?.();
+    try {
+      const auditResponse = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, token, tool: "__prompt_audit__", toolCallId: "prompt-audit", params: { systemPrompt: finalSystemPrompt, sequence } }),
+        signal: auditController.signal,
+      });
+      if (!auditResponse.ok) {
+        // A rejected/stale write is not a capture for this turn.
+        await auditResponse.body?.cancel().catch(() => {});
+      }
+    } catch (err) {
+      // Auditing is best-effort and must never prevent the Pi turn.
+    } finally {
+      clearTimeout(auditTimer);
+    }
+`
+          : ""
+      }    return finalSystemPrompt === (event.systemPrompt ?? ctx.getSystemPrompt())
+      ? undefined
+      : { systemPrompt: finalSystemPrompt };
   });
 `
     : ""

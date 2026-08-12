@@ -79,6 +79,36 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(reloaded?.updatedAt).toBe(original.updatedAt);
   });
 
+  it("round-trips exact latest system-prompt audit state without rewriting activity", () => {
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    const original = sessions.list()[0]!;
+    const text = `launch\n${"large private prompt ".repeat(10_000)}`;
+    sessions.upsert({
+      ...original,
+      finalSystemPromptAudit: { text, capturedAt: "2026-08-01T10:02:03.000Z" },
+    });
+
+    const reloaded = new SessionIndex(dir).find((session) => session.id === original.id);
+    expect(reloaded?.finalSystemPromptAudit).toEqual({
+      text,
+      capturedAt: "2026-08-01T10:02:03.000Z",
+    });
+    expect(reloaded?.updatedAt).toBe(original.updatedAt);
+  });
+
+  it("drops malformed prompt-audit timestamps/content on read", () => {
+    const dir = freshCopy();
+    const file = path.join(dir, "sessions.json");
+    const malformed = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    malformed[0]!.finalSystemPromptAudit = { text: "private", capturedAt: "not-a-date" };
+    malformed[1]!.finalSystemPromptAudit = { text: 42, capturedAt: "2026-08-01T10:02:03.000Z" };
+    writeFileSync(file, JSON.stringify(malformed, null, 2));
+    expect(new SessionIndex(dir).list().every((session) => !session.finalSystemPromptAudit)).toBe(
+      true,
+    );
+  });
+
   it("round-trips bounded provider retry transcript records", () => {
     const dir = freshCopy();
     const sessions = new SessionIndex(dir);

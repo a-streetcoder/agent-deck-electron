@@ -5,13 +5,21 @@ import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts"
 import type { ServerContext } from "../context.ts";
 
 /** A tool call arriving from a session's generated bridge extension. */
-const bridgeCallBody = z.object({
-  sessionId: z.string(),
-  token: z.string(),
-  tool: z.string(),
-  toolCallId: z.string(),
-  params: z.record(z.unknown()).default({}),
-});
+const bridgeCallBody = z
+  .object({
+    sessionId: z.string(),
+    token: z.string(),
+    tool: z.string(),
+    toolCallId: z.string(),
+    params: z.record(z.unknown()).default({}),
+  })
+  .strict();
+const promptAuditParams = z
+  .object({
+    systemPrompt: z.string(),
+    sequence: z.number().int().positive().safe(),
+  })
+  .strict();
 
 /** How long a blocking supervisor request waits for an answer before giving up. */
 const SUPERVISOR_TIMEOUT_MS = 110_000;
@@ -219,7 +227,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   // app-managed tool call here, and the registry dispatches it to the handler.
   // Loopback-only (the pi subprocess is local); the response maps to the pi
   // tool result, including the error flag.
-  fastify.post("/bridge", async (request, reply) => {
+  fastify.post("/bridge", { bodyLimit: 8 * 1024 * 1024 }, async (request, reply) => {
     const parsed = bridgeCallBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.message });
@@ -239,6 +247,29 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     // the user's message (not a model-callable tool — an internal hook channel).
     if (parsed.data.tool === "__recall__") {
       return await handleRecall(parsed.data.sessionId, parsed.data.params);
+    }
+    // Latest-per-turn prompt audit. This callback is generated only for a parent
+    // session, is not model-callable, and must prove both the per-session token
+    // above and a live parent owner here. Keep the exact string (including empty
+    // and large prompts); storage is bounded to one latest value per session.
+    if (parsed.data.tool === "__prompt_audit__") {
+      const audit = promptAuditParams.safeParse(parsed.data.params);
+      if (!audit.success) return reply.code(400).send({ error: "invalid prompt audit" });
+      const result = sessions.captureFinalSystemPromptAudit(
+        parsed.data.sessionId,
+        { text: audit.data.systemPrompt, capturedAt: new Date().toISOString() },
+        audit.data.sequence,
+      );
+      if (!result) return reply.code(400).send({ error: "invalid prompt audit" });
+      if (!result.accepted)
+        return { content: "Stale system prompt audit ignored.", accepted: false };
+      // Deliberately bypass SessionManager's activity callback: observing Pi's
+      // prompt is audit metadata, not user activity, and must not alter updatedAt
+      // or transcript/event ordering. Persist the authoritative live object,
+      // never a pre-audit shallow snapshot.
+      ctx.index.upsert(result.meta);
+      ctx.broadcast({ type: "session_meta", session: result.meta });
+      return { content: "System prompt captured.", accepted: true };
     }
     const controller = new AbortController();
     const abort = (): void => controller.abort();

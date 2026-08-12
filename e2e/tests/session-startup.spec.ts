@@ -43,11 +43,26 @@ test("an empty session shows a startup card that clears after the first message"
   await expect(card).toBeVisible();
   await expect(page.getByTestId("startup-agent")).toHaveText("Pi Agent");
   await expect(page.getByTestId("startup-skills")).toContainText("None assigned");
+  await expect(page.getByRole("button", { name: "View final system prompt" })).toHaveCount(0);
 
   await page.getByTestId("composer-input").fill("hi there");
   await page.getByTestId("send-button").click();
   await expect(page.getByTestId("user-cell")).toBeVisible();
   await expect(card).toBeHidden();
+
+  const promptButton = page.getByRole("button", { name: "View final system prompt" });
+  await expect(promptButton).toBeVisible();
+  await promptButton.focus();
+  await promptButton.click();
+  const dialog = page.getByRole("dialog", { name: "Final system prompt" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(dialog).toContainText("Private to this device");
+  await expect(page.getByTestId("final-system-prompt-content")).not.toBeEmpty();
+  await expect(page.getByRole("button", { name: "Close final system prompt" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(promptButton).toBeFocused();
 });
 
 test("the startup card previews the project's assigned skills", async ({ page }) => {

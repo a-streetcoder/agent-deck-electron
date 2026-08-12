@@ -64,12 +64,24 @@ class JsonArrayStore<T extends { id: string }> {
 
 export class SessionIndex extends JsonArrayStore<SessionMeta> {
   constructor(dataDir: string = defaultDataDir()) {
-    super(dataDir, "sessions.json", (session) => ({
-      ...session,
-      ...(session.needsAttention === undefined
-        ? {}
-        : { needsAttention: session.needsAttention === true }),
-    }));
+    super(dataDir, "sessions.json", (session) => {
+      const rawAudit = (session as SessionMeta & { finalSystemPromptAudit?: unknown })
+        .finalSystemPromptAudit;
+      const validAudit =
+        rawAudit !== null &&
+        typeof rawAudit === "object" &&
+        typeof (rawAudit as Record<string, unknown>).text === "string" &&
+        typeof (rawAudit as Record<string, unknown>).capturedAt === "string" &&
+        !Number.isNaN(Date.parse((rawAudit as Record<string, unknown>).capturedAt as string));
+      const normalized = {
+        ...session,
+        ...(session.needsAttention === undefined
+          ? {}
+          : { needsAttention: session.needsAttention === true }),
+      };
+      if (!validAudit) delete normalized.finalSystemPromptAudit;
+      return normalized;
+    });
   }
 }
 
