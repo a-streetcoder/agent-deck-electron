@@ -6,12 +6,14 @@ import type { SessionMeta } from "@agent-deck/contracts";
 import {
   createIngestState,
   emptyTranscript,
+  finalizeOpenProviderRetry,
   ingestPiEvent,
   reduceTranscript,
   type AskUserAnswer,
   type AskUserCell,
   type DomainEvent,
   type IngestState,
+  type ProviderRetryCell,
   type SessionPlanItem,
   type SessionPlanUpdate,
   type SubagentCell,
@@ -495,6 +497,54 @@ const pushBusCapacity = (): number | undefined => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 };
 
+const boundedInteger = (value: unknown, minimum: number, maximum: number): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum
+    ? value
+    : undefined;
+
+/** Treat the app-data index as untrusted at restart; only our bounded shape re-enters replay. */
+const normalizeDurableProviderRetry = (value: unknown): Omit<ProviderRetryCell, "kind"> | null => {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.id !== "string" ||
+    !record.id ||
+    record.id.length > 128 ||
+    !["retrying", "succeeded", "gave_up"].includes(String(record.status)) ||
+    typeof record.message !== "string" ||
+    !Array.isArray(record.collapsedMessageCounts) ||
+    record.collapsedMessageCounts.length > 100
+  ) {
+    return null;
+  }
+  const attempt = boundedInteger(record.attempt, 1, 100);
+  if (attempt === undefined) return null;
+  const collapsedMessageCounts = record.collapsedMessageCounts.flatMap((count) => {
+    const normalized = boundedInteger(count, 1, 100_000);
+    return normalized === undefined ? [] : [normalized];
+  });
+  const maxAttempts = boundedInteger(record.maxAttempts, 1, 100);
+  const delayMs = boundedInteger(record.delayMs, 0, 86_400_000);
+  const reset = typeof record.resetsAt === "string" ? new Date(record.resetsAt) : null;
+  const resetsAt = reset && Number.isFinite(reset.getTime()) ? reset.toISOString() : undefined;
+  const planType =
+    typeof record.planType === "string" && record.planType.trim()
+      ? record.planType.trim().slice(0, 64)
+      : undefined;
+  return {
+    id: record.id,
+    status: record.status as ProviderRetryCell["status"],
+    attempt,
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+    ...(delayMs !== undefined ? { delayMs } : {}),
+    message: normalizeSessionError(record.message),
+    ...(record.isQuotaLimit === true ? { isQuotaLimit: true } : {}),
+    ...(resetsAt ? { resetsAt } : {}),
+    ...(planType ? { planType } : {}),
+    collapsedMessageCounts: Array.from(new Set(collapsedMessageCounts)),
+  };
+};
+
 // ---------------------------------------------------------------------------
 // 2. The scoped per-session build
 // ---------------------------------------------------------------------------
@@ -535,6 +585,7 @@ export const makeManagedSessionRuntime = (
     let expectedTeardown = false;
     let ingestionStarted = false;
     let pendingProcessExit: PiProcessExit | null = null;
+    let pendingProviderFailure: string | undefined;
     const ingestionSettled = yield* Deferred.make<void>();
 
     const clearFailure = (): void => {
@@ -577,6 +628,16 @@ export const makeManagedSessionRuntime = (
       bus.unsafeAppend(event);
     };
 
+    const persistProviderRetries = (): void => {
+      const retries = transcript.cells
+        .filter((cell): cell is ProviderRetryCell => cell.kind === "provider_retry")
+        .slice(-50)
+        .map(({ kind: _kind, ...record }) => record);
+      if (retries.length > 0) meta.providerRetries = retries;
+      else delete meta.providerRetries;
+      onMetaChange(meta);
+    };
+
     const cleanupTempDirs = (): void => {
       for (const dir of params.tempDirs) {
         try {
@@ -589,6 +650,14 @@ export const makeManagedSessionRuntime = (
 
     const runExitHandling = (exit: PiProcessExit): void => {
       if (exitHandled) return;
+      const unfinishedRetry = finalizeOpenProviderRetry(
+        ingest,
+        expectedTeardown
+          ? "Retrying stopped when the session closed."
+          : "Retrying stopped because Pi exited before the request completed.",
+      );
+      for (const event of unfinishedRetry) emit(event);
+      if (unfinishedRetry.length > 0) persistProviderRetries();
       try {
         params.expirePendingImages?.();
       } catch {
@@ -597,6 +666,10 @@ export const makeManagedSessionRuntime = (
       exitHandled = true;
       currentExit = exit;
       meta.endedAt = new Date().toISOString();
+      if (!expectedTeardown && pendingProviderFailure && meta.status !== "failed") {
+        recordFailure(pendingProviderFailure, false);
+        pendingProviderFailure = undefined;
+      }
       if (!expectedTeardown && (exit.signal !== null || exit.code !== 0)) {
         // A provider/message failure is more useful than the generic process
         // consequence that commonly follows it.
@@ -675,6 +748,7 @@ export const makeManagedSessionRuntime = (
       const rawEvent = piEvent as {
         message?: { role?: string; stopReason?: string; errorMessage?: string };
         messages?: Array<{ role?: string; stopReason?: string; errorMessage?: string }>;
+        willRetry?: unknown;
       };
       const finalAssistant =
         type === "message_end" && rawEvent.message?.role === "assistant"
@@ -684,13 +758,42 @@ export const makeManagedSessionRuntime = (
                 .reverse()
                 .find((message) => message.role === "assistant")
             : undefined;
-      if (finalAssistant?.stopReason === "error") {
-        recordFailure(finalAssistant.errorMessage || "The provider failed to complete this turn.");
+      if (type === "auto_retry_start") {
+        // agent_end.willRetry is the pinned Pi signal that the preceding provider
+        // error is recoverable. It remains visible in the card, never SES-11
+        // terminal metadata while Pi owns the retry loop.
+        pendingProviderFailure = undefined;
+        clearFailure();
+        onMetaChange(meta);
+      } else if (type === "auto_retry_end") {
+        const retryEnd = piEvent as unknown as { success?: unknown; finalError?: unknown };
+        pendingProviderFailure = undefined;
+        if (retryEnd.success === true) {
+          clearFailure();
+          onMetaChange(meta);
+        } else if (
+          typeof retryEnd.finalError === "string" &&
+          retryEnd.finalError !== "Retry cancelled"
+        ) {
+          recordFailure(retryEnd.finalError);
+        }
+      } else if (finalAssistant?.stopReason === "error") {
+        pendingProviderFailure =
+          finalAssistant.errorMessage || "The provider failed to complete this turn.";
+        // Pi 0.84.1 annotates agent_end before publishing it. This is the exact
+        // decision boundary between a retry pause and a terminal provider error.
+        if (type === "agent_end" && rawEvent.willRetry !== true) {
+          recordFailure(pendingProviderFailure);
+          pendingProviderFailure = undefined;
+        }
+      } else if (type === "message_end" && finalAssistant) {
+        pendingProviderFailure = undefined;
       }
       if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
         pendingUiRequests.set(e.id, e.method);
       }
+      let retryChanged = false;
       for (const domainEvent of ingestPiEvent(ingest, piEvent)) {
         if (
           domainEvent.type === "cell_final" &&
@@ -703,6 +806,7 @@ export const makeManagedSessionRuntime = (
           );
         }
         emit(domainEvent);
+        if (domainEvent.type === "provider_retry") retryChanged = true;
         if (domainEvent.type === "cell_delta" && !sawFirstDelta) {
           sawFirstDelta = true;
           receipts.emit("first_delta", meta.id);
@@ -794,6 +898,7 @@ export const makeManagedSessionRuntime = (
           if (params.onIdle) Effect.runFork(Effect.forkIn(params.onIdle, sessionScope));
         }
       }
+      if (retryChanged) persistProviderRetries();
     };
 
     const processStreamItem = (item: PiStreamItem): void => {
@@ -831,6 +936,32 @@ export const makeManagedSessionRuntime = (
       const entryData = yield* handle.getEntries.pipe(Effect.orDie);
       yield* Effect.sync(() => {
         const entries = activeEntryChain(entryData);
+        const durableRetries = (meta.providerRetries ?? [])
+          .flatMap((record) => {
+            const normalized = normalizeDurableProviderRetry(record);
+            return normalized ? [normalized] : [];
+          })
+          .slice(-50)
+          .map((record) =>
+            record.status === "retrying"
+              ? {
+                  ...record,
+                  status: "gave_up" as const,
+                  message: "Retrying was interrupted when Agent Deck stopped.",
+                }
+              : record,
+          );
+        const messageEntryCount = entries.filter((entry) => entry.type === "message").length;
+        const retryByOrdinal = new Map<number, (typeof durableRetries)[number]>();
+        for (const record of durableRetries) {
+          for (const count of record.collapsedMessageCounts) {
+            if (count <= messageEntryCount && !retryByOrdinal.has(count)) {
+              retryByOrdinal.set(count, record);
+            }
+          }
+        }
+        const insertedRetryIds = new Set<string>();
+        let messageOrdinal = 0;
         const historyUsers: Array<{
           entryId: string;
           cellId: string;
@@ -839,28 +970,57 @@ export const makeManagedSessionRuntime = (
         }> = [];
         for (const entry of entries) {
           if (entry.type !== "message") continue;
-          for (const domainEvent of ingestPiEvent(ingest, {
-            type: "message_end",
-            entryId: entry.id,
-            message: entry.message,
-          } as unknown as PiInboundEvent)) {
-            if (
-              domainEvent.type === "cell_final" &&
-              domainEvent.cell.kind === "user" &&
-              params.decorateUserCell
-            ) {
-              domainEvent.cell = params.decorateUserCell(domainEvent.cell, entry.message);
-              historyUsers.push({
-                entryId: entry.id,
-                cellId: domainEvent.cell.id,
-                text: domainEvent.cell.text,
-                rawMessage: entry.message,
-              });
+          messageOrdinal += 1;
+          const retry = retryByOrdinal.get(messageOrdinal);
+          const message = entry.message as { role?: unknown; stopReason?: unknown };
+          const collapsibleProviderError =
+            retry !== undefined && message.role === "assistant" && message.stopReason === "error";
+          if (collapsibleProviderError) {
+            // Keep ingest's canonical ordinal synchronized only when the entry
+            // itself proves it is Pi's paired provider-error assistant.
+            ingest.messageCount += 1;
+          } else {
+            for (const domainEvent of ingestPiEvent(ingest, {
+              type: "message_end",
+              entryId: entry.id,
+              message: entry.message,
+            } as unknown as PiInboundEvent)) {
+              if (
+                domainEvent.type === "cell_final" &&
+                domainEvent.cell.kind === "user" &&
+                params.decorateUserCell
+              ) {
+                domainEvent.cell = params.decorateUserCell(domainEvent.cell, entry.message);
+                historyUsers.push({
+                  entryId: entry.id,
+                  cellId: domainEvent.cell.id,
+                  text: domainEvent.cell.text,
+                  rawMessage: entry.message,
+                });
+              }
+              emit(domainEvent);
             }
-            emit(domainEvent);
+          }
+          if (retry && collapsibleProviderError && !insertedRetryIds.has(retry.id)) {
+            emit({
+              type: "provider_retry",
+              cell: { kind: "provider_retry", ...retry },
+              collapseLatestAssistantError: false,
+            });
+            insertedRetryIds.add(retry.id);
           }
         }
+        // Compaction/truncation can remove an ordinal anchor. Keep unmatched
+        // durable evidence at the tail, but never suppress an unrelated message.
+        for (const retry of durableRetries.filter((record) => !insertedRetryIds.has(record.id))) {
+          emit({
+            type: "provider_retry",
+            cell: { kind: "provider_retry", ...retry },
+            collapseLatestAssistantError: false,
+          });
+        }
         params.reconcileImages?.(historyUsers);
+        if (meta.providerRetries?.length) persistProviderRetries();
       });
     });
 

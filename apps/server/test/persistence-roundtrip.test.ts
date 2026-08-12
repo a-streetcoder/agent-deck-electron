@@ -56,6 +56,39 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(reloaded?.updatedAt).toBe(original.updatedAt);
   });
 
+  it("round-trips bounded provider retry transcript records", () => {
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    const original = sessions.list()[0]!;
+    sessions.upsert({
+      ...original,
+      providerRetries: [
+        {
+          id: "provider-retry-1",
+          status: "succeeded",
+          attempt: 2,
+          maxAttempts: 3,
+          delayMs: 4_000,
+          message: "Provider recovered.",
+          collapsedMessageCounts: [2, 3],
+        },
+      ],
+    });
+    expect(
+      new SessionIndex(dir).find((session) => session.id === original.id)?.providerRetries,
+    ).toEqual([
+      {
+        id: "provider-retry-1",
+        status: "succeeded",
+        attempt: 2,
+        maxAttempts: 3,
+        delayMs: 4_000,
+        message: "Provider recovered.",
+        collapsedMessageCounts: [2, 3],
+      },
+    ]);
+  });
+
   it("round-trips durable history worktree and stream generations", () => {
     const dir = freshCopy();
     const sessions = new SessionIndex(dir);

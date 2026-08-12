@@ -301,6 +301,22 @@ const ForkProvenanceFromSelf: Schema.Schema<ForkProvenance> = Schema.declare(
   (_input: unknown): _input is ForkProvenance => true,
   { identifier: "ForkProvenancePassThrough" },
 );
+export const ProviderRetryRecord = Schema.mutable(
+  Schema.Struct({
+    id: Schema.String,
+    status: Schema.Literal("retrying", "succeeded", "gave_up"),
+    attempt: Schema.Number,
+    maxAttempts: Schema.optional(Schema.Number),
+    delayMs: Schema.optional(Schema.Number),
+    message: Schema.String,
+    isQuotaLimit: Schema.optional(Schema.Boolean),
+    resetsAt: Schema.optional(Schema.String),
+    planType: Schema.optional(Schema.String),
+    collapsedMessageCounts: Schema.mutable(Schema.Array(Schema.Number)),
+  }),
+);
+export type ProviderRetryRecord = typeof ProviderRetryRecord.Type;
+
 /** Future producers may add live statuses, but this version acts only on failed. */
 const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
   (_input: unknown): _input is "failed" => true,
@@ -331,6 +347,8 @@ export const SessionMeta = Schema.mutable(
     status: Schema.optional(SessionFailureStatusFromSelf),
     /** Safe, bounded explanation for the latest terminal chat failure. */
     lastError: Schema.optional(Schema.String),
+    /** Bounded device-local retry cards that Pi's canonical message history omits. */
+    providerRetries: Schema.optional(Schema.mutable(Schema.Array(ProviderRetryRecord))),
     /**
      * The LaunchPlan this session was created with (opaque here — typed in
      * pi-host). Persisted so resume relaunches with the same shape: agent

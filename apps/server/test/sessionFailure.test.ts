@@ -204,6 +204,92 @@ describe("durable session failure metadata", () => {
     expect(session.lastError).toBeUndefined();
   });
 
+  it("does not leave SES-11 failure metadata after a successful automatic retry", async () => {
+    const session = await ingestScriptedItems([
+      assistantError("Transient provider outage"),
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2_000,
+          errorMessage: "Transient provider outage",
+        } as never,
+      },
+      {
+        _tag: "PiEvent",
+        event: { type: "auto_retry_end", success: true, attempt: 1 } as never,
+      },
+      processExit(0),
+    ]);
+    expect(session.status).toBeUndefined();
+    expect(session.lastError).toBeUndefined();
+    expect(session.providerRetries?.[0]).toMatchObject({ status: "succeeded", attempt: 1 });
+  });
+
+  it("settles a cancelled retry card without promoting user cancellation to SES-11 failure", async () => {
+    const session = await ingestScriptedItems([
+      assistantError("Transient provider outage"),
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2_000,
+          errorMessage: "Transient provider outage",
+        } as never,
+      },
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_end",
+          success: false,
+          attempt: 1,
+          finalError: "Retry cancelled",
+        } as never,
+      },
+      processExit(0),
+    ]);
+    expect(session.status).toBeUndefined();
+    expect(session.lastError).toBeUndefined();
+    expect(session.providerRetries?.[0]).toMatchObject({
+      status: "gave_up",
+      message: "Retry cancelled",
+    });
+  });
+
+  it("keeps final retry failure detail ahead of a later process consequence", async () => {
+    const session = await ingestScriptedItems([
+      assistantError("Transient provider outage"),
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2_000,
+          errorMessage: "Transient provider outage",
+        } as never,
+      },
+      assistantError("Final specific provider outage"),
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_end",
+          success: false,
+          attempt: 1,
+          finalError: "Final specific provider outage",
+        } as never,
+      },
+      processExit(9),
+    ]);
+    expect(session.status).toBe("failed");
+    expect(session.lastError).toBe("Final specific provider outage");
+    expect(session.providerRetries?.[0]).toMatchObject({ status: "gave_up", attempt: 1 });
+  });
+
   it("preserves a provider failure over its later nonzero process exit", async () => {
     const session = await ingestScriptedItems([
       assistantError("Provider failed: Bearer secret-token-value"),

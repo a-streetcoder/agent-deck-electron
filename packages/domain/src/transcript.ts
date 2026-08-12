@@ -71,6 +71,22 @@ export interface ToolCell {
   result?: unknown;
 }
 
+/** Durable, sanitized status for one Pi provider auto-retry burst. */
+export interface ProviderRetryCell {
+  kind: "provider_retry";
+  id: string;
+  status: "retrying" | "succeeded" | "gave_up";
+  attempt: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  message: string;
+  isQuotaLimit?: boolean;
+  resetsAt?: string;
+  planType?: string;
+  /** Pi message ordinals hidden because their provider errors are represented by this card. */
+  collapsedMessageCounts: number[];
+}
+
 /** An extension_ui_request awaiting (or after) the user's answer. */
 export interface QuestionCell {
   kind: "question";
@@ -179,6 +195,7 @@ export type TranscriptCell =
   | UserCell
   | AssistantCell
   | ToolCell
+  | ProviderRetryCell
   | QuestionCell
   | SubagentCell
   | SupervisorQuestionCell
@@ -406,6 +423,12 @@ export type DomainEvent =
   | { type: "block_end"; cellId: string; contentIndex: number; content: string }
   | { type: "tool_update"; cellId: string; partialResult: unknown }
   | { type: "tool_end"; cellId: string; status: "done" | "error"; result: unknown }
+  | {
+      type: "provider_retry";
+      cell: ProviderRetryCell;
+      /** Live events collapse the immediately preceding duplicate provider-error message. */
+      collapseLatestAssistantError: boolean;
+    }
   | { type: "subagent_delta"; cellId: string; delta: string }
   | { type: "subagent_progress"; cellId: string; message: string }
   | { type: "supervisor_answered"; cellId: string; answer: string }
@@ -467,12 +490,18 @@ export function emptyTranscript(): TranscriptState {
   };
 }
 
+const MAX_PROVIDER_RETRY_CELLS = 50;
+
 function upsertCell(cells: TranscriptCell[], cell: TranscriptCell): TranscriptCell[] {
   const index = cells.findIndex((c) => c.id === cell.id);
-  if (index === -1) return [...cells, cell];
-  const next = cells.slice();
-  next[index] = cell;
-  return next;
+  const next =
+    index === -1 ? [...cells, cell] : cells.map((current, i) => (i === index ? cell : current));
+  if (cell.kind !== "provider_retry") return next;
+  const retryIndexes = next.flatMap((current, i) => (current.kind === "provider_retry" ? [i] : []));
+  const excess = retryIndexes.length - MAX_PROVIDER_RETRY_CELLS;
+  if (excess <= 0) return next;
+  const remove = new Set(retryIndexes.slice(0, excess));
+  return next.filter((_current, i) => !remove.has(i));
 }
 
 function updateAssistant(
@@ -583,6 +612,23 @@ export function reduceTranscript(state: TranscriptState, event: DomainEvent): Tr
       // Merge, don't replace: tool_execution_end carries no args.
       next[index] = { ...cell, status: event.status, result: event.result };
       return { ...state, cells: next };
+    }
+    case "provider_retry": {
+      let cells = state.cells;
+      if (event.collapseLatestAssistantError) {
+        // Pi emits the failed assistant message immediately before retry_start.
+        // The retry card is the durable, sanitized representation of that same
+        // failure, so remove only the newest matching provider-error cell.
+        for (let index = cells.length - 1; index >= 0; index -= 1) {
+          const candidate = cells[index];
+          if (candidate?.kind === "provider_retry" && candidate.id === event.cell.id) continue;
+          if (candidate?.kind === "assistant" && candidate.stopReason === "error") {
+            cells = cells.filter((_cell, candidateIndex) => candidateIndex !== index);
+          }
+          break;
+        }
+      }
+      return { ...state, cells: upsertCell(cells, event.cell) };
     }
     case "subagent_delta": {
       const index = state.cells.findIndex((c) => c.id === event.cellId);

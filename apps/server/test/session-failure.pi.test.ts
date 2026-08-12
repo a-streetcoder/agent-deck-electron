@@ -74,12 +74,40 @@ describe("real Pi durable provider failure", () => {
       expect(createdResponse.status).toBe(201);
       const created = (await createdResponse.json()) as { session: SessionMeta };
       const failedSocket = await prompt(created.session.id, "fail with provider outage");
+      await waitFor(async () => (await sessions())[0]?.providerRetries?.[0]?.status === "retrying");
+      const retrying = (await sessions())[0]!;
+      expect(retrying.status).toBeUndefined();
+      expect(retrying.lastError).toBeUndefined();
+      expect(
+        server.sessions
+          .get(created.session.id)!
+          .snapshot()
+          .state.cells.find((cell) => cell.kind === "provider_retry"),
+      ).toMatchObject({ status: "retrying", attempt: 1, maxAttempts: 3, delayMs: 2_000 });
+
       await waitFor(async () => (await sessions())[0]?.status === "failed");
       const failed = (await sessions())[0]!;
       expect(failed.lastError).toMatch(/500|internal server error/i);
       expect(failed.lastError).not.toContain("undefined");
       expect(failed.lastError).not.toContain("\u001b");
       expect(Array.from(failed.lastError!).length).toBeLessThanOrEqual(2_048);
+      // This is a real Pi retry loop, not a synthetic final-output assertion:
+      // the deterministic provider sees the initial request plus Pi's retries,
+      // and the authoritative live transcript retains one collapsed outcome.
+      expect(mock.requests.length).toBeGreaterThanOrEqual(4);
+      const liveCells = server.sessions.get(created.session.id)!.snapshot().state.cells;
+      const liveRetry = liveCells.filter((cell) => cell.kind === "provider_retry");
+      expect(liveRetry).toHaveLength(1);
+      expect(
+        liveCells.filter((cell) => cell.kind === "assistant" && cell.stopReason === "error"),
+      ).toHaveLength(0);
+      expect(liveRetry[0]).toMatchObject({
+        status: "gave_up",
+        attempt: 3,
+        maxAttempts: 3,
+        collapsedMessageCounts: expect.arrayContaining([2]),
+      });
+      expect(failed.providerRetries?.[0]).toMatchObject({ status: "gave_up", attempt: 3 });
       failedSocket.close();
 
       await server.close();
@@ -96,6 +124,12 @@ describe("real Pi durable provider failure", () => {
         { method: "POST" },
       );
       expect(resume.status).toBe(200);
+      const hydratedCells = server.sessions.get(created.session.id)!.snapshot().state.cells;
+      const hydratedRetry = hydratedCells.find((cell) => cell.kind === "provider_retry");
+      expect(hydratedRetry).toMatchObject({ status: "gave_up", attempt: 3 });
+      expect(
+        hydratedCells.filter((cell) => cell.kind === "assistant" && cell.stopReason === "error"),
+      ).toHaveLength(0);
       const recoveredSocket = await prompt(created.session.id, "recover now");
       await waitFor(async () => {
         const current = (await sessions())[0];

@@ -1,9 +1,19 @@
 import { AppCopyButton } from "@/design-system/components/AppCopyButton";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { FolderOpen, GitFork, MessageSquareText, RotateCcw, Send } from "lucide-react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  CheckCircle2,
+  FolderOpen,
+  GitFork,
+  Hourglass,
+  MessageSquareText,
+  RotateCcw,
+  Send,
+  TriangleAlert,
+} from "lucide-react";
 import {
   memoryToolCardLabel,
+  type ProviderRetryCell,
   type QuestionCell,
   type SubagentCell,
   type SupervisorQuestionCell,
@@ -125,6 +135,94 @@ function ToolCellView({
         }
       />
     </div>
+  );
+}
+
+function ProviderRetryCellView({ cell }: { cell: ProviderRetryCell }) {
+  const accessibleId = useId();
+  const retrying = cell.status === "retrying";
+  const succeeded = cell.status === "succeeded";
+  const Icon = retrying
+    ? cell.isQuotaLimit
+      ? Hourglass
+      : RotateCcw
+    : succeeded
+      ? CheckCircle2
+      : TriangleAlert;
+  const headline = retrying
+    ? cell.isQuotaLimit
+      ? "Usage limit reached — retrying"
+      : "Retrying model provider request"
+    : succeeded
+      ? "Request succeeded after retrying"
+      : "Model provider stopped retrying";
+  const accent = succeeded ? "text-success" : retrying ? "text-warning" : "text-danger";
+  const border = succeeded
+    ? "border-success/30 bg-success/5"
+    : retrying
+      ? "border-warning/30 bg-warning/5"
+      : "border-danger/30 bg-danger/5";
+  const attempt = retrying
+    ? `Attempt ${cell.attempt}${cell.maxAttempts ? ` of ${cell.maxAttempts}` : ""} · Waiting to retry`
+    : `${cell.attempt} ${cell.attempt === 1 ? "attempt" : "attempts"}`;
+  const resetDate = cell.resetsAt ? new Date(cell.resetsAt) : null;
+  let reset: string | null = null;
+  if (resetDate && Number.isFinite(resetDate.getTime())) {
+    const now = new Date();
+    const sameDay =
+      resetDate.getFullYear() === now.getFullYear() &&
+      resetDate.getMonth() === now.getMonth() &&
+      resetDate.getDate() === now.getDate();
+    const date = sameDay
+      ? ""
+      : `${resetDate.toLocaleDateString([], {
+          month: "short",
+          day: "numeric",
+          ...(resetDate.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+        })} `;
+    reset = `Resets at ${date}${resetDate.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`;
+  }
+  const headlineId = `${accessibleId}-headline`;
+  const detailId = `${accessibleId}-detail`;
+
+  return (
+    <section
+      className={`rounded-xl border px-3 py-2 ${border}`}
+      role={retrying ? "status" : undefined}
+      aria-live={retrying ? "polite" : undefined}
+      aria-atomic={retrying ? "true" : undefined}
+      aria-labelledby={retrying ? headlineId : undefined}
+      aria-describedby={retrying ? detailId : undefined}
+      data-testid="provider-retry-cell"
+      data-status={cell.status}
+    >
+      <div className="flex items-start gap-2">
+        <Icon size={16} className={`mt-0.5 shrink-0 ${accent}`} aria-hidden />
+        <div className="min-w-0 space-y-1">
+          <div id={headlineId} className={`text-sm font-semibold ${accent}`}>
+            {headline}
+          </div>
+          <div id={detailId} className="space-y-1">
+            <div
+              className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              tabIndex={0}
+              data-testid="provider-retry-message"
+            >
+              {succeeded ? "Recovered from: " : ""}
+              {cell.message}
+              {cell.planType ? ` (${cell.planType} plan)` : ""}
+            </div>
+            <div className="flex flex-wrap gap-x-2 text-detail text-text-muted">
+              <span>{attempt}</span>
+              {reset ? <span className={accent}>{reset}</span> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -771,6 +869,8 @@ export function CellView({
       return <AssistantCellView cell={cell} transcriptVisibility={transcriptVisibility} />;
     case "tool":
       return <ToolCellView cell={cell} editorController={editorController} />;
+    case "provider_retry":
+      return <ProviderRetryCellView cell={cell} />;
     case "subagent":
       return <SubagentCellView cell={cell} />;
     case "supervisor_question":

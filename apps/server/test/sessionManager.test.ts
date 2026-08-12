@@ -4,13 +4,30 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyTranscript, type DomainEvent, type SessionMeta } from "@agent-deck/domain";
-import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Scope,
+  Stream,
+} from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManagedSession, SessionCreationError, SessionManager } from "../src/SessionManager.ts";
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
-import { PiHost, PiHostLive, spawnPiProcess, type PiHostShape } from "../src/services/piHost.ts";
+import {
+  PiHost,
+  PiHostLive,
+  spawnPiProcess,
+  type PiHostHandle,
+  type PiHostShape,
+  type PiStreamItem,
+} from "../src/services/piHost.ts";
 import {
   makeSessionPushBusHandle,
   SessionPushBusesLive,
@@ -662,6 +679,413 @@ describe("SessionManager Effect service (services/sessionManager.ts)", () => {
     expect(firstDelta).toBeLessThan(finalIdx);
   }, 15_000);
 
+  it("persists one collapsed retry burst and reconstructs it in order after restart", async () => {
+    const user = { role: "user", content: "retry this", timestamp: 1 };
+    const failed = {
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "mock",
+      model: "mock-model",
+      usage: { input: 1, output: 0 },
+      stopReason: "error",
+      errorMessage: "HTTP 503 provider unavailable",
+      timestamp: 2,
+    };
+    const succeeded = {
+      ...failed,
+      content: [{ type: "text", text: "Recovered answer" }],
+      stopReason: "stop",
+      errorMessage: undefined,
+      timestamp: 3,
+    };
+    const items: PiStreamItem[] = [
+      { _tag: "PiEvent", event: { type: "message_end", message: user } as never },
+      { _tag: "PiEvent", event: { type: "message_end", message: failed } as never },
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2_000,
+          errorMessage: failed.errorMessage,
+        } as never,
+      },
+      { _tag: "PiEvent", event: { type: "message_end", message: succeeded } as never },
+      {
+        _tag: "PiEvent",
+        event: { type: "auto_retry_end", success: true, attempt: 1 } as never,
+      },
+      { _tag: "ProcessExit", exit: { code: 0, signal: null } },
+    ];
+    const entries = [user, failed, succeeded].map((message, index) => ({
+      id: `entry-${index + 1}`,
+      parentId: index === 0 ? null : `entry-${index}`,
+      type: "message" as const,
+      message,
+    }));
+    const session = makeParams().meta;
+    const persisted: SessionMeta[] = [];
+    const handle = (stream: Stream.Stream<PiStreamItem>, history = entries): PiHostHandle =>
+      ({
+        events: stream,
+        exit: Effect.succeed(Option.some({ code: 0, signal: null })),
+        isRunning: Effect.succeed(false),
+        getEntries: Effect.succeed({ leafId: "entry-3", entries: history }),
+        compact: Effect.void,
+        abort: Effect.void,
+        getState: Effect.succeed({}),
+        getForkMessages: Effect.succeed({}),
+        getSessionStats: Effect.succeed({}),
+        getAvailableModels: Effect.succeed([]),
+        getCommands: Effect.succeed([]),
+      }) as unknown as PiHostHandle;
+
+    const liveSnapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle(Stream.fromIterable(items))) },
+            buses,
+            makeParams({
+              meta: session,
+              onMetaChange: (meta) => persisted.push(structuredClone(meta)),
+            }),
+          );
+          yield* rt.ingest;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(liveSnapshot.state.cells.map((cell) => cell.kind)).toEqual([
+      "user",
+      "provider_retry",
+      "assistant",
+    ]);
+    expect(liveSnapshot.state.cells[1]).toMatchObject({
+      kind: "provider_retry",
+      status: "succeeded",
+      collapsedMessageCounts: [2],
+    });
+    expect(session.providerRetries).toHaveLength(1);
+    expect(session.status).toBeUndefined();
+    expect(persisted.some((meta) => meta.providerRetries?.[0]?.status === "succeeded")).toBe(true);
+
+    const restoredSnapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle(Stream.empty)) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(restoredSnapshot.state.cells.map((cell) => cell.kind)).toEqual([
+      "user",
+      "provider_retry",
+      "assistant",
+    ]);
+    expect(restoredSnapshot.state.cells[1]).toMatchObject({
+      kind: "provider_retry",
+      status: "succeeded",
+    });
+  });
+
+  it("tail-emits a gave-up retry whose final error anchor was truncated without hiding history", async () => {
+    const user = { role: "user", content: "retry this", timestamp: 1 };
+    const session = makeParams().meta;
+    session.providerRetries = [
+      {
+        id: "provider-retry-final",
+        status: "gave_up",
+        attempt: 3,
+        maxAttempts: 3,
+        message: "final provider outage",
+        // The final failed assistant was ordinal 2 before history truncation.
+        collapsedMessageCounts: [2],
+      },
+    ];
+    const handle = {
+      events: Stream.empty,
+      exit: Effect.succeed(Option.none()),
+      isRunning: Effect.succeed(true),
+      getEntries: Effect.succeed({
+        leafId: "entry-1",
+        entries: [{ id: "entry-1", parentId: null, type: "message", message: user }],
+      }),
+      compact: Effect.void,
+      abort: Effect.void,
+      getState: Effect.succeed({}),
+      getForkMessages: Effect.succeed({}),
+      getSessionStats: Effect.succeed({}),
+      getAvailableModels: Effect.succeed([]),
+      getCommands: Effect.succeed([]),
+    } as unknown as PiHostHandle;
+    const snapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(snapshot.state.cells).toEqual([
+      expect.objectContaining({ kind: "user", text: "retry this" }),
+      expect.objectContaining({
+        kind: "provider_retry",
+        status: "gave_up",
+        message: "final provider outage",
+      }),
+    ]);
+  });
+
+  it("does not suppress a shifted in-range non-error message after compaction", async () => {
+    const user = { role: "user", content: "surviving shifted message", timestamp: 1 };
+    const session = makeParams().meta;
+    session.providerRetries = [
+      {
+        id: "provider-retry-shifted",
+        status: "gave_up",
+        attempt: 2,
+        message: "older provider outage",
+        // Formerly an assistant error at ordinal 1; compaction shifted a user here.
+        collapsedMessageCounts: [1],
+      },
+    ];
+    const handle = {
+      events: Stream.empty,
+      exit: Effect.succeed(Option.none()),
+      isRunning: Effect.succeed(true),
+      getEntries: Effect.succeed({
+        leafId: "entry-1",
+        entries: [{ id: "entry-1", parentId: null, type: "message", message: user }],
+      }),
+      compact: Effect.void,
+      abort: Effect.void,
+      getState: Effect.succeed({}),
+      getForkMessages: Effect.succeed({}),
+      getSessionStats: Effect.succeed({}),
+      getAvailableModels: Effect.succeed([]),
+      getCommands: Effect.succeed([]),
+    } as unknown as PiHostHandle;
+    const snapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(snapshot.state.cells).toEqual([
+      expect.objectContaining({ kind: "user", text: "surviving shifted message" }),
+      expect.objectContaining({ kind: "provider_retry", id: "provider-retry-shifted" }),
+    ]);
+  });
+
+  it("process exit collapses and persists the pending final provider error across restart", async () => {
+    const failed = {
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "mock",
+      model: "mock-model",
+      usage: { input: 1, output: 0 },
+      stopReason: "error",
+      errorMessage: "final provider outage",
+      timestamp: 2,
+    };
+    const items: PiStreamItem[] = [
+      { _tag: "PiEvent", event: { type: "message_end", message: failed } as never },
+      {
+        _tag: "PiEvent",
+        event: {
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2_000,
+          errorMessage: failed.errorMessage,
+        } as never,
+      },
+      { _tag: "PiEvent", event: { type: "message_end", message: failed } as never },
+      { _tag: "ProcessExit", exit: { code: 9, signal: null } },
+    ];
+    const session = makeParams().meta;
+    const handle = (stream: Stream.Stream<PiStreamItem>): PiHostHandle =>
+      ({
+        events: stream,
+        exit: Effect.succeed(Option.some({ code: 9, signal: null })),
+        isRunning: Effect.succeed(false),
+        getEntries: Effect.succeed({
+          leafId: "entry-2",
+          entries: [
+            { id: "entry-1", parentId: null, type: "message", message: failed },
+            { id: "entry-2", parentId: "entry-1", type: "message", message: failed },
+          ],
+        }),
+        compact: Effect.void,
+        abort: Effect.void,
+        getState: Effect.succeed({}),
+        getForkMessages: Effect.succeed({}),
+        getSessionStats: Effect.succeed({}),
+        getAvailableModels: Effect.succeed([]),
+        getCommands: Effect.succeed([]),
+      }) as unknown as PiHostHandle;
+    const live = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle(Stream.fromIterable(items))) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.ingest;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(live.state.cells).toEqual([
+      expect.objectContaining({
+        kind: "provider_retry",
+        status: "gave_up",
+        collapsedMessageCounts: [1, 2],
+      }),
+    ]);
+    expect(session.providerRetries?.[0]?.collapsedMessageCounts).toEqual([1, 2]);
+
+    const restored = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle(Stream.empty)) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(restored.state.cells).toEqual([
+      expect.objectContaining({ kind: "provider_retry", status: "gave_up" }),
+    ]);
+  });
+
+  it("drops malformed durable retries and re-sanitizes accepted records", async () => {
+    const session = makeParams().meta;
+    session.providerRetries = [
+      {
+        id: "provider-retry-safe",
+        status: "gave_up",
+        attempt: 1,
+        message: "failed {'access_token':'persisted-secret'}\u001b[31m",
+        collapsedMessageCounts: [0, -1],
+      },
+      // Simulate a manually corrupted/future app-data entry past contract typing.
+      { id: "bad", status: "retrying", attempt: 999, message: 42, collapsedMessageCounts: [0] },
+    ] as never;
+    const handle = {
+      events: Stream.empty,
+      exit: Effect.succeed(Option.none()),
+      isRunning: Effect.succeed(true),
+      getEntries: Effect.succeed({ leafId: null, entries: [] }),
+      compact: Effect.void,
+      abort: Effect.void,
+      getState: Effect.succeed({}),
+      getForkMessages: Effect.succeed({}),
+      getSessionStats: Effect.succeed({}),
+      getAvailableModels: Effect.succeed([]),
+      getCommands: Effect.succeed([]),
+    } as unknown as PiHostHandle;
+    const snapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(snapshot.state.cells).toHaveLength(1);
+    expect(JSON.stringify(snapshot.state.cells)).not.toContain("persisted-secret");
+    expect(snapshot.state.cells[0]).toMatchObject({
+      kind: "provider_retry",
+      message: "failed {'access_token':'[REDACTED]'}",
+      collapsedMessageCounts: [],
+    });
+    expect(session.providerRetries).toHaveLength(1);
+  });
+
+  it("converts a persisted in-progress retry to interrupted on restart", async () => {
+    const session = makeParams().meta;
+    session.providerRetries = [
+      {
+        id: "provider-retry-1",
+        status: "retrying",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2_000,
+        message: "temporary outage",
+        collapsedMessageCounts: [],
+      },
+    ];
+    const persisted: SessionMeta[] = [];
+    const handle = {
+      events: Stream.empty,
+      exit: Effect.succeed(Option.none()),
+      isRunning: Effect.succeed(true),
+      getEntries: Effect.succeed({ leafId: null, entries: [] }),
+      compact: Effect.void,
+      abort: Effect.void,
+      getState: Effect.succeed({}),
+      getForkMessages: Effect.succeed({}),
+      getSessionStats: Effect.succeed({}),
+      getAvailableModels: Effect.succeed([]),
+      getCommands: Effect.succeed([]),
+    } as unknown as PiHostHandle;
+    const snapshot = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({
+              meta: session,
+              onMetaChange: (meta) => persisted.push(structuredClone(meta)),
+            }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(snapshot.state.cells[0]).toMatchObject({
+      kind: "provider_retry",
+      status: "gave_up",
+      message: "Retrying was interrupted when Agent Deck stopped.",
+    });
+    expect(session.providerRetries?.[0]?.status).toBe("gave_up");
+    expect(persisted.at(-1)?.providerRetries?.[0]?.status).toBe("gave_up");
+  });
+
   it("closing the session Scope kills pi and runs exit handling once (endedAt, temp cleanup, listeners)", async () => {
     const { piHost, pids } = makeFakePiHost();
     const tempDir = makeTempDir();
@@ -1195,6 +1619,15 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         worktreeIdentity: "owned-token",
         worktreeBranch: "agent-deck/source",
         worktreeSourceBranch: "main",
+        providerRetries: [
+          {
+            id: "provider-retry-source",
+            status: "succeeded",
+            attempt: 1,
+            message: "recovered",
+            collapsedMessageCounts: [2],
+          },
+        ],
       };
       const dir = makeTempDir();
       const sourceFile = path.join(dir, "source.jsonl");
@@ -1208,6 +1641,8 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         piSessionFile: genericFile,
       });
       expect(generic.meta).not.toHaveProperty("worktreePath");
+      // A full-file duplicate preserves the same canonical ancestry and anchors.
+      expect(generic.meta.providerRetries).toEqual(source.providerRetries);
       const nestedGeneric = await sm.fork(generic.meta, genericFile, nestedGenericFile);
       expect(nestedGeneric.meta).toMatchObject({
         cwd: source.cwd,
@@ -1226,6 +1661,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       expect(captured).not.toHaveProperty("worktreeIdentity");
       expect(captured).not.toHaveProperty("worktreeBranch");
       expect(captured).not.toHaveProperty("worktreeSourceBranch");
+      expect(captured).not.toHaveProperty("providerRetries");
       expect(source).toMatchObject({
         worktreePath: "/private/worktree",
         worktreeIdentity: "owned-token",
@@ -1237,6 +1673,12 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         piSessionFile: "/tmp/nested-branch.jsonl",
       });
       expect(nested.meta).not.toHaveProperty("worktreePath");
+      expect(nested.meta).not.toHaveProperty("providerRetries");
+
+      const rebound = await sm.rebindHistoryDeferred(source, "/tmp/rebound-branch.jsonl");
+      expect(rebound.meta).not.toHaveProperty("providerRetries");
+      expect(source.providerRetries).toHaveLength(1);
+      await sm.destroy(rebound.meta.id);
       await sm.destroy(nested.meta.id);
       await sm.destroy(target.meta.id);
       await sm.destroy(nestedGeneric.meta.id);

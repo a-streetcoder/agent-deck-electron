@@ -193,6 +193,105 @@ describe("historic user message actions", () => {
   });
 });
 
+describe("provider retry transcript status", () => {
+  it.each([
+    ["retrying" as const, "Usage limit reached — retrying", "Attempt 2 of 3 · Waiting to retry"],
+    ["succeeded" as const, "Request succeeded after retrying", "2 attempts"],
+    ["gave_up" as const, "Model provider stopped retrying", "2 attempts"],
+  ])(
+    "renders accessible %s outcome without an interactive focus target",
+    (status, headline, detail) => {
+      const view = render(
+        <CellView
+          cell={{
+            kind: "provider_retry",
+            id: "retry-1",
+            status,
+            attempt: 2,
+            maxAttempts: 3,
+            delayMs: 4_000,
+            message: "Provider request was rate limited.",
+            isQuotaLimit: status === "retrying",
+            planType: "plus",
+            collapsedMessageCounts: [2, 3],
+          }}
+        />,
+      );
+
+      const card = screen.getByTestId("provider-retry-cell");
+      expect(card.getAttribute("data-status")).toBe(status);
+      expect(screen.getByText(headline)).toBeTruthy();
+      expect(card.textContent).toContain(
+        `${status === "succeeded" ? "Recovered from: " : ""}Provider request was rate limited. (plus plan)`,
+      );
+      expect(card.textContent).toContain(detail);
+      expect(card.querySelector("button, a, input")).toBeNull();
+      expect(screen.getByTestId("provider-retry-message").getAttribute("tabindex")).toBe("0");
+      if (status === "retrying") {
+        expect(screen.getByRole("status", { name: headline })).toBe(card);
+        expect(card.getAttribute("aria-live")).toBe("polite");
+        expect(card.getAttribute("aria-atomic")).toBe("true");
+        const descriptionId = card.getAttribute("aria-describedby");
+        expect(descriptionId).toBeTruthy();
+        expect(document.getElementById(descriptionId!)?.textContent).toContain(detail);
+        expect(document.getElementById(descriptionId!)?.textContent).toContain(
+          "Provider request was rate limited.",
+        );
+      } else {
+        expect(card.getAttribute("role")).toBeNull();
+        expect(card.getAttribute("aria-live")).toBeNull();
+        expect(card.getAttribute("aria-label")).toBeNull();
+      }
+
+      view.unmount();
+    },
+  );
+
+  it("handles missing optional data and bounds long content visually", () => {
+    render(
+      <CellView
+        cell={{
+          kind: "provider_retry",
+          id: "retry-minimal",
+          status: "retrying",
+          attempt: 1,
+          message: "long diagnostic ".repeat(200),
+          collapsedMessageCounts: [],
+        }}
+      />,
+    );
+    const card = screen.getByTestId("provider-retry-cell");
+    expect(card.textContent).toContain("Attempt 1 · Waiting to retry");
+    expect(card.textContent).not.toContain("undefined");
+    const message = screen.getByTestId("provider-retry-message");
+    expect(message.className).toContain("max-h-32");
+    expect(message.className).toContain("overflow-auto");
+    expect(message.className).toContain("focus-visible:ring-2");
+    expect(message.getAttribute("tabindex")).toBe("0");
+    message.focus();
+    expect(document.activeElement).toBe(message);
+  });
+
+  it("shows timezone-robust reset date context and ignores an invalid timestamp", () => {
+    const base = {
+      kind: "provider_retry" as const,
+      id: "retry-reset",
+      status: "retrying" as const,
+      attempt: 1,
+      message: "Quota exhausted.",
+      collapsedMessageCounts: [1],
+    };
+    const futureYear = new Date().getFullYear() + 2;
+    const reset = new Date(futureYear, 6, 15, 12, 4).toISOString();
+    const view = render(<CellView cell={{ ...base, resetsAt: reset }} />);
+    expect(screen.getByTestId("provider-retry-cell").textContent).toContain("Resets at");
+    expect(screen.getByTestId("provider-retry-cell").textContent).toContain(String(futureYear));
+
+    view.rerender(<CellView cell={{ ...base, resetsAt: "not-a-date" }} />);
+    expect(screen.getByTestId("provider-retry-cell").textContent).not.toContain("Resets at");
+  });
+});
+
 describe("subagent durable status and content", () => {
   const setParentSession = () =>
     useAppStore.setState({

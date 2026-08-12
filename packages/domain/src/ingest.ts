@@ -4,6 +4,7 @@ import type {
   AssistantCell,
   BlockKind,
   DomainEvent,
+  ProviderRetryCell,
   ToolCell,
   TranscriptCell,
 } from "./transcript.ts";
@@ -38,15 +39,166 @@ export interface IngestState {
   };
   /** toolCallIds with a live tool_execution_start cell (merge, don't recreate). */
   seenToolCalls: Set<string>;
+  /** Count of canonical Pi message entries observed, used for durable retry pairing on resume. */
+  messageCount: number;
+  openProviderRetry?: ProviderRetryCell;
 }
 
 export function createIngestState(): IngestState {
-  return { counter: 0, seenToolCalls: new Set() };
+  return { counter: 0, seenToolCalls: new Set(), messageCount: 0 };
 }
 
 function coinId(state: IngestState, prefix: string): string {
   state.counter += 1;
   return `${prefix}-${state.counter}`;
+}
+
+const MAX_RETRY_MESSAGE_CODE_POINTS = 2_048;
+const MAX_RETRY_ATTEMPTS = 100;
+
+/** Bound and redact an untrusted provider diagnostic before it reaches replay or disk. */
+function retryMessage(value: unknown): string {
+  const raw = typeof value === "string" ? value : "";
+  const withoutAnsi = raw.replace(
+    // eslint-disable-next-line no-control-regex
+    /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g,
+    "",
+  );
+  const withoutControls = withoutAnsi.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g,
+    " ",
+  );
+  const secretKey =
+    "(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|secret)";
+  const redacted = withoutControls
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(
+      new RegExp(`"(${secretKey})"\\s*:\\s*"(?:\\\\.|[^"\\\\])*"`, "gi"),
+      '"$1":"[REDACTED]"',
+    )
+    .replace(
+      new RegExp(`'(${secretKey})'\\s*:\\s*'(?:\\\\.|[^'\\\\])*'`, "gi"),
+      "'$1':'[REDACTED]'",
+    )
+    .replace(new RegExp(`\\b(${secretKey})\\b\\s*[:=]\\s*["']?[^\\s,}"']+`, "gi"), "$1=[REDACTED]")
+    .replace(/\b(?:sk|pk)-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED]")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const normalized = redacted || "The model provider returned an error.";
+  const points = Array.from(normalized);
+  return points.length <= MAX_RETRY_MESSAGE_CODE_POINTS
+    ? normalized
+    : `${points.slice(0, MAX_RETRY_MESSAGE_CODE_POINTS - 1).join("")}…`;
+}
+
+function finiteInt(value: unknown, minimum: number, maximum: number): number | undefined {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+    ? value
+    : undefined;
+}
+
+function retryJson(message: string): Record<string, unknown> | undefined {
+  const start = message.indexOf("{");
+  const end = message.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    const parsed = JSON.parse(message.slice(start, end + 1)) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function humanRetryMessage(payload: string): string {
+  const root = retryJson(payload);
+  const error =
+    root?.error && typeof root.error === "object"
+      ? (root.error as Record<string, unknown>)
+      : undefined;
+  const direct = error?.message ?? root?.message;
+  if (typeof direct === "string" && direct.trim()) return retryMessage(direct);
+  const nested = root?.errorMessage ?? root?.finalError;
+  if (typeof nested === "string" && nested !== payload) return humanRetryMessage(nested);
+  const prose = (payload.includes("{") ? payload.slice(0, payload.indexOf("{")) : payload)
+    .trim()
+    .replace(/:$/, "")
+    .trim();
+  return prose || "The model provider returned an error.";
+}
+
+function goDurationSeconds(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  let total = 0;
+  let number = "";
+  for (const character of value) {
+    if ((character >= "0" && character <= "9") || character === ".") {
+      number += character;
+      continue;
+    }
+    const parsed = Number(number);
+    if (!Number.isFinite(parsed)) return undefined;
+    if (character === "h") total += parsed * 3_600;
+    else if (character === "m") total += parsed * 60;
+    else if (character === "s") total += parsed;
+    else return undefined;
+    number = "";
+  }
+  return number === "" && total > 0 ? total : undefined;
+}
+
+function retryMetadata(
+  payload: string,
+): Pick<ProviderRetryCell, "isQuotaLimit" | "resetsAt" | "planType"> {
+  const isQuotaLimit =
+    /(?:usage[_ ]limit|rate[_ ]limit|quota|too many requests|insufficient_quota|resource_exhausted)/i.test(
+      payload,
+    ) || /(?:^|\D)429(?:\D|$)/.test(payload);
+  const root = retryJson(payload);
+  const error =
+    root?.error && typeof root.error === "object" ? (root.error as Record<string, unknown>) : root;
+  const headers =
+    root?.headers && typeof root.headers === "object"
+      ? (root.headers as Record<string, unknown>)
+      : undefined;
+  const plan = error?.plan_type ?? headers?.["X-Codex-Plan-Type"];
+  const resetSeconds = error?.resets_in_seconds;
+  const resetEpoch = error?.resets_at ?? headers?.["X-Codex-Primary-Reset-At"];
+  let resetsAt: string | undefined;
+  if (typeof resetEpoch === "number" && Number.isFinite(resetEpoch) && resetEpoch > 0) {
+    resetsAt = new Date(resetEpoch * 1_000).toISOString();
+  } else if (
+    typeof resetEpoch === "string" &&
+    Number.isFinite(Number(resetEpoch)) &&
+    Number(resetEpoch) > 0
+  ) {
+    resetsAt = new Date(Number(resetEpoch) * 1_000).toISOString();
+  } else if (
+    typeof resetSeconds === "number" &&
+    Number.isFinite(resetSeconds) &&
+    resetSeconds > 0
+  ) {
+    resetsAt = new Date(Date.now() + resetSeconds * 1_000).toISOString();
+  } else if (error && Array.isArray(error.details)) {
+    for (const detail of error.details) {
+      if (!detail || typeof detail !== "object") continue;
+      const candidate = detail as Record<string, unknown>;
+      if (typeof candidate["@type"] !== "string" || !candidate["@type"].includes("RetryInfo")) {
+        continue;
+      }
+      const seconds = goDurationSeconds(candidate.retryDelay);
+      if (seconds !== undefined) resetsAt = new Date(Date.now() + seconds * 1_000).toISOString();
+      break;
+    }
+  }
+  return {
+    ...(isQuotaLimit ? { isQuotaLimit: true } : {}),
+    ...(resetsAt ? { resetsAt } : {}),
+    ...(typeof plan === "string" && plan.trim() ? { planType: plan.trim().slice(0, 64) } : {}),
+  };
 }
 
 function assistantCellFromMessage(id: string, message: AssistantMessage): AssistantCell {
@@ -117,7 +269,78 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
   // the exported RpcEventListener/AgentEvent TYPE is narrower and omits it. A
   // compaction changes the context outside the normal turn cycle, so surface it
   // as `context_changed` (the context-usage indicator re-reads stats on it).
-  const external = event as unknown as { type?: unknown; steering?: unknown; followUp?: unknown };
+  const external = event as unknown as {
+    type?: unknown;
+    steering?: unknown;
+    followUp?: unknown;
+    attempt?: unknown;
+    maxAttempts?: unknown;
+    delayMs?: unknown;
+    errorMessage?: unknown;
+    success?: unknown;
+    finalError?: unknown;
+  };
+  if (external.type === "auto_retry_start") {
+    const attempt = finiteInt(external.attempt, 1, MAX_RETRY_ATTEMPTS) ?? 1;
+    const maxAttempts = finiteInt(external.maxAttempts, 1, MAX_RETRY_ATTEMPTS);
+    const delayMs = finiteInt(external.delayMs, 0, 86_400_000);
+    const payload = retryMessage(external.errorMessage);
+    const message = humanRetryMessage(payload);
+    const prior = state.openProviderRetry;
+    const collapsedMessageCounts = Array.from(
+      new Set([
+        ...(prior?.collapsedMessageCounts ?? []),
+        ...(state.messageCount > 0 ? [state.messageCount] : []),
+      ]),
+    ).slice(-MAX_RETRY_ATTEMPTS);
+    const cell: ProviderRetryCell = {
+      kind: "provider_retry",
+      id: prior?.id ?? coinId(state, "provider-retry"),
+      status: "retrying",
+      attempt,
+      ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+      ...(delayMs !== undefined ? { delayMs } : {}),
+      message,
+      ...retryMetadata(payload),
+      collapsedMessageCounts,
+    };
+    state.openProviderRetry = cell;
+    return [{ type: "provider_retry", cell, collapseLatestAssistantError: true }];
+  }
+  if (external.type === "auto_retry_end") {
+    const prior = state.openProviderRetry;
+    const success = external.success === true;
+    const payload = retryMessage(external.finalError ?? prior?.message);
+    const message = success
+      ? (prior?.message ?? "The request recovered after a provider retry.")
+      : humanRetryMessage(payload);
+    const collapsedMessageCounts = Array.from(
+      new Set([
+        ...(prior?.collapsedMessageCounts ?? []),
+        ...(!success && state.messageCount > 0 ? [state.messageCount] : []),
+      ]),
+    ).slice(-MAX_RETRY_ATTEMPTS);
+    const metadata = success
+      ? {
+          ...(prior?.isQuotaLimit ? { isQuotaLimit: true } : {}),
+          ...(prior?.resetsAt ? { resetsAt: prior.resetsAt } : {}),
+          ...(prior?.planType ? { planType: prior.planType } : {}),
+        }
+      : retryMetadata(payload);
+    const cell: ProviderRetryCell = {
+      kind: "provider_retry",
+      id: prior?.id ?? coinId(state, "provider-retry"),
+      status: success ? "succeeded" : "gave_up",
+      attempt: finiteInt(external.attempt, 1, MAX_RETRY_ATTEMPTS) ?? prior?.attempt ?? 1,
+      ...(prior?.maxAttempts !== undefined ? { maxAttempts: prior.maxAttempts } : {}),
+      ...(prior?.delayMs !== undefined ? { delayMs: prior.delayMs } : {}),
+      message,
+      ...metadata,
+      collapsedMessageCounts,
+    };
+    state.openProviderRetry = undefined;
+    return [{ type: "provider_retry", cell, collapseLatestAssistantError: !success }];
+  }
   if (external.type === "compaction_end") return [{ type: "context_changed" }];
   if (external.type === "queue_update") {
     const steering = boundedQueue(external.steering);
@@ -227,6 +450,7 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
     }
 
     case "message_end": {
+      state.messageCount += 1;
       const message = event.message;
       if (message.role === "assistant") {
         const cellId = state.openAssistant?.cellId ?? coinId(state, "assistant");
@@ -343,8 +567,37 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
     }
 
     default:
-      // turn_start/turn_end and retry events do not affect the transcript;
-      // cell_final self-healing keeps durable message content sound.
+      // turn_start/turn_end do not affect the transcript; cell_final
+      // self-healing keeps durable message content sound.
       return [];
   }
+}
+
+/** Resolve a retry left open only because its owning Pi process terminated. */
+export function finalizeOpenProviderRetry(
+  state: IngestState,
+  message = "Retrying stopped before the request completed.",
+): DomainEvent[] {
+  const prior = state.openProviderRetry;
+  if (!prior) return [];
+  state.openProviderRetry = undefined;
+  const collapsedMessageCounts = Array.from(
+    new Set([
+      ...prior.collapsedMessageCounts,
+      ...(state.messageCount > 0 ? [state.messageCount] : []),
+    ]),
+  ).slice(-MAX_RETRY_ATTEMPTS);
+  return [
+    {
+      type: "provider_retry",
+      cell: {
+        ...prior,
+        status: "gave_up",
+        message: retryMessage(message),
+        collapsedMessageCounts,
+      },
+      // The reducer proves the latest cell is an assistant provider error before removal.
+      collapseLatestAssistantError: state.messageCount > 0,
+    },
+  ];
 }

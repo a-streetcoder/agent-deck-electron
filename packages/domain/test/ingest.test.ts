@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { createIngestState, ingestPiEvent, type PiInboundEvent } from "../src/ingest.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createIngestState,
+  finalizeOpenProviderRetry,
+  ingestPiEvent,
+  type PiInboundEvent,
+} from "../src/ingest.ts";
 import { emptyTranscript, reduceTranscript, type TranscriptState } from "../src/transcript.ts";
 
 function assistantMessage(content: unknown[]): unknown {
@@ -300,6 +305,209 @@ describe("ingest → reduce pipeline", () => {
 
     apply({ type: "queue_update", steering: [], followUp: [] });
     expect(state.pendingInput).toEqual({ status: "available", steering: [], followUp: [] });
+  });
+
+  it("collapses provider errors into one ordered retry card and records recovery", () => {
+    const error = assistantMessage([]) as Record<string, unknown>;
+    error.stopReason = "error";
+    error.errorMessage = "HTTP 429 rate limit token=super-secret";
+    const { state } = runThrough([
+      { type: "message_end", message: error },
+      {
+        type: "auto_retry_start",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2_000,
+        errorMessage: error.errorMessage,
+      },
+      { type: "auto_retry_end", success: true, attempt: 1 },
+    ]);
+
+    expect(state.cells).toHaveLength(1);
+    expect(state.cells[0]).toMatchObject({
+      kind: "provider_retry",
+      status: "succeeded",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      isQuotaLimit: true,
+      collapsedMessageCounts: [1],
+    });
+    expect(JSON.stringify(state.cells[0])).not.toContain("super-secret");
+  });
+
+  it("extracts high-quality quota details only when provider payloads supply them", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const { state } = runThrough([
+      {
+        type: "auto_retry_start",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2_000,
+        errorMessage: `Gemini error: ${JSON.stringify({
+          error: {
+            code: 429,
+            message: "Resource has been exhausted",
+            status: "RESOURCE_EXHAUSTED",
+            details: [
+              {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                retryDelay: "1m30s",
+              },
+            ],
+          },
+        })}`,
+      },
+    ]);
+    expect(state.cells[0]).toMatchObject({
+      kind: "provider_retry",
+      message: "Resource has been exhausted",
+      isQuotaLimit: true,
+      resetsAt: "2026-01-01T00:01:30.000Z",
+    });
+    vi.useRealTimers();
+  });
+
+  it("updates a retry burst in place, gives up, and bounds untrusted content", () => {
+    const ingest = createIngestState();
+    let state = emptyTranscript();
+    const apply = (raw: unknown): void => {
+      for (const event of ingestPiEvent(ingest, raw as PiInboundEvent)) {
+        state = reduceTranscript(state, event);
+      }
+    };
+    apply({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: `\u001b[31mprovider unavailable Bearer secret-value ${"😀".repeat(3_000)}`,
+    });
+    apply({
+      type: "auto_retry_start",
+      attempt: 2,
+      maxAttempts: 3,
+      delayMs: 4_000,
+      errorMessage: "provider unavailable again",
+    });
+    apply({ type: "auto_retry_end", success: false, attempt: 2, finalError: "final outage" });
+
+    expect(state.cells).toHaveLength(1);
+    const retry = state.cells[0];
+    expect(retry).toMatchObject({
+      kind: "provider_retry",
+      status: "gave_up",
+      attempt: 2,
+      message: "final outage",
+    });
+    expect(retry?.kind === "provider_retry" ? retry.collapsedMessageCounts : []).toEqual([]);
+  });
+
+  it("adds the final failed assistant ordinal when a retry burst gives up", () => {
+    const ingest = createIngestState();
+    let state = emptyTranscript();
+    const apply = (raw: unknown): void => {
+      for (const event of ingestPiEvent(ingest, raw as PiInboundEvent)) {
+        state = reduceTranscript(state, event);
+      }
+    };
+    apply({ type: "message_end", message: { role: "user", content: "try", timestamp: 1 } });
+    const failedAssistant = {
+      ...(assistantMessage([]) as Record<string, unknown>),
+      stopReason: "error",
+    };
+    apply({ type: "message_end", message: failedAssistant });
+    apply({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 1,
+      errorMessage: "first error",
+    });
+    apply({ type: "message_end", message: failedAssistant });
+    apply({ type: "auto_retry_end", success: false, attempt: 1, finalError: "final error" });
+    expect(state.cells).toEqual([
+      expect.objectContaining({ kind: "user" }),
+      expect.objectContaining({
+        kind: "provider_retry",
+        status: "gave_up",
+        collapsedMessageCounts: [2, 3],
+      }),
+    ]);
+  });
+
+  it("redacts single-quoted secret fields before the first retry event", () => {
+    const events = ingestPiEvent(createIngestState(), {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: "Provider failed {'access_token':'single-secret','api-key':'other-secret'}",
+    } as unknown as PiInboundEvent);
+    expect(JSON.stringify(events)).not.toContain("single-secret");
+    expect(JSON.stringify(events)).not.toContain("other-secret");
+    expect(events).toMatchObject([{ cell: { message: "Provider failed" } }]);
+  });
+
+  it("finalizes a retry left open by process teardown exactly once", () => {
+    const ingest = createIngestState();
+    ingestPiEvent(ingest, {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: "temporary outage",
+    } as unknown as PiInboundEvent);
+    const first = finalizeOpenProviderRetry(ingest, "Pi exited during retry.");
+    expect(first).toMatchObject([
+      {
+        type: "provider_retry",
+        cell: { status: "gave_up", message: "Pi exited during retry." },
+        collapseLatestAssistantError: false,
+      },
+    ]);
+    expect(finalizeOpenProviderRetry(ingest)).toEqual([]);
+  });
+
+  it("process-exit finalization pairs the latest positive message ordinal", () => {
+    const ingest = createIngestState();
+    ingestPiEvent(ingest, {
+      type: "message_end",
+      message: { ...(assistantMessage([]) as Record<string, unknown>), stopReason: "error" },
+    } as unknown as PiInboundEvent);
+    ingestPiEvent(ingest, {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: "temporary outage",
+    } as unknown as PiInboundEvent);
+    const finalized = finalizeOpenProviderRetry(ingest);
+    expect(finalized).toMatchObject([
+      {
+        type: "provider_retry",
+        cell: { status: "gave_up", collapsedMessageCounts: [1] },
+        collapseLatestAssistantError: true,
+      },
+    ]);
+  });
+
+  it("retains only the newest 50 retry cards", () => {
+    const ingest = createIngestState();
+    let state = emptyTranscript();
+    for (let index = 0; index < 55; index += 1) {
+      for (const event of ingestPiEvent(ingest, {
+        type: "auto_retry_end",
+        success: true,
+        attempt: 1,
+      } as unknown as PiInboundEvent)) {
+        state = reduceTranscript(state, event);
+      }
+    }
+    const retries = state.cells.filter((cell) => cell.kind === "provider_retry");
+    expect(retries).toHaveLength(50);
+    expect(retries[0]?.id).toBe("provider-retry-6");
   });
 
   it("maps the runtime `compaction_end` event to a contextRevision bump", () => {

@@ -1028,6 +1028,7 @@ export class SessionManager {
       piSessionFile: copyTo,
       title: source.title ? `${source.title} (fork)` : undefined,
       plan: source.plan,
+      providerRetries: source.providerRetries,
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath
@@ -1090,9 +1091,12 @@ export class SessionManager {
       ...(forkProvenance ? { forkProvenance } : {}),
     };
     if (!forkProvenance) delete meta.forkProvenance;
-    // A newly materialized fork is an independent recovery boundary.
+    // A newly materialized fork is an independent recovery boundary. Retry
+    // records are ordinal-anchored to the source's full active ancestry and
+    // cannot safely survive a history rewrite.
     delete meta.status;
     delete meta.lastError;
+    delete meta.providerRetries;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.
@@ -1149,6 +1153,8 @@ export class SessionManager {
       endedAt: undefined,
       streamGeneration: randomUUID(),
     };
+    // Re-run/fork-at-entry rewrites active ancestry, invalidating retry ordinals.
+    delete meta.providerRetries;
     const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     const plan: LaunchPlan =
       original.kind === "agent"
