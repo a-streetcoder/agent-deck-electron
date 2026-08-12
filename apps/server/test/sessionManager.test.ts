@@ -1734,3 +1734,108 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     }
   });
 });
+
+describe("durable session attention", () => {
+  it("publishes repeated blocking requests idempotently", async () => {
+    const { piHost } = makeFakePiHost();
+    const changes: boolean[] = [];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams({
+            onMetaChange: (meta) => changes.push(meta.needsAttention === true),
+          });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* rt.openSupervisorQuestion({
+            requestId: "q1",
+            subagentCellId: "child-1",
+            method: "need_decision",
+            title: "Decision needed",
+          });
+          expect(changes.filter(Boolean)).toHaveLength(1);
+          yield* rt.openSupervisorQuestion({
+            requestId: "q2",
+            subagentCellId: "child-2",
+            method: "need_decision",
+            title: "Another decision",
+          });
+          expect(changes.filter(Boolean)).toHaveLength(1);
+        }),
+      ),
+    );
+  });
+
+  it.each(["ask", "supervisor", "extension"] as const)(
+    "marks a %s human-blocking request from a false baseline",
+    async (kind) => {
+      const { piHost } = makeFakePiHost();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const params = makeParams();
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            yield* Effect.fork(rt.ingest);
+            if (kind === "ask") {
+              yield* rt.openAskUser({
+                kind: "ask_user",
+                id: "ask-user-q1",
+                requestId: "q1",
+                sessionId: params.meta.id,
+                question: "Choose",
+                options: [],
+                allowMultiple: false,
+                allowFreeform: false,
+                allowComment: false,
+                status: "pending",
+              });
+            } else if (kind === "supervisor") {
+              yield* rt.openSupervisorQuestion({
+                requestId: "q1",
+                subagentCellId: "child-1",
+                method: "need_decision",
+                title: "Decision needed",
+              });
+            } else {
+              yield* rt.prompt("request-extension-ui");
+              yield* waitUntil(() => params.meta.needsAttention === true);
+            }
+            expect(params.meta.needsAttention).toBe(true);
+          }),
+        ),
+      );
+    },
+  );
+
+  it("does not mark a terminal provider failure", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const failed = makeParams();
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, failed);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("fallback-error");
+          yield* waitUntil(() => failed.meta.status === "failed", 10_000);
+          expect(failed.meta.needsAttention).not.toBe(true);
+        }),
+      ),
+    );
+  }, 15_000);
+
+  it("does not mark an explicitly aborted turn", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aborted = makeParams();
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, aborted);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("stream-forever");
+          yield* rt.abort;
+          yield* Effect.sleep("50 millis");
+          expect(aborted.meta.needsAttention).not.toBe(true);
+        }),
+      ),
+    );
+  });
+});

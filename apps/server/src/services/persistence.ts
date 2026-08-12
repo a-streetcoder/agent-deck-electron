@@ -285,6 +285,7 @@ export interface SettingsStoreHandle {
 export const makeJsonArrayStoreHandle = <T extends { id: string }>(
   dataDir: string,
   fileName: string,
+  normalizeItem: (item: T) => T = (item) => item,
 ): Effect.Effect<JsonArrayStoreHandle<T>> =>
   Effect.sync(() => {
     const file = path.join(dataDir, fileName);
@@ -292,7 +293,7 @@ export const makeJsonArrayStoreHandle = <T extends { id: string }>(
     let items: T[] = [];
     try {
       const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-      if (Array.isArray(parsed)) items = parsed as T[];
+      if (Array.isArray(parsed)) items = (parsed as T[]).map(normalizeItem);
     } catch {
       // Missing or corrupt index — start fresh.
     }
@@ -702,7 +703,12 @@ export class Persistence extends Context.Tag("agent-deck/server/services/Persist
 
 export const PersistenceLive = Layer.succeed(Persistence, {
   openSessionIndex: (dataDir = defaultDataDir()) =>
-    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json"),
+    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json", (session) => ({
+      ...session,
+      ...(session.needsAttention === undefined
+        ? {}
+        : { needsAttention: session.needsAttention === true }),
+    })),
   openProjectIndex: (dataDir = defaultDataDir()) =>
     makeJsonArrayStoreHandle<ProjectMeta>(dataDir, "projects.json"),
   openSettingsStore: (dataDir = defaultDataDir()) => makeSettingsStoreHandle(dataDir),

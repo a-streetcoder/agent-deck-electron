@@ -608,6 +608,11 @@ Menu, shell` — no Notification/Tray/setBadgeCount, no focus tracking, and it s
   approval-needed now fires on any new distinct question id (not only null→non-null);
   documented the harmless focus-gated rollback edge. Gates green (web unit 54, desktop e2e
   6/6 incl. a Notification/setBadgeCount spy test asserting focus clears the badge).
+  **Current model supersedes this historical implementation:** durable backend-owned
+  `SessionMeta.needsAttention` spans all sessions; reviewing only the selected visible,
+  focused chat acknowledges it; focus never globally clears attention. Electron main
+  re-reads authoritative session state for distinct-session indication, using numeric
+  badges on macOS/Linux and a generated raster taskbar overlay on Windows.
 - **S22b — auto-update + packaging/signing: PARKED (2026-07-22) pending USER/infra
   decisions.** electron-updater needs three things the repo has zero of, and they are not
   self-contained code tasks: (1) a packaging tool (electron-builder) AND a bundled-server

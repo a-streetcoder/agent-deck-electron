@@ -1,4 +1,4 @@
-export type SessionMutationKind = "history" | "delete" | "merge";
+export type SessionMutationKind = "history" | "delete" | "merge" | "attention";
 
 /** Synchronous per-session transaction claim shared by destructive routes. */
 export class SessionMutationClaims {

@@ -3,8 +3,9 @@ import {
   canRevealSubagentArtifacts,
   chooseDirectory,
   chooseFiles,
+  notifyAttention,
   onFocusSession,
-  signalAttention,
+  syncAttention,
 } from "./native.ts";
 
 const stubBridge = (bridge: unknown): void => {
@@ -24,40 +25,34 @@ describe("subagent artifact capability", () => {
   });
 });
 
-describe("signalAttention", () => {
-  it("forwards the payload to the Electron bridge when present", () => {
-    const signal = vi.fn();
-    stubBridge({ isElectron: true, signalAttention: signal });
+describe("durable attention bridge", () => {
+  it("forwards sync and bounded notification hints", () => {
+    const sync = vi.fn();
+    const notify = vi.fn();
+    stubBridge({ isElectron: true, syncAttention: sync, notifyAttention: notify });
 
-    signalAttention({ kind: "turn-complete", title: "My session", body: "Turn complete" });
+    syncAttention();
+    notifyAttention({ sessionId: "chat", title: "My session", body: "Needs attention" });
 
-    expect(signal).toHaveBeenCalledTimes(1);
-    expect(signal).toHaveBeenCalledWith({
-      kind: "turn-complete",
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: "chat",
       title: "My session",
-      body: "Turn complete",
+      body: "Needs attention",
     });
   });
 
-  it("is a no-op in a plain browser (no bridge)", () => {
+  it("is a safe no-op when absent or throwing", () => {
     stubBridge(undefined);
-    // Must not throw when window.agentDeck is absent.
-    expect(() => signalAttention({ kind: "approval-needed", title: "x", body: "y" })).not.toThrow();
-  });
+    expect(() => syncAttention()).not.toThrow();
+    expect(() => notifyAttention({ sessionId: "chat", title: "x", body: "y" })).not.toThrow();
 
-  it("is a no-op against an older bridge lacking signalAttention", () => {
-    stubBridge({ isElectron: true });
-    expect(() => signalAttention({ kind: "turn-complete", title: "x", body: "y" })).not.toThrow();
-  });
-
-  it("swallows a throwing bridge so a domain-transition detector never sees it", () => {
-    const signal = vi.fn(() => {
+    const notify = vi.fn(() => {
       throw new Error("ipc down");
     });
-    stubBridge({ isElectron: true, signalAttention: signal });
-
-    expect(() => signalAttention({ kind: "turn-complete", title: "x", body: "y" })).not.toThrow();
-    expect(signal).toHaveBeenCalledTimes(1);
+    stubBridge({ notifyAttention: notify });
+    expect(() => notifyAttention({ sessionId: "chat", title: "x", body: "y" })).not.toThrow();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });
 

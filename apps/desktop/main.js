@@ -13,12 +13,14 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createWindowsAttentionOverlay, windowsAttentionDescription } from "./attention-overlay.js";
 import {
   app,
   BrowserWindow,
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   Notification,
   screen,
@@ -59,10 +61,10 @@ const windowColors = () =>
 let serverProcess = null;
 let serverPort = null;
 let mainWindow = null;
-// Unseen-attention count driving the taskbar/dock badge (Slice 22a). Bumped when
-// a turn-complete / approval-needed event arrives while the window is UNFOCUSED,
-// reset to 0 once the window is focused (the user has "seen" it).
-let attentionCount = 0;
+// Generation-orders backend refreshes so a slower old response cannot restore
+// a stale badge. The count itself is always derived from distinct durable rows.
+let attentionRefreshGeneration = 0;
+const notifiedAttentionIds = new Set();
 
 const registerNativeThemeUpdates = () => {
   nativeTheme.on("updated", () => {
@@ -353,14 +355,8 @@ function createWindow(port) {
     return { action: "deny" };
   });
 
-  // Attention is "seen" once the window gains focus: clear the counter and the
-  // OS badge (Slice 22a). Any turn-complete/approval that arrives while focused
-  // never bumps the badge in the first place, so this only undoes prior bumps.
-  mainWindow.on("focus", () => {
-    attentionCount = 0;
-    app.setBadgeCount(0);
-  });
-
+  // Focus alone is not review: the selected renderer chat acknowledges only
+  // after it is both visible and focused. Main never globally clears attention.
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -835,44 +831,103 @@ ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
   return true;
 });
 
-/**
- * Native desktop attention (Slice 22a). The renderer detects the domain
- * transition (a turn completing, or an approval request appearing on the ACTIVE
- * session) and forwards a semantic event here; the focus gate + OS surface stay
- * in MAIN so they're testable and the main process never opens its own server
- * subscription. If the window is already focused the user is looking, so we do
- * nothing. Otherwise show a native notification (when supported) and bump the
- * portable taskbar/dock badge via setBadgeCount. Clicking the notification
- * shows + focuses the window (which clears the badge) and forwards the session
- * id so the renderer can select the originating session.
- */
-ipcMain.on("attention", (_event, payload) => {
-  if (!mainWindow || !payload || typeof payload !== "object") return;
-  const { kind, title, body, sessionId } = payload;
-  if (kind !== "turn-complete" && kind !== "approval-needed") return;
-  // Already looking → no notification, no badge (don't nag a focused user).
-  if (mainWindow.isFocused()) return;
-
-  attentionCount += 1;
-  app.setBadgeCount(attentionCount);
-
-  if (Notification.isSupported()) {
-    const notification = new Notification({
-      title: typeof title === "string" && title ? title : "Agent Deck",
-      body: typeof body === "string" ? body : "",
-    });
-    notification.on("click", () => {
-      if (!mainWindow) return;
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-      // Best-effort in-app switch to the session that raised the event.
-      if (typeof sessionId === "string" && sessionId) {
-        mainWindow.webContents.send("focus-session", sessionId);
+/** Read the backend-owned durable set. Renderer messages are hints only; they
+ * cannot choose the count or claim that an arbitrary session needs review. */
+async function refreshDesktopAttention(notificationHint) {
+  if (!serverPort) return;
+  const generation = ++attentionRefreshGeneration;
+  try {
+    const response = await fetch(`http://127.0.0.1:${serverPort}/sessions`);
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !Array.isArray(body?.sessions)) return;
+    const pending = body.sessions.filter(
+      (session) => session && typeof session.id === "string" && session.needsAttention === true,
+    );
+    if (generation !== attentionRefreshGeneration) return;
+    const pendingIds = new Set(pending.map((session) => session.id));
+    for (const id of notifiedAttentionIds) {
+      if (!pendingIds.has(id)) notifiedAttentionIds.delete(id);
+    }
+    if (process.platform === "win32") {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (pendingIds.size === 0) {
+          mainWindow.setOverlayIcon(null, "No sessions need attention");
+        } else {
+          mainWindow.setOverlayIcon(
+            createWindowsAttentionOverlay(nativeImage, pendingIds.size),
+            windowsAttentionDescription(pendingIds.size),
+          );
+        }
       }
-    });
-    notification.show();
+    } else {
+      app.setBadgeCount(pendingIds.size);
+    }
+
+    if (
+      notificationHint &&
+      pendingIds.has(notificationHint.sessionId) &&
+      !notifiedAttentionIds.has(notificationHint.sessionId) &&
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      !mainWindow.isFocused() &&
+      Notification.isSupported()
+    ) {
+      notifiedAttentionIds.add(notificationHint.sessionId);
+      const notification = new Notification({
+        title: notificationHint.title,
+        body: notificationHint.body,
+      });
+      notification.on("click", () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        // Route first; renderer acknowledgement still waits for the target chat
+        // to become selected, visible, and focused.
+        mainWindow.webContents.send("focus-session", notificationHint.sessionId);
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      });
+      notification.show();
+    }
+  } catch {
+    // Keep the last known badge; a later metadata hint/startup refresh retries.
   }
+}
+
+ipcMain.on("attention:sync", (event) => {
+  try {
+    assertTrustedPickerSender(event, "Attention sync is unavailable");
+  } catch {
+    return;
+  }
+  void refreshDesktopAttention();
+});
+
+ipcMain.on("attention:notify", (event, payload) => {
+  try {
+    assertTrustedPickerSender(event, "Attention notification is unavailable");
+  } catch {
+    return;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  const keys = Object.keys(payload);
+  if (
+    keys.length !== 3 ||
+    !keys.every((key) => key === "sessionId" || key === "title" || key === "body") ||
+    typeof payload.sessionId !== "string" ||
+    payload.sessionId.length < 1 ||
+    payload.sessionId.length > 256 ||
+    typeof payload.title !== "string" ||
+    payload.title.length < 1 ||
+    payload.title.length > 200 ||
+    typeof payload.body !== "string" ||
+    payload.body.length > 200
+  )
+    return;
+  void refreshDesktopAttention({
+    sessionId: payload.sessionId,
+    title: payload.title,
+    body: payload.body,
+  });
 });
 
 async function bootstrap() {
@@ -896,6 +951,7 @@ async function bootstrap() {
   Menu.setApplicationMenu(buildAppMenu());
   startupTrace("creating main window");
   createWindow(serverPort);
+  void refreshDesktopAttention();
   startupTrace("main window created");
 }
 

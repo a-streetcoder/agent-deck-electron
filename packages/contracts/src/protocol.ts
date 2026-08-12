@@ -343,6 +343,9 @@ export const SessionMeta = Schema.mutable(
     piSessionFile: Schema.optional(Schema.String),
     /** Set when the pi subprocess exits; absent while live. */
     endedAt: Schema.optional(Schema.String),
+    /** Durable user-review marker. Absent on legacy records means false. Only the
+     * server may raise it; the renderer may use the acknowledge-only route. */
+    needsAttention: Schema.optional(Schema.Boolean),
     /** Durable terminal failure only. Running/idle remain live transcript state. */
     status: Schema.optional(SessionFailureStatusFromSelf),
     /** Safe, bounded explanation for the latest terminal chat failure. */

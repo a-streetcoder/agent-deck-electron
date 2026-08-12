@@ -41,8 +41,8 @@ export type {
 class JsonArrayStore<T extends { id: string }> {
   private readonly handle: JsonArrayStoreHandle<T>;
 
-  constructor(dataDir: string, fileName: string) {
-    this.handle = runSyncUnwrapped(makeJsonArrayStoreHandle<T>(dataDir, fileName));
+  constructor(dataDir: string, fileName: string, normalizeItem?: (item: T) => T) {
+    this.handle = runSyncUnwrapped(makeJsonArrayStoreHandle<T>(dataDir, fileName, normalizeItem));
   }
 
   list(): T[] {
@@ -64,7 +64,12 @@ class JsonArrayStore<T extends { id: string }> {
 
 export class SessionIndex extends JsonArrayStore<SessionMeta> {
   constructor(dataDir: string = defaultDataDir()) {
-    super(dataDir, "sessions.json");
+    super(dataDir, "sessions.json", (session) => ({
+      ...session,
+      ...(session.needsAttention === undefined
+        ? {}
+        : { needsAttention: session.needsAttention === true }),
+    }));
   }
 }
 

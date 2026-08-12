@@ -37,15 +37,10 @@ contextBridge.exposeInMainWorld("agentDeck", {
   revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
-  /**
-   * Forward a semantic attention event to the shell (Slice 22a). Fire-and-forget
-   * (send, not invoke): the MAIN process owns the focus gate and the OS surface —
-   * it decides whether to show a native notification and bump the taskbar/dock
-   * badge based on whether the window is currently focused. The renderer only
-   * detects the domain transition and forwards it.
-   * @param {{ kind: "turn-complete" | "approval-needed", title: string, body: string, sessionId?: string }} payload
-   */
-  signalAttention: (payload) => ipcRenderer.send("attention", payload),
+  /** Ask main to re-read the durable backend attention set. */
+  syncAttention: () => ipcRenderer.send("attention:sync"),
+  /** Hint one durable false→true transition; main revalidates backend truth. */
+  notifyAttention: (payload) => ipcRenderer.send("attention:notify", payload),
   /**
    * Subscribe to notification-click session routing. The renderer receives only
    * the opaque session id selected by main; raw IPC events stay inside preload.

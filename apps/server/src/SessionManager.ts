@@ -1097,6 +1097,7 @@ export class SessionManager {
     delete meta.status;
     delete meta.lastError;
     delete meta.providerRetries;
+    delete meta.needsAttention;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.

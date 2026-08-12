@@ -19,6 +19,7 @@ const cwd = mkdtempSync(path.join(tmpdir(), "agent-deck-session-failure-cwd-"));
 const home = mkdtempSync(path.join(tmpdir(), "agent-deck-session-failure-home-"));
 let server: AgentDeckServer | undefined;
 let providerFailure = true;
+let transientFailures = 0;
 
 async function sessions(): Promise<SessionMeta[]> {
   const response = await fetch(`http://127.0.0.1:${server!.port}/sessions`);
@@ -54,6 +55,10 @@ describe("real Pi durable provider failure", () => {
     const mock = await startMockProvider({
       beforeResponse: () => {
         if (providerFailure) throw new Error("deterministic provider outage");
+        if (transientFailures > 0) {
+          transientFailures -= 1;
+          throw new Error("deterministic provider outage");
+        }
       },
       reply: () => "provider recovered successfully",
     });
@@ -108,6 +113,7 @@ describe("real Pi durable provider failure", () => {
         collapsedMessageCounts: expect.arrayContaining([2]),
       });
       expect(failed.providerRetries?.[0]).toMatchObject({ status: "gave_up", attempt: 3 });
+      expect(failed.needsAttention).not.toBe(true);
       failedSocket.close();
 
       await server.close();
@@ -117,6 +123,7 @@ describe("real Pi durable provider failure", () => {
         status: "failed",
         lastError: failed.lastError,
       });
+      expect((await sessions())[0]?.needsAttention).not.toBe(true);
 
       providerFailure = false;
       const resume = await fetch(
@@ -136,7 +143,44 @@ describe("real Pi durable provider failure", () => {
         return current?.status === undefined && current?.lastError === undefined;
       });
       await waitFor(async () => mock.events.some((event) => event.kind === "done"));
+      await waitFor(async () => (await sessions())[0]?.needsAttention === true);
       recoveredSocket.close();
+
+      await server.close();
+      server = await startServer({ dataDir });
+      expect((await sessions())[0]?.needsAttention).toBe(true);
+
+      // A recoverable provider error pauses the same pending user turn; it must
+      // not raise attention at the retry idle, then must raise it once after the
+      // retry succeeds.
+      transientFailures = 1;
+      const retryCreatedResponse = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd,
+          provider: MOCK_PROVIDER_ID,
+          model: MOCK_MODEL_ID,
+          extensions: [extension],
+          env: { HOME: home, USERPROFILE: home, PI_SKIP_VERSION_CHECK: "1" },
+        }),
+      });
+      const retryCreated = (await retryCreatedResponse.json()) as { session: SessionMeta };
+      const retrySocket = await prompt(retryCreated.session.id, "retry then recover");
+      await waitFor(async () => {
+        const current = (await sessions()).find((item) => item.id === retryCreated.session.id);
+        return current?.providerRetries?.[0]?.status === "retrying";
+      });
+      expect(
+        (await sessions()).find((item) => item.id === retryCreated.session.id)?.needsAttention,
+      ).not.toBe(true);
+      await waitFor(async () => {
+        const current = (await sessions()).find((item) => item.id === retryCreated.session.id);
+        return (
+          current?.providerRetries?.[0]?.status === "succeeded" && current.needsAttention === true
+        );
+      });
+      retrySocket.close();
     } finally {
       await server?.close();
       server = undefined;

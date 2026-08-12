@@ -386,6 +386,42 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     return { session: next };
   });
 
+  // Acknowledge-only attention mutation. The backend is the sole authority
+  // allowed to raise this marker; renderer callers can only send literal false.
+  // Preserve updatedAt: reviewing a chat is not new chat activity.
+  fastify.patch("/sessions/:id/attention", async (request, reply) => {
+    const parsed = z
+      .object({ needsAttention: z.literal(false) })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success)
+      return reply.status(400).send({ error: "only attention acknowledgement is allowed" });
+    const { id } = request.params as { id: string };
+    const releaseMutation = sessionMutations.tryClaim(id, "attention");
+    if (!releaseMutation) {
+      return reply.status(409).send({ error: "another session mutation is in progress" });
+    }
+    try {
+      const live = sessions.get(id);
+      const current = live?.meta ?? index.find((session) => session.id === id);
+      if (!current) return reply.status(404).send({ error: "unknown session" });
+      if (current.needsAttention !== true) return { session: current };
+
+      const next = { ...current, needsAttention: false as const };
+      if (live) live.meta.needsAttention = false;
+      // Delete/history share this claim. Re-prove membership at the write edge so
+      // a future asynchronous extension cannot resurrect a concurrently removed row.
+      if (!sessions.get(id) && !index.find((session) => session.id === id)) {
+        return reply.status(404).send({ error: "unknown session" });
+      }
+      index.upsert(next);
+      broadcast({ type: "session_meta", session: next });
+      return { session: next };
+    } finally {
+      releaseMutation();
+    }
+  });
+
   // Pinning is a structural list action, not session activity. Preserve
   // updatedAt, keep repeated pin requests idempotent, and order pins by the
   // first timestamp at which each session became pinned.

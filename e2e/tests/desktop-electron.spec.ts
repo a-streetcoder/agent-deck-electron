@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, test, type ElectronApplication } from "@playwright/test";
+import {
+  windowsAttentionDescription,
+  windowsAttentionPng,
+} from "../../apps/desktop/attention-overlay.js";
 
 /**
  * Phase-1 gate for the Electron shell: launching the real app boots the same
@@ -1121,52 +1125,53 @@ test("the browser element picker captures a clicked element as composer context 
   await expect(window.getByTestId("workspace-body-browser")).toHaveCount(0);
 });
 
-test("attention events notify + badge while unfocused, and focus clears the badge", async () => {
+test("Windows attention overlay raster decodes and describes counts", async () => {
+  const overlayPath = path.join(mkdtempSync(path.join(tmpdir(), "agent-deck-overlay-")), "12.png");
+  writeFileSync(overlayPath, windowsAttentionPng(12));
+  const empty = await app.evaluate(
+    ({ nativeImage }, imagePath) => nativeImage.createFromPath(imagePath).isEmpty(),
+    overlayPath,
+  );
+  expect(empty).toBe(false);
+  expect(windowsAttentionDescription(1)).toBe("1 session needs attention");
+  expect(windowsAttentionDescription(2)).toBe("2 sessions need attention");
+});
+
+test("durable attention observes hidden sessions and badges distinct pending chats", async () => {
   const window = await app.firstWindow();
   await window.waitForLoadState("domcontentloaded");
 
-  // Route the notification to a real session other than the currently selected
-  // one. Reuse an existing chat when possible; otherwise create one through the
-  // Electron-owned server without selecting it in the renderer.
-  const currentRowTestId = await window
-    .getByTestId("chat-list")
-    .locator('[data-active="true"]')
-    .first()
-    .getAttribute("data-testid");
-  const currentSessionId = currentRowTestId?.replace(/^chat-/, "") ?? null;
-  const targetSessionId = await window.evaluate(async (currentId) => {
-    const listed = (await (await fetch("/sessions")).json()) as {
-      sessions: Array<{ id: string }>;
+  const targetIds = await window.evaluate(async () => {
+    const create = async () => {
+      const response = await fetch("/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return ((await response.json()) as { session: { id: string } }).session.id;
     };
-    const existing = listed.sessions.find((session) => session.id !== currentId);
-    if (existing) return existing.id;
-    const created = await fetch("/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (!created.ok) throw new Error(await created.text());
-    return ((await created.json()) as { session: { id: string } }).session.id;
-  }, currentSessionId);
+    return [await create(), await create()];
+  });
 
-  // Install main-process spies (Slice 22a): record setBadgeCount + notification
-  // shows, force isFocused()=false so the focus gate lets events through, and
-  // force Notification.isSupported()=true. Stubbing Notification.prototype.show
-  // works because main.js's `new Notification(...)` shares this exact prototype.
   await app.evaluate(({ app: electronApp, BrowserWindow, Notification }) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) throw new Error("no window");
     const g = globalThis as typeof globalThis & {
       agentDeckAttention?: {
         badge: number[];
+        overlays: string[];
         notifications: Array<{ title: string; body: string }>;
       };
       agentDeckLastNotification?: { emit(event: string): void };
     };
-    g.agentDeckAttention = { badge: [], notifications: [] };
-    electronApp.setBadgeCount = (n: number) => {
-      g.agentDeckAttention!.badge.push(n);
+    g.agentDeckAttention = { badge: [], overlays: [], notifications: [] };
+    electronApp.setBadgeCount = (count: number) => {
+      g.agentDeckAttention!.badge.push(count);
       return true;
+    };
+    win.setOverlayIcon = (_image, description) => {
+      g.agentDeckAttention!.overlays.push(description);
     };
     win.isFocused = () => false;
     Notification.isSupported = () => true;
@@ -1178,103 +1183,154 @@ test("attention events notify + badge while unfocused, and focus clears the badg
       g.agentDeckAttention!.notifications.push({ title: this.title ?? "", body: this.body ?? "" });
       g.agentDeckLastNotification = this;
     };
-    // Re-baseline the counter + recording so a stray startup focus can't skew it.
-    win.emit("focus");
-    g.agentDeckAttention = { badge: [], notifications: [] };
   });
 
-  const readAttention = () =>
+  const supportsNumericBadge = await app.evaluate(() => process.platform !== "win32");
+  await app.evaluate((_electron, attentionTargetIds) => {
+    const g = globalThis as typeof globalThis & {
+      agentDeckAuthoritativeCount?: number;
+      agentDeckAttentionTargetIds?: string[];
+      fetch: typeof fetch;
+    };
+    const realFetch = g.fetch;
+    g.agentDeckAuthoritativeCount = 0;
+    g.agentDeckAttentionTargetIds = attentionTargetIds;
+    g.fetch = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const response = await realFetch(input, init);
+      if (!String(input).endsWith("/sessions")) return response;
+      const body = (await response.json()) as { sessions: Array<Record<string, unknown>> };
+      const count = g.agentDeckAuthoritativeCount ?? 0;
+      const pendingIds = new Set(
+        count === 2
+          ? g.agentDeckAttentionTargetIds
+          : count === 1
+            ? g.agentDeckAttentionTargetIds?.slice(-1)
+            : [],
+      );
+      return new Response(
+        JSON.stringify({
+          sessions: body.sessions.map((session) => ({
+            ...session,
+            needsAttention: pendingIds.has(String(session.id)),
+          })),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+  }, targetIds);
+  expect(
+    await app.evaluate(
+      (_electron) =>
+        (globalThis as typeof globalThis & { agentDeckAttentionTargetIds?: string[] })
+          .agentDeckAttentionTargetIds,
+    ),
+  ).toEqual(targetIds);
+  const setAuthoritativeCount = (count: 0 | 1 | 2) => {
+    if (count === 0) {
+      return app.evaluate(() => {
+        (
+          globalThis as typeof globalThis & { agentDeckAuthoritativeCount?: number }
+        ).agentDeckAuthoritativeCount = 0;
+      });
+    }
+    return count === 1
+      ? app.evaluate(() => {
+          (
+            globalThis as typeof globalThis & { agentDeckAuthoritativeCount?: number }
+          ).agentDeckAuthoritativeCount = 1;
+        })
+      : app.evaluate(() => {
+          (
+            globalThis as typeof globalThis & { agentDeckAuthoritativeCount?: number }
+          ).agentDeckAuthoritativeCount = 2;
+        });
+  };
+  const notify = (sessionId: string) =>
+    window.evaluate((id) => {
+      (
+        globalThis as unknown as {
+          agentDeck?: { notifyAttention?(payload: unknown): void };
+        }
+      ).agentDeck?.notifyAttention?.({
+        sessionId: id,
+        title: `Session ${id}`,
+        body: "Needs review",
+      });
+    }, sessionId);
+  const sync = () =>
+    window.evaluate(() => {
+      (
+        globalThis as unknown as { agentDeck?: { syncAttention?(): void } }
+      ).agentDeck?.syncAttention?.();
+    });
+  const nativeState = () =>
     app.evaluate(() => {
       const g = globalThis as typeof globalThis & {
         agentDeckAttention?: {
           badge: number[];
-          notifications: Array<{ title: string; body: string }>;
+          overlays: string[];
+          notifications: Array<unknown>;
         };
       };
-      return g.agentDeckAttention ?? { badge: [], notifications: [] };
+      return g.agentDeckAttention ?? { badge: [], overlays: [], notifications: [] };
     });
 
-  // Turn complete while unfocused → one notification + badge 1.
-  await window.evaluate(() => {
-    (
-      window as unknown as { agentDeck?: { signalAttention?(p: unknown): void } }
-    ).agentDeck?.signalAttention?.({
-      kind: "turn-complete",
-      title: "My session",
-      body: "Turn complete",
-    });
-  });
-  await expect.poll(async () => (await readAttention()).badge.at(-1)).toBe(1);
-  {
-    const state = await readAttention();
-    expect(state.notifications).toContainEqual({ title: "My session", body: "Turn complete" });
+  // Renderer IPC cannot manufacture attention for a backend row that is false.
+  await notify(targetIds[1]!);
+  await window.waitForTimeout(150);
+  expect((await nativeState()).notifications).toEqual([]);
+
+  await setAuthoritativeCount(1);
+  await notify(targetIds[1]!);
+  if (supportsNumericBadge) {
+    await expect.poll(async () => (await nativeState()).badge.at(-1)).toBe(1);
+  } else {
+    await expect
+      .poll(async () => (await nativeState()).overlays.at(-1))
+      .toBe("1 session needs attention");
   }
+  await expect.poll(async () => (await nativeState()).notifications.length).toBe(1);
 
-  // Approval needed while unfocused → a second notification + badge 2.
-  await window.evaluate((sessionId) => {
-    (
-      window as unknown as { agentDeck?: { signalAttention?(p: unknown): void } }
-    ).agentDeck?.signalAttention?.({
-      kind: "approval-needed",
-      title: "My session",
-      body: "Run rm -rf build?",
-      sessionId,
-    });
-  }, targetSessionId);
-  await expect.poll(async () => (await readAttention()).badge.at(-1)).toBe(2);
-  {
-    const state = await readAttention();
-    expect(state.notifications).toContainEqual({ title: "My session", body: "Run rm -rf build?" });
+  // Repeated hints for one durable row cannot inflate count or notifications.
+  await notify(targetIds[1]!);
+  await window.waitForTimeout(150);
+  expect((await nativeState()).notifications).toHaveLength(1);
+  if (supportsNumericBadge) expect((await nativeState()).badge.at(-1)).toBe(1);
+
+  await setAuthoritativeCount(2);
+  await notify(targetIds[0]!);
+  if (supportsNumericBadge) {
+    await expect.poll(async () => (await nativeState()).badge.at(-1)).toBe(2);
   }
+  await expect.poll(async () => (await nativeState()).notifications.length).toBe(2);
 
-  // Move away from chat, then click the captured native notification. Main
-  // restores/focuses the window and the preload/renderer route selects the
-  // originating session and returns to the chat surface.
+  // An authoritative false observation clears the dedupe epoch; a later true
+  // transition for the same session can notify again. Sync-only hydration never
+  // creates a historical notification.
+  await setAuthoritativeCount(0);
+  await sync();
+  if (supportsNumericBadge) {
+    await expect.poll(async () => (await nativeState()).badge.at(-1)).toBe(0);
+  }
+  expect((await nativeState()).notifications).toHaveLength(2);
+  await setAuthoritativeCount(1);
+  await sync();
+  expect((await nativeState()).notifications).toHaveLength(2);
+  await notify(targetIds[1]!);
+  await expect.poll(async () => (await nativeState()).notifications.length).toBe(3);
+
   await window.getByTestId("nav-projects").click();
-  await expect(window.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "true");
   await app.evaluate(() => {
     const g = globalThis as typeof globalThis & {
       agentDeckLastNotification?: { emit(event: string): void };
     };
-    if (!g.agentDeckLastNotification) throw new Error("notification was not captured");
-    g.agentDeckLastNotification.emit("click");
+    g.agentDeckLastNotification?.emit("click");
   });
   await expect(window.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "false");
-  await expect(
-    window.getByTestId("chat-list").getByTestId(`chat-${targetSessionId}`),
-  ).toHaveAttribute("data-active", "true");
-
-  // Focusing the window clears the badge (attention "seen").
-  await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.emit("focus");
-  });
-  await expect.poll(async () => (await readAttention()).badge.at(-1)).toBe(0);
-
-  // A focused window suppresses both notification and badge bump.
-  await app.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0]!;
-    win.isFocused = () => true;
-    const g = globalThis as typeof globalThis & {
-      agentDeckAttention?: { badge: number[]; notifications: Array<unknown> };
-    };
-    g.agentDeckAttention = { badge: [], notifications: [] };
-  });
-  await window.evaluate(() => {
-    (
-      window as unknown as { agentDeck?: { signalAttention?(p: unknown): void } }
-    ).agentDeck?.signalAttention?.({
-      kind: "turn-complete",
-      title: "My session",
-      body: "Turn complete",
-    });
-  });
-  // Give the fire-and-forget IPC a beat, then assert nothing was recorded.
-  await window.waitForTimeout(200);
-  {
-    const state = await readAttention();
-    expect(state.badge).toEqual([]);
-    expect(state.notifications).toEqual([]);
-  }
+  await expect(window.getByTestId("chat-list").getByTestId(`chat-${targetIds[1]}`)).toHaveAttribute(
+    "data-active",
+    "true",
+  );
 });
 
 test("the app presents itself as Agent Deck", async () => {

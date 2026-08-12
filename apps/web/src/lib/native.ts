@@ -3,12 +3,12 @@
  * the bridge is absent, so callers fall back to the type-a-path input.
  */
 
-/** A semantic attention event forwarded to the Electron shell (Slice 22a). */
+/** A renderer hint for a durable false→true attention transition. Main
+ * re-reads backend truth before showing OS UI or deriving a badge count. */
 export interface AttentionPayload {
-  kind: "turn-complete" | "approval-needed";
+  sessionId: string;
   title: string;
   body: string;
-  sessionId?: string;
 }
 
 export type AppMenuName = "file" | "edit" | "view" | "resources" | "git" | "help";
@@ -62,8 +62,10 @@ export interface AgentDeckBridge {
   openAppMenu?(name: AppMenuName, anchor: { x: number; y: number }): Promise<boolean>;
   /** Subscribe to native-menu commands; returns an unsubscribe function. */
   onMenu?(handler: (action: NativeMenuAction) => void): () => void;
-  /** Forward a semantic attention event; the main process owns the focus gate. */
-  signalAttention?(payload: AttentionPayload): void;
+  /** Ask main to re-read the authoritative durable attention set. */
+  syncAttention?(): void;
+  /** Hint that one durable marker transitioned false→true. */
+  notifyAttention?(payload: AttentionPayload): void;
   /** Subscribe to a notification click targeting an app-owned session id. */
   onFocusSession?(handler: (sessionId: string) => void): () => void;
   /**
@@ -231,20 +233,21 @@ export async function chooseFiles(
   }
 }
 
-/**
- * Forward a semantic attention event (turn complete / approval needed) to the
- * Electron shell (Slice 22a). No-op in a plain browser, or against an older
- * bridge that predates the method. Fire-and-forget: the MAIN process decides
- * whether to actually notify/badge based on window focus, so this never throws
- * at the call site.
- */
-export function signalAttention(payload: AttentionPayload): void {
-  const bridge = nativeBridge();
-  if (!bridge?.signalAttention) return;
+/** Ask Electron main to derive the distinct badge count from backend truth. */
+export function syncAttention(): void {
   try {
-    bridge.signalAttention(payload);
+    nativeBridge()?.syncAttention?.();
   } catch {
-    // A failed IPC must not surface where a domain transition is detected.
+    // A failed fire-and-forget hint is reconciled by the next metadata update.
+  }
+}
+
+/** Hint a durable attention edge. Main validates the source and backend state. */
+export function notifyAttention(payload: AttentionPayload): void {
+  try {
+    nativeBridge()?.notifyAttention?.(payload);
+  } catch {
+    // Native attention must never break renderer state handling.
   }
 }
 

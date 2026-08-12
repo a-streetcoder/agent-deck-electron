@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,29 @@ describe("persistence service — existing-data-dir round-trip", () => {
   it("class facade loads the fixture indexes identically", () => {
     expect(new SessionIndex(FIXTURE_DIR).list()).toEqual(expectedSessions);
     expect(new ProjectIndex(FIXTURE_DIR).list()).toEqual(expectedProjects);
+  });
+
+  it("treats legacy absent attention as false, normalizes malformed values, and round-trips", () => {
+    const legacy = new SessionIndex(FIXTURE_DIR).list()[0]!;
+    expect(legacy.needsAttention ?? false).toBe(false);
+
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    sessions.upsert({ ...legacy, needsAttention: true });
+    expect(new SessionIndex(dir).find((session) => session.id === legacy.id)?.needsAttention).toBe(
+      true,
+    );
+
+    sessions.upsert({ ...legacy, needsAttention: false });
+    expect(new SessionIndex(dir).find((session) => session.id === legacy.id)?.needsAttention).toBe(
+      false,
+    );
+
+    const file = path.join(dir, "sessions.json");
+    const malformed = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    malformed[0]!.needsAttention = "yes";
+    writeFileSync(file, JSON.stringify(malformed, null, 2));
+    expect(new SessionIndex(dir).list()[0]?.needsAttention).toBe(false);
   });
 
   it("persists optional session pin state without rewriting activity time", () => {

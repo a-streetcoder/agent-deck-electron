@@ -254,6 +254,15 @@ export interface AppState {
   session: SessionMeta | null;
   /** All known sessions (live + persisted), for the sidebar chat list. */
   sessions: SessionMeta[];
+  /** True after the first authoritative sessions catalog request settles. Empty
+   * can be an authoritative catalog, so consumers must not infer this from length. */
+  sessionsLoaded: boolean;
+  /** One current-session-independent polite announcement. The id changes even
+   * when text repeats so assistive technology receives a fresh live-region node. */
+  attentionAnnouncement: { id: number; text: string } | null;
+  /** Notification navigation suppresses acknowledgement of the previously
+   * selected chat until the async target activation settles. */
+  attentionRoutingToken: number | null;
   /** A one-shot prompt seed bound to the session that requested it. */
   pendingComposerText: PendingComposerText | null;
   /**
@@ -376,6 +385,8 @@ export interface AppState {
   setCurrentAgent(agentName: string | null): void;
   setSession(session: SessionMeta | null): void;
   setSessions(sessions: SessionMeta[]): void;
+  setAttentionAnnouncement(message: string): void;
+  setAttentionRoutingToken(token: number | null): void;
   setPendingComposerText(pending: PendingComposerText | null): void;
   updateComposerDraft(sessionId: string, update: (current: ComposerDraft) => ComposerDraft): void;
   /** Drop whitespace-only text once its composer is left or unmounted. */
@@ -480,6 +491,9 @@ export const useAppStore = create<AppState>((set) => ({
   currentAgentName: null,
   session: null,
   sessions: [],
+  sessionsLoaded: false,
+  attentionAnnouncement: null,
+  attentionRoutingToken: null,
   pendingComposerText: null,
   composerDrafts: {},
   terminalOpen: false,
@@ -543,7 +557,12 @@ export const useAppStore = create<AppState>((set) => ({
             questionNavigationAnchorId: null,
           },
     ),
-  setSessions: (sessions) => set({ sessions }),
+  setSessions: (sessions) => set({ sessions, sessionsLoaded: true }),
+  setAttentionAnnouncement: (text) =>
+    set((state) => ({
+      attentionAnnouncement: { id: (state.attentionAnnouncement?.id ?? 0) + 1, text },
+    })),
+  setAttentionRoutingToken: (attentionRoutingToken) => set({ attentionRoutingToken }),
   setPendingComposerText: (pendingComposerText) => set({ pendingComposerText }),
   updateComposerDraft: (sessionId, update) =>
     set((state) => {

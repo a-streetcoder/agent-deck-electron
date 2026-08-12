@@ -216,6 +216,13 @@ rl.on("line", (line) => {
             assistantMessageEvent: { type: "text_delta", delta: `chunk-${streamed} ` },
           });
         }, 15);
+      } else if (cmd.message === "request-extension-ui") {
+        send({
+          type: "extension_ui_request",
+          id: "extension-question-1",
+          method: "confirm",
+          title: "Approval needed",
+        });
       } else if (cmd.message === "say-hello") {
         // A COMPLETE assistant turn (message_start → deltas → message_end), so
         // the domain reducer opens, streams, and finalizes a real assistant cell

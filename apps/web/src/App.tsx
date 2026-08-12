@@ -133,6 +133,7 @@ export function App() {
   const session = useAppStore((state) => state.session);
   const projects = useAppStore((state) => state.projects);
   const error = useAppStore((state) => state.error);
+  const attentionAnnouncement = useAppStore((state) => state.attentionAnnouncement);
   const view = useAppStore((state) => state.view);
   const isChat = view === "chat";
   const chatTitle = session
@@ -513,6 +514,17 @@ export function App() {
       </div>
       <CommandPalette />
       <KeybindingsEditor />
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="attention-announcer"
+      >
+        {attentionAnnouncement ? (
+          <span key={attentionAnnouncement.id}>{attentionAnnouncement.text}</span>
+        ) : null}
+      </div>
       <Toaster />
     </div>
   );

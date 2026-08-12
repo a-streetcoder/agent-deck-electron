@@ -45,6 +45,17 @@ describe("contracts ⇄ domain type parity", () => {
     ]).toEqual([true, true, true, true, true, true, true, true]);
   });
 
+  it("decodes legacy absent attention as false-by-default and validates optional booleans", () => {
+    const base = { id: "session", cwd: "/tmp", createdAt: "2026-07-29T12:00:00.000Z" };
+    expect(Schema.decodeUnknownSync(SessionMeta)(base).needsAttention ?? false).toBe(false);
+    expect(
+      Schema.decodeUnknownSync(SessionMeta)({ ...base, needsAttention: true }).needsAttention,
+    ).toBe(true);
+    expect(() =>
+      Schema.decodeUnknownSync(SessionMeta)({ ...base, needsAttention: "yes" }),
+    ).toThrow();
+  });
+
   it("accepts an optional pin timestamp and rejects a non-string pin", () => {
     const base = { id: "session", cwd: "/tmp", createdAt: "2026-07-29T12:00:00.000Z" };
     expect(

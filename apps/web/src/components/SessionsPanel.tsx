@@ -1,6 +1,7 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import {
+  BellRing,
   ChevronDown,
   ChevronUp,
   CircleAlert,
@@ -128,17 +129,22 @@ export function SessionRow({
         "group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
         active ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
-        !active && session.endedAt && session.status !== "failed" && "opacity-60 saturate-50",
+        !active &&
+          session.endedAt &&
+          session.status !== "failed" &&
+          session.needsAttention !== true &&
+          "opacity-60 saturate-50",
       )}
       data-testid={`chat-${session.id}`}
       data-active={active ? "true" : "false"}
+      data-needs-attention={session.needsAttention === true ? "true" : "false"}
       data-status={session.status ?? (session.endedAt ? "ended" : running ? "running" : "idle")}
       title={session.agentName ? `agent: ${session.agentName}` : undefined}
-      aria-label={
+      aria-label={`${displayTitle}${
         session.status === "failed"
-          ? `${displayTitle}, failed${session.lastError ? `: ${session.lastError}` : ""}`
-          : displayTitle
-      }
+          ? `, failed${session.lastError ? `: ${session.lastError}` : ""}`
+          : ""
+      }${session.needsAttention === true ? ", needs attention" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -160,13 +166,22 @@ export function SessionRow({
         </span>
         {session.status === "failed" ? (
           <span
-            className="flex items-center gap-1 truncate text-detail text-danger"
+            className="mt-0.5 flex items-center gap-1 truncate text-detail text-danger"
             data-testid="chat-failure-subtitle"
           >
             <CircleAlert size={10} className="shrink-0" aria-hidden="true" />
             <span className="truncate">
               Failed{session.lastError ? ` · ${session.lastError}` : ""}
             </span>
+          </span>
+        ) : null}
+        {session.needsAttention === true ? (
+          <span
+            className="mt-0.5 flex w-fit max-w-full items-center gap-1 truncate rounded border border-selection-stroke bg-accent-surface px-1.5 py-0.5 text-detail font-semibold text-text-primary"
+            data-testid={`chat-attention-${session.id}`}
+          >
+            <BellRing size={10} className="shrink-0" aria-hidden="true" />
+            <span>Needs attention</span>
           </span>
         ) : null}
         {detailed && session.agentName ? (
@@ -270,13 +285,31 @@ function useSessionsData() {
   const byNewest = sortSessionsByActivity(sessions);
   const projectName = (id?: string): string => projectDisplayName(projects, id);
 
-  return { byNewest, currentProjectId, currentSession, agentStatus, setView, projectName };
+  const pendingAttentionCount = sessions.filter(
+    (session) => session.needsAttention === true,
+  ).length;
+  return {
+    byNewest,
+    currentProjectId,
+    currentSession,
+    agentStatus,
+    setView,
+    projectName,
+    pendingAttentionCount,
+  };
 }
 
 /** Collapsed card — lives at the bottom of the NAV layer. */
 export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
-  const { byNewest, currentProjectId, currentSession, agentStatus, setView, projectName } =
-    useSessionsData();
+  const {
+    byNewest,
+    currentProjectId,
+    currentSession,
+    agentStatus,
+    setView,
+    projectName,
+    pendingAttentionCount,
+  } = useSessionsData();
   const currentProjectSessions = sortSessionsWithPins(
     byNewest.filter((s) => (s.projectId ?? null) === currentProjectId),
   );
@@ -290,6 +323,16 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
             style={{ fontStretch: "expanded" }}
           >
             Sessions
+            {pendingAttentionCount > 0 ? (
+              <span
+                className="ml-1.5 rounded-full bg-accent-surface px-1.5 py-0.5 text-micro text-text-primary"
+                data-testid="sessions-attention-count"
+                aria-label={`${pendingAttentionCount} sessions across all projects need attention`}
+                title="Sessions needing attention across all projects"
+              >
+                {pendingAttentionCount}
+              </span>
+            ) : null}
           </span>
           <span className="flex items-center gap-1">
             <ControlButton
@@ -347,7 +390,8 @@ export function SessionsExpandedOverlay({
   expanded: boolean;
   onCollapse: () => void;
 }) {
-  const { byNewest, currentSession, agentStatus, setView, projectName } = useSessionsData();
+  const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
+    useSessionsData();
   const [search, setSearch] = useState("");
 
   // Search sessions by title OR content (native Sessions search 18.1 "by title
@@ -410,6 +454,16 @@ export function SessionsExpandedOverlay({
             style={{ fontStretch: "expanded" }}
           >
             All sessions
+            {pendingAttentionCount > 0 ? (
+              <span
+                className="ml-1.5 rounded-full bg-accent-surface px-1.5 py-0.5 text-micro text-text-primary"
+                data-testid="sessions-expanded-attention-count"
+                aria-label={`${pendingAttentionCount} sessions across all projects need attention`}
+                title="Sessions needing attention across all projects"
+              >
+                {pendingAttentionCount}
+              </span>
+            ) : null}
           </span>
           <ControlButton
             data-testid="sessions-collapse"

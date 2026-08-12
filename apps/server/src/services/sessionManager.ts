@@ -586,7 +586,19 @@ export const makeManagedSessionRuntime = (
     let ingestionStarted = false;
     let pendingProcessExit: PiProcessExit | null = null;
     let pendingProviderFailure: string | undefined;
+    // A user turn remains pending through Pi's automatic retry cycle. It is
+    // consumed only by a successful idle boundary, or discarded by an explicit
+    // abort/terminal outcome. Startup/resume idle therefore cannot raise attention.
+    let pendingUserTurn = false;
+    let currentTurnFailedOrCancelled = false;
+    let turnAwaitingProviderRetry = false;
     const ingestionSettled = yield* Deferred.make<void>();
+
+    const markNeedsAttention = (): void => {
+      if (meta.needsAttention === true) return;
+      meta.needsAttention = true;
+      onMetaChange(meta);
+    };
 
     const clearFailure = (): void => {
       delete meta.status;
@@ -759,6 +771,7 @@ export const makeManagedSessionRuntime = (
                 .find((message) => message.role === "assistant")
             : undefined;
       if (type === "auto_retry_start") {
+        turnAwaitingProviderRetry = true;
         // agent_end.willRetry is the pinned Pi signal that the preceding provider
         // error is recoverable. It remains visible in the card, never SES-11
         // terminal metadata while Pi owns the retry loop.
@@ -769,29 +782,39 @@ export const makeManagedSessionRuntime = (
         const retryEnd = piEvent as unknown as { success?: unknown; finalError?: unknown };
         pendingProviderFailure = undefined;
         if (retryEnd.success === true) {
+          turnAwaitingProviderRetry = false;
           clearFailure();
           onMetaChange(meta);
-        } else if (
-          typeof retryEnd.finalError === "string" &&
-          retryEnd.finalError !== "Retry cancelled"
-        ) {
-          recordFailure(retryEnd.finalError);
+        } else {
+          turnAwaitingProviderRetry = false;
+          currentTurnFailedOrCancelled = true;
+          if (
+            typeof retryEnd.finalError === "string" &&
+            retryEnd.finalError !== "Retry cancelled"
+          ) {
+            recordFailure(retryEnd.finalError);
+          }
         }
       } else if (finalAssistant?.stopReason === "error") {
+        turnAwaitingProviderRetry = true;
         pendingProviderFailure =
           finalAssistant.errorMessage || "The provider failed to complete this turn.";
         // Pi 0.84.1 annotates agent_end before publishing it. This is the exact
         // decision boundary between a retry pause and a terminal provider error.
         if (type === "agent_end" && rawEvent.willRetry !== true) {
+          turnAwaitingProviderRetry = false;
+          currentTurnFailedOrCancelled = true;
           recordFailure(pendingProviderFailure);
           pendingProviderFailure = undefined;
         }
       } else if (type === "message_end" && finalAssistant) {
+        turnAwaitingProviderRetry = false;
         pendingProviderFailure = undefined;
       }
       if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
         pendingUiRequests.set(e.id, e.method);
+        markNeedsAttention();
       }
       let retryChanged = false;
       for (const domainEvent of ingestPiEvent(ingest, piEvent)) {
@@ -811,11 +834,20 @@ export const makeManagedSessionRuntime = (
           sawFirstDelta = true;
           receipts.emit("first_delta", meta.id);
         }
+        if (domainEvent.type === "cell_final" && domainEvent.cell.kind === "user") {
+          pendingUserTurn = true;
+          currentTurnFailedOrCancelled = false;
+        }
         if (domainEvent.type === "cell_final" && domainEvent.cell.kind === "assistant") {
           receipts.emit("assistant_final", meta.id);
         }
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
           receipts.emit("idle", meta.id);
+          if (pendingUserTurn && !turnAwaitingProviderRetry) {
+            if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
+            pendingUserTurn = false;
+            currentTurnFailedOrCancelled = false;
+          }
           const reconcileImages = Effect.gen(function* () {
             if (!params.reconcileImages) {
               params.expirePendingImages?.();
@@ -1082,7 +1114,7 @@ export const makeManagedSessionRuntime = (
       appendSubagentProgress: (cellId, message) =>
         Effect.sync(() => emit({ type: "subagent_progress", cellId, message })),
       openSupervisorQuestion: (req) =>
-        Effect.sync(() =>
+        Effect.sync(() => {
           emit({
             type: "cell_open",
             cell: {
@@ -1096,8 +1128,9 @@ export const makeManagedSessionRuntime = (
               options: req.options,
               answered: false,
             },
-          }),
-        ),
+          });
+          markNeedsAttention();
+        }),
       answerSupervisorQuestion: (requestId, answer) =>
         Effect.sync(() =>
           emit({ type: "supervisor_answered", cellId: `supervisor-${requestId}`, answer }),
@@ -1106,7 +1139,11 @@ export const makeManagedSessionRuntime = (
         Effect.sync(() =>
           emit({ type: "supervisor_closed", cellId: `supervisor-${requestId}`, reason }),
         ),
-      openAskUser: (cell) => Effect.sync(() => emit({ type: "cell_open", cell })),
+      openAskUser: (cell) =>
+        Effect.sync(() => {
+          emit({ type: "cell_open", cell });
+          markNeedsAttention();
+        }),
       answerAskUser: (requestId, answer) =>
         Effect.sync(() =>
           emit({ type: "ask_user_answered", cellId: `ask-user-${requestId}`, answer }),
@@ -1149,6 +1186,9 @@ export const makeManagedSessionRuntime = (
           Effect.tap(() =>
             Effect.sync(() => {
               clearFailure();
+              pendingUserTurn = true;
+              currentTurnFailedOrCancelled = false;
+              turnAwaitingProviderRetry = false;
               onMetaChange(meta);
             }),
           ),
@@ -1166,7 +1206,11 @@ export const makeManagedSessionRuntime = (
           Effect.orDie,
         ),
       compact: handle.compact.pipe(Effect.orDie),
-      abort: handle.abort.pipe(Effect.orDie),
+      abort: Effect.sync(() => {
+        currentTurnFailedOrCancelled = true;
+        turnAwaitingProviderRetry = false;
+        pendingUserTurn = false;
+      }).pipe(Effect.andThen(handle.abort), Effect.orDie),
       getState: handle.getState.pipe(Effect.orDie),
       getForkMessages: handle.getForkMessages.pipe(Effect.orDie),
       getEntries: handle.getEntries.pipe(Effect.orDie),

@@ -691,6 +691,10 @@ function handleMessage(message: ServerMessage): void {
       store.bumpResourcesVersion();
       break;
     case "session_meta":
+      attentionMetaGeneration.set(
+        message.session.id,
+        (attentionMetaGeneration.get(message.session.id) ?? 0) + 1,
+      );
       store.upsertSessionMeta(message.session);
       break;
     case "session_rebind":
@@ -766,11 +770,35 @@ export async function refreshSessions(): Promise<void> {
 
 let activationToken = 0;
 let notificationFocusToken = 0;
+const attentionMetaGeneration = new Map<string, number>();
+
+/** Preserve attention transitions published after a catalog request began.
+ * Other catalog fields still come from the response; only backend-owned
+ * attention truth is protected from an older HTTP snapshot. */
+function mergeCatalogAttention(
+  sessions: SessionMeta[],
+  generationsAtRequest: ReadonlyMap<string, number>,
+): SessionMeta[] {
+  const currentSessions = useAppStore.getState().sessions;
+  return sessions.map((session) => {
+    if (
+      (attentionMetaGeneration.get(session.id) ?? 0) === (generationsAtRequest.get(session.id) ?? 0)
+    ) {
+      return session;
+    }
+    const current = currentSessions.find((candidate) => candidate.id === session.id);
+    if (!current) return session;
+    return current.needsAttention === true
+      ? { ...session, needsAttention: true as const }
+      : { ...session, needsAttention: false as const };
+  });
+}
 
 async function refreshSessionsForActivation(token: number): Promise<boolean> {
+  const generationsAtRequest = new Map(attentionMetaGeneration);
   const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
   if (token !== activationToken) return false;
-  useAppStore.getState().setSessions(sessions);
+  useAppStore.getState().setSessions(mergeCatalogAttention(sessions, generationsAtRequest));
   return true;
 }
 
@@ -835,14 +863,16 @@ export async function focusSessionFromNotification(sessionId: string): Promise<v
   const activationAtClick = activationToken;
   const requestToken = ++notificationFocusToken;
   try {
+    const generationsAtRequest = new Map(attentionMetaGeneration);
     const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
     if (requestToken !== notificationFocusToken || activationToken !== activationAtClick) return;
-    const target = sessions.find((session) => session.id === sessionId);
+    const mergedSessions = mergeCatalogAttention(sessions, generationsAtRequest);
+    const target = mergedSessions.find((session) => session.id === sessionId);
     if (!target) return;
 
     const token = ++activationToken;
     const store = useAppStore.getState();
-    store.setSessions(sessions);
+    store.setSessions(mergedSessions);
     store.setView("chat");
     if (store.session?.id !== target.id) await switchToSessionAtActivation(target, token);
   } catch (error) {
@@ -899,6 +929,35 @@ export async function renameSession(sessionId: string, title: string): Promise<v
     await refreshSessions();
   } catch (error) {
     useAppStore.getState().setError(String(error));
+  }
+}
+
+export async function acknowledgeSessionAttention(sessionId: string): Promise<void> {
+  const generationAtRequest = attentionMetaGeneration.get(sessionId) ?? 0;
+  const attentionAtRequest =
+    useAppStore.getState().sessions.find((session) => session.id === sessionId)?.needsAttention ===
+    true;
+  const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/attention`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ needsAttention: false }),
+  });
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  const body = (await response.json()) as { session?: SessionMeta };
+  // The websocket publication is authoritative. If activation temporarily put
+  // the renderer between subscriptions, apply only this session's PATCH result,
+  // and only when no session_meta publication arrived since the request began.
+  // This closes the lost-push gap without a stale full-catalog overwrite.
+  if (
+    body.session?.id === sessionId &&
+    body.session.needsAttention !== true &&
+    (attentionMetaGeneration.get(sessionId) ?? 0) === generationAtRequest &&
+    (useAppStore.getState().sessions.find((session) => session.id === sessionId)?.needsAttention ===
+      true) ===
+      attentionAtRequest
+  ) {
+    attentionMetaGeneration.set(sessionId, generationAtRequest + 1);
+    useAppStore.getState().upsertSessionMeta(body.session);
   }
 }
 

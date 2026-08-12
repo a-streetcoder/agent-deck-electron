@@ -1,15 +1,25 @@
 import type { SessionMeta } from "@agent-deck/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const transportMock = vi.hoisted(() => ({
+  host: undefined as { onServerMessage(message: unknown): void } | undefined,
+}));
 vi.mock("./clientTransport.ts", () => ({
   RpcClientTransport: class {
+    constructor(host: { onServerMessage(message: unknown): void }) {
+      transportMock.host = host;
+    }
     connect(): void {}
     disconnect(): void {}
     send(): void {}
   },
 }));
 
-import { focusSessionFromNotification, switchToSession } from "./wsBridge.ts";
+import {
+  acknowledgeSessionAttention,
+  focusSessionFromNotification,
+  switchToSession,
+} from "./wsBridge.ts";
 import { useAppStore } from "./store.ts";
 
 const session = (id: string): SessionMeta => ({
@@ -52,7 +62,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("attention acknowledgement ordering", () => {
+  it("does not apply a delayed false response over a newer true metadata push", async () => {
+    const delayed = deferredResponse();
+    vi.mocked(fetch)
+      .mockReturnValueOnce(delayed.promise)
+      .mockResolvedValueOnce(
+        jsonResponse({ sessions: [{ ...session("current"), needsAttention: true }] }),
+      );
+    const request = acknowledgeSessionAttention("current");
+
+    transportMock.host?.onServerMessage({
+      type: "session_meta",
+      session: { ...session("current"), needsAttention: true },
+    });
+    delayed.resolve(jsonResponse({ session: { ...session("current"), needsAttention: false } }));
+    await request;
+
+    expect(useAppStore.getState().session?.needsAttention).toBe(true);
+  });
+});
+
 describe("notification session routing", () => {
+  it("preserves newer websocket attention over an older notification catalog", async () => {
+    const current = { ...session("current"), needsAttention: true };
+    const target = { ...session("target"), needsAttention: true };
+    useAppStore.setState({ session: current, sessions: [current, target] });
+    const delayedCatalog = deferredResponse();
+    vi.mocked(fetch)
+      .mockReturnValueOnce(delayedCatalog.promise)
+      .mockResolvedValueOnce(jsonResponse({ session: target }))
+      .mockResolvedValueOnce(jsonResponse({ sessions: [current, target] }));
+
+    const routing = focusSessionFromNotification(target.id);
+    transportMock.host?.onServerMessage({
+      type: "session_meta",
+      session: { ...current, needsAttention: true },
+    });
+    delayedCatalog.resolve(
+      jsonResponse({
+        sessions: [
+          { ...current, needsAttention: false },
+          { ...target, needsAttention: true },
+        ],
+      }),
+    );
+    await routing;
+
+    expect(
+      useAppStore.getState().sessions.find((candidate) => candidate.id === current.id)
+        ?.needsAttention,
+    ).toBe(true);
+    expect(useAppStore.getState().session?.id).toBe(target.id);
+    expect(useAppStore.getState().view).toBe("chat");
+  });
+
   it("resolves the opaque id from the live session catalog and activates it", async () => {
     const current = session("current");
     const target = session("target");
