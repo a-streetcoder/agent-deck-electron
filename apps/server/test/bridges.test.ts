@@ -50,7 +50,12 @@ describe("GET /runtime/bridges", () => {
     const deckAgents = list.find((b) => b.id === "deck_agents");
     expect(deckAgents?.active).toBe(true);
     expect(deckAgents?.toolNames).toEqual(
-      expect.arrayContaining(["managed_subagent", "managed_parallel", "list_supervisor_requests"]),
+      expect.arrayContaining([
+        "managed_subagent",
+        "managed_parallel",
+        "list_supervisor_requests",
+        "answer_supervisor_request",
+      ]),
     );
     expect(deckAgents?.toolNames).not.toContain("ask_user");
 

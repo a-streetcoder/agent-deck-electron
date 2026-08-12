@@ -145,10 +145,16 @@ describe("contact_supervisor blocking: a child suspends on need_decision until a
 
     // The child RECEIVED the answer as its contact_supervisor tool result: the
     // child request after the tool call carries it in a role:"tool" message.
-    const childToolResults = mock.requests
-      .filter((r) => isChildRequest(r) && r.messages.some((m) => m.role === "tool"))
+    const childRequests = mock.requests.filter(isChildRequest);
+    const childToolResults = childRequests
+      .filter((r) => r.messages.some((m) => m.role === "tool"))
       .map((r) => JSON.stringify(r.messages.filter((m) => m.role === "tool")));
     expect(childToolResults.some((t) => t.includes("ANSWER_SENTINEL: use JSON"))).toBe(true);
+    // Child extensions remain purpose-built: they can contact their supervisor,
+    // but cannot invoke the parent-only answer capability.
+    expect(JSON.stringify(childRequests.map((request) => request.tools))).not.toContain(
+      "answer_supervisor_request",
+    );
 
     // The subagent finished and the parent received the child's final result.
     const subagent = managed

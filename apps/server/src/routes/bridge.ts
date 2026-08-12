@@ -23,6 +23,12 @@ export interface BridgeRouteHandles {
    * server.ts when a subagent ends.
    */
   cancelChildSupervisorRequests(childSessionId: string): void;
+  /**
+   * Settle one pending child request. When supplied, expectedParentSessionId
+   * makes lookup owner-scoped for model-facing callers; REST omits it to retain
+   * the existing human out-of-band behavior.
+   */
+  answerSupervisor(requestId: string, response: string, expectedParentSessionId?: string): boolean;
 }
 
 /**
@@ -172,9 +178,18 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
    * child's suspended tool call with `response`, mark the record answered, and
    * flip the parent card to answered. Returns false if no such pending request.
    */
-  function answerSupervisor(requestId: string, response: string): boolean {
+  function answerSupervisor(
+    requestId: string,
+    response: string,
+    expectedParentSessionId?: string,
+  ): boolean {
     const pending = pendingSupervisor.get(requestId);
-    if (!pending) return false;
+    if (
+      !pending ||
+      (expectedParentSessionId !== undefined && pending.parentSessionId !== expectedParentSessionId)
+    ) {
+      return false;
+    }
     supervisor.markAnswered(requestId, response);
     sessions.get(pending.parentSessionId)?.answerSupervisorQuestion(requestId, response);
     pending.settle({ content: response });
@@ -310,5 +325,5 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     },
   );
 
-  return { cancelChildSupervisorRequests };
+  return { cancelChildSupervisorRequests, answerSupervisor };
 }

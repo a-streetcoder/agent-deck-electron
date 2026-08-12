@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
-import { registerSupervisorListBridgeTool } from "../src/bridgeTools.ts";
+import {
+  registerSupervisorAnswerBridgeTool,
+  registerSupervisorListBridgeTool,
+} from "../src/bridgeTools.ts";
 import { SupervisorLog } from "../src/supervisor.ts";
 
 function harness(): { bridge: BridgeRegistry; supervisor: SupervisorLog } {
@@ -9,6 +12,78 @@ function harness(): { bridge: BridgeRegistry; supervisor: SupervisorLog } {
   registerSupervisorListBridgeTool(bridge, supervisor);
   return { bridge, supervisor };
 }
+
+describe("answer_supervisor_request bridge tool", () => {
+  const dispatch = (
+    bridge: BridgeRegistry,
+    params: Record<string, unknown>,
+    sessionId = "parent-a",
+  ) =>
+    bridge.dispatch(
+      {
+        tool: "answer_supervisor_request",
+        params,
+        sessionId,
+        toolCallId: "answer-call",
+        token: "token",
+      },
+      { token: "token" },
+    );
+
+  it("registers the strict portable schema and trims then owner-forwards a response", async () => {
+    const bridge = new BridgeRegistry();
+    const answerSupervisor = vi.fn(() => true);
+    registerSupervisorAnswerBridgeTool(bridge, { answerSupervisor });
+
+    expect(bridge.specs().find((spec) => spec.name === "answer_supervisor_request")).toMatchObject({
+      parameters: {
+        type: "object",
+        required: ["requestID", "response"],
+        additionalProperties: false,
+      },
+    });
+    await expect(
+      dispatch(bridge, { requestID: "request-1", response: "  use JSON  " }),
+    ).resolves.toEqual({
+      content: "Supervisor response sent to child request `request-1`.",
+    });
+    expect(answerSupervisor).toHaveBeenCalledWith("request-1", "use JSON", "parent-a");
+  });
+
+  it("rejects invalid and empty responses without attempting settlement", async () => {
+    const bridge = new BridgeRegistry();
+    const answerSupervisor = vi.fn(() => true);
+    registerSupervisorAnswerBridgeTool(bridge, { answerSupervisor });
+
+    const missing = await dispatch(bridge, { requestID: "request-1" });
+    expect(missing.isError).toBe(true);
+    expect(missing.content).toContain("Invalid answer_supervisor_request arguments");
+    const extra = await dispatch(bridge, {
+      requestID: "request-1",
+      response: "ok",
+      unexpected: true,
+    });
+    expect(extra.isError).toBe(true);
+    expect(extra.content).toContain("Invalid answer_supervisor_request arguments");
+    await expect(dispatch(bridge, { requestID: "request-1", response: "  \n " })).resolves.toEqual({
+      content: "Supervisor response is empty.",
+    });
+    expect(answerSupervisor).not.toHaveBeenCalled();
+  });
+
+  it("uses the portable missing result for foreign, stale, answered, or cancelled ids", async () => {
+    const bridge = new BridgeRegistry();
+    const answerSupervisor = vi.fn(() => false);
+    registerSupervisorAnswerBridgeTool(bridge, { answerSupervisor });
+
+    await expect(
+      dispatch(bridge, { requestID: "not-pending", response: "answer" }, "wrong-parent"),
+    ).resolves.toEqual({
+      content: "No pending supervisor request found for id `not-pending`.",
+    });
+    expect(answerSupervisor).toHaveBeenCalledWith("not-pending", "answer", "wrong-parent");
+  });
+});
 
 describe("list_supervisor_requests bridge tool", () => {
   it("returns only this parent's pending rows with the exact portable shape and title fallback", async () => {

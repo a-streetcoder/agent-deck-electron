@@ -600,6 +600,7 @@ describe("child tool capability policy", () => {
     "write",
     "managed_subagent",
     "list_supervisor_requests",
+    "answer_supervisor_request",
     "set_session_plan",
   ];
 

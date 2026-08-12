@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionPlanItem } from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
+import type { BridgeRouteHandles } from "./routes/bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
 import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
@@ -349,6 +350,64 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       if (!session) return { content: "No such session for the plan.", isError: true };
       session.updatePlan(parsed.data.updates);
       return { content: `Plan updated.\n${renderPlan(session.plan)}` };
+    },
+  );
+}
+
+/** Register the parent-only portable answer flow after its route coordinator exists. */
+export function registerSupervisorAnswerBridgeTool(
+  bridge: BridgeRegistry,
+  routes: Pick<BridgeRouteHandles, "answerSupervisor">,
+): void {
+  const paramsSchema = z
+    .object({
+      requestID: z.string(),
+      response: z.string(),
+    })
+    .strict();
+  bridge.register(
+    {
+      name: "answer_supervisor_request",
+      label: "Answer supervisor request",
+      description:
+        "Answer one pending question or decision from this session's Deck subagents. Use a requestID returned by list_supervisor_requests. The response is delivered to the blocked child.",
+      parameters: {
+        type: "object",
+        properties: {
+          requestID: {
+            type: "string",
+            description: "The pending requestID returned by list_supervisor_requests.",
+          },
+          response: {
+            type: "string",
+            description: "The response to deliver to the blocked child.",
+          },
+        },
+        required: ["requestID", "response"],
+        additionalProperties: false,
+      },
+      promptSnippet:
+        "answer_supervisor_request(requestID, response) — answer one pending request from this parent session's subagent.",
+    },
+    (params, ctx) => {
+      const parsed = paramsSchema.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid answer_supervisor_request arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      const response = parsed.data.response.trim();
+      if (!response) return { content: "Supervisor response is empty." };
+      const answered = routes.answerSupervisor(parsed.data.requestID, response, ctx.sessionId);
+      if (!answered) {
+        return {
+          content: `No pending supervisor request found for id \`${parsed.data.requestID}\`.`,
+        };
+      }
+      return {
+        content: `Supervisor response sent to child request \`${parsed.data.requestID}\`.`,
+      };
     },
   );
 }

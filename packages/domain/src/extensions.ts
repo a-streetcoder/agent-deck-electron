@@ -44,6 +44,7 @@ export const BRIDGE_TOOL_NAMES: readonly string[] = [
   "managed_subagent",
   "managed_parallel",
   "list_supervisor_requests",
+  "answer_supervisor_request",
   "contact_supervisor",
   "ask_user",
   "set_session_plan",

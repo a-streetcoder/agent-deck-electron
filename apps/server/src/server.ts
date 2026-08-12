@@ -41,7 +41,11 @@ import {
   type NamedAgentLaunch,
   type ServerContext,
 } from "./context.ts";
-import { registerDeckBridgeTools, registerSupervisorListBridgeTool } from "./bridgeTools.ts";
+import {
+  registerDeckBridgeTools,
+  registerSupervisorAnswerBridgeTool,
+  registerSupervisorListBridgeTool,
+} from "./bridgeTools.ts";
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
 import { loadSkillEngineNative } from "./skills/skillEngineNative.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
@@ -1009,7 +1013,11 @@ async function initServer(
   registerLoopRoutes(ctx);
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
-  ({ cancelChildSupervisorRequests } = registerBridgeRoutes(ctx));
+  const bridgeRouteHandles = registerBridgeRoutes(ctx);
+  ({ cancelChildSupervisorRequests } = bridgeRouteHandles);
+  // This parent-only tool delegates to the route coordinator's exactly-once
+  // settlement path. Register only after that coordinator and its handles exist.
+  registerSupervisorAnswerBridgeTool(bridge, bridgeRouteHandles);
 
   await fastify.listen({ port: options.port ?? 0, host: options.host ?? "127.0.0.1" });
   const address = fastify.server.address();
