@@ -2,7 +2,7 @@
 
 App artwork has one canonical source at `build/icon-source.png`. After changing it, run `pnpm generate:icons` on macOS to regenerate the native macOS, Windows, and Linux formats.
 
-Packaged apps include the pinned Pi dependency tree and the architecture-matched native Loop catalog safety addon, and launch them with Electron's embedded Node runtime; users must not need a separate Node/npm/Pi/Rust installation. Validate the addon's exact architecture and nested code signature whenever packaging changes, then run the packaged Electron executable in Node mode through the full Loop HTTP CRUD and containment smoke.
+Packaged apps include the pinned Pi dependency tree, the architecture-matched native Loop catalog safety addon, and the pinned Syncr-owned skill-engine addon, and launch them with Electron's embedded Node runtime; users must not need a separate Node/npm/Pi/Rust installation. The skill-engine `.node` must remain outside `app.asar`: `scripts/build-backend.mjs` stages it in `build/skill-engine-native`, and `electron-builder.yml` copies it to `resources/skill-engine-native` for `loadSkillEngineNative()`. Validate each addon's exact architecture and nested code signature whenever packaging changes, then run `pnpm smoke:packaged-native`; see [the skill-store contract](../skill-store-contract.md).
 
 Local macOS production-layout validation uses an unsigned Apple Silicon app:
 

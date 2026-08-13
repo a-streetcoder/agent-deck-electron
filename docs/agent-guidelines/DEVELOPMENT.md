@@ -22,4 +22,6 @@ pnpm --filter <workspace-name> <script>
 
 Loop catalog definition CRUD requires the pinned Rust 1.88.0 N-API addon. There is no JavaScript fallback: build it for the current Node platform and architecture before server, resource, Pi, or E2E tests. Registered Loop worktrees are retained for review and are not recursively removed by this addon or the Loop route.
 
+Skill storage separately requires the prebuilt private `@a-streetcoder/skill-engine-native` addon pinned in `apps/server/package.json`; there is no JavaScript fallback, and `pnpm build:native` does not build it. Installing needs GitHub Packages access as described in [the skill-store contract](../skill-store-contract.md). For addon behavior or an upgrade, inspect the sibling Syncr source at `/Users/andrea/Documents/GitHub/Syncr`, verify the pinned package's actual exports, and keep `apps/server/src/skills/skillEngineNative.ts` synchronized. Do not replace real-addon checks with an injected fake.
+
 Prefer a workspace's existing scripts and nearby patterns over introducing new tooling. Keep shared behavior in the appropriate package rather than coupling runtime layers.
