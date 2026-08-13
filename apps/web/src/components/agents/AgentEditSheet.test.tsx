@@ -18,6 +18,7 @@ const builtin: AgentInfo = {
   mcpServers: ["github"],
   defaultExpectedOutcome: "directProjectWrites",
   defaultProgress: true,
+  interactive: true,
   scope: "builtin",
   filePath: "/bundled/reviewer.md",
   body: "Builtin reviewer prompt.",
@@ -47,6 +48,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
           whenToUse: undefined,
           tools: ["read"],
           defaultProgress: false,
+          interactive: false,
           body: "Effective override prompt.",
         }}
         onClose={vi.fn()}
@@ -62,6 +64,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(screen.getByText(/do not connect or grant access/i)).toBeTruthy();
     fireEvent.click(screen.getByTestId("editor-tab-config"));
     expect((screen.getByTestId("editor-default-progress") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId("editor-interactive") as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByTestId("editor-tab-prompt"));
     expect((screen.getByTestId("editor-body") as HTMLTextAreaElement).value).toBe(
       "Effective override prompt.",
@@ -94,6 +97,11 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(screen.getByText(/portable metadata only/i)).toBeTruthy();
     expect(
       screen.getByText(/does not change progress reporting or child runtime behavior/i),
+    ).toBeTruthy();
+    expect((screen.getByTestId("editor-interactive") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/compatibility metadata only/i)).toBeTruthy();
+    expect(
+      screen.getByText(/does not enable prompts or change agent runtime behavior/i),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -135,6 +143,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         mcpServers: ["github"],
         defaultExpectedOutcome: "directProjectWrites",
         defaultProgress: true,
+        interactive: true,
         body: "Builtin reviewer prompt.",
       },
     });
@@ -166,17 +175,41 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     render(
       <AgentEditSheet
         agent={null}
-        createFromBuiltin={{ ...builtin, defaultProgress: false }}
+        createFromBuiltin={{ ...builtin, defaultProgress: false, interactive: false }}
         onClose={vi.fn()}
       />,
     );
     expect((screen.getByTestId("editor-default-progress") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId("editor-interactive") as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByTestId("editor-save"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).edit.defaultProgress).toBe(false);
+    const edit = JSON.parse(String(fetchMock.mock.calls[0]![1].body)).edit;
+    expect(edit.defaultProgress).toBe(false);
+    expect(edit.interactive).toBe(false);
   });
 
-  it("keeps builtin default progress unmanaged when editing an override", async () => {
+  it("edits interactive compatibility metadata on an existing custom agent", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+
+    const checkbox = screen.getByTestId("editor-interactive") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.interactive).toBe(false);
+  });
+
+  it("keeps builtin boolean metadata unmanaged when editing an override", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ agents: [builtin] }), { status: 200 }))
@@ -184,11 +217,12 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<AgentEditSheet agent={builtin} onClose={vi.fn()} />);
     expect(screen.queryByTestId("editor-default-progress")).toBeNull();
+    expect(screen.queryByTestId("editor-interactive")).toBeNull();
     fireEvent.click(screen.getByTestId("editor-save"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(
-      JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.defaultProgress,
-    ).toBeUndefined();
+    const edit = JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit;
+    expect(edit.defaultProgress).toBeUndefined();
+    expect(edit.interactive).toBeUndefined();
   });
 
   it("saves a selected typed outcome", async () => {

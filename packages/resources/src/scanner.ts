@@ -104,6 +104,7 @@ export function parseAgentFile(
     defaultExpectedOutcome: asExpectedOutcome(frontmatter.defaultExpectedOutcome),
     defaultProgress:
       typeof frontmatter.defaultProgress === "boolean" ? frontmatter.defaultProgress : undefined,
+    interactive: typeof frontmatter.interactive === "boolean" ? frontmatter.interactive : undefined,
     scope,
     filePath,
     body: body.trim(),

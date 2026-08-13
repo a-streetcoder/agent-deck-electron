@@ -73,6 +73,7 @@ export function AgentEditSheet({
     SubagentExpectedOutcome | ""
   >(seed?.defaultExpectedOutcome ?? "");
   const [defaultProgress, setDefaultProgress] = useState(seed?.defaultProgress ?? false);
+  const [interactive, setInteractive] = useState(seed?.interactive ?? false);
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -99,6 +100,7 @@ export function AgentEditSheet({
     mcpServers: (seed?.mcpServers ?? []).join(", "),
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
     defaultProgress: seed?.defaultProgress ?? false,
+    interactive: seed?.interactive ?? false,
     body: seed?.body ?? "",
   }).current;
   const dirty =
@@ -115,6 +117,7 @@ export function AgentEditSheet({
     mcpServers !== initial.mcpServers ||
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
     defaultProgress !== initial.defaultProgress ||
+    interactive !== initial.interactive ||
     body !== initial.body;
 
   const dirtyRef = useRef(dirty);
@@ -189,6 +192,7 @@ export function AgentEditSheet({
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
               (live.defaultProgress ?? false) !== initial.defaultProgress ||
+              (live.interactive ?? false) !== initial.interactive ||
               live.body !== initial.body)
           ) {
             throw new Error(
@@ -221,6 +225,9 @@ export function AgentEditSheet({
             // Native exposes this only for custom definitions. Builtin saves
             // leave any same-named override key unmanaged and preserved.
             defaultProgress: isBuiltin ? undefined : defaultProgress,
+            // Compatibility metadata has no Electron runtime consumer. Builtin
+            // edits preserve any existing override instead of managing it here.
+            interactive: isBuiltin ? undefined : interactive,
             body,
           },
         }),
@@ -448,6 +455,23 @@ export function AgentEditSheet({
                       <span id="editor-default-progress-help" className="mt-1 block">
                         Portable metadata only. Agent Deck currently preserves and displays this
                         preference; it does not change progress reporting or child runtime behavior.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-xs text-text-muted">
+                    <ControlInput
+                      type="checkbox"
+                      data-testid="editor-interactive"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                      checked={interactive}
+                      aria-describedby="editor-interactive-help"
+                      onChange={(event) => setInteractive(event.target.checked)}
+                    />
+                    <span>
+                      <span className="block text-text-secondary">Interactive</span>
+                      <span id="editor-interactive-help" className="mt-1 block">
+                        Compatibility metadata only. Agent Deck parses, preserves, and displays this
+                        field; it does not enable prompts or change agent runtime behavior.
                       </span>
                     </span>
                   </label>

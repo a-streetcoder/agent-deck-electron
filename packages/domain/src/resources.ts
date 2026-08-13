@@ -63,6 +63,9 @@ export interface AgentInfo {
   /** Native-compatible authored progress preference. Portable metadata only:
    * Agent Deck currently preserves and displays it without changing runtime. */
   defaultProgress?: boolean;
+  /** Native compatibility metadata for expected interaction. Parsed, persisted,
+   * and displayed without changing Agent Deck runtime behavior. */
+  interactive?: boolean;
   scope: ResourceScope;
   filePath: string;
   /** Markdown body = the agent system prompt. */

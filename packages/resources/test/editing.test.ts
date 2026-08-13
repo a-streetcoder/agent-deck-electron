@@ -109,6 +109,7 @@ describe("builtin override edit safety", () => {
     writeBuiltinAgentOverride(roots, "coder", {
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
+      interactive: false,
       futureField: "keep-me",
     });
 
@@ -117,6 +118,7 @@ describe("builtin override edit safety", () => {
     expect(merged).toEqual({
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
+      interactive: false,
       futureField: "keep-me",
       description: "Edited description",
     });
@@ -124,7 +126,13 @@ describe("builtin override edit safety", () => {
     expect(scanAgents(roots).find((agent) => agent.name === "coder")).toMatchObject({
       description: "Edited description",
       defaultExpectedOutcome: "directProjectWrites",
+      interactive: false,
     });
+    writeBuiltinAgentOverride(roots, "reviewer", { interactive: true });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "reviewer" && agent.scope === "builtin")
+        ?.interactive,
+    ).toBe(true);
 
     // An explicit API edit still wins because computed values merge last.
     const explicit = mergeWithUnmanagedOverrideFields(
@@ -192,6 +200,7 @@ describe("agent/skill file writer", () => {
     });
     expect(effective.whenToUse).toBeUndefined();
     expect(effective.defaultProgress).toBeUndefined();
+    expect(effective.interactive).toBe(true);
     expect(materialized).toContain("defaultExpectedOutcome: reportOnly");
     expect(materialized).toContain("interactive: true");
     expect(materialized).not.toContain("defaultProgress:");
@@ -475,27 +484,54 @@ describe("agent/skill file writer", () => {
     ).toBeUndefined();
   });
 
-  it("parses only boolean defaultProgress frontmatter values", () => {
+  it("round-trips native interactive metadata and omits its false/default state", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "interviewer", {
+      interactive: true,
+      body: "Compatibility metadata only.",
+    });
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace("---\n\n", "futureField: keep-me\n---\n\n"),
+    );
+
+    expect(scanAgents(roots).find((agent) => agent.name === "interviewer")).toMatchObject({
+      interactive: true,
+    });
+    expect(readFileSync(filePath, "utf8")).toContain("interactive: true");
+
+    writeAgentFile(roots, "global", "interviewer", { interactive: false });
+    const updated = readFileSync(filePath, "utf8");
+    expect(updated).not.toContain("interactive:");
+    expect(updated).toContain("futureField: keep-me");
     expect(
-      parseAgentFile(
-        "enabled.md",
-        "---\nname: enabled\ndefaultProgress: true\n---\n\nBody.\n",
-        "global",
-      ).defaultProgress,
+      scanAgents(roots).find((agent) => agent.name === "interviewer")?.interactive,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["defaultProgress", "defaultProgress"],
+    ["interactive", "interactive"],
+  ] as const)("parses only boolean %s frontmatter values", (_label, field) => {
+    expect(
+      parseAgentFile("enabled.md", `---\nname: enabled\n${field}: true\n---\n\nBody.\n`, "global")[
+        field
+      ],
     ).toBe(true);
     expect(
       parseAgentFile(
         "disabled.md",
-        "---\nname: disabled\ndefaultProgress: false\n---\n\nBody.\n",
+        `---\nname: disabled\n${field}: false\n---\n\nBody.\n`,
         "global",
-      ).defaultProgress,
+      )[field],
     ).toBe(false);
     expect(
       parseAgentFile(
         "invalid.md",
-        "---\nname: invalid\ndefaultProgress: sometimes\n---\n\nBody.\n",
+        `---\nname: invalid\n${field}: sometimes\n---\n\nBody.\n`,
         "global",
-      ).defaultProgress,
+      )[field],
     ).toBeUndefined();
   });
 

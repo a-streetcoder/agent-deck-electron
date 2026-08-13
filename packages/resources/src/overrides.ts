@@ -28,6 +28,8 @@ export interface AgentEdit {
   defaultExpectedOutcome?: SubagentExpectedOutcome | "";
   /** `false` clears the custom-agent frontmatter value, matching native writes. */
   defaultProgress?: boolean;
+  /** `false` clears the custom-agent frontmatter value, matching native writes. */
+  interactive?: boolean;
   body?: string;
 }
 
@@ -269,6 +271,10 @@ export function applyAgentOverride(
         // Unlike ordinary false-as-clear override fields, this is boolean
         // metadata: false is an effective value and must shadow builtin true.
         if (typeof value === "boolean") next.defaultProgress = value;
+        break;
+      case "interactive":
+        // Boolean compatibility metadata: false is an effective override value.
+        if (typeof value === "boolean") next.interactive = value;
         break;
       case "systemPrompt": {
         const body = overrideString(value);

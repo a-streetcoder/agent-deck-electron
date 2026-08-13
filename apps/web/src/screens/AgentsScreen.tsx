@@ -433,6 +433,15 @@ export function AgentDetail({
               {agent.defaultProgress ? "Yes" : "No"}
             </div>
           </div>
+          <div
+            className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+            data-testid="agent-interactive"
+          >
+            <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              Interactive Metadata
+            </div>
+            <div className="text-sm text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
+          </div>
           {/* Native "Extensions" card (AgentManagementViews.swift:1377) — an
               explicit pi-extension allowlist for the agent's sessions. Shown only
               when declared, like native's `if !extensions.isEmpty`. */}

@@ -356,6 +356,7 @@ const AGENT_FIELD_ORDER = [
   "mcpServers",
   "defaultExpectedOutcome",
   "defaultProgress",
+  "interactive",
 ] as const;
 
 function serializeFrontmatter(record: Record<string, unknown>): string {
@@ -426,6 +427,11 @@ export function writeAgentFile(
     // Native persists the enabled preference and omits the disabled/default state.
     if (edit.defaultProgress) frontmatter.defaultProgress = true;
     else delete frontmatter.defaultProgress;
+  }
+  if (edit.interactive !== undefined) {
+    // Native persists enabled compatibility metadata and omits false/default.
+    if (edit.interactive) frontmatter.interactive = true;
+    else delete frontmatter.interactive;
   }
   if (edit.body !== undefined) body = edit.body.trim();
 

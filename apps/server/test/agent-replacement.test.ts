@@ -21,7 +21,12 @@ async function createReplacement(description: string): Promise<Response> {
       scope: "global",
       name: "reviewer",
       createFromBuiltin: "reviewer",
-      edit: { description, defaultProgress: true, body: "Custom reviewer body." },
+      edit: {
+        description,
+        defaultProgress: true,
+        interactive: true,
+        body: "Custom reviewer body.",
+      },
     }),
   });
 }
@@ -47,6 +52,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(content).toContain("description: Editable reviewer");
     expect(content).toContain("defaultExpectedOutcome: reportOnly");
     expect(content).toContain("defaultProgress: true");
+    expect(content).toContain("interactive: true");
     expect(content).toContain("Custom reviewer body.");
 
     const listed = (await (
@@ -58,6 +64,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
         shadowed: boolean;
         replacesBuiltin: boolean;
         defaultProgress?: boolean;
+        interactive?: boolean;
       }>;
     };
     expect(listed.agents).toEqual(
@@ -68,6 +75,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           shadowed: false,
           replacesBuiltin: true,
           defaultProgress: true,
+          interactive: true,
         }),
         expect.objectContaining({ name: "reviewer", scope: "builtin", shadowed: true }),
       ]),
@@ -167,15 +175,18 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(listedCoder?.defaultProgress).toBeUndefined();
   });
 
-  it("rejects non-boolean default progress without writing a custom agent", async () => {
-    const invalidFile = path.join(home, ".pi", "agent", "agents", "invalid-progress.md");
+  it.each([
+    ["default progress", "invalid-progress", { defaultProgress: "yes" }],
+    ["interactive", "invalid-interactive", { interactive: "yes" }],
+  ])("rejects non-boolean %s without writing a custom agent", async (_label, name, invalidEdit) => {
+    const invalidFile = path.join(home, ".pi", "agent", "agents", `${name}.md`);
     const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         scope: "global",
-        name: "invalid-progress",
-        edit: { defaultProgress: "yes", body: "No." },
+        name,
+        edit: { ...invalidEdit, body: "No." },
       }),
     });
     expect(response.status).toBe(400);

@@ -45,6 +45,7 @@ const agentEditFields = z.object({
     ])
     .optional(),
   defaultProgress: z.boolean().optional(),
+  interactive: z.boolean().optional(),
   body: z.string().optional(),
 });
 
