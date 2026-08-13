@@ -100,6 +100,38 @@ describe("builtin override edit safety", () => {
     ).not.toBe(true);
   });
 
+  it("preserves an existing builtin outcome override across an unrelated editor merge", () => {
+    const home = makeHome();
+    const roots = { home };
+    const base = scanAgents(roots).find(
+      (agent) => agent.name === "coder" && agent.scope === "builtin",
+    )!;
+    writeBuiltinAgentOverride(roots, "coder", {
+      defaultExpectedOutcome: "directProjectWrites",
+      futureField: "keep-me",
+    });
+
+    const unrelated = computeBuiltinOverride(base, { description: "Edited description" });
+    const merged = mergeWithUnmanagedOverrideFields(readAgentOverrides(roots).coder, unrelated);
+    expect(merged).toEqual({
+      defaultExpectedOutcome: "directProjectWrites",
+      futureField: "keep-me",
+      description: "Edited description",
+    });
+    writeBuiltinAgentOverride(roots, "coder", merged);
+    expect(scanAgents(roots).find((agent) => agent.name === "coder")).toMatchObject({
+      description: "Edited description",
+      defaultExpectedOutcome: "directProjectWrites",
+    });
+
+    // An explicit API edit still wins because computed values merge last.
+    const explicit = mergeWithUnmanagedOverrideFields(
+      readAgentOverrides(roots).coder,
+      computeBuiltinOverride(base, { defaultExpectedOutcome: "writeProjectFile" }),
+    );
+    expect(explicit?.defaultExpectedOutcome).toBe("writeProjectFile");
+  });
+
   it("diffing equal values yields no override; body edits become systemPrompt", () => {
     const home = makeHome();
     const base = scanAgents({ home }).find((a) => a.name === "coder" && a.scope === "builtin")!;
@@ -372,6 +404,62 @@ describe("agent/skill file writer", () => {
     );
     writeBuiltinAgentOverride({ home }, "coder", cleared);
     expect(scanAgents({ home }).find((a) => a.name === "coder")!.mcpServers).toBeUndefined();
+  });
+
+  it("round-trips native defaultExpectedOutcome and preserves unknown frontmatter", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "delegator", {
+      defaultExpectedOutcome: "editFilesInWorktree",
+      body: "Delegate safely.",
+    });
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace("---\n\n", "futureField: keep-me\n---\n\n"),
+    );
+
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "delegator")?.defaultExpectedOutcome,
+    ).toBe("editFilesInWorktree");
+    writeAgentFile(roots, "global", "delegator", {
+      defaultExpectedOutcome: "directProjectWrites",
+    });
+    const updated = readFileSync(filePath, "utf8");
+    expect(updated).toContain("defaultExpectedOutcome: directProjectWrites");
+    expect(updated).toContain("futureField: keep-me");
+
+    writeAgentFile(roots, "global", "delegator", { defaultExpectedOutcome: "" });
+    expect(readFileSync(filePath, "utf8")).not.toContain("defaultExpectedOutcome:");
+  });
+
+  it("accepts native outcome labels, rejects unknown values, and applies builtin overrides", () => {
+    const parsed = parseAgentFile(
+      "named.md",
+      "---\nname: named\ndefaultExpectedOutcome: Write/update project file\n---\n\nBody.\n",
+      "global",
+    );
+    expect(parsed.defaultExpectedOutcome).toBe("writeProjectFile");
+    expect(
+      parseAgentFile(
+        "unknown.md",
+        "---\nname: unknown\ndefaultExpectedOutcome: futureMutationMode\n---\n\nBody.\n",
+        "global",
+      ).defaultExpectedOutcome,
+    ).toBeUndefined();
+
+    const home = makeHome();
+    const builtinFile = path.join(BUILTIN_AGENTS_DIR, "coder.md");
+    const bytesBefore = readFileSync(builtinFile);
+    const base = scanAgents({ home }).find((agent) => agent.name === "coder")!;
+    const override = computeBuiltinOverride(base, {
+      defaultExpectedOutcome: "writeProjectFile",
+    });
+    expect(override).toEqual({ defaultExpectedOutcome: "writeProjectFile" });
+    writeBuiltinAgentOverride({ home }, "coder", override);
+    expect(readFileSync(builtinFile).equals(bytesBefore)).toBe(true);
+    expect(
+      scanAgents({ home }).find((agent) => agent.name === "coder")?.defaultExpectedOutcome,
+    ).toBe("writeProjectFile");
   });
 
   it("round-trips an agent's fallbackModels through write + scan (no silent loss)", () => {

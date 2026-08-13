@@ -37,6 +37,7 @@ import {
 import {
   ChildRunError,
   makeManagedSessionRuntime,
+  managedNamedOutcomeContract,
   parkingStateAllowsStop,
   resolveChildTools,
   SessionManagerService,
@@ -608,6 +609,38 @@ describe("durable generic child lifecycle", () => {
 });
 
 describe("child tool capability policy", () => {
+  it("maps named outcomes to the real run without granting capabilities", () => {
+    const report = managedNamedOutcomeContract("reportOnly", false);
+    expect(report).toContain("Effective outcome: Report only");
+    expect(report).toContain("Do not modify project files");
+
+    const isolatedEdit = managedNamedOutcomeContract("editFilesInWorktree", true);
+    expect(isolatedEdit).toContain("Edit files in the retained isolated worktree");
+    expect(isolatedEdit).toContain("current child working directory is that retained worktree");
+    expect(isolatedEdit).not.toContain("fallback");
+
+    const unisolatedEdit = managedNamedOutcomeContract("editFilesInWorktree", false);
+    expect(unisolatedEdit).toContain("Report only (worktree fallback)");
+    expect(unisolatedEdit).toContain("No retained isolated worktree was requested");
+
+    for (const hasWorktree of [false, true]) {
+      const projectFile = managedNamedOutcomeContract("writeProjectFile", hasWorktree);
+      expect(projectFile).toContain("Report only (output-path fallback)");
+      expect(projectFile).toContain("no validated project-relative output path");
+    }
+
+    const direct = managedNamedOutcomeContract("directProjectWrites", false);
+    expect(direct).toContain("Direct project work in the current child working directory");
+    expect(direct).toContain("does not grant any additional tool");
+    expect(direct).toContain("actual project checkout");
+
+    const isolatedDirect = managedNamedOutcomeContract("directProjectWrites", true);
+    expect(isolatedDirect).toContain(
+      "current child working directory is a retained isolated worktree",
+    );
+    expect(isolatedDirect).toContain("rather than in the parent checkout");
+  });
+
   it("launches named children with ordered direct adapter policy and fails closed otherwise", async () => {
     const { piHost } = makeFakePiHost();
     const spawns: Parameters<PiHostShape["spawn"]>[0][] = [];
@@ -625,14 +658,23 @@ describe("child tool capability policy", () => {
             buses,
             makeParams({
               helperContext: { env: { MCP_DIRECT_TOOLS: "inherited", KEEP: "yes" } },
-              resolveAgent: () => ({
-                body: "Configured persona",
-                tools: ["read"],
-                mcpDirectTools: ["search", "stale-name"],
-              }),
+              resolveAgent: (name) =>
+                name === "direct-read-only"
+                  ? {
+                      body: "Read-only configured persona",
+                      tools: ["read"],
+                      defaultExpectedOutcome: "directProjectWrites",
+                    }
+                  : {
+                      body: "Configured persona",
+                      tools: ["read", "write", "edit", "bash"],
+                      mcpDirectTools: ["search", "stale-name"],
+                      defaultExpectedOutcome: "reportOnly",
+                    },
             }),
           );
           yield* configured.runChildAgent("finish normally", "configured");
+          yield* configured.runChildAgent("inspect only", "direct-read-only");
           yield* configured.runChildAgent("finish normally");
         }),
       ),
@@ -643,7 +685,11 @@ describe("child tool capability policy", () => {
       MCP_DIRECT_TOOLS: "search,stale-name",
     });
     expect(spawns[1]!.args.join(" ")).not.toContain("mcp:search");
+    expect(spawns[1]!.args).toContain("read,write,edit,bash");
+    expect(spawns[2]!.args).toContain("read");
+    expect(spawns[2]!.args.join(" ")).not.toContain("write");
     expect(spawns[2]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
+    expect(spawns[3]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
   });
 
   const dangerous = [

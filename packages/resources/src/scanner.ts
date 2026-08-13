@@ -3,9 +3,11 @@ import path from "node:path";
 import {
   applyShadowing,
   type AgentInfo,
+  SUBAGENT_EXPECTED_OUTCOMES,
   type PromptInfo,
   type ResourceScope,
   type SkillInfo,
+  type SubagentExpectedOutcome,
 } from "@agent-deck/domain";
 import { loadSkillsFromDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { applyAgentOverride, readAgentOverrides } from "./overrides.ts";
@@ -40,6 +42,23 @@ function asList(value: unknown): string[] | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Native accepts canonical raw values plus its human-readable picker labels. */
+function asExpectedOutcome(value: unknown): SubagentExpectedOutcome | undefined {
+  const normalized = asString(value)?.toLowerCase().replaceAll(" ", "");
+  if (!normalized) return undefined;
+  return SUBAGENT_EXPECTED_OUTCOMES.find((outcome) => {
+    const display =
+      outcome === "reportOnly"
+        ? "reportonly"
+        : outcome === "editFilesInWorktree"
+          ? "editfilesinworktree"
+          : outcome === "writeProjectFile"
+            ? "write/updateprojectfile"
+            : "directprojectwrites";
+    return outcome.toLowerCase() === normalized || display === normalized;
+  });
 }
 
 /** Native-compatible split for the shared `tools:` frontmatter field. Direct
@@ -82,6 +101,7 @@ export function parseAgentFile(
     skills: asList(frontmatter.skills),
     extensions: asList(frontmatter.extensions),
     mcpServers: asList(frontmatter.mcpServers),
+    defaultExpectedOutcome: asExpectedOutcome(frontmatter.defaultExpectedOutcome),
     scope,
     filePath,
     body: body.trim(),

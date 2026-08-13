@@ -8,6 +8,27 @@
 
 export type ResourceScope = "builtin" | "global" | "library" | "project";
 
+/** Native-compatible authored default for a managed named delegation. */
+export type SubagentExpectedOutcome =
+  | "reportOnly"
+  | "editFilesInWorktree"
+  | "writeProjectFile"
+  | "directProjectWrites";
+
+export const SUBAGENT_EXPECTED_OUTCOMES: readonly SubagentExpectedOutcome[] = [
+  "reportOnly",
+  "editFilesInWorktree",
+  "writeProjectFile",
+  "directProjectWrites",
+];
+
+export const SUBAGENT_EXPECTED_OUTCOME_LABELS: Record<SubagentExpectedOutcome, string> = {
+  reportOnly: "Report only",
+  editFilesInWorktree: "Edit files in worktree",
+  writeProjectFile: "Write/update project file",
+  directProjectWrites: "Direct project writes",
+};
+
 const SCOPE_PRIORITY: Record<ResourceScope, number> = {
   project: 3,
   global: 2,
@@ -36,6 +57,9 @@ export interface AgentInfo {
   extensions?: string[];
   /** MCP server names (from mcp.json) this agent declares for its sessions. */
   mcpServers?: string[];
+  /** Requested default for managed named delegation. Mutation still requires
+   * the runtime's per-run worktree/approval/path policy. */
+  defaultExpectedOutcome?: SubagentExpectedOutcome;
   scope: ResourceScope;
   filePath: string;
   /** Markdown body = the agent system prompt. */

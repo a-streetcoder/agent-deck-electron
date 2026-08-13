@@ -16,6 +16,7 @@ const builtin: AgentInfo = {
   mcpDirectTools: ["search", "stale-tool"],
   skills: ["reviewing"],
   mcpServers: ["github"],
+  defaultExpectedOutcome: "directProjectWrites",
   scope: "builtin",
   filePath: "/bundled/reviewer.md",
   body: "Builtin reviewer prompt.",
@@ -79,6 +80,12 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect((screen.getByTestId("editor-description") as HTMLInputElement).value).toBe(
       "Review changes",
     );
+    expect((screen.getByTestId("editor-default-outcome") as HTMLSelectElement).value).toBe(
+      "directProjectWrites",
+    );
+    expect(screen.getByText(/neither adds nor removes configured tools/i)).toBeTruthy();
+    expect(screen.getByText(/caller-selected worktree isolation/i)).toBeTruthy();
+    expect(screen.getByText(/validated per-run output path/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledOnce();
@@ -117,6 +124,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         tools: ["read", "grep", "mcp:search", "mcp:stale-tool"],
         skills: ["reviewing"],
         mcpServers: ["github"],
+        defaultExpectedOutcome: "directProjectWrites",
         body: "Builtin reviewer prompt.",
       },
     });
@@ -140,6 +148,20 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
     expect(body.edit.tools).toEqual(["read", "mcp:fetch", "mcp:legacy-name"]);
     expect(body.edit.mcpDirectTools).toBeUndefined();
+  });
+
+  it("saves a selected typed outcome", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={null} createFromBuiltin={builtin} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByTestId("editor-default-outcome"), {
+      target: { value: "writeProjectFile" },
+    });
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).edit.defaultExpectedOutcome).toBe(
+      "writeProjectFile",
+    );
   });
 
   it("keeps the seeded name editable like native custom-agent drafts", async () => {

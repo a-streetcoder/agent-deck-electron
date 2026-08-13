@@ -17,6 +17,7 @@ import {
   type SessionPlanItem,
   type SessionPlanUpdate,
   type SubagentCell,
+  type SubagentExpectedOutcome,
   type TranscriptState,
 } from "@agent-deck/domain";
 import {
@@ -154,6 +155,7 @@ export type AgentResolver = (
       /** External adapter names supplied only through MCP_DIRECT_TOOLS. */
       mcpDirectTools?: string[];
       skillDirs?: string[];
+      defaultExpectedOutcome?: SubagentExpectedOutcome;
     }
   | undefined;
 
@@ -448,6 +450,63 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
 /** Purpose-built child capability restriction. Omitted preserves legacy behavior. */
 export type ChildToolPolicy = "configured" | "readOnly" | "none";
 const CHILD_READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+const EXPECTED_OUTCOME_LABELS: Record<SubagentExpectedOutcome, string> = {
+  reportOnly: "Report only",
+  editFilesInWorktree: "Edit files in worktree",
+  writeProjectFile: "Write/update project file",
+  directProjectWrites: "Direct project writes",
+};
+
+/** Describe the requested result against capabilities already established for
+ * this run. The authored field never adds tools, creates a worktree, or invents
+ * an output path; it only makes the child instruction match the real launch. */
+export function managedNamedOutcomeContract(
+  outcome: SubagentExpectedOutcome,
+  hasRetainedWorktree: boolean,
+): string {
+  const lines = [
+    "# Managed delegation outcome contract",
+    `Configured default outcome: ${EXPECTED_OUTCOME_LABELS[outcome]}.`,
+  ];
+  switch (outcome) {
+    case "reportOnly":
+      lines.push(
+        "Effective outcome: Report only.",
+        "Return the result in your final response. Do not modify project files for this assignment.",
+      );
+      break;
+    case "editFilesInWorktree":
+      if (hasRetainedWorktree) {
+        lines.push(
+          "Effective outcome: Edit files in the retained isolated worktree.",
+          "The current child working directory is that retained worktree. Make scoped edits there only; do not apply them to the parent checkout. Agent Deck will retain the worktree for review.",
+        );
+      } else {
+        lines.push(
+          "Effective outcome: Report only (worktree fallback).",
+          "No retained isolated worktree was requested for this run, so report the changes that would be needed and do not modify project files.",
+        );
+      }
+      break;
+    case "writeProjectFile":
+      lines.push(
+        "Effective outcome: Report only (output-path fallback).",
+        "This delegation supplied no validated project-relative output path or overwrite policy. Report the requested file content or changes instead of writing a project file.",
+      );
+      break;
+    case "directProjectWrites":
+      lines.push(
+        "Effective outcome: Direct project work in the current child working directory.",
+        hasRetainedWorktree
+          ? "The current child working directory is a retained isolated worktree, so any configured file tools operate there rather than in the parent checkout."
+          : "The current child working directory is the run's actual project checkout.",
+        "Use only the tools already configured for this named agent; this outcome does not grant any additional tool or filesystem capability. Keep changes within the delegated task and list changed paths in the final response.",
+      );
+      break;
+  }
+  return lines.join("\n");
+}
 /** An explicit isolated-write request gives an anonymous child only the narrow
  * built-ins needed to inspect and edit that retained checkout. */
 const ANONYMOUS_WORKTREE_TOOLS = ["read", "write", "edit"];
@@ -1557,7 +1616,13 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
       ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
       : SUBAGENT_SYSTEM_PROMPT;
     const declaredReads = runOptions?.declaredReads ?? [];
-    const authoredSystemPrompt = `${boundaryPrompt}${persona}\n\nTask:\n${task}`;
+    const outcomeContract = resolved
+      ? `\n\n${managedNamedOutcomeContract(
+          resolved.defaultExpectedOutcome ?? "reportOnly",
+          runOptions?.worktree === true,
+        )}`
+      : "";
+    const authoredSystemPrompt = `${boundaryPrompt}${persona}${outcomeContract}\n\nTask:\n${task}`;
     let effectiveSystemPrompt = authoredSystemPrompt;
     const cellId = runId;
     const childSessionId = randomUUID();

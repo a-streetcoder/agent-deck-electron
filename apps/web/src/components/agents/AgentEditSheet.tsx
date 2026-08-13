@@ -6,7 +6,13 @@ import {
 } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import type { AgentInfo, ResourceScope } from "@agent-deck/domain";
+import {
+  SUBAGENT_EXPECTED_OUTCOMES,
+  SUBAGENT_EXPECTED_OUTCOME_LABELS,
+  type AgentInfo,
+  type ResourceScope,
+  type SubagentExpectedOutcome,
+} from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../../state/store.ts";
@@ -63,6 +69,9 @@ export function AgentEditSheet({
   );
   const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
   const [mcpServers, setMcpServers] = useState((seed?.mcpServers ?? []).join(", "));
+  const [defaultExpectedOutcome, setDefaultExpectedOutcome] = useState<
+    SubagentExpectedOutcome | ""
+  >(seed?.defaultExpectedOutcome ?? "");
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -87,6 +96,7 @@ export function AgentEditSheet({
     ].join(", "),
     skills: (seed?.skills ?? []).join(", "),
     mcpServers: (seed?.mcpServers ?? []).join(", "),
+    defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
     body: seed?.body ?? "",
   }).current;
   const dirty =
@@ -101,6 +111,7 @@ export function AgentEditSheet({
     tools !== initial.tools ||
     skills !== initial.skills ||
     mcpServers !== initial.mcpServers ||
+    defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
     body !== initial.body;
 
   const dirtyRef = useRef(dirty);
@@ -173,6 +184,7 @@ export function AgentEditSheet({
               ].join(", ") !== initial.tools ||
               (live.skills ?? []).join(", ") !== initial.skills ||
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
+              (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
               live.body !== initial.body)
           ) {
             throw new Error(
@@ -199,6 +211,9 @@ export function AgentEditSheet({
             tools: parseList(tools),
             skills: parseList(skills),
             mcpServers: parseList(mcpServers),
+            // Native exposes this authored default only for custom definitions.
+            // Builtin edits continue to preserve any unmanaged override value.
+            defaultExpectedOutcome: isBuiltin ? undefined : defaultExpectedOutcome,
             body,
           },
         }),
@@ -381,6 +396,35 @@ export function AgentEditSheet({
                   onChange={(e) => setFallbackModels(e.target.value)}
                 />
               </label>
+              {!isBuiltin ? (
+                <label className="block text-xs text-text-muted">
+                  Default outcome for managed delegation
+                  <ControlSelect
+                    data-testid="editor-default-outcome"
+                    className={inputClass}
+                    aria-describedby="editor-default-outcome-help"
+                    value={defaultExpectedOutcome}
+                    onChange={(event) =>
+                      setDefaultExpectedOutcome(event.target.value as SubagentExpectedOutcome | "")
+                    }
+                  >
+                    <option value="">Unspecified (report only)</option>
+                    {SUBAGENT_EXPECTED_OUTCOMES.map((outcome) => (
+                      <option key={outcome} value={outcome}>
+                        {SUBAGENT_EXPECTED_OUTCOME_LABELS[outcome]}
+                      </option>
+                    ))}
+                  </ControlSelect>
+                  <span
+                    id="editor-default-outcome-help"
+                    className="mt-1 block text-xs text-text-muted"
+                  >
+                    This adds outcome guidance only; it neither adds nor removes configured tools.
+                    Edit files in worktree needs caller-selected worktree isolation, and
+                    write/update project file needs a validated per-run output path.
+                  </span>
+                </label>
+              ) : null}
             </>
           ) : null}
 

@@ -1,6 +1,6 @@
 import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
-import type { SkillInfo } from "@agent-deck/domain";
+import type { SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
 import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
 import type {
   ProviderLoginManager,
@@ -83,6 +83,7 @@ export interface NamedAgentLaunch {
   skillDirs: string[];
   extensions: string[];
   mcpServers?: string[];
+  defaultExpectedOutcome?: SubagentExpectedOutcome;
 }
 
 /**

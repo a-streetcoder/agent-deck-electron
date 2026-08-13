@@ -51,7 +51,11 @@ beforeAll(async () => {
     // "use-ghost" in the prompt exercises the unknown-agent path.
     toolCall: (lastUser, body) => {
       if (isChildRequest(body) || body.messages.some((m) => m.role === "tool")) return null;
-      const agent = lastUser.includes("use-ghost") ? "ghost-bot" : "reviewer-bot";
+      const agent = lastUser.includes("use-ghost")
+        ? "ghost-bot"
+        : lastUser.includes("use-fallback")
+          ? "fallback-bot"
+          : "reviewer-bot";
       return { name: "managed_subagent", arguments: { task: "Review the diff.", agent } };
     },
     reply: (_lastUser, body) =>
@@ -77,7 +81,11 @@ beforeAll(async () => {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
-    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read\nskills: review-checklist\n---\n\n${PERSONA_SENTINEL}\n`,
+    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read, write, edit, bash, mcp:remote-mutate\nskills: review-checklist\ndefaultExpectedOutcome: directProjectWrites\n---\n\n${PERSONA_SENTINEL}\n`,
+  );
+  writeFileSync(
+    path.join(agentsDir, "fallback-bot.md"),
+    "---\nname: fallback-bot\ntools: read, write\n---\n\nUse the safe default.\n",
   );
 
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: tmpHome });
@@ -120,6 +128,12 @@ async function startSession(): Promise<string> {
 describe("managed_subagent{agent}: named delegation", () => {
   it("composes the named agent's persona into the child and records the name on the cell", async () => {
     const id = await startSession();
+    const deltas: Array<{ seq: number; delta: string }> = [];
+    const unsubscribe = server.sessions.get(id)!.bus.subscribe((event) => {
+      if (event.event.type === "subagent_delta") {
+        deltas.push({ seq: event.seq, delta: event.event.delta });
+      }
+    });
     await server.sessions.get(id)!.prompt("delegate a code review");
     await server.receipts.waitFor("idle", id);
 
@@ -130,6 +144,23 @@ describe("managed_subagent{agent}: named delegation", () => {
     const childSystem = systemText(childRequest!);
     expect(childSystem).toContain(PERSONA_SENTINEL);
     expect(childSystem).toContain("focused subagent launched by Agent Deck");
+    expect(childSystem).toContain("Configured default outcome: Direct project writes");
+    expect(childSystem).toContain(
+      "Effective outcome: Direct project work in the current child working directory",
+    );
+    expect(childSystem).toContain("actual project checkout");
+    expect(childSystem).toContain("does not grant any additional tool");
+
+    const childToolNames = (Array.isArray(childRequest!.tools) ? childRequest!.tools : []).flatMap(
+      (tool) => {
+        const fn =
+          tool && typeof tool === "object"
+            ? (tool as { function?: { name?: unknown } }).function
+            : undefined;
+        return typeof fn?.name === "string" ? [fn.name] : [];
+      },
+    );
+    expect(childToolNames).toEqual(expect.arrayContaining(["read", "write", "edit", "bash"]));
 
     // The child inherited the agent's TOOLS + SKILL together: pi only injects the
     // skills section when `read` is in the allowlist, so the skill sentinel in the
@@ -148,6 +179,29 @@ describe("managed_subagent{agent}: named delegation", () => {
       .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
     expect(cells).toHaveLength(1);
     expect(cells[0]!.agentName).toBe("reviewer-bot");
+
+    unsubscribe();
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.map(({ seq }) => seq)).toEqual(
+      deltas.map(({ seq }) => seq).sort((a, b) => a - b),
+    );
+    expect(deltas.map(({ delta }) => delta).join("")).toBe("CHILD_REVIEW_SENTINEL: looks good.");
+  });
+
+  it("falls back an unspecified named outcome to an enforced report-only contract", async () => {
+    const id = await startSession();
+    await server.sessions.get(id)!.prompt("delegate and use-fallback");
+    await server.receipts.waitFor("idle", id);
+
+    const childRequest = [...mock.requests].reverse().find(isChildRequest)!;
+    const childSystem = systemText(childRequest);
+    expect(childSystem).toContain("Configured default outcome: Report only");
+    expect(childSystem).toContain("Effective outcome: Report only");
+    const tools = JSON.stringify(childRequest.tools);
+    expect(tools).toContain('"name":"read"');
+    // The default outcome adds nothing, but it also does not revoke the named
+    // agent's already-configured capability.
+    expect(tools).toContain('"name":"write"');
   });
 
   it("surfaces a clean error when the named agent does not exist", async () => {

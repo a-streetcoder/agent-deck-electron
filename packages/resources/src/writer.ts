@@ -354,6 +354,7 @@ const AGENT_FIELD_ORDER = [
   "tools",
   "skills",
   "mcpServers",
+  "defaultExpectedOutcome",
 ] as const;
 
 function serializeFrontmatter(record: Record<string, unknown>): string {
@@ -412,6 +413,13 @@ export function writeAgentFile(
   if (edit.mcpServers !== undefined) {
     if (edit.mcpServers.length > 0) frontmatter.mcpServers = edit.mcpServers.join(", ");
     else delete frontmatter.mcpServers;
+  }
+  if (edit.defaultExpectedOutcome !== undefined) {
+    if (edit.defaultExpectedOutcome) {
+      frontmatter.defaultExpectedOutcome = edit.defaultExpectedOutcome;
+    } else {
+      delete frontmatter.defaultExpectedOutcome;
+    }
   }
   if (edit.body !== undefined) body = edit.body.trim();
 

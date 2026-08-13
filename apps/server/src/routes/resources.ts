@@ -38,6 +38,12 @@ const agentEditFields = z.object({
   tools: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   mcpServers: z.array(z.string()).optional(),
+  defaultExpectedOutcome: z
+    .union([
+      z.enum(["reportOnly", "editFilesInWorktree", "writeProjectFile", "directProjectWrites"]),
+      z.literal(""),
+    ])
+    .optional(),
   body: z.string().optional(),
 });
 

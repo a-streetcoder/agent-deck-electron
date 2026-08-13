@@ -132,7 +132,7 @@ beforeAll(async () => {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
-    `---\nname: reviewer-bot\ndescription: Reviewer\ntools: write\n---\n\n${PERSONA_SENTINEL}\n`,
+    `---\nname: reviewer-bot\ndescription: Reviewer\ntools: write\ndefaultExpectedOutcome: editFilesInWorktree\n---\n\n${PERSONA_SENTINEL}\n`,
   );
 
   execFileSync("git", ["init", "-b", "main"], { cwd: project });
@@ -230,6 +230,10 @@ describe("managed_parallel: fan out subagents and combine results", () => {
     const betaChild = childSystems.find((s) => s.includes("TASK_BETA"))!;
     const alphaChild = childSystems.find((s) => s.includes("TASK_ALPHA"))!;
     expect(betaChild).toContain(PERSONA_SENTINEL);
+    expect(betaChild).toContain("Configured default outcome: Edit files in worktree");
+    expect(betaChild).toContain("Effective outcome: Edit files in the retained isolated worktree");
+    expect(betaChild).toContain("current child working directory is that retained worktree");
+    expect(betaChild).not.toContain("worktree fallback");
     expect(alphaChild).not.toContain(PERSONA_SENTINEL);
     expect(orderedEvents.length).toBeGreaterThan(2);
     expect(orderedEvents.map((event) => event.seq)).toEqual(

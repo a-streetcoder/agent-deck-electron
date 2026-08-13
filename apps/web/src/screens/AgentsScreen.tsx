@@ -15,6 +15,7 @@ import {
 import {
   agentMatchesFilter,
   AGENT_FILTERS,
+  SUBAGENT_EXPECTED_OUTCOME_LABELS,
   type AgentFilter,
   type AgentInfo,
 } from "@agent-deck/domain";
@@ -145,7 +146,7 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
   );
 }
 
-function AgentDetail({
+export function AgentDetail({
   agent,
   canCreateReplacement,
   onCreateReplacement,
@@ -406,6 +407,19 @@ function AgentDetail({
               data-testid="agent-fallback-models"
             >
               <ChipList label="Fallback Models" items={agent.fallbackModels} />
+            </div>
+          ) : null}
+          {agent.defaultExpectedOutcome ? (
+            <div
+              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-default-outcome"
+            >
+              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                Default Outcome
+              </div>
+              <div className="text-sm text-text-secondary">
+                {SUBAGENT_EXPECTED_OUTCOME_LABELS[agent.defaultExpectedOutcome]}
+              </div>
             </div>
           ) : null}
           {/* Native "Extensions" card (AgentManagementViews.swift:1377) — an

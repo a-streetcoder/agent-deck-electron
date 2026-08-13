@@ -428,6 +428,7 @@ async function initServer(
         tools: agent.tools,
         mcpDirectTools: agent.mcpDirectTools,
         skillDirs: agent.skillDirs,
+        defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
       };
     },
     // Live autoTitle preference (native OnboardingPreferencesView). `settings` is
@@ -567,6 +568,7 @@ async function initServer(
         skillDirs,
         extensions: agent.extensions ?? [],
         mcpServers: agent.mcpServers ?? [],
+        defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
       },
     };
   }
