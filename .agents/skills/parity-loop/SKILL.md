@@ -1,30 +1,38 @@
 ---
 name: parity-loop
 description: Autonomously implement, validate, close, and commit unresolved Agent Deck Electron/native parity rows in a continuous verified loop. Use for implementation work that closes parity-register rows, optionally from a supplied ID; do not use for report-only parity audits.
-argument-hint: "[start-ID]"
+argument-hint: "[andrea|ale|parity-ID]"
 ---
 
 # Agent Deck Electron parity loop
 
-Repositories and register:
+Repositories and owner-scoped registers:
 
 - Electron implementation: `/Users/andrea/Documents/GitHub/agent-deck-electron`
 - Native behavioral reference (read-only): `/Users/andrea/Documents/GitHub/agent-deck`
-- Active register: `/Users/andrea/Documents/GitHub/agent-deck-electron/docs/native-functional-parity-2026-07-24.md`
+- Andrea register and canonical shared audit history: `/Users/andrea/Documents/GitHub/agent-deck-electron/docs/native-functional-parity-2026-07-24-andrea.md`
+- Ale register: `/Users/andrea/Documents/GitHub/agent-deck-electron/docs/native-functional-parity-2026-07-24-ale.md`
 
-At runtime, use the first parity ID explicitly supplied with the skill invocation as the requested starting row. If none was supplied, treat it as `none`. Do not interpret template or shell interpolation syntax.
+Select exactly one owner-scoped register before doing parity work:
+
+- An explicit `andrea` or `ale` argument selects that owner's register.
+- An explicit parity ID without an owner may select the unique register containing that active ID. Search both registers only once for this initial ownership lookup, require exactly one match, and then stop reading the other register.
+- If neither an owner nor a parity ID was supplied, ask which owner to work for. Do not scan both backlogs to choose an item.
+- If an owner and parity ID are both supplied, the ID must exist as an active row in that owner's selected register; otherwise stop and ask for a corrected owner or ID rather than crossing into the other backlog.
+
+Use the first parity ID explicitly supplied with the skill invocation as the requested starting row. If none was supplied after owner selection, treat it as `none`. Do not interpret template or shell interpolation syntax. The selected register remains fixed for the entire run.
 
 ## Mission
 
 Repeat without asking whether to continue:
 
-1. Read the register and both projects.
+1. Read the selected owner register and both projects.
 2. Select the next unresolved difference.
 3. Briefly state, in plain English, what you are picking up and why.
 4. Investigate and plan the smallest safe implementation.
 5. Implement it in Electron.
 6. Prove the functionality and UI/UX are complete and high quality.
-7. Remove each fully resolved row from the active register only after its acceptance checks pass.
+7. Remove each fully resolved row from the selected owner register only after its acceptance checks pass.
 8. Commit one coherent parity slice.
 9. Immediately continue to the next unresolved difference.
 
@@ -49,7 +57,7 @@ Before selecting work:
 2. Read both `AGENTS.md` files completely.
 3. Read the Electron architecture, development, testing, and release guidance relevant to the work.
 4. Read the native architecture, invariants, SwiftUI, testing, and release guidance relevant to the selected behavior.
-5. Read the entire register: taxonomy, parity-present summary, active differences, dependencies, workstreams, validation guidance, and limitations.
+5. Read the selected register completely. For Ale, follow its link to Andrea's canonical shared history once during preparation when baseline, taxonomy, historical evidence, dependencies, or limitations are needed; do not use Andrea's active rows as candidate work.
 6. Inspect current Electron source, tests, and recent history. The register is a lead, not unquestionable truth.
 7. Record pre-existing Electron changes; do not overwrite, stage, remove, or commit them.
 8. If a candidate overlaps dirty files and your changes cannot be separated safely, choose another eligible row. If this affects the requested row, stop and explain the preservation blocker.
@@ -57,9 +65,9 @@ Before selecting work:
 
 ## Select the next item
 
-Reread the register from disk at the start of every iteration.
+Reread only the selected owner register from disk at the start of every iteration. Never scan, select from, remove, or otherwise cross into the other owner's backlog.
 
-For the first iteration, prefer a supplied starting ID after verifying it still exists and is unresolved; first handle any prerequisite needed for a safe, architecturally correct implementation. With no supplied ID, choose by:
+For the first iteration, prefer a supplied starting ID after verifying it still exists and is unresolved in the selected register; first handle any prerequisite needed for a safe, architecturally correct implementation. With no supplied ID, choose within the selected register by:
 
 1. safety foundations and prerequisites;
 2. P0, then P1, P2, and P3;
@@ -67,6 +75,8 @@ For the first iteration, prefer a supplied starting ID after verifying it still 
 4. smallest independently testable slice.
 
 A Decision row waits for its product decision. Never invent an ID. Default to one row per slice. Close tightly coupled rows together only when they form one inseparable implementation and each has its own acceptance evidence; do not distort architecture to force separate commits.
+
+In Ale's register, `ANA-01` remains Decision/blocked immediately before the distribution hold. The held distribution rows must remain last and ordered `DST-02`, `DST-03`, `DST-04`, `DST-05`, `DST-06`, `DST-01`; do not select them until the stated target systems, credentials/signing/publication channels, and installed-update tests are available. `DST-01` remains the final implementation candidate regardless of priority.
 
 Before coding, verify the claimed gap against:
 
@@ -179,9 +189,9 @@ If a broad check appears to fail for a pre-existing reason, reproduce it against
 
 Only after acceptance:
 
-1. Reread the register; confirm each resolved row remains active and unchanged in meaning.
+1. Reread only the selected owner register; confirm each resolved row remains active and unchanged in meaning.
 2. Remove fully resolved rows rather than marking them done among active gaps.
-3. Update only counts, summaries, dependencies, workstreams, and cross-references that would otherwise be false; preserve unrelated historical context.
+3. Update only the selected owner register's counts, summaries, dependencies, workstreams, and cross-references that would otherwise be false; preserve unrelated historical context and never maintain the other owner's active backlog.
 4. Run documentation/format checks.
 5. Review all staged, unstaged, untracked, and cached diffs.
 6. Stage only this slice's implementation, tests, and register maintenance—never blanket-stage around unrelated work.
