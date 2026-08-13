@@ -355,6 +355,7 @@ const AGENT_FIELD_ORDER = [
   "skills",
   "mcpServers",
   "defaultExpectedOutcome",
+  "defaultProgress",
 ] as const;
 
 function serializeFrontmatter(record: Record<string, unknown>): string {
@@ -420,6 +421,11 @@ export function writeAgentFile(
     } else {
       delete frontmatter.defaultExpectedOutcome;
     }
+  }
+  if (edit.defaultProgress !== undefined) {
+    // Native persists the enabled preference and omits the disabled/default state.
+    if (edit.defaultProgress) frontmatter.defaultProgress = true;
+    else delete frontmatter.defaultProgress;
   }
   if (edit.body !== undefined) body = edit.body.trim();
 

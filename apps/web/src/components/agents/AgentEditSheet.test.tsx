@@ -17,6 +17,7 @@ const builtin: AgentInfo = {
   skills: ["reviewing"],
   mcpServers: ["github"],
   defaultExpectedOutcome: "directProjectWrites",
+  defaultProgress: true,
   scope: "builtin",
   filePath: "/bundled/reviewer.md",
   body: "Builtin reviewer prompt.",
@@ -45,6 +46,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
           description: "Effective overridden reviewer",
           whenToUse: undefined,
           tools: ["read"],
+          defaultProgress: false,
           body: "Effective override prompt.",
         }}
         onClose={vi.fn()}
@@ -58,6 +60,8 @@ describe("AgentEditSheet builtin replacement create mode", () => {
       "read, mcp:search, mcp:stale-tool",
     );
     expect(screen.getByText(/do not connect or grant access/i)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("editor-tab-config"));
+    expect((screen.getByTestId("editor-default-progress") as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByTestId("editor-tab-prompt"));
     expect((screen.getByTestId("editor-body") as HTMLTextAreaElement).value).toBe(
       "Effective override prompt.",
@@ -86,6 +90,11 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(screen.getByText(/neither adds nor removes configured tools/i)).toBeTruthy();
     expect(screen.getByText(/caller-selected worktree isolation/i)).toBeTruthy();
     expect(screen.getByText(/validated per-run output path/i)).toBeTruthy();
+    expect((screen.getByTestId("editor-default-progress") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/portable metadata only/i)).toBeTruthy();
+    expect(
+      screen.getByText(/does not change progress reporting or child runtime behavior/i),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledOnce();
@@ -125,6 +134,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         skills: ["reviewing"],
         mcpServers: ["github"],
         defaultExpectedOutcome: "directProjectWrites",
+        defaultProgress: true,
         body: "Builtin reviewer prompt.",
       },
     });
@@ -148,6 +158,37 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
     expect(body.edit.tools).toEqual(["read", "mcp:fetch", "mcp:legacy-name"]);
     expect(body.edit.mcpDirectTools).toBeUndefined();
+  });
+
+  it("keeps an effective false replacement seed false when saved unchanged", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <AgentEditSheet
+        agent={null}
+        createFromBuiltin={{ ...builtin, defaultProgress: false }}
+        onClose={vi.fn()}
+      />,
+    );
+    expect((screen.getByTestId("editor-default-progress") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).edit.defaultProgress).toBe(false);
+  });
+
+  it("keeps builtin default progress unmanaged when editing an override", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ agents: [builtin] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={builtin} onClose={vi.fn()} />);
+    expect(screen.queryByTestId("editor-default-progress")).toBeNull();
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.defaultProgress,
+    ).toBeUndefined();
   });
 
   it("saves a selected typed outcome", async () => {

@@ -26,6 +26,8 @@ export interface AgentEdit {
   skills?: string[];
   mcpServers?: string[];
   defaultExpectedOutcome?: SubagentExpectedOutcome | "";
+  /** `false` clears the custom-agent frontmatter value, matching native writes. */
+  defaultProgress?: boolean;
   body?: string;
 }
 
@@ -262,6 +264,11 @@ export function applyAgentOverride(
           value === "directProjectWrites"
             ? value
             : undefined;
+        break;
+      case "defaultProgress":
+        // Unlike ordinary false-as-clear override fields, this is boolean
+        // metadata: false is an effective value and must shadow builtin true.
+        if (typeof value === "boolean") next.defaultProgress = value;
         break;
       case "systemPrompt": {
         const body = overrideString(value);

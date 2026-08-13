@@ -102,6 +102,8 @@ export function parseAgentFile(
     extensions: asList(frontmatter.extensions),
     mcpServers: asList(frontmatter.mcpServers),
     defaultExpectedOutcome: asExpectedOutcome(frontmatter.defaultExpectedOutcome),
+    defaultProgress:
+      typeof frontmatter.defaultProgress === "boolean" ? frontmatter.defaultProgress : undefined,
     scope,
     filePath,
     body: body.trim(),

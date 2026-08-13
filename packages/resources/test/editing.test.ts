@@ -108,6 +108,7 @@ describe("builtin override edit safety", () => {
     )!;
     writeBuiltinAgentOverride(roots, "coder", {
       defaultExpectedOutcome: "directProjectWrites",
+      defaultProgress: false,
       futureField: "keep-me",
     });
 
@@ -115,6 +116,7 @@ describe("builtin override edit safety", () => {
     const merged = mergeWithUnmanagedOverrideFields(readAgentOverrides(roots).coder, unrelated);
     expect(merged).toEqual({
       defaultExpectedOutcome: "directProjectWrites",
+      defaultProgress: false,
       futureField: "keep-me",
       description: "Edited description",
     });
@@ -156,8 +158,22 @@ describe("agent/skill file writer", () => {
     );
   });
 
-  it("materializes managed and unmanaged global override fields for a replacement", () => {
+  it("applies false defaultProgress overrides and materializes them as absent for replacement", () => {
+    const home = makeHome();
+    const roots = { home };
     const builtin = readFileSync(path.join(BUILTIN_AGENTS_DIR, "coder.md"), "utf8");
+    expect(parseAgentFile("coder.md", builtin, "builtin").defaultProgress).toBe(true);
+    writeBuiltinAgentOverride(roots, "coder", { defaultProgress: false });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "coder" && agent.scope === "builtin")
+        ?.defaultProgress,
+    ).toBe(false);
+    writeBuiltinAgentOverride(roots, "reviewer", { defaultProgress: true });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "reviewer" && agent.scope === "builtin")
+        ?.defaultProgress,
+    ).toBe(true);
+
     const materialized = materializeBuiltinAgentOverrideContent(builtin, {
       description: "Effective coder",
       whenToUse: false,
@@ -175,6 +191,7 @@ describe("agent/skill file writer", () => {
       body: "Effective overridden prompt.",
     });
     expect(effective.whenToUse).toBeUndefined();
+    expect(effective.defaultProgress).toBeUndefined();
     expect(materialized).toContain("defaultExpectedOutcome: reportOnly");
     expect(materialized).toContain("interactive: true");
     expect(materialized).not.toContain("defaultProgress:");
@@ -430,6 +447,56 @@ describe("agent/skill file writer", () => {
 
     writeAgentFile(roots, "global", "delegator", { defaultExpectedOutcome: "" });
     expect(readFileSync(filePath, "utf8")).not.toContain("defaultExpectedOutcome:");
+  });
+
+  it("round-trips native defaultProgress metadata and omits its false/default state", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "progress-reporter", {
+      defaultProgress: true,
+      body: "Report progress when the workflow supports it.",
+    });
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace("---\n\n", "futureField: keep-me\n---\n\n"),
+    );
+
+    expect(scanAgents(roots).find((agent) => agent.name === "progress-reporter")).toMatchObject({
+      defaultProgress: true,
+    });
+    expect(readFileSync(filePath, "utf8")).toContain("defaultProgress: true");
+
+    writeAgentFile(roots, "global", "progress-reporter", { defaultProgress: false });
+    const updated = readFileSync(filePath, "utf8");
+    expect(updated).not.toContain("defaultProgress:");
+    expect(updated).toContain("futureField: keep-me");
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "progress-reporter")?.defaultProgress,
+    ).toBeUndefined();
+  });
+
+  it("parses only boolean defaultProgress frontmatter values", () => {
+    expect(
+      parseAgentFile(
+        "enabled.md",
+        "---\nname: enabled\ndefaultProgress: true\n---\n\nBody.\n",
+        "global",
+      ).defaultProgress,
+    ).toBe(true);
+    expect(
+      parseAgentFile(
+        "disabled.md",
+        "---\nname: disabled\ndefaultProgress: false\n---\n\nBody.\n",
+        "global",
+      ).defaultProgress,
+    ).toBe(false);
+    expect(
+      parseAgentFile(
+        "invalid.md",
+        "---\nname: invalid\ndefaultProgress: sometimes\n---\n\nBody.\n",
+        "global",
+      ).defaultProgress,
+    ).toBeUndefined();
   });
 
   it("accepts native outcome labels, rejects unknown values, and applies builtin overrides", () => {

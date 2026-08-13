@@ -72,6 +72,7 @@ export function AgentEditSheet({
   const [defaultExpectedOutcome, setDefaultExpectedOutcome] = useState<
     SubagentExpectedOutcome | ""
   >(seed?.defaultExpectedOutcome ?? "");
+  const [defaultProgress, setDefaultProgress] = useState(seed?.defaultProgress ?? false);
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -97,6 +98,7 @@ export function AgentEditSheet({
     skills: (seed?.skills ?? []).join(", "),
     mcpServers: (seed?.mcpServers ?? []).join(", "),
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
+    defaultProgress: seed?.defaultProgress ?? false,
     body: seed?.body ?? "",
   }).current;
   const dirty =
@@ -112,6 +114,7 @@ export function AgentEditSheet({
     skills !== initial.skills ||
     mcpServers !== initial.mcpServers ||
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
+    defaultProgress !== initial.defaultProgress ||
     body !== initial.body;
 
   const dirtyRef = useRef(dirty);
@@ -185,6 +188,7 @@ export function AgentEditSheet({
               (live.skills ?? []).join(", ") !== initial.skills ||
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
+              (live.defaultProgress ?? false) !== initial.defaultProgress ||
               live.body !== initial.body)
           ) {
             throw new Error(
@@ -214,6 +218,9 @@ export function AgentEditSheet({
             // Native exposes this authored default only for custom definitions.
             // Builtin edits continue to preserve any unmanaged override value.
             defaultExpectedOutcome: isBuiltin ? undefined : defaultExpectedOutcome,
+            // Native exposes this only for custom definitions. Builtin saves
+            // leave any same-named override key unmanaged and preserved.
+            defaultProgress: isBuiltin ? undefined : defaultProgress,
             body,
           },
         }),
@@ -397,33 +404,54 @@ export function AgentEditSheet({
                 />
               </label>
               {!isBuiltin ? (
-                <label className="block text-xs text-text-muted">
-                  Default outcome for managed delegation
-                  <ControlSelect
-                    data-testid="editor-default-outcome"
-                    className={inputClass}
-                    aria-describedby="editor-default-outcome-help"
-                    value={defaultExpectedOutcome}
-                    onChange={(event) =>
-                      setDefaultExpectedOutcome(event.target.value as SubagentExpectedOutcome | "")
-                    }
-                  >
-                    <option value="">Unspecified (report only)</option>
-                    {SUBAGENT_EXPECTED_OUTCOMES.map((outcome) => (
-                      <option key={outcome} value={outcome}>
-                        {SUBAGENT_EXPECTED_OUTCOME_LABELS[outcome]}
-                      </option>
-                    ))}
-                  </ControlSelect>
-                  <span
-                    id="editor-default-outcome-help"
-                    className="mt-1 block text-xs text-text-muted"
-                  >
-                    This adds outcome guidance only; it neither adds nor removes configured tools.
-                    Edit files in worktree needs caller-selected worktree isolation, and
-                    write/update project file needs a validated per-run output path.
-                  </span>
-                </label>
+                <>
+                  <label className="block text-xs text-text-muted">
+                    Default outcome for managed delegation
+                    <ControlSelect
+                      data-testid="editor-default-outcome"
+                      className={inputClass}
+                      aria-describedby="editor-default-outcome-help"
+                      value={defaultExpectedOutcome}
+                      onChange={(event) =>
+                        setDefaultExpectedOutcome(
+                          event.target.value as SubagentExpectedOutcome | "",
+                        )
+                      }
+                    >
+                      <option value="">Unspecified (report only)</option>
+                      {SUBAGENT_EXPECTED_OUTCOMES.map((outcome) => (
+                        <option key={outcome} value={outcome}>
+                          {SUBAGENT_EXPECTED_OUTCOME_LABELS[outcome]}
+                        </option>
+                      ))}
+                    </ControlSelect>
+                    <span
+                      id="editor-default-outcome-help"
+                      className="mt-1 block text-xs text-text-muted"
+                    >
+                      This adds outcome guidance only; it neither adds nor removes configured tools.
+                      Edit files in worktree needs caller-selected worktree isolation, and
+                      write/update project file needs a validated per-run output path.
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-xs text-text-muted">
+                    <ControlInput
+                      type="checkbox"
+                      data-testid="editor-default-progress"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                      checked={defaultProgress}
+                      aria-describedby="editor-default-progress-help"
+                      onChange={(event) => setDefaultProgress(event.target.checked)}
+                    />
+                    <span>
+                      <span className="block text-text-secondary">Default progress</span>
+                      <span id="editor-default-progress-help" className="mt-1 block">
+                        Portable metadata only. Agent Deck currently preserves and displays this
+                        preference; it does not change progress reporting or child runtime behavior.
+                      </span>
+                    </span>
+                  </label>
+                </>
               ) : null}
             </>
           ) : null}

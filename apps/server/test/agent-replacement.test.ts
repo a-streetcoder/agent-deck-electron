@@ -21,7 +21,7 @@ async function createReplacement(description: string): Promise<Response> {
       scope: "global",
       name: "reviewer",
       createFromBuiltin: "reviewer",
-      edit: { description, body: "Custom reviewer body." },
+      edit: { description, defaultProgress: true, body: "Custom reviewer body." },
     }),
   });
 }
@@ -46,12 +46,19 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     const content = readFileSync(customFile, "utf8");
     expect(content).toContain("description: Editable reviewer");
     expect(content).toContain("defaultExpectedOutcome: reportOnly");
+    expect(content).toContain("defaultProgress: true");
     expect(content).toContain("Custom reviewer body.");
 
     const listed = (await (
       await fetch(`http://127.0.0.1:${server.port}/resources/agents`)
     ).json()) as {
-      agents: Array<{ name: string; scope: string; shadowed: boolean; replacesBuiltin: boolean }>;
+      agents: Array<{
+        name: string;
+        scope: string;
+        shadowed: boolean;
+        replacesBuiltin: boolean;
+        defaultProgress?: boolean;
+      }>;
     };
     expect(listed.agents).toEqual(
       expect.arrayContaining([
@@ -60,6 +67,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           scope: "global",
           shadowed: false,
           replacesBuiltin: true,
+          defaultProgress: true,
         }),
         expect.objectContaining({ name: "reviewer", scope: "builtin", shadowed: true }),
       ]),
@@ -144,10 +152,34 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
 
     const listed = (await (
       await fetch(`http://127.0.0.1:${server.port}/resources/agents`)
-    ).json()) as { agents: Array<{ name: string; scope: string; replacesBuiltin: boolean }> };
-    expect(listed.agents).toContainEqual(
-      expect.objectContaining({ name: "coder", scope: "global", replacesBuiltin: true }),
+    ).json()) as {
+      agents: Array<{
+        name: string;
+        scope: string;
+        replacesBuiltin: boolean;
+        defaultProgress?: boolean;
+      }>;
+    };
+    const listedCoder = listed.agents.find(
+      (agent) => agent.name === "coder" && agent.scope === "global",
     );
+    expect(listedCoder).toMatchObject({ replacesBuiltin: true });
+    expect(listedCoder?.defaultProgress).toBeUndefined();
+  });
+
+  it("rejects non-boolean default progress without writing a custom agent", async () => {
+    const invalidFile = path.join(home, ".pi", "agent", "agents", "invalid-progress.md");
+    const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "global",
+        name: "invalid-progress",
+        edit: { defaultProgress: "yes", body: "No." },
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(existsSync(invalidFile)).toBe(false);
   });
 
   it("rejects replacement creation outside global scope", async () => {

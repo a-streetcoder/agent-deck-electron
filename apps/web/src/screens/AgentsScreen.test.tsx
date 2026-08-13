@@ -18,6 +18,7 @@ const agent: AgentInfo = {
   description: "Writes when separately approved",
   systemPromptMode: "replace",
   defaultExpectedOutcome: "writeProjectFile",
+  defaultProgress: true,
   scope: "global",
   filePath: "/tmp/writer.md",
   body: "Write carefully.",
@@ -27,8 +28,8 @@ const agent: AgentInfo = {
 
 afterEach(cleanup);
 
-describe("AgentDetail default outcome", () => {
-  it("displays the native typed label", () => {
+describe("AgentDetail delegation metadata", () => {
+  it("displays the native outcome and progress labels", () => {
     useAppStore.setState({ projects: [], currentProjectId: null });
     render(
       <AgentDetail
@@ -41,5 +42,26 @@ describe("AgentDetail default outcome", () => {
     const card = screen.getByTestId("agent-default-outcome");
     expect(card.textContent).toContain("Default Outcome");
     expect(card.textContent).toContain("Write/update project file");
+    const progress = screen.getByTestId("agent-default-progress");
+    expect(progress.textContent).toContain("Default Progress");
+    expect(progress.textContent).toContain("Yes");
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["explicit false", false],
+  ] as const)("displays No when progress metadata is %s", (_label, defaultProgress) => {
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    render(
+      <AgentDetail
+        agent={{ ...agent, defaultProgress }}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    const progress = screen.getByTestId("agent-default-progress");
+    expect(progress.textContent).toContain("Default Progress");
+    expect(progress.textContent).toContain("No");
   });
 });

@@ -60,6 +60,9 @@ export interface AgentInfo {
   /** Requested default for managed named delegation. Mutation still requires
    * the runtime's per-run worktree/approval/path policy. */
   defaultExpectedOutcome?: SubagentExpectedOutcome;
+  /** Native-compatible authored progress preference. Portable metadata only:
+   * Agent Deck currently preserves and displays it without changing runtime. */
+  defaultProgress?: boolean;
   scope: ResourceScope;
   filePath: string;
   /** Markdown body = the agent system prompt. */
