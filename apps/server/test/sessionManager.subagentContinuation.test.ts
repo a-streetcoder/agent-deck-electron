@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../src/SessionManager.ts";
+import { buildSubagentTaskPrompt } from "../src/services/sessionManager.ts";
 import { ReceiptBus } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore, type SubagentRunRecord } from "../src/subagentRunStore.ts";
@@ -38,6 +39,20 @@ function setup(overrides: Partial<SubagentRunRecord> = {}) {
 }
 
 describe("SessionManager managed_subagent continuation eligibility", () => {
+  it("adds read-first hints to fresh and continuation prompts without weakening assignment boundaries", () => {
+    const fresh = buildSubagentTaskPrompt("inspect", ["AGENTS.md", "src/main.ts"], false);
+    expect(fresh).toContain("only active assignment for this fresh child session");
+    expect(fresh).toContain("hints, not injected truth");
+    expect(fresh).toContain("has not preloaded their contents");
+    expect(fresh).toContain("AGENTS.md\nsrc/main.ts");
+    expect(fresh).toMatch(/Task:\ninspect$/);
+
+    const continuation = buildSubagentTaskPrompt("follow up", ["docs/guide.md"], true);
+    expect(continuation).toContain("prior child messages are available");
+    expect(continuation).toContain("task below is the only active assignment");
+    expect(buildSubagentTaskPrompt("unchanged", [], true)).toBe("unchanged");
+  });
+
   it("reuses the stable run and Pi --session input after same-parent validation", async () => {
     const { manager, parentId, run, sessionFile, runChildAgent } = setup();
     await expect(
@@ -48,7 +63,35 @@ describe("SessionManager managed_subagent continuation eligibility", () => {
       undefined,
       undefined,
       undefined,
-      { source: "single", runId: run.id, resumeSessionPath: sessionFile },
+      {
+        source: "single",
+        declaredReads: [],
+        runId: run.id,
+        resumeSessionPath: sessionFile,
+      },
+    );
+  });
+
+  it("forwards declared reads on continuation and resolves omission to an empty latest-turn list", async () => {
+    const { manager, parentId, run, runChildAgent } = setup();
+    await manager.runManagedSubagent(parentId, "follow up", undefined, run.id, [
+      "AGENTS.md",
+      "src/main.ts",
+    ]);
+    expect(runChildAgent).toHaveBeenLastCalledWith(
+      "follow up",
+      undefined,
+      undefined,
+      undefined,
+      expect.objectContaining({ declaredReads: ["AGENTS.md", "src/main.ts"] }),
+    );
+    await manager.runManagedSubagent(parentId, "another follow up", undefined, run.id);
+    expect(runChildAgent).toHaveBeenLastCalledWith(
+      "another follow up",
+      undefined,
+      undefined,
+      undefined,
+      expect.objectContaining({ declaredReads: [] }),
     );
   });
 

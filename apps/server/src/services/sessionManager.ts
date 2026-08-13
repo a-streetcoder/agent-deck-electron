@@ -1460,6 +1460,8 @@ export interface ChildLaunchOverrides {
 }
 
 export interface ChildRunOptions {
+  /** Validated project-relative read-first hints for managed_subagent only. */
+  declaredReads?: readonly string[];
   /** Supplied only for an already validated same-parent continuation. */
   runId?: string;
   resumeSessionPath?: string;
@@ -1494,6 +1496,18 @@ const persistChildRun = <T>(operation: () => T): Effect.Effect<T, Error> =>
         ? error
         : new Error(`Subagent run persistence failed: ${String(error)}`),
   });
+
+export function buildSubagentTaskPrompt(
+  task: string,
+  declaredReads: readonly string[],
+  isContinuation: boolean,
+): string {
+  if (declaredReads.length === 0) return task;
+  const boundary = isContinuation
+    ? "Delegated continuation: prior child messages are available, but the task below is the only active assignment."
+    : "Delegated assignment: the task below is the only active assignment for this fresh child session.";
+  return `${boundary}\n\nRead current project files first if relevant; treat these project-relative paths as hints, not injected truth. Agent Deck has not preloaded their contents:\n${declaredReads.join("\n")}\n\nTask:\n${task}`;
+}
 
 interface RunChildArgs {
   readonly piHost: Context.Tag.Service<PiHost>;
@@ -1540,6 +1554,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const boundaryPrompt = isContinuation
       ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
       : SUBAGENT_SYSTEM_PROMPT;
+    const declaredReads = runOptions?.declaredReads ?? [];
     const authoredSystemPrompt = `${boundaryPrompt}${persona}\n\nTask:\n${task}`;
     let effectiveSystemPrompt = authoredSystemPrompt;
     const cellId = runId;
@@ -1560,6 +1575,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         createdAt,
         updatedAt: createdAt,
         source: runOptions?.source ?? "single",
+        ...(runOptions?.declaredReads ? { declaredReads: [...runOptions.declaredReads] } : {}),
       };
       const allocation = durable.prepareTurn
         ? yield* persistChildRun(() =>
@@ -1589,6 +1605,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           durable.update(runId, {
             task,
             ...(agentName ? { agent: agentName } : {}),
+            ...(runOptions?.declaredReads ? { declaredReads: [...runOptions.declaredReads] } : {}),
             status: "starting",
             updatedAt: createdAt,
             completedAt: undefined,
@@ -1912,7 +1929,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             }),
             Effect.fork,
           );
-          yield* child.prompt(task);
+          yield* child.prompt(buildSubagentTaskPrompt(task, declaredReads, isContinuation));
           yield* Fiber.join(collector);
           if (!sawAgentEnd)
             return yield* Effect.fail(new Error("subagent exited before finishing"));

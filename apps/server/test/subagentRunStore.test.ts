@@ -17,6 +17,7 @@ import path from "node:path";
 import { emptyTranscript } from "@agent-deck/domain";
 import { SessionWorktreeStore } from "@agent-deck/loop-catalog-native";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_MANAGED_SUBAGENT_TASK_BYTES, normalizeDeclaredReads } from "../src/declaredReads.ts";
 import { gitDetachedWorktreeAdd, gitWorktreeSource } from "../src/git.ts";
 import { SubagentRunStore, type SubagentRunRecord } from "../src/subagentRunStore.ts";
 
@@ -57,6 +58,62 @@ describe("SubagentRunStore", () => {
     expect(store.cells(PARENT_A)[0]?.artifactRootId).toBe(run.id);
     store.removeParent(PARENT_A);
     expect(existsSync(path.join(dataDir, "Subagent Runs", run.id))).toBe(false);
+  });
+
+  it("fits a maximum task plus maximum accepted UTF-8 declared reads in input.md", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-declared-read-boundary-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const declaredReads = normalizeDeclaredReads([
+      ...Array.from(
+        { length: 31 },
+        (_, index) => `${index.toString(16).padStart(2, "0")}${"a".repeat(32)}`,
+      ),
+      "z".repeat(48),
+    ])!;
+    const run = record({
+      task: "t".repeat(MAX_MANAGED_SUBAGENT_TASK_BYTES),
+      source: "single",
+      declaredReads,
+    });
+    const allocation = store.prepareTurn(run, "system prompt");
+    const input = readFileSync(path.join(allocation.turnDirectory, "input.md"));
+    expect(input.byteLength).toBe(50 * 1024);
+  });
+
+  it("persists latest-turn declared reads and writes per-turn artifact evidence", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-declared-reads-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({
+      source: "single",
+      declaredReads: ["AGENTS.md", "src/main.ts"],
+    });
+    const first = store.prepareTurn(run, "system prompt");
+    store.create({
+      ...run,
+      artifactRootId: first.artifactRootId,
+      artifactRootToken: first.identityToken,
+      currentTurnId: first.turnId,
+    });
+    expect(readFileSync(path.join(first.turnDirectory, "input.md"), "utf8")).toContain(
+      "Read first (project-relative hints; contents are not preloaded):\nAGENTS.md\nsrc/main.ts",
+    );
+    expect(readFileSync(path.join(first.turnDirectory, "system-prompt.md"), "utf8")).toContain(
+      "system prompt",
+    );
+
+    const continued = { ...store.get(run.id)!, task: "follow up", declaredReads: [] };
+    const second = store.prepareTurn(continued, "continuation prompt", {
+      artifactRootId: first.artifactRootId,
+      artifactRootToken: first.identityToken,
+    });
+    store.update(run.id, {
+      task: continued.task,
+      declaredReads: [],
+      currentTurnId: second.turnId,
+    });
+    expect(readFileSync(path.join(second.turnDirectory, "input.md"), "utf8")).toBe("follow up");
+    expect(store.get(run.id)?.declaredReads).toEqual([]);
+    expect(new SubagentRunStore(dataDir, vi.fn()).get(run.id)?.declaredReads).toEqual([]);
   });
 
   it("allocates distinct detached child worktrees, retains restart proof, and safely deletes them", async () => {
@@ -655,18 +712,26 @@ describe("SubagentRunStore", () => {
     ]);
   });
 
-  it("round-trips additive continuation fields while accepting legacy v1 records", () => {
+  it("round-trips additive continuation/read fields while accepting legacy records", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-continuation-fields-"));
     const sessionFile = path.join(dataDir, "child.jsonl");
     writeFileSync(sessionFile, "{}\n");
     const store = new SubagentRunStore(dataDir, vi.fn());
-    const current = record({ source: "single", sessionFile });
+    const current = record({
+      source: "single",
+      sessionFile,
+      declaredReads: ["AGENTS.md", "src/main.ts"],
+    });
     store.create(current);
     expect(new SubagentRunStore(dataDir, vi.fn()).get(current.id)).toEqual(
-      expect.objectContaining({ source: "single", sessionFile }),
+      expect.objectContaining({
+        source: "single",
+        sessionFile,
+        declaredReads: ["AGENTS.md", "src/main.ts"],
+      }),
     );
 
-    for (const version of [1, 2] as const) {
+    for (const version of [1, 2, 3] as const) {
       const legacyDir = mkdtempSync(path.join(tmpdir(), `subagent-legacy-v${version}-`));
       const completedAt = new Date().toISOString();
       const legacy = record({ status: "completed", updatedAt: completedAt, completedAt });

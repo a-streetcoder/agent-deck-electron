@@ -26,6 +26,7 @@ import {
   type SubagentArtifactAllocation,
 } from "@agent-deck/loop-catalog-native";
 import { z } from "zod";
+import { renderSubagentArtifactInput } from "./declaredReads.ts";
 import {
   gitDetachedWorktreeAdd,
   gitDetachedWorktreeRegistrationMatches,
@@ -42,6 +43,8 @@ const MAX_TASK_BYTES = 50_000;
 const MAX_RESULT_BYTES = 256_000;
 const MAX_ERROR_BYTES = 50_000;
 const MAX_SESSION_FILE_BYTES = 16_384;
+const MAX_DECLARED_READS = 32;
+const MAX_DECLARED_READ_LENGTH = 512;
 
 export type SubagentRunSource = "single" | "parallel";
 
@@ -85,6 +88,8 @@ export interface SubagentRunRecord {
   worktreeBaseCommit?: string;
   worktreeState?: "reserved" | "registered";
   worktreeCleanup?: "physical_removed";
+  /** Additive v4 validated project-relative read-first hints for the latest turn. */
+  declaredReads?: string[];
 }
 
 const runSchema = z
@@ -124,6 +129,10 @@ const runSchema = z
       .optional(),
     worktreeState: z.enum(["reserved", "registered"]).optional(),
     worktreeCleanup: z.literal("physical_removed").optional(),
+    declaredReads: z
+      .array(z.string().min(1).max(MAX_DECLARED_READ_LENGTH))
+      .max(MAX_DECLARED_READS)
+      .optional(),
   })
   .superRefine((run, context) => {
     if (!active(run.status) && run.completedAt === undefined) {
@@ -167,7 +176,7 @@ const runSchema = z
   });
 
 const storeSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   runs: z.array(runSchema).max(MAX_RUNS),
 });
 
@@ -242,7 +251,7 @@ export class SubagentRunStore {
   private readonly deletedParents = new Set<string>();
   private readonly inFlightWorktrees = new Map<string, Set<Promise<unknown>>>();
   private storeQuarantined = false;
-  private state: StoreState = { version: 3, runs: [] };
+  private state: StoreState = { version: 4, runs: [] };
   /** Runtime-only projections. Pi's existing child event consumer is the sole writer. */
   private readonly liveTranscripts = new Map<string, TranscriptState>();
 
@@ -375,7 +384,7 @@ export class SubagentRunStore {
     if (this.state.runs.some((run) => run.id === record.id)) {
       throw new Error(`Subagent run already exists: ${record.id}`);
     }
-    this.commit({ version: 3, runs: [...this.state.runs, this.normalized(record)] });
+    this.commit({ version: 4, runs: [...this.state.runs, this.normalized(record)] });
   }
 
   /** Allocate a branchless checkout only after proving the parent's exact repo
@@ -573,7 +582,7 @@ export class SubagentRunStore {
       turnId,
       rootManifest: `${JSON.stringify({ schemaVersion: 1, runId: record.id, createdAt: record.createdAt })}\n`,
       turnManifest: `${JSON.stringify({ schemaVersion: 1, runId: record.id, turnId, createdAt: record.createdAt, source: record.source ?? "single" })}\n`,
-      input: record.task,
+      input: renderSubagentArtifactInput(record.task, record.declaredReads),
       systemPrompt,
     });
   }
@@ -634,7 +643,7 @@ export class SubagentRunStore {
     if (index < 0) throw new Error(`Unknown subagent run: ${id}`);
     const runs = this.state.runs.slice();
     runs[index] = this.normalized({ ...runs[index]!, ...patch, id });
-    this.commit({ version: 3, runs });
+    this.commit({ version: 4, runs });
   }
 
   async removeParent(parentSessionId: string): Promise<void> {
@@ -796,7 +805,7 @@ export class SubagentRunStore {
           }
         }
       }
-      this.commit({ version: 3, runs: this.state.runs.filter((item) => item.id !== run.id) });
+      this.commit({ version: 4, runs: this.state.runs.filter((item) => item.id !== run.id) });
     }
   }
 
@@ -875,7 +884,7 @@ export class SubagentRunStore {
         error: "Subagent run was interrupted by an app or server restart.",
       };
     });
-    this.commit({ version: 3, runs });
+    this.commit({ version: 4, runs });
   }
 
   private reconcileArtifacts(): void {
@@ -917,12 +926,12 @@ export class SubagentRunStore {
             ? a.run.id.localeCompare(b.run.id)
             : a.run.updatedAt.localeCompare(b.run.updatedAt),
         )[0]?.index ?? -1;
-    while (runs.length > MAX_RUNS || bytes({ version: 3, runs }) + 1 > MAX_STORE_BYTES) {
+    while (runs.length > MAX_RUNS || bytes({ version: 4, runs }) + 1 > MAX_STORE_BYTES) {
       const index = oldestTerminalIndex();
       if (index < 0) throw new Error("Active subagent runs exceed the persistence budget");
       runs = [...runs.slice(0, index), ...runs.slice(index + 1)];
     }
-    const next = storeSchema.parse({ version: 3, runs });
+    const next = storeSchema.parse({ version: 4, runs });
     const serialized = `${JSON.stringify(next)}\n`;
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     let fd: number | undefined;
@@ -963,7 +972,7 @@ export class SubagentRunStore {
         throw new Error("Subagent run store is oversized");
       const loaded = storeSchema.parse(JSON.parse(raw));
       this.state = {
-        version: 3,
+        version: 4,
         runs: loaded.runs.map((run) => ({
           ...run,
           ...(run.sessionFile && !run.sessionOwnership
@@ -979,7 +988,7 @@ export class SubagentRunStore {
         // Invalid state is never used even if quarantine cannot be written.
       }
       this.storeQuarantined = true;
-      this.state = { version: 3, runs: [] };
+      this.state = { version: 4, runs: [] };
       this.warn("quarantined invalid subagent run store", error);
     }
   }

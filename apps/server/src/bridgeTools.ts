@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { SessionPlanItem } from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
+import {
+  MAX_DECLARED_READS,
+  MAX_DECLARED_READ_BYTES,
+  MAX_DECLARED_READS_TOTAL_BYTES,
+  MAX_MANAGED_SUBAGENT_TASK_BYTES,
+  normalizeDeclaredReads,
+} from "./declaredReads.ts";
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
@@ -18,9 +25,17 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
   // (managed_subagent); parallel / supervisor / plan tools + the deck UI follow.
   const subagentParams = z
     .object({
-      task: z.string().trim().min(1),
+      task: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(
+          (value) => Buffer.byteLength(value, "utf8") <= MAX_MANAGED_SUBAGENT_TASK_BYTES,
+          `task cannot exceed ${MAX_MANAGED_SUBAGENT_TASK_BYTES} UTF-8 bytes`,
+        ),
       agent: z.string().trim().min(1).optional(),
       continueSubagentID: z.string().uuid().optional(),
+      reads: z.array(z.string()).max(MAX_DECLARED_READS).optional(),
     })
     .strict();
   bridge.register(
@@ -28,13 +43,14 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
       name: "managed_subagent",
       label: "Subagent",
       description:
-        "Delegate a self-contained task to a Deck subagent and get its result plus a stable Deck run ID. Omit `continueSubagentID` for a fresh isolated child with no parent conversation. For a direct follow-up, pass that stable ID: Agent Deck resumes only that child's history, never the parent conversation, and updates the same transcript card.",
+        "Delegate a self-contained task to a Deck subagent and get its result plus a stable Deck run ID. Optionally declare current project-relative file paths in `reads` for the child to read first as hints; Agent Deck does not preload their contents. Omit `continueSubagentID` for a fresh isolated child with no parent conversation. For a direct follow-up, pass that stable ID: Agent Deck resumes only that child's history, never the parent conversation, and updates the same transcript card.",
       parameters: {
         type: "object",
         properties: {
           task: {
             type: "string",
-            description: "A complete, self-contained description of the task for the subagent.",
+            description:
+              "A complete, self-contained description of the task for the subagent (maximum 50,000 UTF-8 bytes).",
           },
           agent: {
             type: "string",
@@ -46,12 +62,18 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
             description:
               "Stable Deck run ID for a direct follow-up. Restores only that child's session and updates the same card; omit to start fresh.",
           },
+          reads: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: MAX_DECLARED_READS,
+            description: `Optional current project-relative file paths the child should read first as hints. File contents are not preloaded. Maximum ${MAX_DECLARED_READ_BYTES} UTF-8 bytes per path and ${MAX_DECLARED_READS_TOTAL_BYTES.toLocaleString("en-US")} UTF-8 bytes total after trimming and stable deduplication.`,
+          },
         },
         required: ["task"],
         additionalProperties: false,
       },
       promptSnippet:
-        "managed_subagent(task, agent?, continueSubagentID?) — start fresh or directly follow up using a stable Deck run ID.",
+        "managed_subagent(task, agent?, continueSubagentID?, reads?) — start fresh or directly follow up using a stable Deck run ID; reads are project-relative read-first hints.",
     },
     async (params, ctx) => {
       const parsed = subagentParams.safeParse(params);
@@ -61,12 +83,22 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           isError: true,
         };
       }
+      let reads: string[] | undefined;
+      try {
+        reads = normalizeDeclaredReads(parsed.data.reads);
+      } catch (error) {
+        return {
+          content: `Invalid managed_subagent arguments: ${error instanceof Error ? error.message : "invalid reads"}`,
+          isError: true,
+        };
+      }
       try {
         const result = await sessions.runManagedSubagent(
           ctx.sessionId,
           parsed.data.task,
           parsed.data.agent,
           parsed.data.continueSubagentID,
+          reads,
         );
         return {
           content: `Deck subagent ID: ${result.runId}\n\n${result.text || "(the subagent returned no output)"}`,

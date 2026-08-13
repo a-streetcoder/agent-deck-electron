@@ -1185,6 +1185,7 @@ export class SessionManager {
     task: string,
     agentName?: string,
     continueSubagentId?: string,
+    declaredReads?: readonly string[],
   ): Promise<ChildRunResult> {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
@@ -1193,6 +1194,7 @@ export class SessionManager {
     if (!continueSubagentId) {
       return await parent.runChildAgent(task, agentName, undefined, undefined, {
         source: "single",
+        declaredReads: [...(declaredReads ?? [])],
       });
     }
 
@@ -1243,6 +1245,7 @@ export class SessionManager {
       const effectiveAgentName = agentName ?? run.agent;
       return await parent.runChildAgent(task, effectiveAgentName, undefined, undefined, {
         source: "single",
+        declaredReads: [...(declaredReads ?? [])],
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,

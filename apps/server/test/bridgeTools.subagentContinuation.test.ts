@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import { registerDeckBridgeTools } from "../src/bridgeTools.ts";
+import { MAX_MANAGED_SUBAGENT_TASK_BYTES, normalizeDeclaredReads } from "../src/declaredReads.ts";
 import type { SessionManager } from "../src/SessionManager.ts";
 import { ChildRunError } from "../src/services/sessionManager.ts";
 
@@ -30,18 +31,68 @@ describe("managed_subagent continuation bridge contract", () => {
     expect(spec.description).toContain("stable Deck run ID");
     expect(spec.description).toContain("never the parent conversation");
     expect((spec.parameters.properties as Record<string, unknown>).continueSubagentID).toBeTruthy();
+    expect((spec.parameters.properties as Record<string, unknown>).reads).toEqual(
+      expect.objectContaining({ type: "array", maxItems: 32 }),
+    );
 
     const response = await dispatch(bridge, "managed_subagent", {
       task: "follow up",
       continueSubagentID: runId,
+      reads: [" docs/guide.md ", "src/main.ts", "docs/guide.md"],
     });
     expect(sessions.runManagedSubagent).toHaveBeenCalledWith(
       expect.any(String),
       "follow up",
       undefined,
       runId,
+      ["docs/guide.md", "src/main.ts"],
     );
     expect(response).toEqual({ content: `Deck subagent ID: ${runId}\n\nlatest result` });
+  });
+
+  it("rejects every unsafe read list instead of dropping individual entries", async () => {
+    const invalidLists = [
+      ["   "],
+      ["/etc/passwd"],
+      ["C:\\Windows\\system.ini"],
+      ["C:/Windows/system.ini"],
+      ["\\\\server\\share\\file"],
+      ["src/../secret"],
+      ["src\\..\\secret"],
+      ["src/file\nother"],
+      ["README.md\n"],
+      ["src/\u0000file"],
+      ["src/file\u2028other"],
+      ["é".repeat(257)],
+      Array.from({ length: 33 }, (_, index) => `file-${index}`),
+    ];
+    for (const reads of invalidLists) {
+      const sessions = { runManagedSubagent: vi.fn() } as unknown as SessionManager;
+      const bridge = new BridgeRegistry();
+      registerDeckBridgeTools(bridge, sessions);
+      const response = await dispatch(bridge, "managed_subagent", { task: "inspect", reads });
+      expect(response.isError, JSON.stringify(reads)).toBe(true);
+      expect(sessions.runManagedSubagent).not.toHaveBeenCalled();
+    }
+  });
+
+  it("accepts the exact UTF-8 budget, allows tilde hints, and rejects one byte beyond before launch", async () => {
+    const accepted = ["é".repeat(256), "b".repeat(512), "c".repeat(78)];
+    expect(normalizeDeclaredReads(accepted)).toEqual(accepted);
+    expect(normalizeDeclaredReads(["~/notes.md", "~/notes.md"])).toEqual(["~/notes.md"]);
+
+    const sessions = {
+      runManagedSubagent: vi.fn().mockResolvedValue({ runId: randomUUID(), text: "done" }),
+    } as unknown as SessionManager;
+    const bridge = new BridgeRegistry();
+    registerDeckBridgeTools(bridge, sessions);
+    const response = await dispatch(bridge, "managed_subagent", {
+      task: "t".repeat(MAX_MANAGED_SUBAGENT_TASK_BYTES),
+      reads: [accepted[0], accepted[1], "c".repeat(79)],
+    });
+    expect(response.isError).toBe(true);
+    expect(response.content).toContain("1102 UTF-8 bytes in total");
+    expect(sessions.runManagedSubagent).not.toHaveBeenCalled();
   });
 
   it("includes the stable ID when an accepted run later fails", async () => {

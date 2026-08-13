@@ -58,7 +58,13 @@ beforeAll(async () => {
     toolCall: (lastUser, body) => {
       if (isChild(body) || body.messages.at(-1)?.role === "tool") return null;
       if (lastUser === FIRST_PARENT) {
-        return { name: "managed_subagent", arguments: { task: FIRST_TASK } };
+        return {
+          name: "managed_subagent",
+          arguments: {
+            task: FIRST_TASK,
+            reads: [" AGENTS.md ", "src/SessionManager.ts", "AGENTS.md"],
+          },
+        };
       }
       if (lastUser === SECOND_PARENT) {
         const text = JSON.stringify(body.messages);
@@ -66,7 +72,11 @@ beforeAll(async () => {
         if (!id) throw new Error("stable subagent ID missing from first tool result");
         return {
           name: "managed_subagent",
-          arguments: { task: SECOND_TASK, continueSubagentID: id },
+          arguments: {
+            task: SECOND_TASK,
+            continueSubagentID: id,
+            reads: ["docs/sync-seams.md"],
+          },
         };
       }
       return null;
@@ -147,6 +157,9 @@ describe("managed_subagent real-Pi continuation", () => {
     expect(continuationContext).toContain(FIRST_TASK);
     expect(continuationContext).toContain("CHILD_HISTORY_SENTINEL");
     expect(continuationContext).not.toContain("PARENT_ONLY_SENTINEL");
+    expect(continuationContext).toContain("docs/sync-seams.md");
+    expect(continuationContext).toContain("task below is the only active assignment");
+    expect(continuationContext).toContain("has not preloaded their contents");
 
     const persisted = JSON.parse(
       readFileSync(path.join(dataDir, "subagent-runs.json"), "utf8"),
@@ -164,6 +177,7 @@ describe("managed_subagent real-Pi continuation", () => {
         artifactRootId: firstCard.id,
         artifactRootToken: expect.any(String),
         currentTurnId: expect.any(String),
+        declaredReads: ["docs/sync-seams.md"],
       }),
     );
     const run = persisted.runs[0]! as {
@@ -174,8 +188,12 @@ describe("managed_subagent real-Pi continuation", () => {
       realpathSync.native(path.join(dataDir, "Subagent Runs", firstCard.id)),
     );
     const turn = path.join(root, "turns", run.currentTurnId);
-    expect(readFileSync(path.join(root, "input.md"), "utf8")).toBe(FIRST_TASK);
-    expect(readFileSync(path.join(turn, "input.md"), "utf8")).toBe(SECOND_TASK);
+    expect(readFileSync(path.join(root, "input.md"), "utf8")).toBe(
+      `${FIRST_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\nAGENTS.md\nsrc/SessionManager.ts`,
+    );
+    expect(readFileSync(path.join(turn, "input.md"), "utf8")).toBe(
+      `${SECOND_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\ndocs/sync-seams.md`,
+    );
     expect(readFileSync(path.join(turn, "system-prompt.md"), "utf8")).toContain(
       `Artifact directory: ${turn}`,
     );
