@@ -20,6 +20,7 @@ const agent: AgentInfo = {
   defaultExpectedOutcome: "writeProjectFile",
   defaultProgress: true,
   interactive: true,
+  output: "Concise review summary",
   scope: "global",
   filePath: "/tmp/writer.md",
   body: "Write carefully.",
@@ -40,6 +41,9 @@ describe("AgentDetail delegation metadata", () => {
         onEdit={vi.fn()}
       />,
     );
+    const output = screen.getByTestId("agent-output");
+    expect(output.textContent).toContain("Output Advisory");
+    expect(output.textContent).toContain("Concise review summary");
     const card = screen.getByTestId("agent-default-outcome");
     expect(card.textContent).toContain("Default Outcome");
     expect(card.textContent).toContain("Write/update project file");
@@ -49,6 +53,19 @@ describe("AgentDetail delegation metadata", () => {
     const interactive = screen.getByTestId("agent-interactive");
     expect(interactive.textContent).toContain("Interactive");
     expect(interactive.textContent).toContain("Yes");
+  });
+
+  it("does not display effective output metadata on a builtin", () => {
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    render(
+      <AgentDetail
+        agent={{ ...agent, scope: "builtin" }}
+        canCreateReplacement={true}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("agent-output")).toBeNull();
   });
 
   it.each([

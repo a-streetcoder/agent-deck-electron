@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   applyShadowing,
   type AgentInfo,
+  normalizeAgentOutput,
   SUBAGENT_EXPECTED_OUTCOMES,
   type PromptInfo,
   type ResourceScope,
@@ -105,6 +106,7 @@ export function parseAgentFile(
     defaultProgress:
       typeof frontmatter.defaultProgress === "boolean" ? frontmatter.defaultProgress : undefined,
     interactive: typeof frontmatter.interactive === "boolean" ? frontmatter.interactive : undefined,
+    output: normalizeAgentOutput(frontmatter.output),
     scope,
     filePath,
     body: body.trim(),

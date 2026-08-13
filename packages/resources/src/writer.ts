@@ -357,6 +357,7 @@ const AGENT_FIELD_ORDER = [
   "defaultExpectedOutcome",
   "defaultProgress",
   "interactive",
+  "output",
 ] as const;
 
 function serializeFrontmatter(record: Record<string, unknown>): string {
@@ -433,6 +434,7 @@ export function writeAgentFile(
     if (edit.interactive) frontmatter.interactive = true;
     else delete frontmatter.interactive;
   }
+  setOrDelete("output", edit.output);
   if (edit.body !== undefined) body = edit.body.trim();
 
   secureWrite(

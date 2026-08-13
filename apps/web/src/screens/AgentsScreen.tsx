@@ -409,6 +409,17 @@ export function AgentDetail({
               <ChipList label="Fallback Models" items={agent.fallbackModels} />
             </div>
           ) : null}
+          {agent.scope !== "builtin" && agent.output ? (
+            <div
+              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-output"
+            >
+              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                Output Advisory
+              </div>
+              <div className="text-sm text-text-secondary">{agent.output}</div>
+            </div>
+          ) : null}
           {agent.defaultExpectedOutcome ? (
             <div
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"

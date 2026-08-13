@@ -50,7 +50,22 @@ beforeAll(async () => {
     // The PARENT delegates (never the child, never after the tool result lands).
     // "use-ghost" in the prompt exercises the unknown-agent path.
     toolCall: (lastUser, body) => {
-      if (isChildRequest(body) || body.messages.some((m) => m.role === "tool")) return null;
+      if (isChildRequest(body)) return null;
+      if (lastUser.includes("continue-review")) {
+        const history = JSON.stringify(body.messages);
+        const runId = /Deck subagent ID: ([0-9a-f-]{36})/i.exec(history)?.[1];
+        return runId
+          ? {
+              name: "managed_subagent",
+              arguments: {
+                task: "Continue the review.",
+                agent: "reviewer-bot",
+                continueSubagentID: runId,
+              },
+            }
+          : null;
+      }
+      if (body.messages.some((m) => m.role === "tool")) return null;
       const agent = lastUser.includes("use-ghost")
         ? "ghost-bot"
         : lastUser.includes("use-fallback")
@@ -81,7 +96,7 @@ beforeAll(async () => {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
-    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read, write, edit, bash, mcp:remote-mutate\nskills: review-checklist\ndefaultExpectedOutcome: directProjectWrites\n---\n\n${PERSONA_SENTINEL}\n`,
+    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read, write, edit, bash, mcp:remote-mutate\nskills: review-checklist\ndefaultExpectedOutcome: directProjectWrites\noutput: Concise quoted review summary\n---\n\n${PERSONA_SENTINEL}\n`,
   );
   writeFileSync(
     path.join(agentsDir, "fallback-bot.md"),
@@ -150,6 +165,12 @@ describe("managed_subagent{agent}: named delegation", () => {
     );
     expect(childSystem).toContain("actual project checkout");
     expect(childSystem).toContain("does not grant any additional tool");
+    expect(childSystem).toContain("# Named agent output advisory");
+    expect(childSystem).toContain('Configured output: "Concise quoted review summary"');
+    expect(childSystem).toContain("does not grant tools");
+    expect(childSystem).toContain("select Agent Deck artifact output.md");
+    expect(childSystem).toContain("validate or authorize a project path");
+    expect(childSystem).toContain("create a worktree");
 
     const childToolNames = (Array.isArray(childRequest!.tools) ? childRequest!.tools : []).flatMap(
       (tool) => {
@@ -186,6 +207,27 @@ describe("managed_subagent{agent}: named delegation", () => {
       deltas.map(({ seq }) => seq).sort((a, b) => a - b),
     );
     expect(deltas.map(({ delta }) => delta).join("")).toBe("CHILD_REVIEW_SENTINEL: looks good.");
+  });
+
+  it("reapplies the named output advisory to a continuation prompt", async () => {
+    const id = await startSession();
+    await server.sessions.get(id)!.prompt("delegate a code review");
+    await server.receipts.waitFor("idle", id);
+    const beforeContinuation = mock.requests.length;
+
+    await server.sessions.get(id)!.prompt("continue-review");
+    let continuedChild: ChatCompletionRequest | undefined;
+    const deadline = Date.now() + 30_000;
+    while (!continuedChild && Date.now() < deadline) {
+      continuedChild = mock.requests.slice(beforeContinuation).find(isChildRequest);
+      if (!continuedChild) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(continuedChild).toBeDefined();
+    const continuedSystem = systemText(continuedChild!);
+    expect(continuedSystem).toContain("This is a continuation of your own child session");
+    expect(continuedSystem).toContain("# Named agent output advisory");
+    expect(continuedSystem).toContain('Configured output: "Concise quoted review summary"');
+    expect(continuedSystem).toContain("does not grant tools");
   });
 
   it("falls back an unspecified named outcome to an enforced report-only contract", async () => {

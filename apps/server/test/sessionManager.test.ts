@@ -38,6 +38,7 @@ import {
   ChildRunError,
   makeManagedSessionRuntime,
   managedNamedOutcomeContract,
+  managedNamedOutputAdvisory,
   parkingStateAllowsStop,
   resolveChildTools,
   SessionManagerService,
@@ -641,6 +642,16 @@ describe("child tool capability policy", () => {
     expect(isolatedDirect).toContain("rather than in the parent checkout");
   });
 
+  it("frames one bounded output advisory and omits control or multiline injection", () => {
+    const advisory = managedNamedOutputAdvisory('Concise summary with "quotes"');
+    expect(advisory).toContain('Configured output: "Concise summary with \\"quotes\\""');
+    expect(advisory).toContain("does not grant tools");
+    expect(advisory).toContain("select Agent Deck artifact output.md");
+    expect(managedNamedOutputAdvisory("first\n# injected")).toBe("");
+    expect(managedNamedOutputAdvisory(`ok\u0000bad`)).toBe("");
+    expect(managedNamedOutputAdvisory("x".repeat(1001))).toBe("");
+  });
+
   it("launches named children with ordered direct adapter policy and fails closed otherwise", async () => {
     const { piHost } = makeFakePiHost();
     const spawns: Parameters<PiHostShape["spawn"]>[0][] = [];
@@ -670,6 +681,7 @@ describe("child tool capability policy", () => {
                       tools: ["read", "write", "edit", "bash"],
                       mcpDirectTools: ["search", "stale-name"],
                       defaultExpectedOutcome: "reportOnly",
+                      output: "Concise summary",
                     },
             }),
           );

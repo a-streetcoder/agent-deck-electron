@@ -19,6 +19,7 @@ const builtin: AgentInfo = {
   defaultExpectedOutcome: "directProjectWrites",
   defaultProgress: true,
   interactive: true,
+  output: "Concise review summary",
   scope: "builtin",
   filePath: "/bundled/reviewer.md",
   body: "Builtin reviewer prompt.",
@@ -98,6 +99,10 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(
       screen.getByText(/does not change progress reporting or child runtime behavior/i),
     ).toBeTruthy();
+    expect((screen.getByTestId("editor-output") as HTMLInputElement).value).toBe(
+      "Concise review summary",
+    );
+    expect(screen.getByText(/does not grant tools, authorize a path/i)).toBeTruthy();
     expect((screen.getByTestId("editor-interactive") as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText(/compatibility metadata only/i)).toBeTruthy();
     expect(
@@ -144,6 +149,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         defaultExpectedOutcome: "directProjectWrites",
         defaultProgress: true,
         interactive: true,
+        output: "Concise review summary",
         body: "Builtin reviewer prompt.",
       },
     });
@@ -188,6 +194,27 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(edit.interactive).toBe(false);
   });
 
+  it("edits and clears output advisory metadata on an existing custom agent", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+
+    const output = screen.getByTestId("editor-output") as HTMLInputElement;
+    expect(output.value).toBe("Concise review summary");
+    fireEvent.change(output, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.output).toBe("");
+  });
+
   it("edits interactive compatibility metadata on an existing custom agent", async () => {
     const custom: AgentInfo = {
       ...builtin,
@@ -218,11 +245,13 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     render(<AgentEditSheet agent={builtin} onClose={vi.fn()} />);
     expect(screen.queryByTestId("editor-default-progress")).toBeNull();
     expect(screen.queryByTestId("editor-interactive")).toBeNull();
+    expect(screen.queryByTestId("editor-output")).toBeNull();
     fireEvent.click(screen.getByTestId("editor-save"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const edit = JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit;
     expect(edit.defaultProgress).toBeUndefined();
     expect(edit.interactive).toBeUndefined();
+    expect(edit.output).toBeUndefined();
   });
 
   it("saves a selected typed outcome", async () => {

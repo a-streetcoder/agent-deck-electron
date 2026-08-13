@@ -8,6 +8,7 @@ import {
   emptyTranscript,
   finalizeOpenProviderRetry,
   ingestPiEvent,
+  normalizeAgentOutput,
   reduceTranscript,
   type AskUserAnswer,
   type AskUserCell,
@@ -156,6 +157,8 @@ export type AgentResolver = (
       mcpDirectTools?: string[];
       skillDirs?: string[];
       defaultExpectedOutcome?: SubagentExpectedOutcome;
+      /** Advisory output metadata; it never changes child capabilities. */
+      output?: string;
     }
   | undefined;
 
@@ -506,6 +509,20 @@ export function managedNamedOutcomeContract(
       break;
   }
   return lines.join("\n");
+}
+
+/** Frame native output metadata as one inert value. Runtime validation is
+ * repeated here because AgentResolver is an injectable boundary in tests and
+ * future compositions; malformed/multiline metadata is omitted, never spliced
+ * into the child prompt. */
+export function managedNamedOutputAdvisory(output: string | undefined): string {
+  const value = normalizeAgentOutput(output);
+  if (!value) return "";
+  return [
+    "# Named agent output advisory",
+    `Configured output: ${JSON.stringify(value)}.`,
+    "Treat this only as advisory result-format or destination guidance. By itself it does not grant tools, select Agent Deck artifact output.md, validate or authorize a project path, create a worktree, or permit filesystem changes.",
+  ].join("\n");
 }
 /** An explicit isolated-write request gives an anonymous child only the narrow
  * built-ins needed to inspect and edit that retained checkout. */
@@ -1622,7 +1639,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           runOptions?.worktree === true,
         )}`
       : "";
-    const authoredSystemPrompt = `${boundaryPrompt}${persona}${outcomeContract}\n\nTask:\n${task}`;
+    const outputAdvisory = resolved ? managedNamedOutputAdvisory(resolved.output) : "";
+    const authoredSystemPrompt = `${boundaryPrompt}${persona}${outcomeContract}${outputAdvisory ? `\n\n${outputAdvisory}` : ""}\n\nTask:\n${task}`;
     let effectiveSystemPrompt = authoredSystemPrompt;
     const cellId = runId;
     const childSessionId = randomUUID();

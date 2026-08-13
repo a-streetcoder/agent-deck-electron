@@ -130,12 +130,14 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
   await expect(page.getByTestId("editor-name")).toBeFocused();
   await expect(page.getByTestId("editor-name")).toHaveValue("reviewer");
   await expect(page.getByTestId("editor-scope")).toHaveValue("global");
+  await expect(page.getByTestId("editor-output")).toHaveValue("");
   await page.getByRole("button", { name: "Cancel" }).click();
   expect(existsSync(customFile)).toBe(false);
   expect(readFileSync(settingsFile).equals(seededSettingsBytes)).toBe(true);
 
   // A file appearing after the editor opens is rejected rather than overwritten.
   await page.getByTestId("agent-create-replacement").click();
+  await page.getByTestId("editor-output").fill("Concise browser-tested review summary");
   mkdirSync(path.dirname(customFile), { recursive: true });
   writeFileSync(customFile, "---\nname: reviewer\n---\n\nCollision sentinel.\n");
   await page.getByTestId("editor-save").click();
@@ -150,12 +152,18 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
   expect(readFileSync(builtinFile).equals(builtinBefore)).toBe(true);
   expect(readFileSync(settingsFile).equals(seededSettingsBytes)).toBe(true);
   expect(readFileSync(customFile, "utf8")).toContain("defaultExpectedOutcome: reportOnly");
+  expect(readFileSync(customFile, "utf8")).toContain(
+    "output: Concise browser-tested review summary",
+  );
 
   await page.reload();
   await selectProject(page, path.basename(project));
   await page.getByTestId("nav-agents").click();
   await page.locator('[data-agent-name="reviewer"]').first().click();
   await expect(page.getByTestId("agent-detail")).toContainText("replaces builtin");
+  await expect(page.getByTestId("agent-output")).toContainText(
+    "Concise browser-tested review summary",
+  );
   await expect(page.getByTestId("agent-create-replacement")).toHaveCount(0);
   expect(readFileSync(builtinFile).equals(builtinBefore)).toBe(true);
   expect(readFileSync(settingsFile).equals(seededSettingsBytes)).toBe(true);

@@ -1,6 +1,10 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { AgentInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
+import {
+  normalizeAgentOutput,
+  type AgentInfo,
+  type SubagentExpectedOutcome,
+} from "@agent-deck/domain";
 import { piAgentHome, type ResourceRoots } from "./paths.ts";
 
 /**
@@ -30,6 +34,8 @@ export interface AgentEdit {
   defaultProgress?: boolean;
   /** `false` clears the custom-agent frontmatter value, matching native writes. */
   interactive?: boolean;
+  /** Single-line native output guidance; an empty string clears it. */
+  output?: string;
   body?: string;
 }
 
@@ -149,6 +155,7 @@ export function computeBuiltinOverride(
     | "skills"
     | "mcpServers"
     | "defaultExpectedOutcome"
+    | "output"
     | "body"
   >,
   edit: AgentEdit,
@@ -163,6 +170,7 @@ export function computeBuiltinOverride(
   diffString("whenToUse", edit.whenToUse, base.whenToUse);
   diffString("model", edit.model, base.model);
   diffString("thinking", edit.thinking, base.thinking);
+  diffString("output", edit.output, base.output);
   if (edit.systemPromptMode !== undefined && edit.systemPromptMode !== base.systemPromptMode) {
     values.systemPromptMode = edit.systemPromptMode;
   }
@@ -275,6 +283,9 @@ export function applyAgentOverride(
       case "interactive":
         // Boolean compatibility metadata: false is an effective override value.
         if (typeof value === "boolean") next.interactive = value;
+        break;
+      case "output":
+        next.output = value === false ? undefined : normalizeAgentOutput(value);
         break;
       case "systemPrompt": {
         const body = overrideString(value);

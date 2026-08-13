@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
-import type { SkillInfo } from "@agent-deck/domain";
+import { AGENT_OUTPUT_MAX_LENGTH, normalizeAgentOutput, type SkillInfo } from "@agent-deck/domain";
 import {
   BUILTIN_AGENTS_DIR,
   computeBuiltinOverride,
@@ -46,6 +46,17 @@ const agentEditFields = z.object({
     .optional(),
   defaultProgress: z.boolean().optional(),
   interactive: z.boolean().optional(),
+  // Prompt-adjacent metadata: one bounded advisory value, never a multiline
+  // prompt fragment or control sequence. Empty remains the explicit clear.
+  output: z
+    .string()
+    .trim()
+    .max(AGENT_OUTPUT_MAX_LENGTH)
+    .refine(
+      (value) => value === "" || normalizeAgentOutput(value) !== undefined,
+      "output must be a single line",
+    )
+    .optional(),
   body: z.string().optional(),
 });
 

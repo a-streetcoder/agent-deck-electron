@@ -110,6 +110,7 @@ describe("builtin override edit safety", () => {
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
       interactive: false,
+      output: "Write a concise review summary",
       futureField: "keep-me",
     });
 
@@ -119,6 +120,7 @@ describe("builtin override edit safety", () => {
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
       interactive: false,
+      output: "Write a concise review summary",
       futureField: "keep-me",
       description: "Edited description",
     });
@@ -189,6 +191,7 @@ describe("agent/skill file writer", () => {
       systemPrompt: "Effective overridden prompt.",
       defaultExpectedOutcome: "reportOnly",
       interactive: true,
+      output: "Review summary only",
       defaultProgress: false,
     });
     const effective = parseAgentFile("coder.md", materialized, "builtin");
@@ -203,6 +206,7 @@ describe("agent/skill file writer", () => {
     expect(effective.interactive).toBe(true);
     expect(materialized).toContain("defaultExpectedOutcome: reportOnly");
     expect(materialized).toContain("interactive: true");
+    expect(materialized).toContain("output: Review summary only");
     expect(materialized).not.toContain("defaultProgress:");
   });
 
@@ -481,6 +485,47 @@ describe("agent/skill file writer", () => {
     expect(updated).toContain("futureField: keep-me");
     expect(
       scanAgents(roots).find((agent) => agent.name === "progress-reporter")?.defaultProgress,
+    ).toBeUndefined();
+  });
+
+  it("round-trips native output metadata, preserves unknown fields, and clears blank values", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "reporter", {
+      output: "Concise review summary",
+      body: "Review carefully.",
+    });
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace("---\n\n", "futureField: keep-me\n---\n\n"),
+    );
+
+    expect(scanAgents(roots).find((agent) => agent.name === "reporter")?.output).toBe(
+      "Concise review summary",
+    );
+    writeAgentFile(roots, "global", "reporter", { output: "Updated summary" });
+    expect(readFileSync(filePath, "utf8")).toContain("output: Updated summary");
+    expect(readFileSync(filePath, "utf8")).toContain("futureField: keep-me");
+
+    writeAgentFile(roots, "global", "reporter", { output: "" });
+    expect(readFileSync(filePath, "utf8")).not.toContain("output:");
+    expect(scanAgents(roots).find((agent) => agent.name === "reporter")?.output).toBeUndefined();
+  });
+
+  it("rejects unsafe authored output metadata during scanning", () => {
+    expect(
+      parseAgentFile(
+        "multiline.md",
+        "---\nname: multiline\noutput: |\n  first line\n  # injected section\n---\n\nBody.\n",
+        "global",
+      ).output,
+    ).toBeUndefined();
+    expect(
+      parseAgentFile(
+        "bounded.md",
+        `---\nname: bounded\noutput: ${"x".repeat(1001)}\n---\n\nBody.\n`,
+        "global",
+      ).output,
     ).toBeUndefined();
   });
 

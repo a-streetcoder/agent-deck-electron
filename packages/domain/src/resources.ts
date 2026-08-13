@@ -29,6 +29,28 @@ export const SUBAGENT_EXPECTED_OUTCOME_LABELS: Record<SubagentExpectedOutcome, s
   directProjectWrites: "Direct project writes",
 };
 
+export const AGENT_OUTPUT_MAX_LENGTH = 1000;
+
+/** Native output metadata enters a child prompt as exactly one advisory value. */
+export function normalizeAgentOutput(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const output = value.trim();
+  if (!output || output.length > AGENT_OUTPUT_MAX_LENGTH) return undefined;
+  for (const character of output) {
+    const codePoint = character.codePointAt(0)!;
+    if (
+      codePoint <= 31 ||
+      codePoint === 127 ||
+      codePoint === 133 ||
+      codePoint === 8232 ||
+      codePoint === 8233
+    ) {
+      return undefined;
+    }
+  }
+  return output;
+}
+
 const SCOPE_PRIORITY: Record<ResourceScope, number> = {
   project: 3,
   global: 2,
@@ -66,6 +88,9 @@ export interface AgentInfo {
   /** Native compatibility metadata for expected interaction. Parsed, persisted,
    * and displayed without changing Agent Deck runtime behavior. */
   interactive?: boolean;
+  /** Native authored output guidance. For named delegation this is advisory
+   * prompt metadata only; it never grants tools or filesystem authority. */
+  output?: string;
   scope: ResourceScope;
   filePath: string;
   /** Markdown body = the agent system prompt. */

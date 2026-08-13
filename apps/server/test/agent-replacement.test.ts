@@ -25,6 +25,7 @@ async function createReplacement(description: string): Promise<Response> {
         description,
         defaultProgress: true,
         interactive: true,
+        output: "Concise review summary",
         body: "Custom reviewer body.",
       },
     }),
@@ -53,6 +54,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(content).toContain("defaultExpectedOutcome: reportOnly");
     expect(content).toContain("defaultProgress: true");
     expect(content).toContain("interactive: true");
+    expect(content).toContain("output: Concise review summary");
     expect(content).toContain("Custom reviewer body.");
 
     const listed = (await (
@@ -65,6 +67,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
         replacesBuiltin: boolean;
         defaultProgress?: boolean;
         interactive?: boolean;
+        output?: string;
       }>;
     };
     expect(listed.agents).toEqual(
@@ -76,6 +79,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           replacesBuiltin: true,
           defaultProgress: true,
           interactive: true,
+          output: "Concise review summary",
         }),
         expect.objectContaining({ name: "reviewer", scope: "builtin", shadowed: true }),
       ]),
@@ -114,6 +118,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
                 systemPrompt: "Effective overridden prompt.",
                 defaultExpectedOutcome: "reportOnly",
                 interactive: true,
+                output: "Effective report summary",
                 defaultProgress: false,
               },
             },
@@ -152,6 +157,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(custom).toContain("tools: read, grep");
     expect(custom).toContain("defaultExpectedOutcome: reportOnly");
     expect(custom).toContain("interactive: true");
+    expect(custom).toContain("output: Effective report summary");
     expect(custom).not.toContain("defaultProgress:");
     expect(custom).not.toContain("whenToUse:");
     expect(custom).toContain("Effective overridden prompt.");
@@ -178,6 +184,8 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
   it.each([
     ["default progress", "invalid-progress", { defaultProgress: "yes" }],
     ["interactive", "invalid-interactive", { interactive: "yes" }],
+    ["multiline output", "invalid-output", { output: "first\n# injected" }],
+    ["oversized output", "oversized-output", { output: "x".repeat(1001) }],
   ])("rejects non-boolean %s without writing a custom agent", async (_label, name, invalidEdit) => {
     const invalidFile = path.join(home, ".pi", "agent", "agents", `${name}.md`);
     const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {

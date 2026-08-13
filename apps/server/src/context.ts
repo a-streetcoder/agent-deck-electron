@@ -84,6 +84,8 @@ export interface NamedAgentLaunch {
   extensions: string[];
   mcpServers?: string[];
   defaultExpectedOutcome?: SubagentExpectedOutcome;
+  /** Advisory output metadata for named children; never a capability grant. */
+  output?: string;
 }
 
 /**

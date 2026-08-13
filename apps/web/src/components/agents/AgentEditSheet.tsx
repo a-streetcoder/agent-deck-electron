@@ -74,6 +74,7 @@ export function AgentEditSheet({
   >(seed?.defaultExpectedOutcome ?? "");
   const [defaultProgress, setDefaultProgress] = useState(seed?.defaultProgress ?? false);
   const [interactive, setInteractive] = useState(seed?.interactive ?? false);
+  const [output, setOutput] = useState(seed?.output ?? "");
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -101,6 +102,7 @@ export function AgentEditSheet({
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
     defaultProgress: seed?.defaultProgress ?? false,
     interactive: seed?.interactive ?? false,
+    output: seed?.output ?? "",
     body: seed?.body ?? "",
   }).current;
   const dirty =
@@ -118,6 +120,7 @@ export function AgentEditSheet({
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
     defaultProgress !== initial.defaultProgress ||
     interactive !== initial.interactive ||
+    output !== initial.output ||
     body !== initial.body;
 
   const dirtyRef = useRef(dirty);
@@ -193,6 +196,7 @@ export function AgentEditSheet({
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
               (live.defaultProgress ?? false) !== initial.defaultProgress ||
               (live.interactive ?? false) !== initial.interactive ||
+              (live.output ?? "") !== initial.output ||
               live.body !== initial.body)
           ) {
             throw new Error(
@@ -228,6 +232,9 @@ export function AgentEditSheet({
             // Compatibility metadata has no Electron runtime consumer. Builtin
             // edits preserve any existing override instead of managing it here.
             interactive: isBuiltin ? undefined : interactive,
+            // Native output is advisory metadata for named delegation only.
+            // Builtin saves preserve any unmanaged override value.
+            output: isBuiltin ? undefined : output,
             body,
           },
         }),
@@ -439,6 +446,22 @@ export function AgentEditSheet({
                       This adds outcome guidance only; it neither adds nor removes configured tools.
                       Edit files in worktree needs caller-selected worktree isolation, and
                       write/update project file needs a validated per-run output path.
+                    </span>
+                  </label>
+                  <label className="block text-xs text-text-muted">
+                    Output advisory
+                    <ControlInput
+                      data-testid="editor-output"
+                      className={inputClass}
+                      maxLength={1000}
+                      aria-describedby="editor-output-help"
+                      placeholder="e.g. concise review summary"
+                      value={output}
+                      onChange={(event) => setOutput(event.target.value)}
+                    />
+                    <span id="editor-output-help" className="mt-1 block text-xs text-text-muted">
+                      Advisory guidance for named children only. It does not grant tools, authorize
+                      a path, create a worktree, or select an Agent Deck artifact file.
                     </span>
                   </label>
                   <label className="flex items-start gap-2 text-xs text-text-muted">
