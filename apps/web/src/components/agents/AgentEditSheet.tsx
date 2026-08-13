@@ -56,7 +56,11 @@ export function AgentEditSheet({
   const [fallbackModels, setFallbackModels] = useState((seed?.fallbackModels ?? []).join(", "));
   const [thinking, setThinking] = useState(seed?.thinking ?? "");
   const [mode, setMode] = useState<"replace" | "append">(seed?.systemPromptMode ?? "replace");
-  const [tools, setTools] = useState((seed?.tools ?? []).join(", "));
+  const [tools, setTools] = useState(
+    [...(seed?.tools ?? []), ...(seed?.mcpDirectTools ?? []).map((name) => `mcp:${name}`)].join(
+      ", ",
+    ),
+  );
   const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
   const [mcpServers, setMcpServers] = useState((seed?.mcpServers ?? []).join(", "));
   const [body, setBody] = useState(seed?.body ?? "");
@@ -77,7 +81,10 @@ export function AgentEditSheet({
     fallbackModels: (seed?.fallbackModels ?? []).join(", "),
     thinking: seed?.thinking ?? "",
     mode: seed?.systemPromptMode ?? "replace",
-    tools: (seed?.tools ?? []).join(", "),
+    tools: [
+      ...(seed?.tools ?? []),
+      ...(seed?.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
+    ].join(", "),
     skills: (seed?.skills ?? []).join(", "),
     mcpServers: (seed?.mcpServers ?? []).join(", "),
     body: seed?.body ?? "",
@@ -160,7 +167,10 @@ export function AgentEditSheet({
               (live.fallbackModels ?? []).join(", ") !== initial.fallbackModels ||
               (live.thinking ?? "") !== initial.thinking ||
               live.systemPromptMode !== initial.mode ||
-              (live.tools ?? []).join(", ") !== initial.tools ||
+              [
+                ...(live.tools ?? []),
+                ...(live.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
+              ].join(", ") !== initial.tools ||
               (live.skills ?? []).join(", ") !== initial.skills ||
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
               live.body !== initial.body)
@@ -216,6 +226,7 @@ export function AgentEditSheet({
         className="flex max-h-[85vh] w-[560px] flex-col rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
         data-testid="agent-editor"
         role="dialog"
+        aria-busy={saving}
         aria-modal="true"
         aria-label={
           agent
@@ -399,16 +410,23 @@ export function AgentEditSheet({
           ) : null}
 
           {tab === "tools" ? (
-            <label className="block text-xs text-text-muted">
-              Tools (comma-separated; empty = pi defaults)
-              <ControlInput
-                data-testid="editor-tools"
-                className={inputClass}
-                placeholder="read, grep, bash…"
-                value={tools}
-                onChange={(e) => setTools(e.target.value)}
-              />
-            </label>
+            <div className="space-y-2">
+              <label className="block text-xs text-text-muted">
+                Tools (comma-separated; empty = Pi defaults)
+                <ControlInput
+                  data-testid="editor-tools"
+                  className={inputClass}
+                  aria-describedby="editor-tools-help"
+                  placeholder="read, grep, mcp:search…"
+                  value={tools}
+                  onChange={(e) => setTools(e.target.value)}
+                />
+              </label>
+              <p id="editor-tools-help" className="text-xs text-text-muted">
+                Prefix an external Pi MCP adapter tool with mcp:. These names may be stale and do
+                not connect or grant access to Agent Deck MCP servers.
+              </p>
+            </div>
           ) : null}
 
           {tab === "skills" ? (
@@ -436,7 +454,7 @@ export function AgentEditSheet({
           ) : null}
 
           {error ? (
-            <div className="text-sm" style={{ color: "var(--color-role-error)" }}>
+            <div className="text-sm" role="alert" style={{ color: "var(--color-role-error)" }}>
               {error}
             </div>
           ) : null}

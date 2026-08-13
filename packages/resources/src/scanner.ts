@@ -42,6 +42,25 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Native-compatible split for the shared `tools:` frontmatter field. Direct
+ * adapter names are metadata only: they must never enter Pi's `--tools` list. */
+function splitAgentTools(value: unknown): { tools?: string[]; mcpDirectTools?: string[] } {
+  const tools: string[] = [];
+  const mcpDirectTools: string[] = [];
+  for (const item of asList(value) ?? []) {
+    if (item.startsWith("mcp:")) {
+      const name = item.slice(4).trim();
+      if (name) mcpDirectTools.push(name);
+    } else {
+      tools.push(item);
+    }
+  }
+  return {
+    tools: tools.length > 0 ? tools : undefined,
+    mcpDirectTools: mcpDirectTools.length > 0 ? mcpDirectTools : undefined,
+  };
+}
+
 export function parseAgentFile(
   filePath: string,
   content: string,
@@ -49,6 +68,7 @@ export function parseAgentFile(
 ): Omit<AgentInfo, "shadowed" | "replacesBuiltin"> {
   const { frontmatter, body } = parseFrontmatter(content);
   const mode = asString(frontmatter.systemPromptMode);
+  const parsedTools = splitAgentTools(frontmatter.tools);
   return {
     name: asString(frontmatter.name) ?? path.basename(filePath, ".md"),
     description: asString(frontmatter.description),
@@ -57,7 +77,8 @@ export function parseAgentFile(
     fallbackModels: asList(frontmatter.fallbackModels),
     thinking: asString(frontmatter.thinking),
     systemPromptMode: mode === "append" ? "append" : "replace",
-    tools: asList(frontmatter.tools),
+    tools: parsedTools.tools,
+    mcpDirectTools: parsedTools.mcpDirectTools,
     skills: asList(frontmatter.skills),
     extensions: asList(frontmatter.extensions),
     mcpServers: asList(frontmatter.mcpServers),

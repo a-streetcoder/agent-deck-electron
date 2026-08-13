@@ -280,6 +280,55 @@ describe("agent/skill file writer", () => {
     });
   });
 
+  it("round-trips direct adapter tools in shared tools frontmatter without losing unknown fields", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "adapter-user", {
+      tools: ["read", "grep", "mcp:search", "mcp:stale-name"],
+      body: "Use an external adapter.",
+    });
+    writeFileSync(
+      filePath,
+      readFileSync(filePath, "utf8").replace("---\n\n", "customField: keep-me\n---\n\n"),
+    );
+
+    expect(readFileSync(filePath, "utf8")).toContain(
+      "tools: read, grep, mcp:search, mcp:stale-name",
+    );
+    expect(scanAgents(roots).find((agent) => agent.name === "adapter-user")).toMatchObject({
+      tools: ["read", "grep"],
+      mcpDirectTools: ["search", "stale-name"],
+    });
+
+    writeAgentFile(roots, "global", "adapter-user", {
+      tools: ["read", "grep", "mcp:fetch"],
+    });
+    const updated = readFileSync(filePath, "utf8");
+    expect(updated).toContain("tools: read, grep, mcp:fetch");
+    expect(updated).toContain("customField: keep-me");
+  });
+
+  it("keeps builtin direct tools in the combined tools override and tools:false clears both", () => {
+    const home = makeHome();
+    const base = scanAgents({ home }).find(
+      (agent) => agent.name === "coder" && agent.scope === "builtin",
+    )!;
+    const configured = computeBuiltinOverride(base, {
+      tools: ["read", "mcp:search", "mcp:fetch"],
+    });
+    expect(configured).toEqual({ tools: ["read", "mcp:search", "mcp:fetch"] });
+    writeBuiltinAgentOverride({ home }, "coder", configured);
+    expect(scanAgents({ home }).find((agent) => agent.name === "coder")).toMatchObject({
+      tools: ["read"],
+      mcpDirectTools: ["search", "fetch"],
+    });
+
+    writeBuiltinAgentOverride({ home }, "coder", { tools: false });
+    const cleared = scanAgents({ home }).find((agent) => agent.name === "coder")!;
+    expect(cleared.tools).toBeUndefined();
+    expect(cleared.mcpDirectTools).toBeUndefined();
+  });
+
   it("round-trips an agent's declared mcpServers through write + scan", () => {
     const home = makeHome();
     const roots = { home };

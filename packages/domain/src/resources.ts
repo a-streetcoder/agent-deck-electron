@@ -27,7 +27,11 @@ export interface AgentInfo {
   fallbackModels?: string[];
   thinking?: string;
   systemPromptMode: "replace" | "append";
+  /** Ordinary Pi tool names passed through `--tools`. */
   tools?: string[];
+  /** Ordered external pi-mcp-adapter tool names declared as `mcp:<tool>` in
+   * `tools:` frontmatter. These names do not grant or connect MCP servers. */
+  mcpDirectTools?: string[];
   skills?: string[];
   extensions?: string[];
   /** MCP server names (from mcp.json) this agent declares for its sessions. */

@@ -426,6 +426,7 @@ async function initServer(
         model: agent.model,
         thinking: asThinkingLevel(agent.thinking),
         tools: agent.tools,
+        mcpDirectTools: agent.mcpDirectTools,
         skillDirs: agent.skillDirs,
       };
     },
@@ -562,6 +563,7 @@ async function initServer(
         model: agent.model,
         thinking: agent.thinking,
         tools: agent.tools?.filter((tool) => !BRIDGE_ONLY_TOOLS.has(tool)),
+        mcpDirectTools: agent.mcpDirectTools,
         skillDirs,
         extensions: agent.extensions ?? [],
         mcpServers: agent.mcpServers ?? [],

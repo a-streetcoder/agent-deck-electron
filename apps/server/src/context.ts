@@ -77,6 +77,8 @@ export interface NamedAgentLaunch {
   thinking?: string;
   /** Real pi tools the agent declares (bridge-only tools filtered out). */
   tools?: string[];
+  /** Ordered external adapter names; never part of Pi's `--tools` allowlist. */
+  mcpDirectTools?: string[];
   /** Resolved skill base dirs, disabled skills removed. */
   skillDirs: string[];
   extensions: string[];

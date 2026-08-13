@@ -13,6 +13,7 @@ const builtin: AgentInfo = {
   thinking: "high",
   systemPromptMode: "replace",
   tools: ["read", "grep"],
+  mcpDirectTools: ["search", "stale-tool"],
   skills: ["reviewing"],
   mcpServers: ["github"],
   scope: "builtin",
@@ -52,7 +53,10 @@ describe("AgentEditSheet builtin replacement create mode", () => {
       "Effective overridden reviewer",
     );
     fireEvent.click(screen.getByTestId("editor-tab-tools"));
-    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("read");
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe(
+      "read, mcp:search, mcp:stale-tool",
+    );
+    expect(screen.getByText(/do not connect or grant access/i)).toBeTruthy();
     fireEvent.click(screen.getByTestId("editor-tab-prompt"));
     expect((screen.getByTestId("editor-body") as HTMLTextAreaElement).value).toBe(
       "Effective override prompt.",
@@ -110,12 +114,32 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         description: "Review changes",
         whenToUse: "Before risky changes",
         thinking: "high",
-        tools: ["read", "grep"],
+        tools: ["read", "grep", "mcp:search", "mcp:stale-tool"],
         skills: ["reviewing"],
         mcpServers: ["github"],
         body: "Builtin reviewer prompt.",
       },
     });
+  });
+
+  it("edits direct adapter names in the native-compatible tools list and announces failures", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "Save refused" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={null} createFromBuiltin={builtin} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("editor-tab-tools"));
+    fireEvent.change(screen.getByTestId("editor-tools"), {
+      target: { value: "read, mcp:fetch, mcp:legacy-name" },
+    });
+    fireEvent.click(screen.getByTestId("editor-save"));
+    expect((await screen.findByRole("alert")).textContent).toContain("Save refused");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
+    expect(body.edit.tools).toEqual(["read", "mcp:fetch", "mcp:legacy-name"]);
+    expect(body.edit.mcpDirectTools).toBeUndefined();
   });
 
   it("keeps the seeded name editable like native custom-agent drafts", async () => {

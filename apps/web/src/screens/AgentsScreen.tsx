@@ -375,7 +375,17 @@ function AgentDetail({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <ChipList label="Tools" items={agent.tools ?? ["pi defaults"]} />
+            <ChipList
+              label="Tools"
+              items={
+                agent.tools?.length || agent.mcpDirectTools?.length
+                  ? [
+                      ...(agent.tools ?? []),
+                      ...(agent.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
+                    ]
+                  : ["pi defaults"]
+              }
+            />
           </div>
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
             <ChipList label="Skills" items={agent.skills?.length ? agent.skills : ["none"]} />

@@ -608,6 +608,44 @@ describe("durable generic child lifecycle", () => {
 });
 
 describe("child tool capability policy", () => {
+  it("launches named children with ordered direct adapter policy and fails closed otherwise", async () => {
+    const { piHost } = makeFakePiHost();
+    const spawns: Parameters<PiHostShape["spawn"]>[0][] = [];
+    const capturingHost: PiHostShape = {
+      spawn: (options) => {
+        spawns.push(options);
+        return piHost.spawn(options);
+      },
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const configured = yield* makeManagedSessionRuntime(
+            capturingHost,
+            buses,
+            makeParams({
+              helperContext: { env: { MCP_DIRECT_TOOLS: "inherited", KEEP: "yes" } },
+              resolveAgent: () => ({
+                body: "Configured persona",
+                tools: ["read"],
+                mcpDirectTools: ["search", "stale-name"],
+              }),
+            }),
+          );
+          yield* configured.runChildAgent("finish normally", "configured");
+          yield* configured.runChildAgent("finish normally");
+        }),
+      ),
+    );
+
+    expect(spawns[1]!.env).toMatchObject({
+      KEEP: "yes",
+      MCP_DIRECT_TOOLS: "search,stale-name",
+    });
+    expect(spawns[1]!.args.join(" ")).not.toContain("mcp:search");
+    expect(spawns[2]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
+  });
+
   const dangerous = [
     "read",
     "grep",

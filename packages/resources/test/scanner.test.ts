@@ -84,6 +84,18 @@ describe("scanAgents", () => {
     });
   });
 
+  it("semantically separates ordered mcp: entries from ordinary Pi tools", () => {
+    const home = makeHome();
+    writeAgent(
+      path.join(home, ".agents"),
+      "adapter-user",
+      "tools: read, mcp:search, grep, mcp:stale-external-name\n",
+    );
+    const agent = scanAgents({ home }).find((item) => item.name === "adapter-user")!;
+    expect(agent.tools).toEqual(["read", "grep"]);
+    expect(agent.mcpDirectTools).toEqual(["search", "stale-external-name"]);
+  });
+
   it("parses comma-separated tools and marks a global replacement of a builtin", () => {
     const home = makeHome();
     writeAgent(path.join(home, ".agents"), "reviewer", "tools: read, grep\n");

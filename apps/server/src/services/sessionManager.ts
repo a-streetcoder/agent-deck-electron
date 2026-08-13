@@ -151,6 +151,8 @@ export type AgentResolver = (
       model?: string;
       thinking?: AgentSessionPlan["thinking"];
       tools?: string[];
+      /** External adapter names supplied only through MCP_DIRECT_TOOLS. */
+      mcpDirectTools?: string[];
       skillDirs?: string[];
     }
   | undefined;
@@ -1820,7 +1822,16 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               : helperContext.extensions,
           }),
           cwd: childCwd,
-          env: helperContext.env,
+          // External pi-mcp-adapter policy is separate from Agent Deck's MCP
+          // connection/assignment trust. Always overwrite inherited state so an
+          // unnamed or empty-policy child fails closed rather than gaining tools.
+          env: {
+            ...helperContext.env,
+            MCP_DIRECT_TOOLS:
+              resolved?.mcpDirectTools && resolved.mcpDirectTools.length > 0
+                ? resolved.mcpDirectTools.join(",")
+                : "__none__",
+          },
           requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
         });
 
