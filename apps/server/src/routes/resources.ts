@@ -16,6 +16,7 @@ import {
 import {
   BUILTIN_AGENTS_DIR,
   builtinPromptsDir,
+  isExternalPromptFileName,
   computeBuiltinOverride,
   deleteAgentFile,
   deletePromptFile,
@@ -967,10 +968,10 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     } catch {
       isFile = false;
     }
-    if (!isFile || !resolved.toLowerCase().endsWith(".md")) {
-      return reply
-        .status(400)
-        .send({ error: "An external prompt reference must be an existing .md file." });
+    if (!isFile || !isExternalPromptFileName(resolved)) {
+      return reply.status(400).send({
+        error: "An external prompt reference must be an existing markdown or text file.",
+      });
     }
     settings.addExternalPromptPath(resolved);
     broadcast({ type: "resources_changed" });
@@ -981,7 +982,9 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = z.object({ path: z.string().trim().min(1).max(2000) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const resolved = nodePath.resolve(parsed.data.path);
-    const name = nodePath.basename(resolved, ".md");
+    // the SAME name scanning registered: the real extension stripped, whatever it
+    // was (.md/.markdown/.mdown/.txt) — basename(x, ".md") mis-keys the others
+    const name = nodePath.parse(resolved).name;
     settings.removeExternalPromptPath(resolved);
     // The reference is gone: drop the default and each project's assignment only if
     // the NAME no longer resolves for them (a catalog/builtin/package prompt may

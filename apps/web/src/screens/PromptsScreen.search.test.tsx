@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { filterPrompts, PromptsScreen } from "./PromptsScreen.tsx";
 
+// The file picker is a trusted desktop IPC — stubbed per test via this holder (PRM-07).
+const pickerResult: { files: string[] } = { files: [] };
+vi.mock("../lib/native.ts", async (importOriginal) => {
+  const mod = (await importOriginal()) as Record<string, unknown>;
+  return { ...mod, chooseFiles: vi.fn(async () => pickerResult.files) };
+});
+
 const prompts: PromptInfo[] = [
   {
     name: "NameNeedle",
@@ -350,9 +357,10 @@ describe("external prompt references (PRM-05)", () => {
       });
     });
 
-    // adding: the reference-path input posts to the same endpoint
+    // adding without a picker (browser dev): the reference-path input posts
+    pickerResult.files = [];
     fireEvent.click(screen.getByTestId("prompt-add-external"));
-    fireEvent.change(screen.getByTestId("prompt-external-path"), {
+    fireEvent.change(await screen.findByTestId("prompt-external-path"), {
       target: { value: "C:/notes/another.md" },
     });
     fireEvent.click(screen.getByTestId("prompt-external-confirm"));
@@ -367,6 +375,60 @@ describe("external prompt references (PRM-05)", () => {
       expect(JSON.parse(String((post![1] as RequestInit).body))).toEqual({
         path: "C:/notes/another.md",
       });
+    });
+  });
+
+  it("the native picker references every chosen file directly — no path typing (PRM-07)", async () => {
+    const requested: string[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/prompts") return Promise.resolve(jsonResponse({ prompts: [] }));
+      if (url === "/settings") return Promise.resolve(jsonResponse({ settings: {} }));
+      if (url === "/resources/prompts/external-refs" && init?.method === "POST") {
+        requested.push((JSON.parse(String(init.body)) as { path: string }).path);
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    pickerResult.files = ["C:/notes/one.md", "C:/notes/two.markdown"];
+    render(<PromptsScreen />);
+    await screen.findByTestId("prompt-add-external");
+
+    fireEvent.click(screen.getByTestId("prompt-add-external"));
+    await waitFor(() => {
+      expect(requested).toEqual(["C:/notes/one.md", "C:/notes/two.markdown"]);
+    });
+    // the typed-path fallback input never opened
+    expect(screen.queryByTestId("prompt-external-path")).toBeNull();
+  });
+
+  it("a rejected file does not stop the rest of the selection (review, Codex)", async () => {
+    const requested: string[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/prompts") return Promise.resolve(jsonResponse({ prompts: [] }));
+      if (url === "/settings") return Promise.resolve(jsonResponse({ settings: {} }));
+      if (url === "/resources/prompts/external-refs" && init?.method === "POST") {
+        const p = (JSON.parse(String(init.body)) as { path: string }).path;
+        requested.push(p);
+        if (p.endsWith("broken.md")) {
+          return Promise.resolve(new Response(JSON.stringify({ error: "nope" }), { status: 400 }));
+        }
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    pickerResult.files = ["C:/n/ok.md", "C:/n/broken.md", "C:/n/also-ok.md"];
+    render(<PromptsScreen />);
+    await screen.findByTestId("prompt-add-external");
+
+    fireEvent.click(screen.getByTestId("prompt-add-external"));
+    // every file is attempted; the failure is reported, not swallowed or fatal
+    await waitFor(() => {
+      expect(requested).toEqual(["C:/n/ok.md", "C:/n/broken.md", "C:/n/also-ok.md"]);
+    });
+    await waitFor(() => {
+      expect(useAppStore.getState().error).toContain("broken.md");
     });
   });
 });

@@ -481,6 +481,24 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     expect(prompts.filter((p) => !p.external && p.name === "kept-outside")).toHaveLength(0);
   });
 
+  it("accepts native's reference extensions (.markdown/.mdown/.txt) with clean names (PRM-07)", () => {
+    const home = makeHome();
+    const outside = path.join(home, "misc");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, "notes.markdown"), "---\ndescription: a\n---\n\nbody\n");
+    writeFileSync(path.join(outside, "plain.txt"), "just text\n");
+    writeFileSync(path.join(outside, "binary.png"), "nope");
+    const prompts = scanPrompts({ home }, undefined, [
+      path.join(outside, "notes.markdown"),
+      path.join(outside, "plain.txt"),
+      path.join(outside, "binary.png"),
+    ]);
+    const external = prompts.filter((p) => p.external).map((p) => p.name);
+    // the NAME strips the real extension (native deletingPathExtension), so the
+    // slash command stays clean: /notes, /plain
+    expect(external.sort()).toEqual(["notes", "plain"]);
+  });
+
   it("a reference pointing INTO a catalog never duplicates the catalog record (PRM-05)", () => {
     const home = makeHome();
     const globalDir = path.join(home, ".pi", "agent", "prompts");

@@ -803,11 +803,29 @@ ipcMain.handle("dialog:openDirectory", async (event, options = {}) => {
 ipcMain.handle("dialog:openFiles", async (event, options = {}) => {
   assertTrustedPickerSender(event, "File chooser is unavailable");
   const pickerOptions = options && typeof options === "object" ? options : {};
+  // Extension filters (PRM-07): validated shape only — a renderer-supplied filter
+  // can narrow the picker but never widen any capability (the picker only returns paths).
+  const filters = Array.isArray(pickerOptions.filters)
+    ? pickerOptions.filters
+        .slice(0, 8) // bound BEFORE validating — never scan an unbounded array
+        .filter(
+          (f) =>
+            f &&
+            typeof f.name === "string" &&
+            Array.isArray(f.extensions) &&
+            f.extensions.length > 0 &&
+            f.extensions
+              .slice(0, 16)
+              .every((ext) => typeof ext === "string" && /^[a-z0-9]{1,12}$/i.test(ext)),
+        )
+        .map((f) => ({ name: f.name.slice(0, 64), extensions: f.extensions.slice(0, 16) }))
+    : undefined;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: typeof pickerOptions.title === "string" ? pickerOptions.title : "Choose Files",
     message: typeof pickerOptions.message === "string" ? pickerOptions.message : undefined,
     buttonLabel:
       typeof pickerOptions.buttonLabel === "string" ? pickerOptions.buttonLabel : undefined,
+    filters: filters && filters.length > 0 ? filters : undefined,
     properties: ["openFile", "multiSelections"],
   });
   if (result.canceled) return [];

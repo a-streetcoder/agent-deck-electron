@@ -32,6 +32,8 @@ export {
   type McpTransport,
 } from "./mcp.ts";
 export {
+  EXTERNAL_PROMPT_EXTENSIONS,
+  isExternalPromptFileName,
   parseAgentFile,
   scanAgents,
   scanExtensions,

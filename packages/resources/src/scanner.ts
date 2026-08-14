@@ -178,6 +178,14 @@ export function scanAgents(roots: ResourceRoots): AgentInfo[] {
  * scope's entry (no dedup) so a management UI can edit/delete both a global
  * prompt and a same-name project one — pi resolves precedence itself at load.
  */
+/** Native references md/markdown/mdown/txt (NSOpenPanel's allowed types, PRM-07). */
+export const EXTERNAL_PROMPT_EXTENSIONS = [".md", ".markdown", ".mdown", ".txt"] as const;
+
+export function isExternalPromptFileName(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return EXTERNAL_PROMPT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
 export function scanPrompts(
   roots: ResourceRoots,
   onWarning?: (warning: string) => void,
@@ -191,8 +199,9 @@ export function scanPrompts(
       // under the basename (expandPromptTemplate matches `/<basename>`) and
       // IGNORES any frontmatter `name`. So `name` (which edit/rename/delete and
       // the writer key off, as `${name}.md`) must be the basename too — trusting
-      // a divergent frontmatter `name` would target the wrong file.
-      const basename = path.basename(filePath, ".md");
+      // a divergent frontmatter `name` would target the wrong file. External
+      // refs may carry native's other extensions; strip whichever matched.
+      const basename = external ? path.parse(filePath).name : path.basename(filePath, ".md");
       prompts.push({
         name: basename,
         description: asString(frontmatter.description),
@@ -269,7 +278,7 @@ export function scanPrompts(
       onWarning?.(`External prompt reference ${raw} does not exist.`);
       continue;
     }
-    if (!isFile || !resolved.toLowerCase().endsWith(".md")) continue; // single .md files only
+    if (!isFile || !isExternalPromptFileName(resolved)) continue; // native's reference types only
     readPromptFile(resolved, "library", true);
   }
   // Rank within a name for first-wins consumers (launch resolution's promptsByName):

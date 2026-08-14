@@ -9,7 +9,7 @@ import { Check, Globe, MessageSquareText, Pencil, Plus, Search, Trash2, X } from
 import type { PromptInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
-import { openResourceFile, revealResourceFile } from "../lib/native.ts";
+import { chooseFiles, openResourceFile, revealResourceFile } from "../lib/native.ts";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
 
@@ -93,22 +93,55 @@ export function PromptsScreen() {
   // PRM-05: the external-reference path input (null = closed).
   const [externalPath, setExternalPath] = useState<string | null>(null);
 
+  const referencePath = async (refPath: string): Promise<void> => {
+    const response = await fetch("/resources/prompts/external-refs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: refPath }),
+    });
+    if (!response.ok) {
+      throw new Error(await responseErrorMessage(response, "Couldn't reference that prompt file."));
+    }
+  };
+
   const addExternalRef = async (): Promise<void> => {
     const refPath = (externalPath ?? "").trim();
     if (!refPath) return;
     try {
-      const response = await fetch("/resources/prompts/external-refs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: refPath }),
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Couldn't reference that prompt file."),
-        );
-      }
+      await referencePath(refPath);
       setExternalPath(null);
       await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // PRM-07 (native importPromptTemplate): the trusted OS file picker references each
+  // chosen file in place. No picker (browser dev) or cancel falls back to the
+  // typed-path input, keeping the button's toggle behavior.
+  const importExternalPrompt = async (): Promise<void> => {
+    try {
+      const files = await chooseFiles({
+        title: "Import Prompt",
+        buttonLabel: "Import Prompt",
+        filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdown", "txt"] }],
+      });
+      if (files.length === 0) {
+        setExternalPath((v) => (v === null ? "" : null));
+        return;
+      }
+      // every picked file is attempted; one rejection must not strand the rest
+      // (review, Codex). Failures are reported together after the loop.
+      const failures: string[] = [];
+      for (const file of files) {
+        try {
+          await referencePath(file);
+        } catch (err) {
+          failures.push(`${file}: ${String(err)}`);
+        }
+      }
+      await load();
+      if (failures.length > 0) setError(failures.join(" · "));
     } catch (err) {
       setError(String(err));
     }
@@ -434,8 +467,8 @@ export function PromptsScreen() {
             <ControlButton
               data-testid="prompt-add-external"
               className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-              title="Reference an existing .md file in place — it stays where you keep it (never copied)"
-              onClick={() => setExternalPath((v) => (v === null ? "" : null))}
+              title="Reference an existing markdown or text file in place — it stays where you keep it (never copied)"
+              onClick={() => void importExternalPrompt()}
             >
               Reference file…
             </ControlButton>
@@ -459,7 +492,7 @@ export function PromptsScreen() {
               autoFocus
               data-testid="prompt-external-path"
               className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="absolute path to an existing .md prompt file"
+              placeholder="absolute path to an existing prompt file (.md, .markdown, .mdown, .txt)"
               value={externalPath}
               onChange={(event) => setExternalPath(event.target.value)}
               onKeyDown={(event) => {

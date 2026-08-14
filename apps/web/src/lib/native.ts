@@ -51,6 +51,8 @@ export interface AgentDeckBridge {
     title?: string;
     message?: string;
     buttonLabel?: string;
+    /** Picker extension filters (PRM-07); narrows the dialog, never a capability. */
+    filters?: { name: string; extensions: string[] }[];
   }): Promise<string[]>;
   revealSubagentArtifacts?(runId: string): Promise<boolean>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;

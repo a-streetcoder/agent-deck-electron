@@ -449,6 +449,34 @@ describe("external prompt references (PRM-05)", () => {
     expect(readFileSync(refPath, "utf8")).toContain("external body");
   });
 
+  it("accepts native's reference extensions — .markdown works, .png refuses (PRM-07)", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "external-ext-"));
+    const mdown = path.join(outside, "long-form.markdown");
+    writeFileSync(mdown, "---\ndescription: alt extension\n---\n\nbody\n");
+    expect((await api("POST", "/resources/prompts/external-refs", { path: mdown })).status).toBe(
+      200,
+    );
+    const { prompts } = (await (await api("GET", "/resources/prompts")).json()) as {
+      prompts: Array<{ name: string; external?: boolean }>;
+    };
+    expect(prompts.find((p) => p.name === "long-form")?.external).toBe(true);
+    const png = path.join(outside, "image.png");
+    writeFileSync(png, "binary");
+    expect((await api("POST", "/resources/prompts/external-refs", { path: png })).status).toBe(400);
+    // removal cleanup must key the SAME name scanning registered — the real
+    // extension stripped, not just ".md" (review, Codex)
+    await api("PATCH", "/settings", {
+      setDefaultPromptTemplate: { name: "long-form", enabled: true },
+    });
+    expect((await api("DELETE", "/resources/prompts/external-refs", { path: mdown })).status).toBe(
+      200,
+    );
+    const { settings } = (await (await api("GET", "/settings")).json()) as {
+      settings: { defaultPromptTemplates: string[] };
+    };
+    expect(settings.defaultPromptTemplates).not.toContain("long-form");
+  });
+
   it("adds/removes are case-insensitive on Windows (one visible ref, fully removable)", async () => {
     if (process.platform !== "win32") return;
     const outside = mkdtempSync(path.join(tmpdir(), "external-case-"));
