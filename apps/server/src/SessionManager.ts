@@ -28,6 +28,7 @@ import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
+import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
 import type { StampedEvent } from "./services/pushBus.ts";
 import {
@@ -85,10 +86,15 @@ export class SessionCreationError extends Error {
 export interface CreateSessionOptions {
   cwd: string;
   plan: LaunchPlan;
+  launchResourceConfig?: LaunchResourceConfigV1;
+  launchResourceFingerprint?: string;
   projectId?: string;
   agentName?: string;
-  /** Extra env for the pi subprocess (merged over process.env). */
+  /** Effective env additions for the initial Pi subprocess. */
   env?: Record<string, string | undefined>;
+  /** Explicit request-only additions retained in memory for this process.
+   * Never copy these values into SessionMeta, persistence, fingerprints, or errors. */
+  environmentOverride?: Record<string, string | undefined>;
   /** Set when this session runs in an isolated git worktree (cwd IS the worktree)
    *  so the fields persist WITH the initial meta — no orphan window. */
   worktree?: { path: string; branch: string; sourceBranch: string; identityToken?: string };
@@ -139,6 +145,7 @@ export class ManagedSession {
     /** The session's own Scope: closing it kills pi and settles everything. */
     private scope: Scope.CloseableScope,
     private readonly enableMetaPublication: () => void = () => {},
+    private readonly enableActivityPublication: () => void = () => {},
   ) {
     this.bindRuntimeExit();
   }
@@ -248,8 +255,13 @@ export class ManagedSession {
     this.parkingTimer.unref?.();
   }
 
-  private async park(onParked: (meta: SessionMeta) => void): Promise<void> {
-    if (this.lifecycle !== "live" || !Effect.runSync(this.rt.parkingEligible)) return;
+  private async park(
+    onParked: (meta: SessionMeta) => void,
+    eligibility: "parking" | "resourceRefresh" = "parking",
+  ): Promise<void> {
+    const eligible =
+      eligibility === "parking" ? this.rt.parkingEligible : this.rt.resourceRefreshEligible;
+    if (this.lifecycle !== "live" || !Effect.runSync(eligible)) return;
     this.lifecycle = "parking";
     this.parkingGeneration += 1;
     try {
@@ -271,6 +283,21 @@ export class ManagedSession {
       }
       throw error;
     }
+  }
+
+  async parkForResourceRefresh(onParked: (meta: SessionMeta) => void): Promise<boolean> {
+    await this.park(onParked, "resourceRefresh");
+    return this.lifecycle === "parked";
+  }
+
+  get resourceRefreshEligible(): boolean {
+    return this.lifecycle === "parked" || Effect.runSync(this.rt.resourceRefreshEligible);
+  }
+
+  get resourceRefreshWaitingForSessionFile(): boolean {
+    return (
+      this.lifecycle === "live" && Effect.runSync(this.rt.resourceRefreshWaitingForSessionFile)
+    );
   }
 
   private async piSession(): Promise<ManagedSession> {
@@ -390,6 +417,7 @@ export class ManagedSession {
     streamingBehavior?: Parameters<ManagedSessionRuntime["prompt"]>[2],
   ): Promise<void> {
     const session = await this.piSession();
+    session.enableActivityPublication();
     await runPromiseUnwrapped(
       session.runtime,
       session.rt.prompt(message, images, streamingBehavior),
@@ -398,11 +426,13 @@ export class ManagedSession {
 
   async steer(message: string): Promise<void> {
     const session = await this.piSession();
+    session.enableActivityPublication();
     await runPromiseUnwrapped(session.runtime, session.rt.steer(message));
   }
 
   async followUp(message: string): Promise<void> {
     const session = await this.piSession();
+    session.enableActivityPublication();
     await runPromiseUnwrapped(session.runtime, session.rt.followUp(message));
   }
 
@@ -548,6 +578,25 @@ export class SessionManager {
   private readonly resuming = new Map<string, Promise<ManagedSession>>();
   /** Same-run continuation claims. JS's synchronous Set mutation is the lock. */
   private readonly claimedSubagentContinuations = new Set<string>();
+  private resourceRefreshGeneration = 0;
+  private resourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly resourceRefreshInFlight = new Map<string, Promise<void>>();
+  private readonly resourceRefreshDirty = new Set<string>();
+  private readonly resourceRefreshIdleSubscriptions = new Map<string, () => void>();
+  /** Request-only environment additions. Session metadata is a public HTTP/WS
+   * contract, so values live only here and disappear on restart or teardown. */
+  private readonly sessionEnvironmentOverrides = new Map<
+    string,
+    Record<string, string | undefined>
+  >();
+  private resolveLaunchResources?: (meta: SessionMeta) => ResolvedLaunchResources;
+  private resourceRefreshEnv: () => Record<string, string | undefined> | undefined = () =>
+    undefined;
+  private preflightResourceRefresh?: (
+    meta: SessionMeta,
+    candidate: ResolvedLaunchResources,
+  ) => Promise<() => Promise<void>>;
+  private shuttingDown = false;
 
   constructor(
     /** The server's ManagedRuntime (runtime.ts): every session resolves its pi
@@ -649,6 +698,182 @@ export class SessionManager {
     );
   }
 
+  /** Wire the composition-root resolver. Dirty notifications are coalesced and
+   * each session is independently retried at its next authoritative idle edge. */
+  configureResourceRefresh(
+    resolve: (meta: SessionMeta) => ResolvedLaunchResources,
+    env: () => Record<string, string | undefined> | undefined,
+    preflight?: (
+      meta: SessionMeta,
+      candidate: ResolvedLaunchResources,
+    ) => Promise<() => Promise<void>>,
+  ): void {
+    this.resolveLaunchResources = resolve;
+    this.resourceRefreshEnv = env;
+    this.preflightResourceRefresh = preflight;
+  }
+
+  queueResourceRefresh(): void {
+    if (this.shuttingDown) return;
+    this.resourceRefreshGeneration += 1;
+    for (const session of this.sessions.values()) {
+      if (session.meta.launchResourceConfig) this.resourceRefreshDirty.add(session.meta.id);
+    }
+    if (this.resourceRefreshTimer) clearTimeout(this.resourceRefreshTimer);
+    const generation = this.resourceRefreshGeneration;
+    this.resourceRefreshTimer = setTimeout(() => {
+      this.resourceRefreshTimer = undefined;
+      for (const session of this.sessions.values()) this.startRefresh(session, generation);
+    }, 75);
+    this.resourceRefreshTimer.unref?.();
+  }
+
+  private publishResourceMeta(meta: SessionMeta): void {
+    this.onParkingMetaChange(meta);
+  }
+
+  private setResourceRefreshError(meta: SessionMeta, error: unknown): void {
+    meta.resourceRefreshError = normalizeSessionError(error).slice(0, 500);
+    this.publishResourceMeta(meta);
+  }
+
+  private armResourceRefresh(session: ManagedSession): void {
+    if (this.shuttingDown) return;
+    this.resourceRefreshDirty.add(session.meta.id);
+    if (this.resourceRefreshInFlight.has(session.meta.id)) return;
+    if (session.resourceRefreshEligible || session.resourceRefreshWaitingForSessionFile) {
+      const delay = session.resourceRefreshWaitingForSessionFile ? 50 : 0;
+      setTimeout(() => this.startRefresh(session, this.resourceRefreshGeneration), delay).unref?.();
+      return;
+    }
+    if (this.resourceRefreshIdleSubscriptions.has(session.meta.id)) return;
+    const unsubscribe = session.bus.subscribe(({ event }) => {
+      if (event.type !== "agent_status" || event.status !== "idle") return;
+      unsubscribe();
+      this.resourceRefreshIdleSubscriptions.delete(session.meta.id);
+      this.startRefresh(session, this.resourceRefreshGeneration);
+    });
+    this.resourceRefreshIdleSubscriptions.set(session.meta.id, unsubscribe);
+  }
+
+  private startRefresh(session: ManagedSession, generation: number): void {
+    if (this.shuttingDown || this.resourceRefreshInFlight.has(session.meta.id)) return;
+    const task = this.refreshOne(session, generation).finally(() => {
+      if (this.resourceRefreshInFlight.get(session.meta.id) === task)
+        this.resourceRefreshInFlight.delete(session.meta.id);
+      const owner = this.sessions.get(session.meta.id);
+      if (owner && this.resourceRefreshDirty.has(session.meta.id)) this.armResourceRefresh(owner);
+    });
+    this.resourceRefreshInFlight.set(session.meta.id, task);
+    void task.catch(() => {});
+  }
+
+  private async refreshOne(session: ManagedSession, generation: number): Promise<void> {
+    const resolve = this.resolveLaunchResources;
+    const meta = session.meta;
+    if (
+      this.shuttingDown ||
+      !resolve ||
+      !meta.launchResourceConfig ||
+      meta.loopReviewRunId ||
+      meta.agentName?.startsWith("Loop ·")
+    ) {
+      this.resourceRefreshDirty.delete(meta.id);
+      return;
+    }
+    let candidate: ResolvedLaunchResources;
+    try {
+      candidate = resolve(meta);
+    } catch (error) {
+      this.setResourceRefreshError(meta, error);
+      this.resourceRefreshDirty.delete(meta.id);
+      return;
+    }
+    if (candidate.fingerprint === meta.launchResourceFingerprint) {
+      this.resourceRefreshDirty.delete(meta.id);
+      if (meta.resourceRefreshError) {
+        delete meta.resourceRefreshError;
+        this.publishResourceMeta(meta);
+      }
+      return;
+    }
+
+    let releasePreflight: (() => Promise<void>) | undefined;
+    try {
+      if (session.isParked) {
+        // A parked placeholder owns no process; adopting the current plan is the
+        // whole transaction. Wake will resume the same Pi file with these bytes.
+        meta.launchPlan = candidate.plan;
+        meta.launchResourceFingerprint = candidate.fingerprint;
+        delete meta.finalSystemPromptAudit;
+        delete meta.resourceRefreshError;
+        this.resourceRefreshDirty.delete(meta.id);
+        this.publishResourceMeta(meta);
+        return;
+      }
+      if (!session.resourceRefreshEligible) {
+        this.armResourceRefresh(session);
+        return;
+      }
+      // Expensive/transient MCP preparation begins only once replacement can
+      // proceed, while the old process remains live until this preflight passes.
+      try {
+        releasePreflight = await this.preflightResourceRefresh?.(meta, candidate);
+      } catch (error) {
+        this.setResourceRefreshError(meta, error);
+        this.resourceRefreshDirty.delete(meta.id);
+        return;
+      }
+      const activityTimestamp = meta.updatedAt;
+      const parked = await session.parkForResourceRefresh((changed) =>
+        this.publishResourceMeta(changed),
+      );
+      if (!parked) {
+        this.armResourceRefresh(session);
+        return;
+      }
+      const replacementMeta: SessionMeta = {
+        ...session.meta,
+        updatedAt: activityTimestamp,
+        launchPlan: candidate.plan,
+        launchResourceFingerprint: candidate.fingerprint,
+        resourceRefreshError: undefined,
+        finalSystemPromptAudit: undefined,
+      };
+      const replacement = await this.resume(
+        replacementMeta,
+        candidate.plan,
+        undefined,
+        true,
+        candidate,
+      );
+      // A concurrent ordinary wake may have won the manager's resume coalescer.
+      // Never claim candidate success unless the authoritative owner proves it.
+      const authoritative = this.sessions.get(meta.id);
+      const candidatePlan = JSON.stringify(candidate.plan);
+      if (
+        authoritative !== replacement ||
+        replacement.meta.launchResourceFingerprint !== candidate.fingerprint ||
+        JSON.stringify(replacement.meta.launchPlan) !== candidatePlan
+      ) {
+        if (authoritative) this.armResourceRefresh(authoritative);
+        return;
+      }
+      if (activityTimestamp === undefined) delete replacement.meta.updatedAt;
+      else replacement.meta.updatedAt = activityTimestamp;
+      delete replacement.meta.finalSystemPromptAudit;
+      this.resourceRefreshDirty.delete(meta.id);
+      this.publishResourceMeta(replacement.meta);
+    } catch (error) {
+      const owner = this.sessions.get(meta.id);
+      this.setResourceRefreshError(owner?.meta ?? meta, error);
+      this.resourceRefreshDirty.delete(meta.id);
+    } finally {
+      await releasePreflight?.().catch(() => {});
+      if (generation !== this.resourceRefreshGeneration) this.resourceRefreshDirty.add(meta.id);
+    }
+  }
+
   create(options: CreateSessionOptions): ManagedSession {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -659,6 +884,12 @@ export class SessionManager {
       projectId: options.projectId,
       agentName: options.agentName,
       launchPlan: options.plan,
+      ...(options.launchResourceConfig
+        ? { launchResourceConfig: options.launchResourceConfig }
+        : {}),
+      ...(options.launchResourceFingerprint
+        ? { launchResourceFingerprint: options.launchResourceFingerprint }
+        : {}),
       ...(options.worktree
         ? {
             worktreePath: options.worktree.path,
@@ -671,6 +902,9 @@ export class SessionManager {
         : {}),
       ...(options.loopReviewRunId ? { loopReviewRunId: options.loopReviewRunId } : {}),
     };
+    if (options.environmentOverride !== undefined) {
+      this.sessionEnvironmentOverrides.set(meta.id, { ...options.environmentOverride });
+    }
     try {
       const session = this.launch(meta, options.plan, options.env, options.deferAnnouncement);
       try {
@@ -689,6 +923,7 @@ export class SessionManager {
     } catch (error) {
       // launch() supplies its own cleanup when a Scope already exists. Failures
       // before then still carry the identity needed to remove the bridge token.
+      this.sessionEnvironmentOverrides.delete(meta.id);
       if (error instanceof SessionCreationError) throw error;
       throw new SessionCreationError(meta.id, error);
     }
@@ -704,6 +939,8 @@ export class SessionManager {
     meta: SessionMeta,
     fallbackPlan: LaunchPlan,
     env?: Record<string, string | undefined>,
+    preserveActivity = false,
+    preparedCandidate?: ResolvedLaunchResources,
   ): Promise<ManagedSession> {
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
@@ -711,7 +948,7 @@ export class SessionManager {
     if (transitioning) {
       const waiting = transitioning.then(async () => {
         if (this.resuming.get(meta.id) === waiting) this.resuming.delete(meta.id);
-        return await this.resume(meta, fallbackPlan, env);
+        return await this.resume(meta, fallbackPlan, env, preserveActivity, preparedCandidate);
       });
       this.resuming.set(meta.id, waiting);
       try {
@@ -727,12 +964,48 @@ export class SessionManager {
     if (live?.isRunning) return live;
     const parkedPlaceholder = live?.isParked ? live : undefined;
 
-    const original = (meta.launchPlan as LaunchPlan | undefined) ?? fallbackPlan;
+    let candidate = preparedCandidate;
+    let releaseResumePreflight: (() => Promise<void>) | undefined;
+    let resumeMeta = meta;
+    if (
+      meta.launchResourceConfig &&
+      !meta.loopReviewRunId &&
+      !meta.agentName?.startsWith("Loop ·")
+    ) {
+      try {
+        candidate ??= this.resolveLaunchResources?.(meta);
+        if (candidate) {
+          if (!preparedCandidate) {
+            releaseResumePreflight = await this.preflightResourceRefresh?.(meta, candidate);
+          }
+          const changed = candidate.fingerprint !== meta.launchResourceFingerprint;
+          resumeMeta = {
+            ...meta,
+            launchPlan: candidate.plan,
+            launchResourceFingerprint: candidate.fingerprint,
+            launchResourceConfig: candidate.config,
+            resourceRefreshError: undefined,
+            ...(changed ? { finalSystemPromptAudit: undefined } : {}),
+          };
+        }
+      } catch (error) {
+        this.setResourceRefreshError(parkedPlaceholder?.meta ?? meta, error);
+        await releaseResumePreflight?.().catch(() => {});
+        throw error;
+      }
+    }
+    const effectiveEnv = {
+      ...this.resourceRefreshEnv(),
+      ...env,
+      ...this.sessionEnvironmentOverrides.get(meta.id),
+    };
+    const preservedUpdatedAt = resumeMeta.updatedAt;
+    const original = (resumeMeta.launchPlan as LaunchPlan | undefined) ?? fallbackPlan;
     let plan: LaunchPlan;
     if (original.kind === "agent") {
-      plan = { ...original, sessionDir: undefined, resumeSessionPath: meta.piSessionFile };
+      plan = { ...original, sessionDir: undefined, resumeSessionPath: resumeMeta.piSessionFile };
     } else if (original.kind === "parent") {
-      plan = { ...original, resumeSessionPath: meta.piSessionFile };
+      plan = { ...original, resumeSessionPath: resumeMeta.piSessionFile };
     } else {
       plan = original;
     }
@@ -743,7 +1016,7 @@ export class SessionManager {
       // Naturally-ended sessions remain addressable in the map for snapshot/
       // exit semantics. Close and remove that settled owner before relaunch;
       // destroy keeps it registered if scope close itself fails.
-      if (live && !parkedPlaceholder) await this.destroy(meta.id);
+      if (live && !parkedPlaceholder) await this.destroySession(meta.id, true);
       // launch() requires exclusive map ownership. The parked placeholder keeps
       // the old snapshot for already-held callers while the one candidate is
       // built and seeded; it is restored on every failure path.
@@ -751,14 +1024,14 @@ export class SessionManager {
         this.sessions.delete(meta.id);
       }
       const revived: SessionMeta = {
-        ...meta,
+        ...resumeMeta,
         endedAt: undefined,
         parkedAt: undefined,
         streamGeneration: randomUUID(),
       };
       let session: ManagedSession | undefined;
       try {
-        session = this.launch(revived, plan, env);
+        session = this.launch(revived, plan, effectiveEnv, true, preserveActivity);
         await session.seedFromHistory();
         session.seedSyntheticCells([
           ...(this.loopSnapshots?.get(revived.id) ?? []),
@@ -782,6 +1055,9 @@ export class SessionManager {
         // spawn) so they apply strictly after the seed.
         session.startIngestion();
         session.clearFailure();
+        // Suppress candidate metadata (including its new generation) until
+        // history is seeded and this exact runtime is ready to become authority.
+        session.publishMetaChanges();
         if (parkedPlaceholder) {
           parkedPlaceholder.adoptRuntimeFrom(session);
           this.sessions.set(revived.id, parkedPlaceholder);
@@ -795,13 +1071,17 @@ export class SessionManager {
         // launch() may have failed before registration, or spawned pi and then
         // failed while seeding. Both paths restore the parked placeholder; a
         // registered half-build is torn down before ownership is restored.
-        await this.destroy(revived.id).catch(() => {});
+        await this.destroySession(revived.id, true).catch(() => {});
         if (parkedPlaceholder && !this.sessions.has(revived.id)) {
           this.sessions.set(revived.id, parkedPlaceholder);
         }
         throw error;
       }
-      this.onMetaChange(revived);
+      if (preserveActivity) {
+        if (preservedUpdatedAt === undefined) delete revived.updatedAt;
+        else revived.updatedAt = preservedUpdatedAt;
+        this.onParkingMetaChange(revived);
+      } else this.onMetaChange(revived);
       // Rebind only after the replacement bus is fully seeded, adopted, and
       // authoritative in the manager. Command callers await this transaction,
       // so accepted prompts cannot precede the client reset signal.
@@ -813,6 +1093,7 @@ export class SessionManager {
       return await task;
     } finally {
       this.resuming.delete(meta.id);
+      await releaseResumePreflight?.().catch(() => {});
     }
   }
 
@@ -827,6 +1108,7 @@ export class SessionManager {
     plan: LaunchPlan,
     env?: Record<string, string | undefined>,
     deferAnnouncement = false,
+    preserveActivity = false,
   ): ManagedSession {
     if (this.sessions.has(meta.id)) {
       throw new Error(`session already has an authoritative runtime owner: ${meta.id}`);
@@ -837,8 +1119,11 @@ export class SessionManager {
     let owned = false;
     try {
       let publicationEnabled = !deferAnnouncement;
+      let activityPublicationEnabled = !preserveActivity;
       const publishMeta = (changed: SessionMeta): void => {
-        if (publicationEnabled) this.onMetaChange(changed);
+        if (!publicationEnabled) return;
+        if (activityPublicationEnabled) this.onMetaChange(changed);
+        else this.onParkingMetaChange(changed);
       };
       const params = this.buildSpawnParams(meta, plan, env, tempDirs, publishMeta);
       const scope = this.runtime.runSync(Scope.make());
@@ -860,9 +1145,17 @@ export class SessionManager {
       // The session now owns tempDirs cleanup (via its exit handling).
       owned = true;
       try {
-        const session = new ManagedSession(rt, this.runtime, scope, () => {
-          publicationEnabled = true;
-        });
+        const session = new ManagedSession(
+          rt,
+          this.runtime,
+          scope,
+          () => {
+            publicationEnabled = true;
+          },
+          () => {
+            activityPublicationEnabled = true;
+          },
+        );
         this.sessions.set(meta.id, session);
         if (!deferAnnouncement) {
           // Preserve the established non-deferred ordering used by Loop/direct
@@ -1273,6 +1566,14 @@ export class SessionManager {
    * Map ownership remains authoritative until stop settles. A failed stop keeps
    * the owner registered so no second process can launch under the same id. */
   async destroy(id: string): Promise<void> {
+    await this.destroySession(id, false);
+  }
+
+  private async destroySession(id: string, preserveEnvironmentOverride: boolean): Promise<void> {
+    this.resourceRefreshIdleSubscriptions.get(id)?.();
+    this.resourceRefreshIdleSubscriptions.delete(id);
+    this.resourceRefreshDirty.delete(id);
+    if (!preserveEnvironmentOverride) this.sessionEnvironmentOverrides.delete(id);
     const session = this.sessions.get(id);
     if (!session) return;
     await session.stop();
@@ -1467,9 +1768,23 @@ export class SessionManager {
   }
 
   async stopAll(): Promise<void> {
-    await Promise.all([...this.sessions.values()].map((session) => session.stop()));
-    // Symmetric with destroy(): a stopped session must not linger in the map
-    // (stopAll is shutdown-only today, but the asymmetry invited misuse).
-    this.sessions.clear();
+    this.shuttingDown = true;
+    if (this.resourceRefreshTimer) clearTimeout(this.resourceRefreshTimer);
+    this.resourceRefreshTimer = undefined;
+    for (const unsubscribe of this.resourceRefreshIdleSubscriptions.values()) unsubscribe();
+    this.resourceRefreshIdleSubscriptions.clear();
+    await Promise.allSettled([...this.resourceRefreshInFlight.values()]);
+    this.resourceRefreshInFlight.clear();
+    this.resourceRefreshDirty.clear();
+    try {
+      await Promise.all([...this.sessions.values()].map((session) => session.stop()));
+    } finally {
+      // Shutdown discards all process-local credentials even if one owner fails
+      // to stop cleanly; no future refresh/resume may reuse them.
+      this.sessionEnvironmentOverrides.clear();
+      // Symmetric with destroy(): a stopped session must not linger in the map
+      // (stopAll is shutdown-only today, but the asymmetry invited misuse).
+      this.sessions.clear();
+    }
   }
 }

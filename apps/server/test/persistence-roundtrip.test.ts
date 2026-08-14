@@ -101,6 +101,34 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(loaded.find((row) => row.id === "ended-parked")?.parkedAt).toBeUndefined();
   });
 
+  it("never exposes environment values from persisted launch-resource metadata", () => {
+    const dir = freshCopy();
+    const sessions = new SessionIndex(dir);
+    const original = sessions.list()[0]!;
+    sessions.upsert({
+      ...original,
+      launchResourceConfig: {
+        version: 1,
+        providerOverride: "custom",
+      },
+      launchResourceFingerprint: "a".repeat(64),
+    });
+
+    // A pre-release checkout may have written this field. Loading rebuilds the
+    // public config from its allowlist rather than returning unknown secret data.
+    const file = path.join(dir, "sessions.json");
+    const rows = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    (rows[0]!.launchResourceConfig as Record<string, unknown>).envOverride = {
+      API_TOKEN: "deck-secret-value",
+    };
+    writeFileSync(file, JSON.stringify(rows));
+    const loaded = new SessionIndex(dir).list()[0]!;
+    expect(loaded.launchResourceConfig).toEqual({ version: 1, providerOverride: "custom" });
+    expect(loaded.launchResourceFingerprint).toBe("a".repeat(64));
+    expect(JSON.stringify(loaded)).not.toContain("deck-secret-value");
+    expect(JSON.stringify(loaded)).not.toContain("envOverride");
+  });
+
   it("persists optional session pin state without rewriting activity time", () => {
     const dir = freshCopy();
     const sessions = new SessionIndex(dir);

@@ -80,6 +80,65 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           : { needsAttention: session.needsAttention === true }),
       };
       if (!validAudit) delete normalized.finalSystemPromptAudit;
+      const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })
+        .launchResourceConfig;
+      const validStringArray = (value: unknown): value is string[] | undefined =>
+        value === undefined ||
+        (Array.isArray(value) &&
+          value.length <= 256 &&
+          value.every((item) => typeof item === "string" && item.length <= 4096));
+      if (
+        !rawResources ||
+        typeof rawResources !== "object" ||
+        (rawResources as { version?: unknown }).version !== 1 ||
+        !["undefined", "string"].includes(
+          typeof (rawResources as { providerOverride?: unknown }).providerOverride,
+        ) ||
+        !["undefined", "string"].includes(
+          typeof (rawResources as { modelOverride?: unknown }).modelOverride,
+        ) ||
+        !validStringArray((rawResources as { extensionsOverride?: unknown }).extensionsOverride) ||
+        !validStringArray((rawResources as { skillsOverride?: unknown }).skillsOverride)
+      ) {
+        delete normalized.launchResourceConfig;
+        delete normalized.launchResourceFingerprint;
+      } else {
+        // Rebuild from the public allowlist instead of retaining unknown fields.
+        // In particular, never surface an envOverride written by a pre-release
+        // build: session metadata is persisted and returned over HTTP/WS.
+        const resources = rawResources as {
+          providerOverride?: string;
+          modelOverride?: string;
+          extensionsOverride?: string[];
+          skillsOverride?: string[];
+        };
+        normalized.launchResourceConfig = {
+          version: 1,
+          ...(resources.providerOverride !== undefined
+            ? { providerOverride: resources.providerOverride }
+            : {}),
+          ...(resources.modelOverride !== undefined
+            ? { modelOverride: resources.modelOverride }
+            : {}),
+          ...(resources.extensionsOverride !== undefined
+            ? { extensionsOverride: [...resources.extensionsOverride] }
+            : {}),
+          ...(resources.skillsOverride !== undefined
+            ? { skillsOverride: [...resources.skillsOverride] }
+            : {}),
+        };
+      }
+      if (
+        typeof normalized.launchResourceFingerprint !== "string" ||
+        !/^[0-9a-f]{64}$/.test(normalized.launchResourceFingerprint)
+      ) {
+        delete normalized.launchResourceFingerprint;
+      }
+      if (typeof normalized.resourceRefreshError !== "string") {
+        delete normalized.resourceRefreshError;
+      } else {
+        normalized.resourceRefreshError = normalized.resourceRefreshError.slice(0, 500);
+      }
       if (
         typeof normalized.parkedAt !== "string" ||
         Number.isNaN(Date.parse(normalized.parkedAt)) ||

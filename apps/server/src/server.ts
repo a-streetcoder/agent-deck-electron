@@ -54,6 +54,7 @@ import {
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
 import { loadSkillEngineNative } from "./skills/skillEngineNative.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
+import { resolveLaunchResources } from "./launchResources.ts";
 import { createEditorLauncher } from "./editorLauncher.ts";
 import { createScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import { makeCheckpointRollback } from "./checkpointRollback.ts";
@@ -1009,7 +1010,10 @@ async function initServer(
     sessionImages,
     sessionPastes,
   });
-  broadcast = wsBroadcast;
+  broadcast = (message) => {
+    wsBroadcast(message);
+    if (message.type === "resources_changed") sessions.queueResourceRefresh();
+  };
   broadcastDiff = wsBroadcastDiff;
 
   // Resource watcher: any change under the resource catalogs re-broadcasts so the UI refreshes.
@@ -1086,6 +1090,39 @@ async function initServer(
     watchProject,
     dropDiffCache: (sessionId) => diffs.drop(sessionId),
   };
+
+  sessions.configureResourceRefresh(
+    (meta) => {
+      const defaults = envDefaults();
+      return resolveLaunchResources(
+        ctx,
+        { cwd: meta.cwd, projectId: meta.projectId, agentName: meta.agentName },
+        {
+          provider: defaults.provider,
+          model: defaults.model,
+          extensions: defaults.extensions,
+        },
+        meta.launchResourceConfig,
+      );
+    },
+    () => envDefaults().env,
+    async (meta, candidate) => {
+      if (!meta.projectId || candidate.mcpServerIds.length === 0) return async () => {};
+      const preparation = await prepareProjectMcpSession(meta.projectId, candidate.mcpServerIds);
+      if (!preparation.result.ok) {
+        await preparation.release();
+        throw new Error(preparation.result.error);
+      }
+      const missing = candidate.mcpServerIds.filter((id) =>
+        preparation.result.ok ? preparation.result.missing.includes(id) : false,
+      );
+      if (missing.length > 0) {
+        await preparation.release();
+        throw new Error(`Assigned MCP server definition missing: ${missing.join(", ")}.`);
+      }
+      return preparation.release;
+    },
+  );
 
   // Route modules. Fastify's router matches on method + path (never on
   // registration order), so grouping the routes by module preserves behavior;

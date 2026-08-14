@@ -3,10 +3,9 @@ import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
 import type { ProjectMeta, SessionModelInfo } from "@agent-deck/contracts";
-import type { PromptInfo } from "@agent-deck/domain";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { listProjectFiles, scanPrompts } from "@agent-deck/resources";
+import { listProjectFiles } from "@agent-deck/resources";
 import { z } from "zod";
 import {
   canonicalWorktreePath,
@@ -33,16 +32,11 @@ import {
   SessionWorktreeAddError,
   type GitWorktree,
 } from "../git.ts";
-import {
-  SessionCreationError,
-  SubagentTranscriptEvidenceError,
-  type LaunchPlan,
-} from "../SessionManager.ts";
-import { resolveExplicitSkills } from "../agentSkillResolution.ts";
-import { asThinkingLevel, envDefaults, type ServerContext } from "../context.ts";
+import { SessionCreationError, SubagentTranscriptEvidenceError } from "../SessionManager.ts";
+import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
+import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
 import { SessionMutationClaims } from "../sessionMutationClaims.ts";
-import { finalizeExtensions } from "./shared.ts";
 
 const mergeLocks = new Set<string>();
 
@@ -56,7 +50,18 @@ const createSessionBody = z.object({
   extensions: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   /** Extra env for the pi subprocess (tests use this for a hermetic HOME). */
-  env: z.record(z.string()).optional(),
+  env: z
+    .record(z.string().max(32_768))
+    .refine(
+      (env) => Object.keys(env).every((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)),
+      "invalid environment override key",
+    )
+    .refine((env) => Object.keys(env).length <= 64, "too many environment overrides")
+    .refine(
+      (env) => Object.values(env).reduce((sum, value) => sum + value.length, 0) <= 131_072,
+      "environment overrides are too large",
+    )
+    .optional(),
 });
 
 /**
@@ -76,10 +81,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     worktreesRoot,
     sessionWorktreeStore,
     broadcast,
-    rootsFor,
-    scanSkillCandidatesFor,
-    resolveNamedAgent,
-    enabledExtensionPaths,
     dropDiffCache,
     prepareProjectMcpSession,
   } = ctx;
@@ -1397,133 +1398,24 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // may silently redirect Pi into the primary checkout.
     let worktree: GitWorktree | null = null;
 
-    // Resolve provider + model. Precedence: explicit request → the user's default
-    // model (native onboarding preference) → env default. The default model is
-    // stored provider-qualified ("provider:id") so it launches under the RIGHT
-    // provider — a bare id can't disambiguate two providers exposing the same id.
-    let provider = body.provider ?? defaults.provider;
-    let model = body.model;
-    if (model === undefined) {
-      const defaultModel = settings.get().defaultModel; // "provider:id" | "id" | null
-      if (defaultModel) {
-        const sep = defaultModel.indexOf(":");
-        if (sep > 0) {
-          if (body.provider === undefined) provider = defaultModel.slice(0, sep);
-          model = defaultModel.slice(sep + 1);
-        } else {
-          model = defaultModel; // unqualified — launch under the resolved provider
-        }
-      }
-    }
-    model = model ?? defaults.model;
-    // Base extensions (request or env defaults) + the user's enabled ones,
-    // deduped and re-validated as real files at launch time.
-    const baseExtensions = body.extensions ?? defaults.extensions ?? [];
-    // Named agents resolve their own default-vs-explicit catalog policy below.
-    // Plain/anonymous parents retain the global enabled catalog behavior.
-    const finalizedBase = finalizeExtensions([
-      ...baseExtensions,
-      ...(body.agentName ? [] : enabledExtensionPaths(body.projectId)),
-    ]);
-    const extensions = finalizedBase.length > 0 ? finalizedBase : undefined;
-
-    // Default + project skill assignments become explicit --skill paths on
-    // parent sessions (pi-rpc-launch-flags.md §1: "Default + current Project
-    // skill assignments"). Applied at session creation; a running session
-    // keeps its flags until relaunched.
-    // CONTRACT GAP: bridge/audit/web extensions and APPEND_SYSTEM.md
-    // preservation are still missing here (M2).
-    let assignedSkillPaths: string[] | undefined;
-    if (!body.agentName && body.skills === undefined) {
-      const disabledSkills = new Set(settings.get().disabledSkills);
-      const names = [...settings.get().defaultSkills, ...(project?.assignedSkills ?? [])];
-      if (names.length > 0) {
-        const resolved = resolveExplicitSkills({
-          skillNames: names,
-          candidates: scanSkillCandidatesFor(body.projectId),
-          disabledSkills,
-          strict: false,
+    // Resolve catalog-derived launch flags through the same pure preflight used
+    // by running-session refresh. Typed compatibility metadata records only
+    // request-specific overrides; settings-derived provider/model choices stay live.
+    let resolvedLaunch;
+    try {
+      resolvedLaunch = resolveLaunchResources(ctx, body, {
+        provider: defaults.provider,
+        model: defaults.model,
+        extensions: defaults.extensions,
+      });
+    } catch (error) {
+      return reply
+        .status(error instanceof LaunchResourceResolutionError ? error.statusCode : 409)
+        .send({
+          error: error instanceof Error ? error.message : "Launch resources are unavailable.",
         });
-        if (resolved.status === "error") {
-          return reply.status(409).send({ error: resolved.message });
-        }
-        if (resolved.skipped.length > 0) {
-          fastify.log.warn({ missingOrDisabled: resolved.skipped }, "assigned skills skipped");
-        }
-        if (resolved.skillDirs.length > 0) assignedSkillPaths = resolved.skillDirs;
-      }
     }
-
-    // Prompt templates (native: defaultPromptTemplateNames ∪ the project's
-    // assignedPromptTemplateNames): the user's "All Projects" defaults PLUS this
-    // project's assigned prompts become `--prompt-template <path>` flags so pi
-    // exposes them as /<name> slash commands. On a name collision we resolve to
-    // the GLOBAL entry (first-wins) — matching pi's own prompt-template loader,
-    // which loads global before project and keeps the first (unlike skills, where
-    // a project skill deliberately shadows the global one). scanPrompts sorts a
-    // same-named collision global-before-project, so keeping the first occurrence
-    // yields the global file.
-    let defaultPromptTemplatePaths: string[] | undefined;
-    {
-      const names = [...settings.get().defaultPromptTemplates, ...(project?.assignedPrompts ?? [])];
-      if (names.length > 0) {
-        const promptsByName = new Map<string, PromptInfo>();
-        for (const prompt of scanPrompts(rootsFor(body.projectId))) {
-          if (!promptsByName.has(prompt.name)) promptsByName.set(prompt.name, prompt);
-        }
-        const paths = [...new Set(names)]
-          .map((name) => promptsByName.get(name)?.filePath)
-          .filter((p): p is string => Boolean(p));
-        if (paths.length > 0) defaultPromptTemplatePaths = paths;
-      }
-    }
-
-    let namedMcpIds: string[] = [];
-    let plan: LaunchPlan = {
-      kind: "parent",
-      provider,
-      model,
-      // The user's default thinking level (native onboarding preference) seeds a
-      // plain parent session; launchPlan encodes it as the `--model model:level`
-      // suffix when a model is known, else `--thinking`.
-      thinking: settings.get().defaultThinking ?? undefined,
-      extensions,
-      skills: body.skills ?? assignedSkillPaths,
-      promptTemplates: defaultPromptTemplatePaths,
-    };
-
-    if (body.agentName) {
-      // Agent-backed session: the picked agent's body becomes the system
-      // prompt; frontmatter tools/skills/model apply per the launch contract.
-      // Resolved via the same helper the subagent delegation uses, so both paths
-      // stay in lock-step.
-      const resolved = resolveNamedAgent(body.agentName, body.projectId);
-      if (resolved.status === "not_found") {
-        return reply.status(404).send({ error: `unknown agent: ${body.agentName}` });
-      }
-      if (resolved.status === "disabled") {
-        return reply.status(409).send({ error: `agent is disabled: ${body.agentName}` });
-      }
-      if (resolved.status === "invalid") {
-        return reply.status(409).send({ error: resolved.error });
-      }
-      const { agent } = resolved;
-      const projectAssignments = new Set(project?.assignedMcpServers ?? []);
-      namedMcpIds = (agent.mcpServers ?? []).filter((id) => projectAssignments.has(id));
-      plan = {
-        kind: "agent",
-        systemPrompt: { mode: agent.systemPromptMode, text: agent.body },
-        tools: agent.tools,
-        extensions: finalizeExtensions([...(extensions ?? []), ...agent.extensions]),
-        skills: agent.skillDirs,
-        provider,
-        // Agent model/thinking, else the inherited defaults (frontmatter wins;
-        // an agent that specifies neither falls back to the user's default model
-        // AND default thinking, the same precedence a plain parent gets).
-        model: agent.model ?? model,
-        thinking: asThinkingLevel(agent.thinking) ?? settings.get().defaultThinking ?? undefined,
-      };
-    }
+    let plan = resolvedLaunch.plan;
 
     if (settings.get().worktreeIsolation && project) {
       const suffix = randomUUID().slice(0, 8);
@@ -1582,8 +1474,48 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           error: `Session creation stopped because an isolated worktree couldn't be created: ${gitErrorText(error)} — Fix the project's Git state or disable worktree isolation, then try again.`,
         });
       }
+
+      // Pi runs from the allocated checkout. Re-resolve instruction/append and
+      // other cwd-sensitive fingerprint inputs against that final owner before
+      // persisting or spawning; a failure rolls back the proven allocation.
+      try {
+        resolvedLaunch = resolveLaunchResources(
+          ctx,
+          { ...body, cwd },
+          {
+            provider: defaults.provider,
+            model: defaults.model,
+            extensions: defaults.extensions,
+          },
+          resolvedLaunch.config,
+        );
+        plan = resolvedLaunch.plan;
+      } catch (error) {
+        const physicallyRemoved = await sessionWorktreeStore
+          .deleteWorktree(worktree.path, worktree.identityToken!)
+          .then(() => true)
+          .catch((cleanupError) => {
+            fastify.log.warn(
+              { err: cleanupError },
+              "failed to clean session worktree after resource preflight",
+            );
+            return false;
+          });
+        if (physicallyRemoved) {
+          await gitWorktreePrune(project.path).catch(() => {});
+          await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch(() => {});
+        }
+        return reply.status(409).send({
+          code: "session_resource_resolution_failed",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Launch resources could not be resolved in the isolated checkout.",
+        });
+      }
     }
 
+    const namedMcpIds = resolvedLaunch.mcpServerIds;
     const mcpPreparation = project
       ? await prepareProjectMcpSession(project.id, namedMcpIds)
       : undefined;
@@ -1610,7 +1542,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         projectId: body.projectId,
         agentName: body.agentName,
         env: { ...defaults.env, ...body.env },
+        ...(body.env !== undefined ? { environmentOverride: { ...body.env } } : {}),
         plan,
+        launchResourceConfig: resolvedLaunch.config,
+        launchResourceFingerprint: resolvedLaunch.fingerprint,
         // Defer persistence/broadcast/receipt until create + immediate setup has
         // completed. This gives the route a real commit point for the allocation.
         deferAnnouncement: true,

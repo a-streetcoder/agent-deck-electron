@@ -406,6 +406,23 @@ export const SessionMeta = Schema.mutable(
      * system prompt/tools/skills, project assignments, provider/model.
      */
     launchPlan: Schema.optional(Schema.Unknown),
+    /** Durable v1 compatibility inputs for recomputing catalog-derived launch
+     * resources without losing request-specific extension/skill overrides. */
+    launchResourceConfig: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          version: Schema.Literal(1),
+          providerOverride: Schema.optional(Schema.String),
+          modelOverride: Schema.optional(Schema.String),
+          extensionsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+          skillsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+        }),
+      ),
+    ),
+    /** Semantic digest of the resolved launch flags and selected resource bytes. */
+    launchResourceFingerprint: Schema.optional(Schema.String),
+    /** Bounded nonterminal diagnostic. The old/live runtime remains usable. */
+    resourceRefreshError: Schema.optional(Schema.String),
     /**
      * The session's activity plan (set_session_plan / update_session_plan),
      * persisted so a resumed session restores it — the plan is app state, not part

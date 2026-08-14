@@ -1,11 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import type * as GitModule from "../src/git.ts";
+import { fingerprintLaunchResources } from "../src/launchResources.ts";
+import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
 const resourceMocks = vi.hoisted(() => ({
   listProjectFiles: vi.fn<
@@ -553,6 +555,8 @@ describe("POST /sessions worktree transaction", () => {
   });
 
   it("does not let ambient skill resolution block or replace a named-agent plan", async () => {
+    const namedSkill = path.join(mkdtempSync(path.join(tmpdir(), "named-skill-")), "skill");
+    mkdirSync(namedSkill);
     const scanSkillCandidatesFor = vi.fn(() => {
       throw new Error("ambient resolution must not run");
     });
@@ -565,7 +569,7 @@ describe("POST /sessions worktree transaction", () => {
           body: "agent",
           systemPromptMode: "replace",
           tools: [],
-          skillDirs: ["/named/skill"],
+          skillDirs: [namedSkill],
           extensions: [],
         },
       }),
@@ -579,14 +583,14 @@ describe("POST /sessions worktree transaction", () => {
     expect(scanSkillCandidatesFor).not.toHaveBeenCalled();
     expect(sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        plan: expect.objectContaining({ tools: [], skills: ["/named/skill"] }),
+        plan: expect.objectContaining({ tools: [], skills: [namedSkill] }),
       }),
     );
     await fastify.close();
   });
 
   it("persists the reservation identity without post-add capture", async () => {
-    const { fastify, state } = makeRoute();
+    const { fastify, state, sessions } = makeRoute();
 
     const response = await fastify.inject({
       method: "POST",
@@ -607,6 +611,25 @@ describe("POST /sessions worktree transaction", () => {
     });
     expect(state.prepareProjectMcpSession).toHaveBeenCalledWith("project-1", []);
     expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
+    const createOptions = sessions.create.mock.calls[0]![0] as {
+      plan: Parameters<typeof fingerprintLaunchResources>[0];
+      launchResourceFingerprint: string;
+    };
+    const globalInstructions = resolveInstructionsFile(path.join(homedir(), ".pi", "agent"));
+    const bridgePolicy = {
+      memoryEnabled: undefined,
+      assignedMcpServers: [],
+      named: undefined,
+    };
+    // The initially persisted digest must no longer be the source-checkout
+    // pre-allocation value; it was recomputed after cwd became the worktree.
+    expect(createOptions.launchResourceFingerprint).not.toBe(
+      fingerprintLaunchResources(
+        createOptions.plan,
+        [globalInstructions, resolveInstructionsFile(PROJECT_PATH)],
+        bridgePolicy,
+      ),
+    );
     await fastify.close();
   });
 
@@ -724,6 +747,28 @@ describe("POST /sessions worktree transaction", () => {
     expect(sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: standalone, projectId: undefined }),
     );
+    await fastify.close();
+  });
+
+  it("keeps explicit launch environment values out of public session metadata", async () => {
+    const { fastify, sessions } = makeRoute({ isolated: false });
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: {
+        cwd: path.join(tmpdir(), "secret-session"),
+        env: { API_TOKEN: "deck-secret-value" },
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentOverride: { API_TOKEN: "deck-secret-value" },
+        env: expect.objectContaining({ API_TOKEN: "deck-secret-value" }),
+      }),
+    );
+    expect(JSON.stringify(response.json())).not.toContain("deck-secret-value");
+    expect(JSON.stringify(response.json())).not.toContain("envOverride");
     await fastify.close();
   });
 

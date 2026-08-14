@@ -191,6 +191,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     const parsed = z
       .object({
         defaultSkills: z.array(RESOURCE_NAME).optional(),
+        defaultPromptTemplates: z.array(RESOURCE_NAME).optional(),
         /** Atomic membership ops — preferred over whole-array replacement. */
         setDefaultSkill: z.object({ name: RESOURCE_NAME, enabled: z.boolean() }).optional(),
         setDisabledSkill: z.object({ name: RESOURCE_NAME, disabled: z.boolean() }).optional(),
@@ -244,11 +245,15 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     if (parsed.data.setDefaultSkill) {
       const { name, enabled } = parsed.data.setDefaultSkill;
-      return { settings: settings.setDefaultSkill(name, enabled) };
+      const result = settings.setDefaultSkill(name, enabled);
+      broadcast({ type: "resources_changed" });
+      return { settings: result };
     }
     if (parsed.data.setDefaultPromptTemplate) {
       const { name, enabled } = parsed.data.setDefaultPromptTemplate;
-      return { settings: settings.setDefaultPromptTemplate(name, enabled) };
+      const result = settings.setDefaultPromptTemplate(name, enabled);
+      broadcast({ type: "resources_changed" });
+      return { settings: result };
     }
     if (parsed.data.setDisabledSkill) {
       const { name, disabled } = parsed.data.setDisabledSkill;
@@ -262,6 +267,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     const d = parsed.data;
     const patch: Partial<AppSettings> = {};
     if (d.defaultSkills !== undefined) patch.defaultSkills = d.defaultSkills;
+    if (d.defaultPromptTemplates !== undefined)
+      patch.defaultPromptTemplates = d.defaultPromptTemplates;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
     if (d.piAgentIdleParkingEnabled !== undefined)
       patch.piAgentIdleParkingEnabled = d.piAgentIdleParkingEnabled;
@@ -285,6 +292,15 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
     const updated = settings.update(patch);
+    if (
+      d.defaultSkills !== undefined ||
+      d.defaultPromptTemplates !== undefined ||
+      d.defaultModel !== undefined ||
+      d.defaultThinking !== undefined ||
+      d.extensionLoadingMode !== undefined
+    ) {
+      broadcast({ type: "resources_changed" });
+    }
     if (
       d.piAgentIdleParkingEnabled !== undefined ||
       d.piAgentIdleParkingTimeoutMinutes !== undefined

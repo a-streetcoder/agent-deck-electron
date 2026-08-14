@@ -284,6 +284,11 @@ export interface ManagedSessionRuntime {
   readonly cancelParkingExpectation: Effect.Effect<void>;
   /** Fail-closed parking proof from the runtime's authoritative live state. */
   readonly parkingEligible: Effect.Effect<boolean>;
+  /** Safe replacement boundary; unlike parking, empty-history sessions qualify. */
+  readonly resourceRefreshEligible: Effect.Effect<boolean>;
+  /** Authoritative idle has arrived but Pi's asynchronous session-file capture
+   * has not yet published the resume handle. */
+  readonly resourceRefreshWaitingForSessionFile: Effect.Effect<boolean>;
   /** Facade seam for ordinary resume/history-seed failures. */
   readonly recordFailure: (error: unknown, publish?: boolean) => Effect.Effect<void>;
 
@@ -1290,6 +1295,40 @@ export const makeManagedSessionRuntime = (
             transcript.pendingInput.steering.length > 0 ||
             transcript.pendingInput.followUp.length > 0,
         });
+      }),
+      resourceRefreshEligible: Effect.sync(() => {
+        let resumableFile = transcript.cells.length === 0;
+        try {
+          resumableFile ||= Boolean(
+            meta.piSessionFile &&
+              isAbsolute(meta.piSessionFile) &&
+              lstatSync(meta.piSessionFile).isFile(),
+          );
+        } catch {
+          // Keep the empty-history allowance only.
+        }
+        return parkingStateAllowsStop({
+          authoritativeIdle,
+          resumableFile,
+          terminalFailure: meta.status === "failed",
+          pendingExtensionUi: pendingUiRequests.size > 0,
+          pendingAskUser: pendingAskUser.size > 0,
+          pendingSupervisor: pendingSupervisor.size > 0,
+          pendingUserTurn,
+          providerRetry: turnAwaitingProviderRetry,
+          compaction: compactionInFlight,
+          childRun: activeChildRuns > 0,
+          tool: activeToolCalls.size > 0,
+          transcriptIdle: transcript.agentStatus === "idle",
+          queueAvailable: transcript.pendingInput.status === "available",
+          queuedInput:
+            transcript.pendingInput.steering.length > 0 ||
+            transcript.pendingInput.followUp.length > 0,
+        });
+      }),
+      resourceRefreshWaitingForSessionFile: Effect.sync(() => {
+        if (!authoritativeIdle || transcript.cells.length === 0 || meta.piSessionFile) return false;
+        return transcript.agentStatus === "idle";
       }),
       recordFailure: (error, publish = true) => Effect.sync(() => recordFailure(error, publish)),
 
