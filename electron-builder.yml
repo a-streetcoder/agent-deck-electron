@@ -28,6 +28,8 @@ extraResources:
       - "*.node"
   - from: packages/resources/builtin-agents
     to: builtin-agents
+  - from: packages/resources/builtin-prompts
+    to: builtin-prompts
   - from: build/pi-runtime/node_modules
     to: pi-runtime/node_modules
     filter:

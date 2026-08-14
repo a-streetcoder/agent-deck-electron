@@ -68,6 +68,43 @@ describe("injected command launch matrix", () => {
     );
     expect(absentStore.plan.extensions).toBeUndefined();
   });
+
+  it("resolves builtin prompts as launchable defaults, shadowed by a user's copy (PRM-02)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-builtin-prompt-"));
+    const globalPrompts = path.join(root, ".pi", "agent", "prompts");
+    mkdirSync(globalPrompts, { recursive: true });
+    // the user customized ONE of the bundled prompts by copying it
+    const copyPath = path.join(globalPrompts, "plan-a-feature.md");
+    writeFileSync(copyPath, "---\ndescription: my copy\n---\n\nmine\n");
+    const settings = {
+      defaultSkills: [],
+      defaultPromptTemplates: ["plan-a-feature", "review-my-changes"],
+      disabledSkills: [],
+      defaultThinking: null,
+    };
+    const context = {
+      projects: { find: () => undefined },
+      settings: { get: () => settings },
+      enabledExtensionPaths: () => [],
+      scanSkillCandidatesFor: () => [],
+      rootsFor: () => ({ home: root }),
+      resourceHome: () => root,
+      memoryEnabled: false,
+      memoryBaseDir: path.join(root, "memory"),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const { plan } = resolveLaunchResources(context, {}, {});
+    if (plan.kind !== "parent") throw new Error(`expected a parent plan, got ${plan.kind}`);
+    expect(plan.promptTemplates).toHaveLength(2);
+    // the user's copy wins over the bundled original; the untouched builtin resolves
+    // to the app-bundled file so builtin prompts are actually launchable
+    expect(plan.promptTemplates).toContain(copyPath);
+    expect(
+      plan.promptTemplates!.some(
+        (p: string) => p.endsWith("review-my-changes.md") && p.includes("builtin-prompts"),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("launch resource fingerprint", () => {

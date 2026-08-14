@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promptCatalogDirs } from "../src/paths.ts";
 import { scanPrompts } from "../src/scanner.ts";
 import { renamePromptFile, writePromptFile } from "../src/writer.ts";
@@ -22,6 +22,15 @@ function globalPromptPath(roots: { home: string }, name: string): string {
 }
 
 describe("renamePromptFile", () => {
+  // Hermetic: keep the app-bundled builtin prompts (PRM-02) out of these
+  // exact-list scan assertions.
+  beforeEach(() => {
+    process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = path.join(tmpdir(), "no-builtin-prompts");
+  });
+  afterEach(() => {
+    delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+  });
+
   it("moves the file, preserves content, and updates the name field", () => {
     const roots = { home: home() };
     writePromptFile(roots, "global", "review", {

@@ -208,7 +208,16 @@ export function scanPrompts(roots: ResourceRoots): PromptInfo[] {
       }
     }
   }
-  return prompts.sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope));
+  // Builtins rank LAST within a name so first-wins consumers (launch resolution's
+  // promptsByName) resolve a user's customized copy over the bundled original —
+  // "builtin" would otherwise win the alphabetical scope tiebreak (PRM-02).
+  const builtinLast = (scope: ResourceScope): number => (scope === "builtin" ? 1 : 0);
+  return prompts.sort(
+    (a, b) =>
+      a.name.localeCompare(b.name) ||
+      builtinLast(a.scope) - builtinLast(b.scope) ||
+      a.scope.localeCompare(b.scope),
+  );
 }
 
 function toSkillInfo(

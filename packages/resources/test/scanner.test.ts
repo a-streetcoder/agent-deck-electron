@@ -349,4 +349,45 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     // A selected project's `.pi/prompts` are scanned with scope "project" (native parity).
     expect(prompts.find((p) => p.name === "project-only")).toMatchObject({ scope: "project" });
   });
+
+  it("ships the native builtin prompts as a builtin source (PRM-02)", () => {
+    // the four native bundled-prompts, scanned from the package's own builtin-prompts dir
+    const home = makeHome();
+    const prompts = scanPrompts({ home });
+    const builtin = prompts.filter((p) => p.scope === "builtin").map((p) => p.name);
+    expect(builtin.sort()).toEqual([
+      "investigate-a-bug",
+      "plan-a-feature",
+      "refactor-for-clarity",
+      "review-my-changes",
+    ]);
+    expect(prompts.find((p) => p.name === "plan-a-feature")!.invocation).toBe("/plan-a-feature");
+  });
+
+  it("a builtin always ranks LAST among same-named prompts (copy-to-customize wins)", () => {
+    const home = makeHome();
+    writePrompt(
+      path.join(home, ".pi", "agent", "prompts"),
+      "plan-a-feature.md",
+      "---\ndescription: my customized copy\n---\n\nmine\n",
+    );
+    const matches = scanPrompts({ home }).filter((p) => p.name === "plan-a-feature");
+    expect(matches).toHaveLength(2);
+    // first-wins consumers (launch resolution) must see the user's copy first
+    expect(matches[0]!.scope).toBe("global");
+    expect(matches[1]!.scope).toBe("builtin");
+  });
+
+  it("honors AGENT_DECK_BUILTIN_PROMPTS_DIR per call (hermetic override)", () => {
+    const home = makeHome();
+    const override = path.join(home, "custom-builtins");
+    writePrompt(override, "special.md", "---\ndescription: overridden builtin\n---\n\nbody\n");
+    process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = override;
+    try {
+      const prompts = scanPrompts({ home });
+      expect(prompts.filter((p) => p.scope === "builtin").map((p) => p.name)).toEqual(["special"]);
+    } finally {
+      delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+    }
+  });
 });

@@ -197,15 +197,29 @@ export function PromptsScreen() {
   }, [newDraftOpen]);
 
   const startEdit = (prompt: PromptInfo): void => {
-    useAppStore.getState().setSelectedPromptFilePath(prompt.filePath);
+    // A builtin is not the user's file (PRM-02): opening it drafts a COPY that saves
+    // into the global prompts dir — native's "copy one into your prompts directory
+    // to customize it". The copy then shadows the bundled original by name. When a
+    // same-named global copy ALREADY exists, edit THAT — an original-less draft
+    // would silently overwrite the user's customization (review, Codex).
+    let target = prompt;
+    let isBuiltin = prompt.scope === "builtin";
+    if (isBuiltin) {
+      const existingCopy = prompts.find((p) => p.name === prompt.name && p.scope === "global");
+      if (existingCopy) {
+        target = existingCopy;
+        isBuiltin = false;
+      }
+    }
+    useAppStore.getState().setSelectedPromptFilePath(target.filePath);
     setDraft({
-      name: prompt.name,
-      description: prompt.description ?? "",
-      body: prompt.body,
-      scope: prompt.scope === "library" ? "library" : "global",
+      name: target.name,
+      description: target.description ?? "",
+      body: target.body,
+      scope: target.scope === "library" ? "library" : "global",
       projectId: currentProjectId,
-      original: prompt.name,
-      filePath: prompt.filePath,
+      original: isBuiltin ? undefined : target.name,
+      filePath: isBuiltin ? undefined : target.filePath,
     });
   };
 
@@ -610,28 +624,38 @@ export function PromptsScreen() {
                         </ControlButton>
                       );
                     })()}
-                  <ControlButton
-                    data-testid={`prompt-rename-${prompt.name}`}
-                    className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
-                    title="Rename"
-                    onClick={() =>
-                      setRenaming({ name: prompt.name, scope: prompt.scope, value: prompt.name })
-                    }
-                  >
-                    <Pencil size={13} />
-                  </ControlButton>
-                  <ControlButton
-                    data-testid={`prompt-delete-${prompt.name}`}
-                    className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                    title="Delete"
-                    onClick={() => {
-                      if (confirm(`Delete prompt "${prompt.name}"? This removes its file.`)) {
-                        void remove(prompt);
-                      }
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </ControlButton>
+                  {/* Builtins are app-bundled and immutable — no rename/delete; opening
+                      one drafts a global copy instead (PRM-02). */}
+                  {prompt.scope !== "builtin" ? (
+                    <>
+                      <ControlButton
+                        data-testid={`prompt-rename-${prompt.name}`}
+                        className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+                        title="Rename"
+                        onClick={() =>
+                          setRenaming({
+                            name: prompt.name,
+                            scope: prompt.scope,
+                            value: prompt.name,
+                          })
+                        }
+                      >
+                        <Pencil size={13} />
+                      </ControlButton>
+                      <ControlButton
+                        data-testid={`prompt-delete-${prompt.name}`}
+                        className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                        title="Delete"
+                        onClick={() => {
+                          if (confirm(`Delete prompt "${prompt.name}"? This removes its file.`)) {
+                            void remove(prompt);
+                          }
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </ControlButton>
+                    </>
+                  ) : null}
                 </>
               )}
             </div>

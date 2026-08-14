@@ -137,6 +137,17 @@ export interface PromptCatalogDir {
 }
 
 /** Prompt-template catalog dirs — single .md files, pi's `/prompt:<name>`. */
+/**
+ * Packaged builds copy immutable built-ins outside app.asar and provide their
+ * explicit resource path (same shape as BUILTIN_AGENTS_DIR). The env is read
+ * per call so hermetic tests can override it without module-load ordering.
+ */
+const BUILTIN_PROMPTS_DIR_DEFAULT = fileURLToPath(new URL("../builtin-prompts", import.meta.url));
+
+export function builtinPromptsDir(): string {
+  return process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR?.trim() || BUILTIN_PROMPTS_DIR_DEFAULT;
+}
+
 export function promptCatalogDirs(roots: ResourceRoots): PromptCatalogDir[] {
   const dirs: PromptCatalogDir[] = [];
   // A selected project's prompts (`<project>/.pi/prompts`) come first — native
@@ -146,6 +157,8 @@ export function promptCatalogDirs(roots: ResourceRoots): PromptCatalogDir[] {
   }
   dirs.push({ dir: path.join(piAgentHome(roots), "prompts"), scope: "global" });
   dirs.push({ dir: path.join(piAgentHome(roots), "prompt-library"), scope: "library" });
+  // PRM-02: the app-bundled prompts, last — a user's copy always outranks them.
+  dirs.push({ dir: builtinPromptsDir(), scope: "builtin" });
   return dirs;
 }
 
@@ -160,7 +173,9 @@ export function watchDirs(roots: ResourceRoots): string[] {
       .filter((d) => d.scope !== "builtin")
       .map((d) => d.dir),
     ...skillCatalogDirs(roots).map((d) => d.dir),
-    ...promptCatalogDirs(roots).map((d) => d.dir),
+    ...promptCatalogDirs(roots)
+      .filter((d) => d.scope !== "builtin")
+      .map((d) => d.dir),
     // Native watches this exact file even before it exists. It can change
     // builtin-agent overrides and other Pi-discovered resource configuration.
     path.join(piAgentHome(roots), "settings.json"),

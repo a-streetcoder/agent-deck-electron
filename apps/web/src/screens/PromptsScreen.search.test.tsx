@@ -99,6 +99,67 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("builtin prompt source (PRM-02)", () => {
+  it("builtin prompts are read-only; opening one drafts a GLOBAL copy to customize", async () => {
+    await renderCatalog();
+    // no rename/delete affordances on the builtin row — it is not the user's file
+    expect(screen.queryByTestId("prompt-rename-third")).toBeNull();
+    expect(screen.queryByTestId("prompt-delete-third")).toBeNull();
+    // ordinary rows keep them
+    expect(screen.getByTestId("prompt-rename-NameNeedle")).toBeTruthy();
+
+    // opening a builtin drafts a copy that SAVES into the user's global prompts
+    fireEvent.click(screen.getByText("/third"));
+    await screen.findByTestId("prompt-editor");
+    fireEvent.click(screen.getByTestId("prompt-save"));
+    await waitFor(() => {
+      const put = vi
+        .mocked(fetch)
+        .mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(put).toBeTruthy();
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toMatchObject({
+        scope: "global",
+        name: "third",
+      });
+    });
+  });
+
+  it("opening a builtin that is ALREADY customized edits the user's copy, never overwrites it blind", async () => {
+    const shadowed: PromptInfo[] = [
+      {
+        name: "third",
+        invocation: "/third",
+        description: "the user's customized copy",
+        scope: "global",
+        filePath: "/prompts/third-global.md",
+        body: "customized body",
+      },
+      {
+        name: "third",
+        invocation: "/third",
+        description: "the bundled original",
+        scope: "builtin",
+        filePath: "/builtin-prompts/third.md",
+        body: "bundled body",
+      },
+    ];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/prompts") {
+        return Promise.resolve(jsonResponse({ prompts: shadowed }));
+      }
+      if (url === "/settings") return Promise.resolve(jsonResponse({ settings: {} }));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<PromptsScreen />);
+    const rows = await screen.findAllByText("/third");
+    fireEvent.click(rows[1]!); // the BUILTIN row
+    await screen.findByTestId("prompt-editor");
+    // the draft targets the user's existing copy (its file), not a blind overwrite
+    expect(screen.getByTestId("prompt-file-path").textContent).toContain("third-global.md");
+  });
+});
+
 describe("prompt catalog search", () => {
   it("does not show the catalog-empty state while the initial prompt request is pending", () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {

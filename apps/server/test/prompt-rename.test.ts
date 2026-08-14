@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +30,13 @@ async function promptNames(): Promise<string[]> {
   };
   return prompts.map((p) => p.name).sort();
 }
+
+// Hermetic: keep the app-bundled builtin prompts (PRM-02) out of these
+// exact-list catalog assertions.
+process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = path.join(tmpdir(), "no-builtin-prompts");
+afterAll(() => {
+  delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+});
 
 beforeAll(async () => {
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: resourceHome });
@@ -209,5 +216,49 @@ describe("prompt rename/delete re-points assignments (native defaultPromptTempla
     expect(projects.find((p) => p.id === projectId)!.assignedPrompts ?? []).not.toContain(
       "release",
     );
+  });
+});
+
+describe("DELETE /resources/prompts with a builtin fallback (PRM-02)", () => {
+  it("keeps the default when the deleted copy still resolves to a builtin", async () => {
+    // a builtin dir that really contains the shadowed name
+    const builtinDir = mkdtempSync(path.join(tmpdir(), "builtin-prompts-"));
+    writeFileSync(
+      path.join(builtinDir, "shadowed.md"),
+      "---\ndescription: bundled\n---\n\nbundled body\n",
+    );
+    const prior = process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+    process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = builtinDir;
+    try {
+      // the user copied the builtin, made it a default, then deleted the copy
+      expect(
+        (
+          await api("PUT", "/resources/prompts", {
+            scope: "global",
+            name: "shadowed",
+            edit: { body: "my copy" },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setDefaultPromptTemplate: { name: "shadowed", enabled: true },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (await api("DELETE", "/resources/prompts", { scope: "global", name: "shadowed" })).status,
+      ).toBe(200);
+
+      // the name STILL resolves (to the builtin), so the default must survive
+      const { settings } = (await (await api("GET", "/settings")).json()) as {
+        settings: { defaultPromptTemplates: string[] };
+      };
+      expect(settings.defaultPromptTemplates).toContain("shadowed");
+    } finally {
+      if (prior === undefined) delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+      else process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = prior;
+    }
   });
 });

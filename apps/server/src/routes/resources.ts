@@ -15,6 +15,7 @@ import {
 } from "@agent-deck/domain";
 import {
   BUILTIN_AGENTS_DIR,
+  builtinPromptsDir,
   computeBuiltinOverride,
   deleteAgentFile,
   deletePromptFile,
@@ -978,9 +979,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return sendResourceMutationFailure(reply, error);
     }
     // Drop the name from the flat default list only if it no longer resolves to
-    // any prompt anywhere (another scope may still provide it).
+    // any prompt anywhere (another scope may still provide it). A same-named
+    // BUILTIN keeps resolving after a user's copy is deleted (PRM-02), so it
+    // counts too — dropping the reference would silently stop launching it.
     const globalPromptDir = nodePath.join(resourceHome(), ".pi", "agent", "prompts");
-    const globalPromptExists = existsSync(nodePath.join(globalPromptDir, `${name}.md`));
+    const globalPromptExists =
+      existsSync(nodePath.join(globalPromptDir, `${name}.md`)) ||
+      existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`));
     const stillResolves =
       globalPromptExists ||
       projects

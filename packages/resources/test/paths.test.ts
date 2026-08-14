@@ -6,6 +6,7 @@ import {
   agentCatalogDirs,
   extensionCatalogDirs,
   projectWatchDirs,
+  builtinPromptsDir,
   promptCatalogDirs,
   skillCatalogDirs,
   watchDirs,
@@ -46,6 +47,8 @@ describe("native-compatible resource paths", () => {
       { dir: path.join(projectPath, ".pi", "prompts"), scope: "project" },
       { dir: path.join(home, ".pi", "agent", "prompts"), scope: "global" },
       { dir: path.join(home, ".pi", "agent", "prompt-library"), scope: "library" },
+      // PRM-02: the app-bundled prompts, always last (a user's copy outranks them)
+      { dir: builtinPromptsDir(), scope: "builtin" },
     ]);
     expect(extensionCatalogDirs(roots)).toEqual([
       { dir: path.join(home, ".pi", "agent", "extensions"), scope: "global" },
