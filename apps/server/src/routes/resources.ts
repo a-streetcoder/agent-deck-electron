@@ -512,6 +512,35 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     return reply.status(500).send({ error: generic });
   };
 
+  // Known external skill sources (SKL-07/10): the folders other tools keep skills in — Claude
+  // and Codex, global and per-project (native's knownSkillSources). Existence-checked so the
+  // client only scans folders that are actually there; `CODEX_HOME` is honored like Codex does.
+  // The plugin-cache pass (SKL-09) is deliberately NOT here — it needs reference semantics.
+  fastify.get("/resources/skills/known-sources", async () => {
+    const home = resourceHome();
+    const codexHome = process.env.CODEX_HOME?.trim() || nodePath.join(home, ".codex");
+    const sources: { path: string; label: string; provider: "claude" | "codex" }[] = [];
+    const seen = new Set<string>();
+    const add = (dir: string, label: string, provider: "claude" | "codex"): void => {
+      // dedupe by resolved path: CODEX_HOME can alias a project folder, and a duplicate root
+      // would mint duplicate candidate ids downstream (review, Codex); first label wins
+      const resolved = nodePath.resolve(dir);
+      if (seen.has(resolved)) return;
+      if (existsSync(resolved)) {
+        seen.add(resolved);
+        sources.push({ path: resolved, label, provider });
+      }
+    };
+    add(nodePath.join(home, ".claude", "skills"), "Claude · Global", "claude");
+    add(nodePath.join(codexHome, "skills"), "Codex · Global", "codex");
+    for (const project of projects.list()) {
+      if (project.enabled === false || project.hidden) continue;
+      add(nodePath.join(project.path, ".claude", "skills"), `Claude · ${project.name}`, "claude");
+      add(nodePath.join(project.path, ".codex", "skills"), `Codex · ${project.name}`, "codex");
+    }
+    return { sources };
+  });
+
   // Preview a LOCAL folder of skills (SKL-05): engine discovery, materializes nothing. Shares
   // the git preview's payload shape so the renderer reuses one dialog.
   fastify.post("/resources/skills/inspect-local", async (request, reply) => {

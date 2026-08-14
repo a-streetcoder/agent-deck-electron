@@ -7,6 +7,10 @@ import { useFocusTrap } from "../lib/useFocusTrap.ts";
 export interface SkillPreviewItem {
   /** Engine skill name (the import selection key). */
   name: string;
+  /** Selection identity when names can collide across sources (defaults to `name`). */
+  id?: string;
+  /** Where this skill was discovered — shown per row for multi-source scans (SKL-07). */
+  sourceLabel?: string;
   /** SKILL.md frontmatter name, or the folder name when absent. */
   displayName: string;
   description?: string;
@@ -23,13 +27,17 @@ export function SkillImportPreviewDialog({
   sourceLabel,
   sourceKind = "git",
   skills,
+  defaultSelected,
   onImport,
   onCancel,
 }: {
   /** The reference the user gave (repo URL or folder path) — shown so they know the source. */
   sourceLabel: string;
-  /** Picks the header icon; the selection/import behavior is identical for both. */
-  sourceKind?: "git" | "local";
+  /** Picks the header icon; the selection/import behavior is identical for all kinds. */
+  sourceKind?: "git" | "local" | "known";
+  /** Initial selection keys; defaults to every skill. Multi-source scans pass a name-deduped
+   *  set so two same-name skills don't both import into one catalog name (review, Codex). */
+  defaultSelected?: string[];
   skills: SkillPreviewItem[];
   /** Import the selection; reject (throw) to keep the dialog open with the error shown. */
   onImport: (selected: string[]) => Promise<void>;
@@ -37,9 +45,11 @@ export function SkillImportPreviewDialog({
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useFocusTrap<HTMLDivElement>(true, cancelRef);
-  // Native pre-selects every importable skill; deselection is the exception.
+  // Native pre-selects every importable skill; deselection is the exception. Multi-source
+  // scans pass a name-deduped defaultSelected instead (review, Codex).
+  const keyOf = (s: SkillPreviewItem): string => s.id ?? s.name;
   const [selected, setSelected] = useState<ReadonlySet<string>>(
-    () => new Set(skills.map((s) => s.name)),
+    () => new Set(defaultSelected ?? skills.map(keyOf)),
   );
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
@@ -67,18 +77,19 @@ export function SkillImportPreviewDialog({
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return skills;
     return skills.filter((s) => {
-      const haystack = `${s.displayName} ${s.name} ${s.description ?? ""}`.toLowerCase();
+      const haystack =
+        `${s.displayName} ${s.name} ${s.description ?? ""} ${s.sourceLabel ?? ""}`.toLowerCase();
       return tokens.every((t) => haystack.includes(t));
     });
   }, [skills, query]);
 
-  const allVisibleSelected = visible.length > 0 && visible.every((s) => selected.has(s.name));
+  const allVisibleSelected = visible.length > 0 && visible.every((s) => selected.has(keyOf(s)));
   const toggleVisible = (): void => {
     setSelected((prev) => {
       const next = new Set(prev);
       for (const s of visible) {
-        if (allVisibleSelected) next.delete(s.name);
-        else next.add(s.name);
+        if (allVisibleSelected) next.delete(keyOf(s));
+        else next.add(keyOf(s));
       }
       return next;
     });
@@ -176,19 +187,19 @@ export function SkillImportPreviewDialog({
           ) : (
             <ul className="flex flex-col">
               {visible.map((skill) => (
-                <li key={skill.name} className="border-b border-border last:border-b-0">
+                <li key={keyOf(skill)} className="border-b border-border last:border-b-0">
                   <label className="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-2.5 hover:bg-hover">
                     <ControlInput
                       type="checkbox"
-                      data-testid={`skill-import-preview-check-${skill.name}`}
+                      data-testid={`skill-import-preview-check-${keyOf(skill)}`}
                       className="mt-0.5 accent-accent"
-                      checked={selected.has(skill.name)}
+                      checked={selected.has(keyOf(skill))}
                       disabled={importing}
                       onChange={() =>
                         setSelected((prev) => {
                           const next = new Set(prev);
-                          if (next.has(skill.name)) next.delete(skill.name);
-                          else next.add(skill.name);
+                          if (next.has(keyOf(skill))) next.delete(keyOf(skill));
+                          else next.add(keyOf(skill));
                           return next;
                         })
                       }
@@ -210,6 +221,7 @@ export function SkillImportPreviewDialog({
                         </span>
                       ) : null}
                       <span className="mt-0.5 block truncate font-mono text-micro text-text-muted">
+                        {skill.sourceLabel ? `${skill.sourceLabel} · ` : ""}
                         {skill.name}
                       </span>
                     </span>

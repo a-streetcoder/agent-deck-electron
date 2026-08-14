@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   FolderInput,
+  FolderSearch,
   GitBranch,
   Grid3x3,
   Pencil,
@@ -614,7 +615,7 @@ export function SkillsScreen() {
 
   const doGitInspect = async (): Promise<void> => {
     const url = (gitUrl ?? "").trim();
-    if (!url || inspectLock.current || localPreview) return;
+    if (!url || inspectLock.current || localPreview || knownPreview) return;
     inspectLock.current = true;
     const seq = ++inspectSeq.current;
     setGitImporting(true);
@@ -679,7 +680,7 @@ export function SkillsScreen() {
   const doLocalFolderImport = async (): Promise<void> => {
     // one import flow at a time: the shared lock + the open-dialog checks keep a second picker,
     // a stale response, or a SECOND aria-modal dialog from ever appearing (review, Codex)
-    if (inspectLock.current || gitPreview || localPreview) return;
+    if (inspectLock.current || gitPreview || knownPreview || localPreview) return;
     inspectLock.current = true;
     const seq = ++inspectSeq.current;
     try {
@@ -707,6 +708,116 @@ export function SkillsScreen() {
     } finally {
       inspectLock.current = false;
     }
+  };
+
+  // SKL-07/10: scan the KNOWN external skill folders (Claude/Codex, global + per-project) and
+  // feed every discovered skill into the same preview dialog, labeled by source. Copy-on-import
+  // like every engine import; per-root scan failures degrade to a note instead of killing the scan.
+  const [knownPreview, setKnownPreview] = useState<{
+    items: (SkillPreviewItem & { sourcePath: string })[];
+    failures: string[];
+    defaultSelected: string[];
+  } | null>(null);
+
+  const doKnownScan = async (): Promise<void> => {
+    if (inspectLock.current || gitPreview || localPreview || knownPreview) return;
+    inspectLock.current = true;
+    const seq = ++inspectSeq.current;
+    try {
+      const res = await fetch("/resources/skills/known-sources");
+      if (!res.ok) {
+        throw new Error(await responseErrorMessage(res, "Couldn't list known skill folders."));
+      }
+      const { sources } = (await res.json()) as {
+        sources: { path: string; label: string }[];
+      };
+      const items: (SkillPreviewItem & { sourcePath: string })[] = [];
+      const failures: string[] = [];
+      for (const src of sources) {
+        try {
+          const r = await fetch("/resources/skills/inspect-local", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path: src.path }),
+          });
+          if (!r.ok) throw new Error(await responseErrorMessage(r, "unreadable"));
+          const data = (await r.json()) as { skills: SkillPreviewItem[] };
+          for (const s of data.skills) {
+            items.push({
+              ...s,
+              id: `${src.path}::${s.name}`,
+              sourceLabel: src.label,
+              sourcePath: src.path,
+            });
+          }
+        } catch {
+          // ANY per-root failure (HTTP, network, malformed JSON) degrades to a note — one bad
+          // root must not kill the whole scan or masquerade as "no skills" (review, Codex)
+          failures.push(src.label);
+        }
+      }
+      if (seq !== inspectSeq.current) return; // superseded while in flight
+      if (items.length === 0) {
+        throw new Error(
+          failures.length > 0
+            ? `Couldn't read the known skill folders: ${failures.join(", ")}.`
+            : "No Claude or Codex skills with a SKILL.md were found in known folders.",
+        );
+      }
+      // default selection dedupes by NAME (first source wins): two same-name discoveries both
+      // import into ONE catalog name, so both-selected would always collide (review, Codex)
+      const seenNames = new Set<string>();
+      const defaultSelected: string[] = [];
+      for (const item of items) {
+        if (seenNames.has(item.name)) continue;
+        seenNames.add(item.name);
+        if (item.id) defaultSelected.push(item.id);
+      }
+      setKnownPreview({ items, failures, defaultSelected });
+    } catch (err) {
+      if (seq === inspectSeq.current) setGlobalError(String(err));
+    } finally {
+      inspectLock.current = false;
+    }
+  };
+
+  const confirmKnownImport = async (selectedIds: string[]): Promise<void> => {
+    if (!knownPreview) return;
+    // group the selection back into per-root imports (ids are path-qualified)
+    const byRoot = new Map<string, { label: string; selected: string[] }>();
+    for (const id of selectedIds) {
+      const item = knownPreview.items.find((i) => i.id === id);
+      if (!item) continue;
+      const entry = byRoot.get(item.sourcePath) ?? {
+        label: item.sourceLabel ?? item.sourcePath,
+        selected: [],
+      };
+      entry.selected.push(item.name);
+      byRoot.set(item.sourcePath, entry);
+    }
+    const done: string[] = [];
+    for (const [rootPath, { label, selected }] of byRoot) {
+      const res = await fetch("/resources/skills/import-local-folder", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: rootPath, selected }),
+      });
+      if (!res.ok) {
+        const message = await responseErrorMessage(res, "import failed");
+        // drop the roots that DID land so a retry only re-attempts the remainder, and name
+        // both sides so the error is actionable (review, Codex)
+        setKnownPreview((prev) =>
+          prev ? { ...prev, items: prev.items.filter((i) => !done.includes(i.sourcePath)) } : prev,
+        );
+        throw new Error(
+          done.length > 0
+            ? `Imported from ${done.length} folder(s); ${label} failed: ${message}`
+            : `${label} failed: ${message}`,
+        );
+      }
+      done.push(rootPath);
+    }
+    setKnownPreview(null);
   };
 
   const confirmLocalImport = async (selected: string[]): Promise<void> => {
@@ -1238,6 +1349,14 @@ export function SkillsScreen() {
             <FolderInput size={15} />
           </ControlButton>
           <ControlButton
+            data-testid="skill-scan-known"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
+            title="Scan Claude and Codex skill folders"
+            onClick={() => void doKnownScan()}
+          >
+            <FolderSearch size={15} />
+          </ControlButton>
+          <ControlButton
             data-testid="skill-import-git"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
             title="Import skills from a git repository"
@@ -1313,6 +1432,20 @@ export function SkillsScreen() {
             skills={localPreview.skills}
             onImport={confirmLocalImport}
             onCancel={() => setLocalPreview(null)}
+          />
+        ) : null}
+        {knownPreview ? (
+          <SkillImportPreviewDialog
+            sourceLabel={
+              knownPreview.failures.length > 0
+                ? `Claude & Codex folders · couldn't read: ${knownPreview.failures.join(", ")}`
+                : "Claude & Codex folders"
+            }
+            sourceKind="known"
+            skills={knownPreview.items}
+            defaultSelected={knownPreview.defaultSelected}
+            onImport={confirmKnownImport}
+            onCancel={() => setKnownPreview(null)}
           />
         ) : null}
         <div

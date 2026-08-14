@@ -109,6 +109,54 @@ describe.skipIf(!hasLocalFolder)("engine 0.1.7 local folder import routes (SKL-0
     expect(() => readFileSync(skillFile("beta", "SKILL.md"))).toThrow();
   }, 60_000);
 
+  it("known sources list existing Claude/Codex folders and feed the same preview flow (SKL-07/10)", async () => {
+    // a Claude global skills folder in the test home — the discovery catalog must find it,
+    // and the folder previews/imports through the same local pipeline
+    const claude = path.join(resourceHome, ".claude", "skills", "claude-tip");
+    mkdirSync(claude, { recursive: true });
+    writeFileSync(
+      path.join(claude, "SKILL.md"),
+      "---\nname: claude-tip\ndescription: From Claude\n---\nTip body\n",
+    );
+
+    const known = await api("GET", "/resources/skills/known-sources");
+    expect(known.statusCode).toBe(200);
+    const { sources } = (await known.json()) as {
+      sources: { path: string; label: string; provider: string }[];
+    };
+    const claudeGlobal = sources.find((s) => s.label === "Claude · Global");
+    expect(claudeGlobal?.provider).toBe("claude");
+    // only folders that exist are offered — no Codex dir was created in this home
+    expect(sources.some((s) => s.label === "Codex · Global")).toBe(false);
+
+    // an aliased CODEX_HOME must not mint a duplicate root (dedupe by resolved path)
+    const priorCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = path.join(resourceHome, ".claude");
+    try {
+      const aliased = await api("GET", "/resources/skills/known-sources");
+      const aliasedSources = (await aliased.json()) as { sources: { path: string }[] };
+      const claudePaths = aliasedSources.sources.filter((s) => s.path === claudeGlobal!.path);
+      expect(claudePaths).toHaveLength(1);
+    } finally {
+      if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorCodexHome;
+    }
+
+    const inspect = await api("POST", "/resources/skills/inspect-local", {
+      path: claudeGlobal!.path,
+    });
+    expect(inspect.statusCode).toBe(200);
+    const preview = (await inspect.json()) as { skills: { name: string }[] };
+    expect(preview.skills.map((s) => s.name)).toEqual(["claude-tip"]);
+
+    const imp = await api("POST", "/resources/skills/import-local-folder", {
+      path: claudeGlobal!.path,
+      selected: ["claude-tip"],
+    });
+    expect(imp.statusCode).toBe(200);
+    expect(readFileSync(skillFile("claude-tip", "SKILL.md"), "utf8")).toContain("From Claude");
+  }, 60_000);
+
   it("single-path import brings siblings when pointed at a SKILL.md (SKL-06)", async () => {
     // a UNIQUE skill name so this test cannot collide with the sibling test's imports and
     // silently skip its success assertions (review, Codex)

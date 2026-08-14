@@ -361,6 +361,69 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
   });
 
+  it("known-source scan merges labeled roots and imports grouped by folder (SKL-07/10)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/known-sources") {
+        return Promise.resolve(
+          jsonResponse({
+            sources: [
+              { path: "C:/home/.claude/skills", label: "Claude · Global", provider: "claude" },
+              { path: "C:/home/.codex/skills", label: "Codex · Global", provider: "codex" },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skills/inspect-local") {
+        // BOTH roots contain a skill named "helper" — path-qualified ids must keep them apart
+        return Promise.resolve(
+          jsonResponse({
+            skills: [{ name: "helper", displayName: "Helper", extraFileCount: 0 }],
+          }),
+        );
+      }
+      if (url === "/resources/skills/import-local-folder") {
+        return Promise.resolve(jsonResponse({ imported: ["helper"] }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-scan-known"));
+    await screen.findByTestId("skill-import-preview-dialog");
+
+    // two same-name skills from two labeled sources: BOTH visible, but the default selection
+    // dedupes by name (first source wins) — both-selected would always collide in one catalog
+    const claudeCheck = screen.getByTestId(
+      "skill-import-preview-check-C:/home/.claude/skills::helper",
+    ) as HTMLInputElement;
+    const codexCheck = screen.getByTestId(
+      "skill-import-preview-check-C:/home/.codex/skills::helper",
+    ) as HTMLInputElement;
+    expect(claudeCheck.checked).toBe(true);
+    expect(codexCheck.checked).toBe(false);
+    expect(screen.getAllByText(/Claude · Global/).length).toBeGreaterThan(0);
+
+    // import must group by root and post ONLY the Claude folder (the deduped default)
+    fireEvent.click(screen.getByTestId("skill-import-preview-import"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const importCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/resources/skills/import-local-folder",
+    );
+    expect(importCalls).toHaveLength(1);
+    expect(JSON.parse(String(importCalls[0]?.[1]?.body))).toEqual({
+      path: "C:/home/.claude/skills",
+      selected: ["helper"],
+    });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);
