@@ -2,15 +2,19 @@ import { ControlButton, ControlTextArea } from "@/design-system/components/Nativ
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
 
 /**
- * Instructions editor — pi's AGENTS.md context files, which pi auto-loads every
- * turn (agent-deck-system-prompt-logic §context files). Two scopes: the current
- * project's AGENTS.md at its root, and the GLOBAL ~/.pi/agent/AGENTS.md that
- * applies to every session. Global is editable with no project selected.
+ * Instructions editor — pi's context files AND the base-prompt override (INS-01).
+ * Two scopes (project / global) × two files:
+ * - context: AGENTS.md (or its CLAUDE.md fallback), auto-loaded every turn.
+ * - system:  SYSTEM.md, which REPLACES pi's built-in base prompt. pi resolves
+ *   precedence itself (project SYSTEM.md → global SYSTEM.md → built-in); the app
+ *   only catalogs and edits the candidates (native SystemInstructionsViews).
  */
 type Scope = "project" | "global";
+type FileKind = "context" | "system";
 
 export function InstructionsScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
@@ -19,9 +23,11 @@ export function InstructionsScreen() {
   const project = projects.find((p) => p.id === currentProjectId) ?? null;
 
   const [scope, setScope] = useState<Scope>(currentProjectId ? "project" : "global");
+  const [fileKind, setFileKind] = useState<FileKind>("context");
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [filePath, setFilePath] = useState("");
+  const [fileExists, setFileExists] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const activeKey = useRef<string | null>(null);
@@ -29,13 +35,16 @@ export function InstructionsScreen() {
 
   // The current edit target. `key` identifies it (for stale-load guarding);
   // `url` is null only for project scope with no project selected.
-  const key = scope === "global" ? "global" : (currentProjectId ?? null);
+  const key = `${fileKind}:${scope === "global" ? "global" : (currentProjectId ?? "")}`;
+  const projectBase = currentProjectId ? `/projects/${encodeURIComponent(currentProjectId)}` : null;
   const url =
-    scope === "global"
-      ? "/runtime/instructions"
-      : currentProjectId
-        ? `/projects/${encodeURIComponent(currentProjectId)}/instructions`
-        : null;
+    fileKind === "context"
+      ? scope === "global"
+        ? "/runtime/instructions"
+        : projectBase && `${projectBase}/instructions`
+      : scope === "global"
+        ? "/runtime/system-prompt"
+        : projectBase && `${projectBase}/system-prompt`;
 
   const load = useCallback(
     async (loadKey: string, loadUrl: string): Promise<void> => {
@@ -43,11 +52,16 @@ export function InstructionsScreen() {
       try {
         const response = await fetch(loadUrl);
         if (!response.ok) throw new Error(await response.text());
-        const data = (await response.json()) as { content: string; path: string };
+        const data = (await response.json()) as {
+          content: string;
+          path: string;
+          exists?: boolean;
+        };
         if (activeKey.current !== loadKey) return;
         setContent(data.content);
         setSavedContent(data.content);
         setFilePath(data.path);
+        setFileExists(data.exists ?? data.content !== "");
       } catch (err) {
         setError(String(err));
       } finally {
@@ -60,9 +74,9 @@ export function InstructionsScreen() {
   );
 
   useEffect(() => {
-    // (Re)load when the target changes — scope toggle or project switch. Loading
-    // once per key avoids a re-fire clobbering unsaved edits.
-    if (key && url && loadedKey.current !== key) {
+    // (Re)load when the target changes — scope/file toggle or project switch.
+    // Loading once per key avoids a re-fire clobbering unsaved edits.
+    if (url && loadedKey.current !== key) {
       loadedKey.current = key;
       setLoaded(false);
       setContent("");
@@ -70,12 +84,16 @@ export function InstructionsScreen() {
       // Clear the path too, so the header can't show the PREVIOUS target's
       // resolved filename (e.g. a stale CLAUDE.md) while the new one loads.
       setFilePath("");
+      setFileExists(false);
       void load(key, url);
     }
   }, [key, url, load]);
 
   const save = async (): Promise<void> => {
     if (!url) return;
+    // a completion must only mutate the target it was issued FOR — the user may
+    // have switched scope/file while the PUT was in flight (review, Codex)
+    const targetKey = key;
     setSaving(true);
     try {
       const response = await fetch(url, {
@@ -84,7 +102,9 @@ export function InstructionsScreen() {
         body: JSON.stringify({ content }),
       });
       if (!response.ok) throw new Error(await response.text());
+      if (loadedKey.current !== targetKey) return;
       setSavedContent(content);
+      setFileExists(true);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -92,10 +112,31 @@ export function InstructionsScreen() {
     }
   };
 
+  // Remove the base-prompt OVERRIDE (system file only): deleting restores pi's
+  // fallback (global SYSTEM.md or the built-in prompt) — an empty save would
+  // instead replace the base prompt with nothing.
+  const removeOverride = async (): Promise<void> => {
+    if (!url || fileKind !== "system" || saving) return;
+    const targetKey = key;
+    try {
+      const response = await fetch(url, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Couldn't remove the override."));
+      }
+      if (loadedKey.current !== targetKey) return;
+      setContent("");
+      setSavedContent("");
+      setFileExists(false);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   const dirty = content !== savedContent;
   const needsProject = scope === "project" && !project;
-  // The effective file pi loads (AGENTS.md, or a CLAUDE.md fallback the server resolved).
-  const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? "AGENTS.md") : "AGENTS.md";
+  // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
+  const fallbackName = fileKind === "system" ? "SYSTEM.md" : "AGENTS.md";
+  const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? fallbackName) : fallbackName;
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="instructions-screen">
@@ -111,6 +152,33 @@ export function InstructionsScreen() {
             </h2>
           </div>
           <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+              role="group"
+              aria-label="Instruction file"
+            >
+              {(
+                [
+                  ["context", "Context"],
+                  ["system", "Base prompt"],
+                ] as const
+              ).map(([kind, label]) => (
+                <ControlButton
+                  key={kind}
+                  data-testid={`instructions-file-${kind}`}
+                  aria-pressed={fileKind === kind}
+                  className={cn(
+                    "rounded-capsule px-2.5 py-0.5 text-xs transition-colors",
+                    fileKind === kind
+                      ? "bg-selection text-text-primary"
+                      : "text-text-muted hover:text-text-primary",
+                  )}
+                  onClick={() => setFileKind(kind)}
+                >
+                  {label}
+                </ControlButton>
+              ))}
+            </div>
             <div
               className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
               role="group"
@@ -133,6 +201,16 @@ export function InstructionsScreen() {
                 </ControlButton>
               ))}
             </div>
+            {fileKind === "system" && fileExists && !needsProject ? (
+              <ControlButton
+                data-testid="instructions-remove-override"
+                className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-danger"
+                title="Delete this SYSTEM.md so pi falls back to its default base prompt"
+                onClick={() => void removeOverride()}
+              >
+                Remove override
+              </ControlButton>
+            ) : null}
             <ControlButton
               data-testid="instructions-save"
               className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
@@ -156,7 +234,7 @@ export function InstructionsScreen() {
           >
             <div className="max-w-sm text-sm text-text-muted">
               Select a project in the sidebar to edit its{" "}
-              <code className="rounded bg-surface px-1 font-mono text-xs">AGENTS.md</code>, or
+              <code className="rounded bg-surface px-1 font-mono text-xs">{fallbackName}</code>, or
               switch to <b>Global</b> to edit the instructions that apply to every session.
             </div>
           </div>
@@ -165,14 +243,25 @@ export function InstructionsScreen() {
             <p className="truncate pb-3 font-mono text-detail text-text-muted" title={filePath}>
               {filePath}
             </p>
+            {fileKind === "system" ? (
+              <p className="pb-3 text-xs text-text-muted" data-testid="instructions-system-note">
+                {fileExists
+                  ? "This file REPLACES pi's built-in base prompt for this scope."
+                  : scope === "project"
+                    ? "Creating SYSTEM.md overrides pi's base prompt for this project (it wins over the global SYSTEM.md)."
+                    : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
+              </p>
+            ) : null}
             {loaded ? (
               <ControlTextArea
                 data-testid="instructions-editor"
                 className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-sm text-text-primary outline-none focus:border-accent"
                 placeholder={
-                  scope === "global"
-                    ? "Global context pi reads for every session. Markdown."
-                    : "Project context pi reads on every turn. Markdown."
+                  fileKind === "system"
+                    ? "The replacement base prompt. Leave the override removed to keep pi's default."
+                    : scope === "global"
+                      ? "Global context pi reads for every session. Markdown."
+                      : "Project context pi reads on every turn. Markdown."
                 }
                 spellCheck={false}
                 value={content}

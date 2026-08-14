@@ -1,4 +1,12 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import nodePath from "node:path";
 import {
   discoverModelCatalog,
@@ -429,5 +437,52 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     mkdirSync(nodePath.dirname(filePath), { recursive: true });
     writeFileSync(filePath, parsed.data.content, "utf8");
     return { ok: true, path: filePath };
+  });
+
+  // INS-01: the GLOBAL base-prompt override, ~/.pi/agent/SYSTEM.md. pi resolves the
+  // base prompt itself (project SYSTEM.md wins, else this file, else the built-in
+  // prompt) — these routes only catalog and edit the candidate. Its path is derived
+  // here, never client-sent. DELETE removes the override: an EMPTY SYSTEM.md would
+  // replace pi's base prompt with nothing, a different (dangerous) state.
+  const globalSystemPromptPath = (): string =>
+    nodePath.join(resourceHome(), ".pi", "agent", "SYSTEM.md");
+
+  fastify.get("/runtime/system-prompt", async (_request, reply) => {
+    const filePath = globalSystemPromptPath();
+    let content = "";
+    const exists = existsSync(filePath);
+    if (exists) {
+      if (statSync(filePath).size > INSTRUCTIONS_MAX) {
+        return reply.status(413).send({ error: "the instructions file is too large to edit here" });
+      }
+      content = readFileSync(filePath, "utf8");
+    }
+    return { content, path: filePath, exists };
+  });
+
+  fastify.put("/runtime/system-prompt", async (request, reply) => {
+    const parsed = instructionsBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const filePath = globalSystemPromptPath();
+    if (existsSync(filePath) && lstatSync(filePath).isSymbolicLink()) {
+      return reply
+        .status(400)
+        .send({ error: "the instructions file is a symlink; refusing to write" });
+    }
+    mkdirSync(nodePath.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, parsed.data.content, "utf8");
+    return { ok: true, path: filePath };
+  });
+
+  fastify.delete("/runtime/system-prompt", async (_request, _reply) => {
+    const filePath = globalSystemPromptPath();
+    // rmSync on a symlink removes the ENTRY, never its target — deleting the link
+    // is exactly how the user restores pi's fallback, so it is allowed (review, Codex)
+    try {
+      if (lstatSync(filePath)) rmSync(filePath);
+    } catch {
+      // already absent — idempotent
+    }
+    return { ok: true };
   });
 }

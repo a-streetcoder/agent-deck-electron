@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -248,6 +250,88 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
     writeFileSync(target.path, parsed.data.content, "utf8");
     return { ok: true, path: target.path };
+  });
+
+  // INS-01: the PROJECT base-prompt override, <project>/.pi/SYSTEM.md — wins over
+  // the global SYSTEM.md and pi's built-in prompt (pi resolves; we only edit).
+  const systemPromptFileFor = (id: string): { path: string; projectPath: string } | null => {
+    const project = projects.find((p) => p.id === id);
+    return project
+      ? { path: nodePath.join(project.path, ".pi", "SYSTEM.md"), projectPath: project.path }
+      : null;
+  };
+
+  // Repo-checked-in links are untrusted: a `.pi` (or deeper) symlink/junction must
+  // never redirect a read/write/delete outside the project (review, Codex). REAL-path
+  // containment, fail closed on unresolvable paths; the file itself may not exist yet,
+  // so the check anchors on its nearest existing ancestor via the dirname.
+  const systemPromptDirEscapes = (target: { path: string; projectPath: string }): boolean => {
+    const piDir = nodePath.dirname(target.path);
+    if (!existsSync(piDir)) return false; // nothing to traverse yet; mkdir creates it fresh
+    try {
+      const realDir = realpathSync(piDir);
+      const realRoot = realpathSync(target.projectPath);
+      const rel = nodePath.relative(realRoot, realDir);
+      return rel.startsWith("..") || nodePath.isAbsolute(rel);
+    } catch {
+      return true;
+    }
+  };
+
+  fastify.get("/projects/:id/system-prompt", async (request, reply) => {
+    const target = systemPromptFileFor((request.params as { id: string }).id);
+    if (!target) return reply.status(404).send({ error: "unknown project" });
+    if (systemPromptDirEscapes(target)) {
+      return reply.status(400).send({ error: "the .pi directory resolves outside the project" });
+    }
+    let content = "";
+    const exists = existsSync(target.path);
+    if (exists) {
+      if (statSync(target.path).size > INSTRUCTIONS_MAX) {
+        return reply.status(413).send({ error: "the instructions file is too large to edit here" });
+      }
+      content = readFileSync(target.path, "utf8");
+    }
+    return { content, path: target.path, exists };
+  });
+
+  fastify.put("/projects/:id/system-prompt", async (request, reply) => {
+    const target = systemPromptFileFor((request.params as { id: string }).id);
+    if (!target) return reply.status(404).send({ error: "unknown project" });
+    // never recreate a project whose directory vanished (moved/deleted) — that
+    // would silently reconstruct a stale path (review, Codex)
+    if (!existsSync(target.projectPath)) {
+      return reply.status(404).send({ error: "the project directory no longer exists" });
+    }
+    if (systemPromptDirEscapes(target)) {
+      return reply.status(400).send({ error: "the .pi directory resolves outside the project" });
+    }
+    const parsed = instructionsBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    if (existsSync(target.path) && lstatSync(target.path).isSymbolicLink()) {
+      return reply
+        .status(400)
+        .send({ error: "the instructions file is a symlink; refusing to write" });
+    }
+    mkdirSync(nodePath.dirname(target.path), { recursive: true });
+    writeFileSync(target.path, parsed.data.content, "utf8");
+    return { ok: true, path: target.path };
+  });
+
+  fastify.delete("/projects/:id/system-prompt", async (request, reply) => {
+    const target = systemPromptFileFor((request.params as { id: string }).id);
+    if (!target) return reply.status(404).send({ error: "unknown project" });
+    if (systemPromptDirEscapes(target)) {
+      return reply.status(400).send({ error: "the .pi directory resolves outside the project" });
+    }
+    // rmSync on a symlink removes the ENTRY, never its target — deleting the link
+    // is exactly how the user restores pi's fallback, so it is allowed (review, Codex)
+    try {
+      if (lstatSync(target.path)) rmSync(target.path);
+    } catch {
+      // already absent — idempotent
+    }
+    return { ok: true };
   });
 
   // GitHub issues for a project, via the gh CLI (reuses the user's gh auth so
