@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { loadPackageSkillEntries, scanPackageSkillLocations } from "../src/packageSkills.ts";
+import {
+  loadPackageSkillEntries,
+  scanPackagePromptLocations,
+  scanPackageSkillLocations,
+} from "../src/packageSkills.ts";
 
 /** SKL-08: package-provided skills from Pi's `settings.json → packages`. */
 const root = mkdtempSync(path.join(tmpdir(), "pkg-skills-"));
@@ -129,6 +133,52 @@ describe("scanPackageSkillLocations", () => {
 
     const out = scanPackageSkillLocations({ home });
     expect(out.locations).toHaveLength(1);
+  });
+
+  it("resolves package PROMPTS: declared dirs, single .md files, conventional fallback (PRM-03)", () => {
+    const { home, piAgent } = makeHome("prompts");
+    const pkg = path.join(root, "pkg-prompts");
+    mkdirSync(path.join(pkg, "tpl"), { recursive: true });
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ name: "pkg-prompts", pi: { prompts: ["tpl", "one-off.md", "gone.md"] } }),
+    );
+    writeFileSync(path.join(pkg, "tpl", "packaged.md"), "---\ndescription: dir prompt\n---\nbody");
+    writeFileSync(path.join(pkg, "one-off.md"), "---\ndescription: file prompt\n---\nbody");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+    const out = scanPackagePromptLocations({ home });
+    expect(out.locations.map((l) => `${l.kind}:${path.basename(l.target)}`).sort()).toEqual([
+      "dir:tpl",
+      "file:one-off.md",
+    ]);
+    // a DECLARED path that is missing warns — the user configured it (native parity)
+    expect(out.warnings.some((w) => w.includes("gone.md"))).toBe(true);
+
+    // conventional prompts/ dir when nothing is declared
+    const pkg2 = path.join(root, "pkg-conventional");
+    mkdirSync(path.join(pkg2, "prompts"), { recursive: true });
+    writeFileSync(path.join(pkg2, "package.json"), JSON.stringify({ name: "pkg-conventional" }));
+    writeFileSync(path.join(pkg2, "prompts", "conv.md"), "body");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg2] }));
+    const conv = scanPackagePromptLocations({ home });
+    expect(conv.locations.map((l) => l.kind)).toEqual(["dir"]);
+  });
+
+  it("refuses a declared prompt path escaping its package (PRM-03)", () => {
+    const { home, piAgent } = makeHome("prompt-escape");
+    const pkg = path.join(root, "pkg-prompt-escape");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ name: "pkg-prompt-escape", pi: { prompts: ["../outside-prompts"] } }),
+    );
+    mkdirSync(path.join(root, "outside-prompts"), { recursive: true });
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+    const out = scanPackagePromptLocations({ home });
+    expect(out.locations).toEqual([]);
+    expect(out.warnings.some((w) => w.includes("outside itself"))).toBe(true);
   });
 
   it("refuses a declared path escaping its package and tolerates malformed JSON", () => {

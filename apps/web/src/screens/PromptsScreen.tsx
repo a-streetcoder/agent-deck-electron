@@ -88,6 +88,12 @@ export function PromptsScreen() {
   const loadSeq = useRef(0);
   const promptNameInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  // PRM-03: package-prompt resolution warnings from the catalog scan.
+  const [packageWarnings, setPackageWarnings] = useState<string[]>([]);
+  // Builtin and package prompts are bundled/installed files, never the user's —
+  // no rename/delete; opening one drafts a global copy to customize (PRM-02/03).
+  const isReadOnlyPromptScope = (scope: PromptInfo["scope"]): boolean =>
+    scope === "builtin" || scope === "package";
   // "All Projects" default prompt templates (native defaultPromptTemplateNames):
   // enabled ones are injected into every project's parent sessions as
   // --prompt-template flags. Tracked by name, read from app settings.
@@ -111,9 +117,13 @@ export function PromptsScreen() {
     try {
       const response = await fetch(`/resources/prompts${query}`);
       if (!response.ok) throw new Error(await responseErrorMessage(response));
-      const data = (await response.json()) as { prompts: PromptInfo[] };
+      const data = (await response.json()) as {
+        prompts: PromptInfo[];
+        packagePromptWarnings?: string[];
+      };
       if (seq === loadSeq.current) {
         setPrompts(data.prompts);
+        setPackageWarnings(data.packagePromptWarnings ?? []);
         setPromptsLoaded(true);
       }
     } catch (err) {
@@ -197,18 +207,18 @@ export function PromptsScreen() {
   }, [newDraftOpen]);
 
   const startEdit = (prompt: PromptInfo): void => {
-    // A builtin is not the user's file (PRM-02): opening it drafts a COPY that saves
-    // into the global prompts dir — native's "copy one into your prompts directory
-    // to customize it". The copy then shadows the bundled original by name. When a
-    // same-named global copy ALREADY exists, edit THAT — an original-less draft
-    // would silently overwrite the user's customization (review, Codex).
+    // A builtin/package prompt is not the user's file (PRM-02/03): opening it drafts
+    // a COPY that saves into the global prompts dir — native's "copy one into your
+    // prompts directory to customize it". The copy then shadows the original by name.
+    // When a same-named global copy ALREADY exists, edit THAT — an original-less
+    // draft would silently overwrite the user's customization (review, Codex).
     let target = prompt;
-    let isBuiltin = prompt.scope === "builtin";
-    if (isBuiltin) {
+    let isReadOnly = isReadOnlyPromptScope(prompt.scope);
+    if (isReadOnly) {
       const existingCopy = prompts.find((p) => p.name === prompt.name && p.scope === "global");
       if (existingCopy) {
         target = existingCopy;
-        isBuiltin = false;
+        isReadOnly = false;
       }
     }
     useAppStore.getState().setSelectedPromptFilePath(target.filePath);
@@ -218,8 +228,8 @@ export function PromptsScreen() {
       body: target.body,
       scope: target.scope === "library" ? "library" : "global",
       projectId: currentProjectId,
-      original: isBuiltin ? undefined : target.name,
-      filePath: isBuiltin ? undefined : target.filePath,
+      original: isReadOnly ? undefined : target.name,
+      filePath: isReadOnly ? undefined : target.filePath,
     });
   };
 
@@ -495,6 +505,19 @@ export function PromptsScreen() {
           </div>
         ) : null}
 
+        {packageWarnings.length > 0 ? (
+          <div
+            data-testid="prompt-package-warnings"
+            className="mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+            role="status"
+          >
+            {packageWarnings.map((warning) => (
+              <div key={warning} className="truncate" title={warning}>
+                {warning}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div
           className="space-y-1.5"
           data-testid="prompt-list"
@@ -624,9 +647,9 @@ export function PromptsScreen() {
                         </ControlButton>
                       );
                     })()}
-                  {/* Builtins are app-bundled and immutable — no rename/delete; opening
-                      one drafts a global copy instead (PRM-02). */}
-                  {prompt.scope !== "builtin" ? (
+                  {/* Builtin/package prompts are bundled/installed and immutable — no
+                      rename/delete; opening one drafts a global copy instead (PRM-02/03). */}
+                  {!isReadOnlyPromptScope(prompt.scope) ? (
                     <>
                       <ControlButton
                         data-testid={`prompt-rename-${prompt.name}`}

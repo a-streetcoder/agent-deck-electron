@@ -14,7 +14,11 @@ import {
 } from "@agent-deck/domain";
 import { loadSkillsFromDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { applyAgentOverride, readAgentOverrides } from "./overrides.ts";
-import { loadPackageSkillEntries } from "./packageSkills.ts";
+import {
+  isRealpathContained,
+  loadPackageSkillEntries,
+  scanPackagePromptLocations,
+} from "./packageSkills.ts";
 import {
   agentCatalogDirs,
   extensionCatalogDirs,
@@ -174,49 +178,87 @@ export function scanAgents(roots: ResourceRoots): AgentInfo[] {
  * scope's entry (no dedup) so a management UI can edit/delete both a global
  * prompt and a same-name project one — pi resolves precedence itself at load.
  */
-export function scanPrompts(roots: ResourceRoots): PromptInfo[] {
+export function scanPrompts(
+  roots: ResourceRoots,
+  onWarning?: (warning: string) => void,
+): PromptInfo[] {
   const prompts: PromptInfo[] = [];
-  for (const { dir, scope } of promptCatalogDirs(roots)) {
+  const readPromptFile = (filePath: string, scope: ResourceScope): void => {
+    try {
+      const { frontmatter, body } = parseFrontmatter(readFileSync(filePath, "utf8"));
+      // A prompt's identity IS its file basename: pi registers the command
+      // under the basename (expandPromptTemplate matches `/<basename>`) and
+      // IGNORES any frontmatter `name`. So `name` (which edit/rename/delete and
+      // the writer key off, as `${name}.md`) must be the basename too — trusting
+      // a divergent frontmatter `name` would target the wrong file.
+      const basename = path.basename(filePath, ".md");
+      prompts.push({
+        name: basename,
+        description: asString(frontmatter.description),
+        scope,
+        filePath,
+        body: body.trim(),
+        invocation: `/${basename}`,
+        argumentHint: asString(frontmatter["argument-hint"]),
+      });
+    } catch {
+      // Unreadable/malformed — skip.
+    }
+  };
+  const readPromptDir = (dir: string, scope: ResourceScope): void => {
     let entries: string[];
     try {
       entries = readdirSync(dir);
     } catch {
-      continue;
+      return;
     }
     for (const entry of entries) {
-      if (!entry.endsWith(".md")) continue;
-      const filePath = path.join(dir, entry);
+      if (entry.endsWith(".md")) readPromptFile(path.join(dir, entry), scope);
+    }
+  };
+  for (const { dir, scope } of promptCatalogDirs(roots)) readPromptDir(dir, scope);
+  // Package-provided prompts (PRM-03): read-only provenance-bearing entries, same
+  // posture as package skills; resolution problems surface through onWarning.
+  const packageScan = scanPackagePromptLocations(roots);
+  for (const warning of packageScan.warnings) onWarning?.(warning);
+  for (const location of packageScan.locations) {
+    if (location.kind === "dir") {
+      // per-FILE realpath containment: the dir itself is contained, but a symlinked
+      // .md inside it could still point outside the package (review, Codex)
+      let entries: string[];
       try {
-        const { frontmatter, body } = parseFrontmatter(readFileSync(filePath, "utf8"));
-        // A prompt's identity IS its file basename: pi registers the command
-        // under the basename (expandPromptTemplate matches `/<basename>`) and
-        // IGNORES any frontmatter `name`. So `name` (which edit/rename/delete and
-        // the writer key off, as `${name}.md`) must be the basename too — trusting
-        // a divergent frontmatter `name` would target the wrong file.
-        const basename = path.basename(entry, ".md");
-        prompts.push({
-          name: basename,
-          description: asString(frontmatter.description),
-          scope,
-          filePath,
-          body: body.trim(),
-          invocation: `/${basename}`,
-          argumentHint: asString(frontmatter["argument-hint"]),
-        });
+        entries = readdirSync(location.target);
       } catch {
-        // Unreadable/malformed — skip.
+        continue;
       }
+      for (const entry of entries) {
+        if (!entry.endsWith(".md")) continue;
+        const filePath = path.join(location.target, entry);
+        if (!isRealpathContained(location.target, filePath)) {
+          onWarning?.(
+            `Package prompt ${entry} in ${location.packageRef} resolves outside its package — ignored.`,
+          );
+          continue;
+        }
+        readPromptFile(filePath, "package");
+      }
+    } else {
+      readPromptFile(location.target, "package");
     }
   }
-  // Builtins rank LAST within a name so first-wins consumers (launch resolution's
-  // promptsByName) resolve a user's customized copy over the bundled original —
-  // "builtin" would otherwise win the alphabetical scope tiebreak (PRM-02).
-  const builtinLast = (scope: ResourceScope): number => (scope === "builtin" ? 1 : 0);
+  // Rank within a name for first-wins consumers (launch resolution's promptsByName):
+  // the user's catalogs keep their existing order (global-first is this repo's
+  // documented prompt rule), a package variant ranks below them, and the bundled
+  // builtin is always last so a customized copy wins (PRM-02/03).
+  const rank: Record<string, number> = {
+    global: 0,
+    library: 1,
+    project: 2,
+    package: 3,
+    builtin: 4,
+  };
   return prompts.sort(
-    (a, b) =>
-      a.name.localeCompare(b.name) ||
-      builtinLast(a.scope) - builtinLast(b.scope) ||
-      a.scope.localeCompare(b.scope),
+    (a, b) => a.name.localeCompare(b.name) || (rank[a.scope] ?? 9) - (rank[b.scope] ?? 9),
   );
 }
 

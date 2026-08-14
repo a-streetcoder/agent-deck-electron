@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { agentMatchesFilter } from "@agent-deck/domain";
@@ -376,6 +376,82 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     // first-wins consumers (launch resolution) must see the user's copy first
     expect(matches[0]!.scope).toBe("global");
     expect(matches[1]!.scope).toBe("builtin");
+  });
+
+  it("surfaces package prompts with scope 'package', ranked below user catalogs, above builtin (PRM-03)", () => {
+    const home = makeHome();
+    const pkg = path.join(home, "my-pack");
+    mkdirSync(path.join(pkg, "prompts"), { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "my-pack" }));
+    writePrompt(
+      path.join(pkg, "prompts"),
+      "from-pack.md",
+      "---\ndescription: a packaged prompt\nargument-hint: <x>\n---\n\npackaged body\n",
+    );
+    // a name COLLIDING with both a global prompt and a builtin
+    writePrompt(path.join(pkg, "prompts"), "plan-a-feature.md", "packaged variant\n");
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: [pkg] }),
+    );
+    writePrompt(path.join(home, ".pi", "agent", "prompts"), "plan-a-feature.md", "user copy\n");
+
+    const warnings: string[] = [];
+    const prompts = scanPrompts({ home }, (w) => warnings.push(w));
+    const packaged = prompts.find((p) => p.name === "from-pack")!;
+    expect(packaged.scope).toBe("package");
+    expect(packaged.invocation).toBe("/from-pack");
+    expect(packaged.argumentHint).toBe("<x>");
+    // ranking: the user's global copy first, then the package variant, then the builtin
+    expect(prompts.filter((p) => p.name === "plan-a-feature").map((p) => p.scope)).toEqual([
+      "global",
+      "package",
+      "builtin",
+    ]);
+  });
+
+  it("refuses a symlinked prompt file escaping its package (POSIX)", () => {
+    // a CONTAINED prompts dir may still hold a symlinked .md pointing outside the
+    // package — per-file realpath containment must refuse it (review, Codex).
+    // File symlinks need privilege on Windows; CI's linux/macos legs exercise this.
+    if (process.platform === "win32") return;
+    const home = makeHome();
+    const pkg = path.join(home, "leak-pack");
+    mkdirSync(path.join(pkg, "prompts"), { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "leak-pack" }));
+    const outside = path.join(home, "secret.md");
+    writeFileSync(outside, "---\ndescription: outside\n---\n\nsecret\n");
+    symlinkSync(outside, path.join(pkg, "prompts", "leak.md"));
+    writePrompt(path.join(pkg, "prompts"), "honest.md", "fine\n");
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: [pkg] }),
+    );
+
+    const names = scanPrompts({ home })
+      .filter((p) => p.scope === "package")
+      .map((p) => p.name);
+    expect(names).toEqual(["honest"]);
+  });
+
+  it("reports package-prompt resolution warnings through onWarning (PRM-03)", () => {
+    const home = makeHome();
+    const pkg = path.join(home, "warn-pack");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ name: "warn-pack", pi: { prompts: ["missing-dir"] } }),
+    );
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: [pkg] }),
+    );
+    const warnings: string[] = [];
+    scanPrompts({ home }, (w) => warnings.push(w));
+    expect(warnings.some((w) => w.includes("missing-dir"))).toBe(true);
   });
 
   it("honors AGENT_DECK_BUILTIN_PROMPTS_DIR per call (hermetic override)", () => {

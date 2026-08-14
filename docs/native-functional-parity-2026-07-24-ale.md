@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 60 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 59 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -54,7 +54,6 @@ These are recommended checks for future implementation and regression coverage. 
 <!-- prettier-ignore -->
 | ID     | Priority | Status  | Difference                        | Plain English                                                               | Why it matters                                                 | Evidence                                                                               |
 | ------ | -------- | ------- | --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| PRM-03 | **P2**   | Missing | Package prompt source             | Package-provided prompts are not surfaced separately.                       | Provenance and discovery are incomplete.                       | Same as PRM-02.                                                                        |
 | PRM-04 | **P3**   | Missing | Settings prompt source            | Settings-defined prompt candidates are not shown in the prompt catalog.     | Users cannot audit all prompt origins.                         | Same as PRM-02.                                                                        |
 | PRM-05 | **P2**   | Missing | External-reference prompt source  | Electron does not model prompts that remain at an external file location.   | Users must copy content into the catalog.                      | Same as PRM-02.                                                                        |
 | PRM-06 | **P2**   | Missing | Builtin prompt disable            | Builtin prompts cannot be individually disabled.                            | Users cannot curate the builtin command set.                   | **E:** prompt settings/UI. **N:** prompt views/settings.                               |

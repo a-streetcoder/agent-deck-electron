@@ -160,6 +160,59 @@ describe("builtin prompt source (PRM-02)", () => {
   });
 });
 
+describe("package prompt source (PRM-03)", () => {
+  it("package prompts are read-only like builtins, and resolution warnings surface", async () => {
+    const packaged: PromptInfo[] = [
+      {
+        name: "from-pack",
+        invocation: "/from-pack",
+        description: "shipped by a package",
+        scope: "package",
+        filePath: "/node_modules/my-pack/prompts/from-pack.md",
+        body: "packaged body",
+      },
+    ];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/prompts") {
+        return Promise.resolve(
+          jsonResponse({
+            prompts: packaged,
+            packagePromptWarnings: [
+              "Package ghost-pack declares prompt templates at tpl, but that path was not found.",
+            ],
+          }),
+        );
+      }
+      if (url === "/settings") return Promise.resolve(jsonResponse({ settings: {} }));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<PromptsScreen />);
+    await screen.findByText("/from-pack");
+
+    // read-only: no rename/delete for a package prompt
+    expect(screen.queryByTestId("prompt-rename-from-pack")).toBeNull();
+    expect(screen.queryByTestId("prompt-delete-from-pack")).toBeNull();
+    // a configured-but-broken package is surfaced, not silent
+    expect(screen.getByTestId("prompt-package-warnings").textContent).toContain("ghost-pack");
+
+    // opening a package prompt drafts a GLOBAL copy (copy-to-customize)
+    fireEvent.click(screen.getByText("/from-pack"));
+    await screen.findByTestId("prompt-editor");
+    fireEvent.click(screen.getByTestId("prompt-save"));
+    await waitFor(() => {
+      const put = vi
+        .mocked(fetch)
+        .mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(put).toBeTruthy();
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toMatchObject({
+        scope: "global",
+        name: "from-pack",
+      });
+    });
+  });
+});
+
 describe("prompt catalog search", () => {
   it("does not show the catalog-empty state while the initial prompt request is pending", () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {

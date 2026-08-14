@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -259,6 +259,51 @@ describe("DELETE /resources/prompts with a builtin fallback (PRM-02)", () => {
     } finally {
       if (prior === undefined) delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
       else process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = prior;
+    }
+  });
+
+  it("keeps the default when the deleted copy still resolves to a PACKAGE prompt (PRM-03)", async () => {
+    // a configured package that provides the shadowed name
+    const pkg = path.join(resourceHome, "fallback-pack");
+    mkdirSync(path.join(pkg, "prompts"), { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "fallback-pack" }));
+    writeFileSync(
+      path.join(pkg, "prompts", "pack-shadowed.md"),
+      "---\ndescription: packaged\n---\n\npackaged body\n",
+    );
+    mkdirSync(path.join(resourceHome, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(resourceHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: [pkg] }),
+    );
+    try {
+      expect(
+        (
+          await api("PUT", "/resources/prompts", {
+            scope: "global",
+            name: "pack-shadowed",
+            edit: { body: "my copy" },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setDefaultPromptTemplate: { name: "pack-shadowed", enabled: true },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (await api("DELETE", "/resources/prompts", { scope: "global", name: "pack-shadowed" }))
+          .status,
+      ).toBe(200);
+
+      const { settings } = (await (await api("GET", "/settings")).json()) as {
+        settings: { defaultPromptTemplates: string[] };
+      };
+      expect(settings.defaultPromptTemplates).toContain("pack-shadowed");
+    } finally {
+      rmSync(path.join(resourceHome, ".pi", "agent", "settings.json"), { force: true });
     }
   });
 });

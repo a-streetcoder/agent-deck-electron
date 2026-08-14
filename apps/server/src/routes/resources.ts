@@ -30,6 +30,7 @@ import {
   resolveCodexPluginSkillRefs,
   resolveSkillSource,
   scanAgents,
+  scanPackagePromptLocations,
   scanPackageSkillLocations,
   scanExtensions,
   scanPrompts,
@@ -931,10 +932,16 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
   });
 
-  // Prompt templates: single .md files pi exposes as /prompt:<name>.
+  // Prompt templates: single .md files pi exposes as /prompt:<name>. Package-prompt
+  // resolution problems ride along (PRM-03) — a configured package that silently
+  // contributes nothing is exactly what the user needs to hear about.
   fastify.get("/resources/prompts", async (request) => {
     const { projectId } = request.query as { projectId?: string };
-    return { prompts: scanPrompts(rootsFor(projectId)) };
+    const packagePromptWarnings: string[] = [];
+    return {
+      prompts: scanPrompts(rootsFor(projectId), (warning) => packagePromptWarnings.push(warning)),
+      packagePromptWarnings,
+    };
   });
 
   const promptWriteBody = z.object({
@@ -980,12 +987,19 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     // Drop the name from the flat default list only if it no longer resolves to
     // any prompt anywhere (another scope may still provide it). A same-named
-    // BUILTIN keeps resolving after a user's copy is deleted (PRM-02), so it
-    // counts too — dropping the reference would silently stop launching it.
+    // BUILTIN (PRM-02) or PACKAGE prompt (PRM-03) keeps resolving after a user's
+    // copy is deleted — dropping the reference would silently stop launching it.
+    const packagePromptResolves = (targetName: string): boolean =>
+      scanPackagePromptLocations(rootsFor(projectId)).locations.some((location) =>
+        location.kind === "file"
+          ? nodePath.basename(location.target, ".md") === targetName
+          : existsSync(nodePath.join(location.target, `${targetName}.md`)),
+      );
     const globalPromptDir = nodePath.join(resourceHome(), ".pi", "agent", "prompts");
     const globalPromptExists =
       existsSync(nodePath.join(globalPromptDir, `${name}.md`)) ||
-      existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`));
+      existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`)) ||
+      packagePromptResolves(name);
     const stillResolves =
       globalPromptExists ||
       projects

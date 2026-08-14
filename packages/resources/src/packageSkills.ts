@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { piAgentHome, type ResourceRoots } from "./paths.ts";
@@ -68,7 +68,11 @@ function readPackagesList(settingsFile: string, warnings: string[]): string[] {
 /** REAL-path containment: `child` must live inside `parent` after resolving symlinks and
  * junctions on BOTH sides — a lexical prefix check accepts `pkg-evil` for `pkg`, and a
  * symlinked skills dir would escape the package entirely (review, Codex). Fail closed on
- * unresolvable paths. */
+ * unresolvable paths. Exported for per-FILE checks at package prompt read time. */
+export function isRealpathContained(parent: string, child: string): boolean {
+  return isContained(parent, child);
+}
+
 function isContained(parent: string, child: string): boolean {
   let realParent: string;
   let realChild: string;
@@ -146,17 +150,19 @@ function packageSkillDirs(pkgRoot: string, ref: string, warnings: string[]): str
   return dirs;
 }
 
-/** Resolve every configured package to its skill catalog locations (global ∪ project). */
-export function scanPackageSkillLocations(roots: ResourceRoots): PackageSkillScanResult {
-  const warnings: string[] = [];
+/** Every configured package ref resolved to its on-disk root (global ∪ project),
+ * with unresolvable refs warned about — shared by the skill and prompt scans. */
+function resolvedPackageRoots(
+  roots: ResourceRoots,
+  warnings: string[],
+): { ref: string; pkgRoot: string }[] {
   const refs = [
     ...readPackagesList(path.join(piAgentHome(roots), "settings.json"), warnings),
     ...(roots.projectPath
       ? readPackagesList(path.join(roots.projectPath, ".pi", "settings.json"), warnings)
       : []),
   ];
-  const locations: PackageSkillLocation[] = [];
-  const seenDirs = new Set<string>();
+  const resolved: { ref: string; pkgRoot: string }[] = [];
   for (const ref of refs) {
     const pkgRoot = resolvePackageRoot(ref, roots, warnings);
     if (!pkgRoot) {
@@ -167,20 +173,116 @@ export function scanPackageSkillLocations(roots: ResourceRoots): PackageSkillSca
       }
       continue;
     }
+    resolved.push({ ref, pkgRoot });
+  }
+  return resolved;
+}
+
+/** Dedupe by FILESYSTEM identity (realpath, case-folded on Windows) — the same catalog
+ * through an alias would mint duplicate candidates (review, Codex). Unresolvable → skip. */
+function fsIdentity(target: string): string | undefined {
+  let identity: string;
+  try {
+    identity = realpathSync(target);
+  } catch {
+    return undefined;
+  }
+  return process.platform === "win32" ? identity.toLowerCase() : identity;
+}
+
+/** Resolve every configured package to its skill catalog locations (global ∪ project). */
+export function scanPackageSkillLocations(roots: ResourceRoots): PackageSkillScanResult {
+  const warnings: string[] = [];
+  const locations: PackageSkillLocation[] = [];
+  const seenDirs = new Set<string>();
+  for (const { ref, pkgRoot } of resolvedPackageRoots(roots, warnings)) {
     for (const dir of packageSkillDirs(pkgRoot, ref, warnings)) {
-      // dedupe by FILESYSTEM identity (realpath, case-folded on Windows) — the same catalog
-      // through an alias would mint duplicate candidates and an ambiguous assigned-skill
-      // launch refusal (review, Codex)
-      let identity: string;
-      try {
-        identity = realpathSync(dir);
-      } catch {
-        continue;
-      }
-      if (process.platform === "win32") identity = identity.toLowerCase();
-      if (seenDirs.has(identity)) continue;
+      const identity = fsIdentity(dir);
+      if (!identity || seenDirs.has(identity)) continue;
       seenDirs.add(identity);
       locations.push({ dir: path.resolve(dir), packageRef: ref });
+    }
+  }
+  return { locations, warnings: [...new Set(warnings)] };
+}
+
+/**
+ * Package-provided prompt templates (PRM-03), mirroring the skills shape:
+ * `package.json → pi.prompts` (string or array; each entry a directory OR a single
+ * `.md` file), else the conventional `prompts/` dir. Same containment + warning
+ * posture as skills; native `resolvePackagePromptLocations`.
+ */
+export interface PackagePromptLocation {
+  /** A prompt directory (`kind: "dir"`) or one `.md` template (`kind: "file"`). */
+  target: string;
+  kind: "dir" | "file";
+  packageRef: string;
+}
+
+export interface PackagePromptScanResult {
+  locations: PackagePromptLocation[];
+  warnings: string[];
+}
+
+function packagePromptTargets(
+  pkgRoot: string,
+  ref: string,
+  warnings: string[],
+): { target: string; kind: "dir" | "file" }[] {
+  let declared: string[] | undefined;
+  const manifest = path.join(pkgRoot, "package.json");
+  if (existsSync(manifest)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
+        pi?: { prompts?: unknown };
+      };
+      const value = parsed.pi?.prompts;
+      if (typeof value === "string") declared = [value];
+      else if (Array.isArray(value)) {
+        declared = value.filter((v): v is string => typeof v === "string");
+      }
+    } catch {
+      warnings.push(`Couldn't read ${manifest} (invalid JSON).`);
+    }
+  }
+  const targets: { target: string; kind: "dir" | "file" }[] = [];
+  if (declared) {
+    for (const rel of declared) {
+      const target = path.resolve(pkgRoot, rel);
+      if (!existsSync(target)) {
+        warnings.push(
+          `Package ${ref} declares prompt templates at ${rel}, but that path was not found.`,
+        );
+        continue;
+      }
+      if (!isContained(pkgRoot, target)) {
+        warnings.push(`Package ${ref} declares prompts outside itself (${rel}) — ignored.`);
+        continue;
+      }
+      const kind = statSync(target).isDirectory() ? "dir" : "file";
+      if (kind === "file" && !target.endsWith(".md")) continue; // native scans only .md files
+      targets.push({ target, kind });
+    }
+  } else {
+    const conventional = path.join(pkgRoot, "prompts");
+    if (existsSync(conventional) && isContained(pkgRoot, conventional)) {
+      targets.push({ target: conventional, kind: "dir" });
+    }
+  }
+  return targets;
+}
+
+/** Resolve every configured package to its prompt template locations (global ∪ project). */
+export function scanPackagePromptLocations(roots: ResourceRoots): PackagePromptScanResult {
+  const warnings: string[] = [];
+  const locations: PackagePromptLocation[] = [];
+  const seen = new Set<string>();
+  for (const { ref, pkgRoot } of resolvedPackageRoots(roots, warnings)) {
+    for (const { target, kind } of packagePromptTargets(pkgRoot, ref, warnings)) {
+      const identity = fsIdentity(target);
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      locations.push({ target: path.resolve(target), kind, packageRef: ref });
     }
   }
   return { locations, warnings: [...new Set(warnings)] };
