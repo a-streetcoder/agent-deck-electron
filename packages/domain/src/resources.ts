@@ -158,6 +158,9 @@ export interface AgentInfo {
   /** Native compatibility metadata for expected interaction. Parsed, persisted,
    * and displayed without changing Agent Deck runtime behavior. */
   interactive?: boolean;
+  /** Native compatibility metadata for delegation depth. Agent Deck still
+   * prohibits recursive child delegation regardless of this value. */
+  maxSubagentDepth?: number;
   /** Native authored output guidance. For named delegation this is advisory
    * prompt metadata only; it never grants tools or filesystem authority. */
   output?: string;

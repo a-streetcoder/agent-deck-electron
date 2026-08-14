@@ -359,6 +359,7 @@ const AGENT_FIELD_ORDER = [
   "defaultExpectedOutcome",
   "defaultProgress",
   "interactive",
+  "maxSubagentDepth",
   "output",
 ] as const;
 
@@ -440,6 +441,14 @@ export function writeAgentFile(
     // Native persists enabled compatibility metadata and omits false/default.
     if (edit.interactive) frontmatter.interactive = true;
     else delete frontmatter.interactive;
+  }
+  if (edit.maxSubagentDepth !== undefined) {
+    if (edit.maxSubagentDepth === "") delete frontmatter.maxSubagentDepth;
+    else if (Number.isInteger(edit.maxSubagentDepth) && edit.maxSubagentDepth >= 0) {
+      frontmatter.maxSubagentDepth = edit.maxSubagentDepth;
+    } else {
+      throw new Error("maxSubagentDepth must be a non-negative integer");
+    }
   }
   setOrDelete("output", edit.output);
   if (edit.body !== undefined) body = edit.body.trim();

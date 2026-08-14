@@ -110,6 +110,7 @@ describe("builtin override edit safety", () => {
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
       interactive: false,
+      maxSubagentDepth: 0,
       output: "Write a concise review summary",
       futureField: "keep-me",
     });
@@ -120,6 +121,7 @@ describe("builtin override edit safety", () => {
       defaultExpectedOutcome: "directProjectWrites",
       defaultProgress: false,
       interactive: false,
+      maxSubagentDepth: 0,
       output: "Write a concise review summary",
       futureField: "keep-me",
       description: "Edited description",
@@ -129,6 +131,7 @@ describe("builtin override edit safety", () => {
       description: "Edited description",
       defaultExpectedOutcome: "directProjectWrites",
       interactive: false,
+      maxSubagentDepth: 0,
     });
     writeBuiltinAgentOverride(roots, "reviewer", { interactive: true });
     expect(
@@ -607,6 +610,31 @@ describe("agent/skill file writer", () => {
     expect(updated).toContain("futureField: keep-me");
     expect(
       scanAgents(roots).find((agent) => agent.name === "interviewer")?.interactive,
+    ).toBeUndefined();
+  });
+
+  it("round-trips native maxSubagentDepth metadata including zero and clear", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "depth-limited", {
+      maxSubagentDepth: 0,
+      body: "Compatibility metadata only.",
+    });
+    expect(readFileSync(filePath, "utf8")).toContain("maxSubagentDepth: 0");
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "depth-limited")?.maxSubagentDepth,
+    ).toBe(0);
+
+    writeAgentFile(roots, "global", "depth-limited", { maxSubagentDepth: 11 });
+    expect(readFileSync(filePath, "utf8")).toContain("maxSubagentDepth: 11");
+    writeAgentFile(roots, "global", "depth-limited", { maxSubagentDepth: "" });
+    expect(readFileSync(filePath, "utf8")).not.toContain("maxSubagentDepth:");
+    expect(
+      parseAgentFile(
+        "invalid.md",
+        "---\nname: invalid\nmaxSubagentDepth: -1\n---\n\nBody.\n",
+        "global",
+      ).maxSubagentDepth,
     ).toBeUndefined();
   });
 

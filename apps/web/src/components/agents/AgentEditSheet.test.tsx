@@ -20,6 +20,7 @@ const builtin: AgentInfo = {
   defaultExpectedOutcome: "directProjectWrites",
   defaultProgress: true,
   interactive: true,
+  maxSubagentDepth: 4,
   output: "Concise review summary",
   scope: "builtin",
   filePath: "/bundled/reviewer.md",
@@ -241,6 +242,27 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.interactive).toBe(false);
   });
 
+  it("edits and clears maximum subagent depth compatibility metadata", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+
+    const depth = screen.getByTestId("editor-max-subagent-depth") as HTMLInputElement;
+    expect(depth.value).toBe("4");
+    fireEvent.change(depth, { target: { value: "0" } });
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit.maxSubagentDepth).toBe(0);
+  });
+
   it("keeps builtin boolean metadata unmanaged when editing an override", async () => {
     const fetchMock = vi
       .fn()
@@ -251,12 +273,14 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(screen.queryByTestId("editor-default-progress")).toBeNull();
     expect(screen.queryByTestId("editor-interactive")).toBeNull();
     expect(screen.queryByTestId("editor-output")).toBeNull();
+    expect(screen.queryByTestId("editor-max-subagent-depth")).toBeNull();
     fireEvent.click(screen.getByTestId("editor-save"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const edit = JSON.parse(String(fetchMock.mock.calls[1]![1].body)).edit;
     expect(edit.defaultProgress).toBeUndefined();
     expect(edit.interactive).toBeUndefined();
     expect(edit.output).toBeUndefined();
+    expect(edit.maxSubagentDepth).toBeUndefined();
   });
 
   it("saves a selected typed outcome", async () => {

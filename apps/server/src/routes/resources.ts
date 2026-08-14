@@ -54,6 +54,7 @@ const agentEditFields = z.object({
     .optional(),
   defaultProgress: z.boolean().optional(),
   interactive: z.boolean().optional(),
+  maxSubagentDepth: z.union([z.number().int().min(0), z.literal("")]).optional(),
   // Prompt-adjacent metadata: one bounded advisory value, never a multiline
   // prompt fragment or control sequence. Empty remains the explicit clear.
   output: z

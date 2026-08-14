@@ -452,6 +452,17 @@ export function AgentDetail({
               {agent.defaultProgress ? "Yes" : "No"}
             </div>
           </div>
+          {agent.maxSubagentDepth !== undefined ? (
+            <div
+              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-max-subagent-depth"
+            >
+              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                Max Subagent Depth Metadata
+              </div>
+              <div className="text-sm text-text-secondary">{agent.maxSubagentDepth}</div>
+            </div>
+          ) : null}
           <div
             className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-interactive"

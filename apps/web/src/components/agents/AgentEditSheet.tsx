@@ -75,6 +75,9 @@ export function AgentEditSheet({
   >(seed?.defaultExpectedOutcome ?? "");
   const [defaultProgress, setDefaultProgress] = useState(seed?.defaultProgress ?? false);
   const [interactive, setInteractive] = useState(seed?.interactive ?? false);
+  const [maxSubagentDepth, setMaxSubagentDepth] = useState(
+    seed?.maxSubagentDepth === undefined ? "" : String(seed.maxSubagentDepth),
+  );
   const [output, setOutput] = useState(seed?.output ?? "");
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +107,7 @@ export function AgentEditSheet({
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
     defaultProgress: seed?.defaultProgress ?? false,
     interactive: seed?.interactive ?? false,
+    maxSubagentDepth: seed?.maxSubagentDepth === undefined ? "" : String(seed.maxSubagentDepth),
     output: seed?.output ?? "",
     body: seed?.body ?? "",
   }).current;
@@ -123,6 +127,7 @@ export function AgentEditSheet({
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
     defaultProgress !== initial.defaultProgress ||
     interactive !== initial.interactive ||
+    maxSubagentDepth !== initial.maxSubagentDepth ||
     output !== initial.output ||
     body !== initial.body;
 
@@ -200,6 +205,8 @@ export function AgentEditSheet({
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
               (live.defaultProgress ?? false) !== initial.defaultProgress ||
               (live.interactive ?? false) !== initial.interactive ||
+              (live.maxSubagentDepth === undefined ? "" : String(live.maxSubagentDepth)) !==
+                initial.maxSubagentDepth ||
               (live.output ?? "") !== initial.output ||
               live.body !== initial.body)
           ) {
@@ -242,6 +249,12 @@ export function AgentEditSheet({
             // Compatibility metadata has no Electron runtime consumer. Builtin
             // edits preserve any existing override instead of managing it here.
             interactive: isBuiltin ? undefined : interactive,
+            // Compatibility metadata only; recursive child delegation remains blocked.
+            maxSubagentDepth: isBuiltin
+              ? undefined
+              : maxSubagentDepth === ""
+                ? ""
+                : Number(maxSubagentDepth),
             // Native output is advisory metadata for named delegation only.
             // Builtin saves preserve any unmanaged override value.
             output: isBuiltin ? undefined : output,
@@ -504,6 +517,28 @@ export function AgentEditSheet({
                         Portable metadata only. Agent Deck currently preserves and displays this
                         preference; it does not change progress reporting or child runtime behavior.
                       </span>
+                    </span>
+                  </label>
+                  <label className="block text-xs text-text-muted">
+                    Maximum subagent depth
+                    <ControlInput
+                      type="number"
+                      min={0}
+                      step={1}
+                      data-testid="editor-max-subagent-depth"
+                      className={inputClass}
+                      aria-describedby="editor-max-subagent-depth-help"
+                      placeholder="Unspecified"
+                      value={maxSubagentDepth}
+                      onChange={(event) => setMaxSubagentDepth(event.target.value)}
+                    />
+                    <span
+                      id="editor-max-subagent-depth-help"
+                      className="mt-1 block text-xs text-text-muted"
+                    >
+                      Compatibility metadata. Native’s editor offers 0 to 10, while higher
+                      hand-authored non-negative values remain preservable. Agent Deck still blocks
+                      recursive child delegation regardless of this value.
                     </span>
                   </label>
                   <label className="flex items-start gap-2 text-xs text-text-muted">

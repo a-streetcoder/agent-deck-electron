@@ -108,6 +108,14 @@ export function parseAgentFile(
     defaultProgress:
       typeof frontmatter.defaultProgress === "boolean" ? frontmatter.defaultProgress : undefined,
     interactive: typeof frontmatter.interactive === "boolean" ? frontmatter.interactive : undefined,
+    maxSubagentDepth: (() => {
+      const raw = frontmatter.maxSubagentDepth;
+      if ((typeof raw !== "number" && typeof raw !== "string") || String(raw).trim() === "") {
+        return undefined;
+      }
+      const parsed = Number(raw);
+      return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+    })(),
     output: normalizeAgentOutput(frontmatter.output),
     scope,
     filePath,

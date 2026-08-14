@@ -37,6 +37,8 @@ export interface AgentEdit {
   defaultProgress?: boolean;
   /** `false` clears the custom-agent frontmatter value, matching native writes. */
   interactive?: boolean;
+  /** Optional native compatibility depth; undefined leaves it unmanaged. */
+  maxSubagentDepth?: number | "";
   /** Single-line native output guidance; an empty string clears it. */
   output?: string;
   body?: string;
@@ -297,6 +299,10 @@ export function applyAgentOverride(
       case "interactive":
         // Boolean compatibility metadata: false is an effective override value.
         if (typeof value === "boolean") next.interactive = value;
+        break;
+      case "maxSubagentDepth":
+        next.maxSubagentDepth =
+          typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
         break;
       case "output":
         next.output = value === false ? undefined : normalizeAgentOutput(value);

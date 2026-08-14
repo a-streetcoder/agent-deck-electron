@@ -196,7 +196,9 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     ["interactive", "invalid-interactive", { interactive: "yes" }],
     ["multiline output", "invalid-output", { output: "first\n# injected" }],
     ["oversized output", "oversized-output", { output: "x".repeat(1001) }],
-  ])("rejects non-boolean %s without writing a custom agent", async (_label, name, invalidEdit) => {
+    ["negative depth", "negative-depth", { maxSubagentDepth: -1 }],
+    ["fractional depth", "fractional-depth", { maxSubagentDepth: 1.5 }],
+  ])("rejects invalid %s without writing a custom agent", async (_label, name, invalidEdit) => {
     const invalidFile = path.join(home, ".pi", "agent", "agents", `${name}.md`);
     const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {
       method: "PUT",

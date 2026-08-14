@@ -21,6 +21,7 @@ const agent: AgentInfo = {
   defaultExpectedOutcome: "writeProjectFile",
   defaultProgress: true,
   interactive: true,
+  maxSubagentDepth: 0,
   output: "Concise review summary",
   scope: "global",
   filePath: "/tmp/writer.md",
@@ -58,6 +59,9 @@ describe("AgentDetail delegation metadata", () => {
     const interactive = screen.getByTestId("agent-interactive");
     expect(interactive.textContent).toContain("Interactive");
     expect(interactive.textContent).toContain("Yes");
+    const depth = screen.getByTestId("agent-max-subagent-depth");
+    expect(depth.textContent).toContain("Max Subagent Depth Metadata");
+    expect(depth.textContent).toContain("0");
   });
 
   it("does not display effective output metadata on a builtin", () => {
