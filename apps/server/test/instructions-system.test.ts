@@ -143,6 +143,52 @@ describe("project SYSTEM.md routes (INS-01)", () => {
     expect(existsSync(path.join(outside, "SYSTEM.md"))).toBe(true);
   });
 
+  it("APPEND_SYSTEM.md gets the same catalog trio at append-prompt routes (INS-02)", async () => {
+    // global roundtrip
+    const globalAppend = path.join(resourceHome, ".pi", "agent", "APPEND_SYSTEM.md");
+    const before = (await (await api("GET", "/runtime/append-prompt")).json()) as {
+      exists: boolean;
+      path: string;
+    };
+    expect(before.exists).toBe(false);
+    expect(before.path).toBe(globalAppend);
+    expect((await api("PUT", "/runtime/append-prompt", { content: "House rules." })).status).toBe(
+      200,
+    );
+    expect(readFileSync(globalAppend, "utf8")).toBe("House rules.");
+    expect((await api("DELETE", "/runtime/append-prompt")).status).toBe(200);
+    expect(existsSync(globalAppend)).toBe(false);
+
+    // project roundtrip + the shared junction guard is WIRED for this file too
+    const projectDir = mkdtempSync(path.join(tmpdir(), "append-prompt-project-"));
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+    const projectFile = path.join(projectDir, ".pi", "APPEND_SYSTEM.md");
+    expect(
+      (await api("PUT", `/projects/${project.id}/append-prompt`, { content: "project rules" }))
+        .status,
+    ).toBe(200);
+    expect(readFileSync(projectFile, "utf8")).toBe("project rules");
+    expect((await api("DELETE", `/projects/${project.id}/append-prompt`)).status).toBe(200);
+    expect(existsSync(projectFile)).toBe(false);
+
+    if (process.platform === "win32") {
+      const { spawnSync } = await import("node:child_process");
+      const evilDir = mkdtempSync(path.join(tmpdir(), "append-junction-"));
+      const outside = mkdtempSync(path.join(tmpdir(), "append-outside-"));
+      const { project: evil } = (await (
+        await api("POST", "/projects", { path: evilDir })
+      ).json()) as { project: { id: string } };
+      const link = spawnSync("cmd", ["/c", "mklink", "/J", path.join(evilDir, ".pi"), outside]);
+      expect(link.status).toBe(0);
+      expect(
+        (await api("PUT", `/projects/${evil.id}/append-prompt`, { content: "smuggled" })).status,
+      ).toBe(400);
+      expect(existsSync(path.join(outside, "APPEND_SYSTEM.md"))).toBe(false);
+    }
+  });
+
   it("refuses to recreate a VANISHED project path (review, Codex)", async () => {
     const projectDir = mkdtempSync(path.join(tmpdir(), "system-prompt-vanished-"));
     const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {

@@ -14,7 +14,7 @@ import { useAppStore } from "../state/store.ts";
  *   only catalogs and edits the candidates (native SystemInstructionsViews).
  */
 type Scope = "project" | "global";
-type FileKind = "context" | "system";
+type FileKind = "context" | "system" | "append";
 
 export function InstructionsScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
@@ -37,14 +37,14 @@ export function InstructionsScreen() {
   // `url` is null only for project scope with no project selected.
   const key = `${fileKind}:${scope === "global" ? "global" : (currentProjectId ?? "")}`;
   const projectBase = currentProjectId ? `/projects/${encodeURIComponent(currentProjectId)}` : null;
-  const url =
+  const routeName =
     fileKind === "context"
-      ? scope === "global"
-        ? "/runtime/instructions"
-        : projectBase && `${projectBase}/instructions`
-      : scope === "global"
-        ? "/runtime/system-prompt"
-        : projectBase && `${projectBase}/system-prompt`;
+      ? "instructions"
+      : fileKind === "system"
+        ? "system-prompt"
+        : "append-prompt";
+  const url =
+    scope === "global" ? `/runtime/${routeName}` : projectBase && `${projectBase}/${routeName}`;
 
   const load = useCallback(
     async (loadKey: string, loadUrl: string): Promise<void> => {
@@ -116,7 +116,7 @@ export function InstructionsScreen() {
   // fallback (global SYSTEM.md or the built-in prompt) — an empty save would
   // instead replace the base prompt with nothing.
   const removeOverride = async (): Promise<void> => {
-    if (!url || fileKind !== "system" || saving) return;
+    if (!url || fileKind === "context" || saving) return;
     const targetKey = key;
     try {
       const response = await fetch(url, { method: "DELETE" });
@@ -135,7 +135,8 @@ export function InstructionsScreen() {
   const dirty = content !== savedContent;
   const needsProject = scope === "project" && !project;
   // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
-  const fallbackName = fileKind === "system" ? "SYSTEM.md" : "AGENTS.md";
+  const fallbackName =
+    fileKind === "system" ? "SYSTEM.md" : fileKind === "append" ? "APPEND_SYSTEM.md" : "AGENTS.md";
   const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? fallbackName) : fallbackName;
 
   return (
@@ -161,6 +162,7 @@ export function InstructionsScreen() {
                 [
                   ["context", "Context"],
                   ["system", "Base prompt"],
+                  ["append", "Append"],
                 ] as const
               ).map(([kind, label]) => (
                 <ControlButton
@@ -201,11 +203,15 @@ export function InstructionsScreen() {
                 </ControlButton>
               ))}
             </div>
-            {fileKind === "system" && fileExists && !needsProject ? (
+            {fileKind !== "context" && fileExists && !needsProject ? (
               <ControlButton
                 data-testid="instructions-remove-override"
                 className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-danger"
-                title="Delete this SYSTEM.md so pi falls back to its default base prompt"
+                title={
+                  fileKind === "system"
+                    ? "Delete this SYSTEM.md so pi falls back to its default base prompt"
+                    : "Delete this APPEND_SYSTEM.md so pi falls back to the global append file, if any"
+                }
                 onClick={() => void removeOverride()}
               >
                 Remove override
@@ -252,6 +258,13 @@ export function InstructionsScreen() {
                     : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
               </p>
             ) : null}
+            {fileKind === "append" ? (
+              <p className="pb-3 text-xs text-text-muted" data-testid="instructions-append-note">
+                {scope === "project"
+                  ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
+                  : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
+              </p>
+            ) : null}
             {loaded ? (
               <ControlTextArea
                 data-testid="instructions-editor"
@@ -259,9 +272,11 @@ export function InstructionsScreen() {
                 placeholder={
                   fileKind === "system"
                     ? "The replacement base prompt. Leave the override removed to keep pi's default."
-                    : scope === "global"
-                      ? "Global context pi reads for every session. Markdown."
-                      : "Project context pi reads on every turn. Markdown."
+                    : fileKind === "append"
+                      ? "Extra instructions appended after the base prompt — house rules, tone, policies."
+                      : scope === "global"
+                        ? "Global context pi reads for every session. Markdown."
+                        : "Project context pi reads on every turn. Markdown."
                 }
                 spellCheck={false}
                 value={content}

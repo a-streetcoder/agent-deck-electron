@@ -111,6 +111,44 @@ describe("SYSTEM.md base-prompt candidate (INS-01)", () => {
     });
   });
 
+  it("the Append toggle catalogs APPEND_SYSTEM.md with its own note and save target (INS-02)", async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/runtime/instructions") {
+        return Promise.resolve(jsonResponse({ content: "", path: "/home/.pi/agent/AGENTS.md" }));
+      }
+      if (url === "/runtime/append-prompt") {
+        if (init?.method === "PUT") return Promise.resolve(jsonResponse({ ok: true }));
+        return Promise.resolve(
+          jsonResponse({ content: "", path: "/home/.pi/agent/APPEND_SYSTEM.md", exists: false }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<InstructionsScreen />);
+    await screen.findByTestId("instructions-editor");
+
+    fireEvent.click(screen.getByTestId("instructions-file-append"));
+    await screen.findByTestId("instructions-append-note");
+
+    fireEvent.change(await screen.findByTestId("instructions-editor"), {
+      target: { value: "House rules." },
+    });
+    fireEvent.click(screen.getByTestId("instructions-save"));
+    await waitFor(() => {
+      const put = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init]) =>
+            String(url) === "/runtime/append-prompt" &&
+            (init as RequestInit | undefined)?.method === "PUT",
+        );
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({
+        content: "House rules.",
+      });
+    });
+  });
+
   it("the context file view offers no Remove override", async () => {
     render(<InstructionsScreen />);
     await screen.findByTestId("instructions-editor");
