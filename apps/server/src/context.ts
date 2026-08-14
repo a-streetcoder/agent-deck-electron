@@ -9,6 +9,7 @@ import type {
 } from "@agent-deck/resources";
 import type { FastifyInstance } from "fastify";
 import type { AskUserCoordinator } from "./askUserCoordinator.ts";
+import type { AgentAvatarStore } from "./agentAvatars.ts";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager, McpServerConfig } from "./mcpTools.ts";
@@ -99,6 +100,7 @@ export interface ServerContext {
   fastify: FastifyInstance;
   sessions: SessionManager;
   sessionImages: SessionImageStore;
+  agentAvatars: AgentAvatarStore;
   sessionPastes: SessionPasteStore;
   index: SessionIndex;
   projects: ProjectIndex;

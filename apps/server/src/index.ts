@@ -16,6 +16,13 @@ export {
 export { makeServerRuntime, serverLayers, type ServerRuntime } from "./runtime.ts";
 export { ReceiptBus, type ReceiptName } from "./receipts.ts";
 export { SessionIndex, defaultDataDir } from "./persistence.ts";
+export {
+  FileAgentAvatarStore,
+  agentAvatarIdentityKey,
+  normalizeAgentAvatarName,
+  type AgentAvatarIdentity,
+  type AgentAvatarStore,
+} from "./agentAvatars.ts";
 
 // CLI entry: `pnpm --filter @agent-deck/server dev`
 if (isMainModule(import.meta.url, process.argv[1])) {

@@ -36,6 +36,7 @@ const agent: AgentInfo = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("AgentDetail delegation metadata", () => {
@@ -125,6 +126,28 @@ describe("AgentDetail delegation metadata", () => {
     expect(screen.getByTestId("builtin-project-access").textContent).toContain("every project");
     expect(screen.queryByTestId("assigned-agent-writer")).toBeNull();
     expect(screen.getByTestId("default-agent-writer").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("offers accessible replace and remove actions for a managed avatar", async () => {
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <AgentDetail
+        agent={{ ...agent, avatarUrl: "/agent-avatars/id?v=hash" }}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Replace avatar for writer")).not.toBeNull();
+    const remove = screen.getByRole("button", { name: "Remove avatar for writer" });
+    fireEvent.click(remove);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/resources/agents/avatar",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   it("does not display effective output metadata on a builtin", () => {

@@ -1,7 +1,8 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
+  ImagePlus,
   Pencil,
   Power,
   PowerOff,
@@ -22,6 +23,7 @@ import {
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { openResourceFile, revealResourceFile } from "../lib/native.ts";
+import { responseErrorMessage } from "../lib/responseError.ts";
 import { useAgentsCatalog } from "../state/useAgents.ts";
 import { useAppStore } from "../state/store.ts";
 import { deleteAgent, renameAgent, setAgentDisabled, updateProject } from "../state/wsBridge.ts";
@@ -183,6 +185,66 @@ export function AgentDetail({
   };
   // Inline rename (native RenameResourceSheet); value === null when not renaming.
   const [renameValue, setRenameValue] = useState<string | null>(null);
+  const avatarInput = useRef<HTMLInputElement>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+
+  const avatarRequest = async (file: File): Promise<void> => {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      if (file.size < 1 || file.size > 15_000_000)
+        throw new Error("Choose an image no larger than 15 MB.");
+      if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type))
+        throw new Error("Choose a PNG, JPEG, GIF, or WebP image.");
+      const url = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("The image could not be read."));
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsDataURL(file);
+      });
+      const separator = url.indexOf(",");
+      if (separator < 0) throw new Error("The image could not be read.");
+      const response = await fetch("/resources/agents/avatar", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectId: currentProjectId ?? undefined,
+          scope: agent.scope,
+          name: agent.name,
+          mimeType: file.type,
+          data: url.slice(separator + 1),
+        }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+    } catch (error) {
+      setAvatarError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAvatarBusy(false);
+      if (avatarInput.current) avatarInput.current.value = "";
+    }
+  };
+
+  const removeAvatar = async (): Promise<void> => {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      const response = await fetch("/resources/agents/avatar", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectId: currentProjectId ?? undefined,
+          scope: agent.scope,
+          name: agent.name,
+        }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+    } catch (error) {
+      setAvatarError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
 
   const submitRename = async (): Promise<void> => {
     const newName = (renameValue ?? "").trim();
@@ -196,7 +258,42 @@ export function AgentDetail({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="agent-detail">
       <div className="flex flex-wrap items-start gap-4">
-        <AgentAvatar agent={agent} size={56} />
+        <div className="flex shrink-0 flex-col items-center gap-1.5">
+          <AgentAvatar agent={agent} size={56} />
+          <ControlInput
+            ref={avatarInput}
+            className="sr-only"
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            aria-label={`${agent.avatarUrl ? "Replace" : "Import"} avatar for ${agent.name}`}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void avatarRequest(file);
+            }}
+          />
+          <div className="flex gap-1">
+            <ControlButton
+              data-testid="agent-avatar-import"
+              className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+              disabled={avatarBusy}
+              onClick={() => avatarInput.current?.click()}
+            >
+              <ImagePlus size={11} aria-hidden="true" />
+              {agent.avatarUrl ? "Replace" : "Import"}
+            </ControlButton>
+            {agent.avatarUrl ? (
+              <ControlButton
+                data-testid="agent-avatar-remove"
+                className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-muted hover:text-danger disabled:opacity-40"
+                disabled={avatarBusy}
+                aria-label={`Remove avatar for ${agent.name}`}
+                onClick={() => void removeAvatar()}
+              >
+                Remove
+              </ControlButton>
+            ) : null}
+          </div>
+        </div>
         <div className="min-w-[180px] flex-1">
           <div className="flex items-center gap-2">
             {renameValue !== null ? (
@@ -376,6 +473,12 @@ export function AgentDetail({
           </>
         </div>
       </div>
+
+      {avatarError ? (
+        <div className="mt-3 text-sm" role="alert" style={{ color: "var(--color-role-error)" }}>
+          {avatarError}
+        </div>
+      ) : null}
 
       <div className="mt-5 space-y-4">
         {canCreateReplacement ? (

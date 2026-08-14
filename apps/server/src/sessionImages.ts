@@ -19,8 +19,8 @@ import type { UserCell, UserImageRef } from "@agent-deck/domain";
 export const MAX_PROMPT_IMAGES = 8;
 export const MAX_IMAGE_BASE64_CHARS = 20_000_000;
 export const MAX_PROMPT_IMAGE_BYTES = 15_000_000;
-const MAX_DIMENSION = 16_384;
-const MAX_PIXELS = 100_000_000;
+export const MAX_IMAGE_DIMENSION = 16_384;
+export const MAX_IMAGE_PIXELS = 100_000_000;
 const MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const HASH_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -161,9 +161,9 @@ function checkedDimensions(width: number, height: number): [number, number] {
     !Number.isSafeInteger(height) ||
     width < 1 ||
     height < 1 ||
-    width > MAX_DIMENSION ||
-    height > MAX_DIMENSION ||
-    width * height > MAX_PIXELS
+    width > MAX_IMAGE_DIMENSION ||
+    height > MAX_IMAGE_DIMENSION ||
+    width * height > MAX_IMAGE_PIXELS
   )
     throw new Error("unsafe image dimensions");
   return [width, height];
@@ -382,7 +382,13 @@ function dimensions(data: Buffer, mime: string): [number, number] {
       throw new Error("unsupported image type");
   }
 }
-function decodeCanonical(value: ImageAttachment): { data: Buffer; width: number; height: number } {
+/** Shared strict image boundary for app-owned image stores. The caller supplies
+ * JSON/base64 only; filesystem paths never enter this contract. */
+export function decodeCanonicalImage(value: ImageAttachment): {
+  data: Buffer;
+  width: number;
+  height: number;
+} {
   if (!MIME.has(value.mimeType)) throw new Error("unsupported image type");
   if (
     !value.data ||
@@ -568,9 +574,9 @@ export class SessionImageStore {
         !Number.isSafeInteger(image.height) ||
         image.width < 1 ||
         image.height < 1 ||
-        image.width > MAX_DIMENSION ||
-        image.height > MAX_DIMENSION ||
-        image.width * image.height > MAX_PIXELS ||
+        image.width > MAX_IMAGE_DIMENSION ||
+        image.height > MAX_IMAGE_DIMENSION ||
+        image.width * image.height > MAX_IMAGE_PIXELS ||
         (image.entryId !== undefined && typeof image.entryId !== "string") ||
         (image.cellId !== undefined && typeof image.cellId !== "string") ||
         (image.messageKey !== undefined && !HASH_RE.test(image.messageKey))
@@ -585,7 +591,7 @@ export class SessionImageStore {
   ): { rollback: () => void } {
     if (values.length < 1 || values.length > MAX_PROMPT_IMAGES)
       throw new Error("invalid image count");
-    const decoded = values.map((value) => ({ value, ...decodeCanonical(value) }));
+    const decoded = values.map((value) => ({ value, ...decodeCanonicalImage(value) }));
     if (decoded.reduce((sum, image) => sum + image.data.length, 0) > MAX_PROMPT_IMAGE_BYTES)
       throw new Error("prompt images exceed decoded size limit");
     const signature = signatureFor(
@@ -648,7 +654,7 @@ export class SessionImageStore {
     let decoded: Array<{ data: Buffer; mimeType: string; width: number; height: number }> = [];
     try {
       decoded = parts.images.map((image) => ({
-        ...decodeCanonical(image),
+        ...decodeCanonicalImage(image),
         mimeType: image.mimeType,
       }));
     } catch {
@@ -685,7 +691,7 @@ export class SessionImageStore {
     // consume ownership merely because it also contains image bytes.
     if (!selected.length && !cell.entryId) return cell;
     if (!selected.length) {
-      const imported = parts.images.map((value) => ({ value, ...decodeCanonical(value) }));
+      const imported = parts.images.map((value) => ({ value, ...decodeCanonicalImage(value) }));
       const batchId = randomUUID();
       for (const image of imported) {
         const blobHash = createHash("sha256").update(image.data).digest("hex");

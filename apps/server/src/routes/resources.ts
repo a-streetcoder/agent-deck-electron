@@ -5,6 +5,7 @@ import {
   AGENT_OUTPUT_MAX_LENGTH,
   normalizeAgentOutput,
   validateAgentDefaultReadsForAuthoring,
+  type AgentInfo,
   type SkillInfo,
 } from "@agent-deck/domain";
 import {
@@ -31,6 +32,7 @@ import {
 } from "@agent-deck/resources";
 import { z } from "zod";
 import { curateProjectAgents } from "../agentCuration.ts";
+import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import type { ServerContext } from "../context.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
@@ -116,6 +118,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     resourceHome,
     rootsFor,
     skillStore,
+    agentAvatars,
     extensionBridgeConflictAt,
   } = ctx;
 
@@ -185,16 +188,124 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     return reply.status(failure.status).send({ error: failure.error });
   };
 
+  const avatarIdentity = (scope: AgentInfo["scope"], name: string, projectId?: string) => ({
+    scope,
+    name,
+    projectId: scope === "project" ? projectId : undefined,
+  });
+  const enrichAgentAvatars = (agents: AgentInfo[], projectId?: string): AgentInfo[] =>
+    agents.map((agent) => {
+      const avatar = agentAvatars.assignment(avatarIdentity(agent.scope, agent.name, projectId));
+      return avatar
+        ? { ...agent, avatarUrl: `/agent-avatars/${avatar.id}?v=${avatar.blobHash}` }
+        : agent;
+    });
+
   fastify.get("/resources/agents", async (request) => {
     const { projectId, includeUnassigned } = request.query as {
       projectId?: string;
       includeUnassigned?: string;
     };
-    const agents = scanAgents(rootsFor(projectId));
+    const agents = enrichAgentAvatars(scanAgents(rootsFor(projectId)), projectId);
     const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
     return {
       agents: includeUnassigned === "true" ? agents : curateProjectAgents(project, agents),
     };
+  });
+
+  // Opaque app-owned avatar reads. The id is derived from managed identity, not
+  // a path; v binds stale cached URLs to the exact current blob.
+  fastify.get("/agent-avatars/:avatarId", async (request, reply) => {
+    const { avatarId } = request.params as { avatarId: string };
+    const version = (request.query as { v?: unknown }).v;
+    const image = agentAvatars.read(avatarId);
+    const notFound = () =>
+      reply
+        .code(404)
+        .headers({
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cross-origin-resource-policy": "same-origin",
+        })
+        .send();
+    if (!image || version !== image.blobHash) return notFound();
+    return reply
+      .headers({
+        "content-type": image.mimeType,
+        "content-length": String(image.data.length),
+        "cache-control": "private, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin",
+      })
+      .send(image.data);
+  });
+
+  // 15,000,000 decoded bytes canonically expand to 20,000,000 base64
+  // characters. Keep this exception route-local and leave Fastify's global
+  // request limit unchanged.
+  const AVATAR_IMPORT_BODY_LIMIT = 20_100_000;
+  const avatarMutationBody = z.object({
+    projectId: z.string().optional(),
+    scope: z.enum(["builtin", "global", "library", "project"]),
+    name: RESOURCE_NAME,
+    mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+    data: z.string().max(20_000_000),
+  });
+
+  fastify.put(
+    "/resources/agents/avatar",
+    { bodyLimit: AVATAR_IMPORT_BODY_LIMIT },
+    async (request, reply) => {
+      const parsed = avatarMutationBody.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .status(400)
+          .send({ error: "Choose a PNG, JPEG, GIF, or WebP image up to 15 MB." });
+      const { projectId, scope, name, mimeType, data } = parsed.data;
+      if (scope === "project" && !projects.find((project) => project.id === projectId))
+        return reply.status(400).send({ error: "projectId required for project scope" });
+      const exists = scanAgents(rootsFor(projectId)).some(
+        (agent) => agent.scope === scope && agent.name === name,
+      );
+      if (!exists) return reply.status(404).send({ error: "The agent no longer exists." });
+      try {
+        agentAvatars.assign(avatarIdentity(scope, name, projectId), {
+          type: "image",
+          mimeType,
+          data,
+        });
+      } catch (error) {
+        if (error instanceof AgentAvatarStoreError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        return reply.status(400).send({
+          error: "That file is not a valid supported image or exceeds the 15 MB/dimension limits.",
+        });
+      }
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    },
+  );
+
+  fastify.delete("/resources/agents/avatar", async (request, reply) => {
+    const parsed = avatarMutationBody.omit({ mimeType: true, data: true }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const { projectId, scope, name } = parsed.data;
+    if (scope === "project" && !projects.find((project) => project.id === projectId))
+      return reply.status(400).send({ error: "projectId required for project scope" });
+    try {
+      agentAvatars.remove(avatarIdentity(scope, name, projectId));
+    } catch (error) {
+      if (error instanceof AgentAvatarStoreError)
+        return reply.status(409).send({ error: error.message });
+      return sendResourceMutationFailure(reply, error);
+    }
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
   });
 
   // Skills carry the app-level disabled flag from settings.
@@ -1006,6 +1117,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const { projectId, scope, name } = parsed.data;
     const roots = rootsFor(projectId);
     try {
+      agentAvatars.validateForMutation();
       if (scope === "builtin") {
         if (!existsSync(nodePath.join(BUILTIN_AGENTS_DIR, `${name}.md`))) {
           return reply.status(404).send({ error: `unknown builtin agent: ${name}` });
@@ -1040,10 +1152,15 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           projects.upsert(next);
         }
       }
+      // Avatar ownership follows the exact managed agent. Removing/resetting one
+      // same-named source never touches another scope's assignment.
+      agentAvatars.remove(avatarIdentity(scope, name, projectId));
     } catch (error) {
       if (error instanceof Error && error.message === "agent_ambiguous") {
         return reply.status(409).send({ error: `Agent "${name}" has ambiguous global sources.` });
       }
+      if (error instanceof AgentAvatarStoreError)
+        return reply.status(409).send({ error: error.message });
       return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
@@ -1069,7 +1186,34 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
     try {
-      renameAgentFile(roots, scope, name, newName);
+      agentAvatars.validateForMutation();
+      // Refuse an avatar identity collision before moving the resource file, so
+      // the cross-store rename cannot report failure after the catalog changed.
+      const oldAvatarIdentity = avatarIdentity(scope, name, projectId);
+      const newAvatarIdentity = avatarIdentity(scope, newName, projectId);
+      const avatarMoves = agentAvatars.assignment(oldAvatarIdentity) !== undefined;
+      if (avatarMoves && agentAvatars.assignment(newAvatarIdentity)) {
+        return reply.status(409).send({ error: `An avatar is already assigned to "${newName}".` });
+      }
+      // Move the independently atomic avatar assignment first. A catalog rename
+      // failure then rolls it back, while an avatar write failure never changes
+      // the resource file.
+      if (avatarMoves) agentAvatars.rename(oldAvatarIdentity, newAvatarIdentity);
+      try {
+        renameAgentFile(roots, scope, name, newName);
+      } catch (error) {
+        if (avatarMoves) {
+          try {
+            agentAvatars.rename(newAvatarIdentity, oldAvatarIdentity);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              "Agent rename failed and avatar ownership could not be restored.",
+            );
+          }
+        }
+        throw error;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "agent_exists") {
@@ -1083,6 +1227,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       if (message === "agent_not_found") {
         return reply.status(404).send({ error: `No ${scope} agent named "${name}".` });
       }
+      if (message === "agent_avatar_exists") {
+        return reply.status(409).send({ error: `An avatar is already assigned to "${newName}".` });
+      }
+      if (error instanceof AgentAvatarStoreError)
+        return reply.status(409).send({ error: error.message });
       return sendResourceMutationFailure(reply, error);
     }
     // Re-point project defaults, but ONLY where this rename actually changes the

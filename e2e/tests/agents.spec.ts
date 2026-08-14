@@ -107,6 +107,41 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
   await expect(page.getByTestId("user-cell")).toContainText("what is a monad?");
 });
 
+test("imports, replaces, reloads, and removes an app-managed agent avatar", async ({ page }) => {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-agents").click();
+  await page.locator('[data-agent-name="pancake-bot"]').click();
+  const detail = page.getByTestId("agent-detail");
+  await detail.locator('input[type="file"]').setInputFiles({
+    name: "avatar.png",
+    mimeType: "image/png",
+    buffer: png,
+  });
+  await expect(detail.getByTestId("agent-avatar-remove")).toBeVisible();
+  const managedImage = detail.locator('img[src^="/agent-avatars/"]');
+  await expect(managedImage).toBeVisible();
+  const firstUrl = await managedImage.getAttribute("src");
+  await detail.locator('input[type="file"]').setInputFiles({
+    name: "replacement.gif",
+    mimeType: "image/gif",
+    buffer: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+  });
+  await expect(managedImage).not.toHaveAttribute("src", firstUrl!);
+
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-agents").click();
+  await page.locator('[data-agent-name="pancake-bot"]').click();
+  await expect(page.getByTestId("agent-detail").getByTestId("agent-avatar-remove")).toBeVisible();
+  await page.getByTestId("agent-detail").getByTestId("agent-avatar-remove").click();
+  await expect(page.getByTestId("agent-detail").getByTestId("agent-avatar-remove")).toHaveCount(0);
+});
+
 test("creates a safe editable global replacement from a pure builtin", async ({ page }) => {
   const builtinFile = path.resolve("..", "packages/resources/builtin-agents/reviewer.md");
   const builtinBefore = readFileSync(builtinFile);

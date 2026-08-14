@@ -166,6 +166,8 @@ export interface AgentInfo {
   output?: string;
   scope: ResourceScope;
   filePath: string;
+  /** Opaque same-origin URL for an app-managed avatar. Never a filesystem path. */
+  avatarUrl?: string;
   /** Markdown body = the agent system prompt. */
   body: string;
   /** A higher-priority scope defines the same name. */

@@ -34,6 +34,7 @@ import {
 import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
+import { FileAgentAvatarStore } from "./agentAvatars.ts";
 import { registerAskUserBridgeTool } from "./askUserBridgeTool.ts";
 import { BridgeRegistry } from "./bridge.ts";
 import {
@@ -201,6 +202,7 @@ async function initServer(
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const sessionImages = new SessionImageStore(dataDir);
+  const agentAvatars = new FileAgentAvatarStore(dataDir);
   const sessionPastes = new SessionPasteStore(dataDir);
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
@@ -991,6 +993,7 @@ async function initServer(
     fastify,
     sessions,
     sessionImages,
+    agentAvatars,
     sessionPastes,
     index,
     projects,
