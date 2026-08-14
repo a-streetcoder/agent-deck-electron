@@ -32,6 +32,7 @@ import type {
   GitConflictDetail,
   GitDelta,
   GitImportResult,
+  GitInspectResult,
   GitPathChoice,
   GitRepoInfo,
   GitSyncResult,
@@ -78,8 +79,14 @@ export interface SkillStore {
   // ── Git-repo collections (managed skill repositories) ────────────────────────
   // The engine clones, discovers, sanitizes, and materializes into the ordinary catalogs.
   // Collections are GLOBAL (the UI only imports at global scope); state lives engine-side.
-  /** Import a git repo as a managed collection. `url` is the resolved clone URL. */
-  importGitRepo(url: string, ref?: string, subpath?: string): GitImportResult;
+  /** Import a git repo as a managed collection. `url` is the resolved clone URL. `selected`
+   *  (SKL-04) imports only those skills; the selection persists engine-side. */
+  importGitRepo(url: string, ref?: string, subpath?: string, selected?: string[]): GitImportResult;
+  /** Preview a repo BEFORE importing (SKL-03): clone + discover, materialize nothing; the
+   *  clone stays cached so the following import matches what was shown. */
+  inspectGitRepo(url: string, ref?: string, subpath?: string): GitInspectResult;
+  /** Remove an unconfirmed preview (user cancelled). Idempotent. */
+  discardGitPreview(collectionId: string): void;
   /** Every imported collection. */
   listGitRepos(): GitRepoInfo[];
   /** Preview upstream drift; writes nothing. */

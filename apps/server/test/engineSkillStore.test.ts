@@ -17,6 +17,8 @@ function fakeEngine(overrides: Partial<SkillEngineNative> = {}): SkillEngineNati
     restoreRecovery: vi.fn(() => "/canonical/.agents/skills/s/SKILL.md"),
     acknowledgeRecovery: vi.fn(),
     importGitRepo: vi.fn(() => ({ collectionId: "c1", skills: ["a", "b"] })),
+    inspectGitRepo: vi.fn(() => ({ collectionId: "c1", skills: [] })),
+    discardGitPreview: vi.fn(),
     checkGitRepo: vi.fn(() => []),
     syncGitRepo: vi.fn(() => ({ applied: [], conflicts: [] })),
     conflictPaths: vi.fn(() => ({ mergeId: "m1", paths: [] })),
@@ -188,11 +190,40 @@ describe("EngineSkillStore", () => {
       "https://x/y.git",
       "main",
       "sub",
+      undefined,
     );
     store.syncGitRepo("c1");
     expect(engine.syncGitRepo).toHaveBeenCalledWith("/home", undefined, "c1");
     store.forgetGitRepo("c1", true);
     expect(engine.forgetGitRepo).toHaveBeenCalledWith("/home", undefined, "c1", true);
+  });
+
+  it("delegates preview ops (inspect/discard) and threads a selection through import", () => {
+    const engine = fakeEngine({
+      inspectGitRepo: vi.fn(() => ({
+        collectionId: "c1",
+        skills: [{ name: "alpha", fileCount: 2, skillMd: "---\nname: Alpha\n---\nbody" }],
+      })),
+    });
+    const { store } = makeStore(engine);
+
+    const preview = store.inspectGitRepo("https://x/y.git", "main", "sub");
+    expect(preview.skills[0]?.name).toBe("alpha");
+    expect(engine.inspectGitRepo).toHaveBeenCalledWith("/home", "https://x/y.git", "main", "sub");
+
+    store.discardGitPreview("c1");
+    expect(engine.discardGitPreview).toHaveBeenCalledWith("/home", "c1");
+
+    store.importGitRepo("https://x/y.git", "main", "sub", ["alpha"]);
+    expect(engine.importGitRepo).toHaveBeenCalledWith(
+      "/home",
+      undefined,
+      "global",
+      "https://x/y.git",
+      "main",
+      "sub",
+      ["alpha"],
+    );
   });
 
   it("maps git-conflict recoveries (both whole-skill and per-path) to ResourceRecovery", () => {

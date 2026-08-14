@@ -22,6 +22,10 @@ import {
 import type { SkillInfo } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
+import {
+  SkillImportPreviewDialog,
+  type SkillPreviewItem,
+} from "../components/SkillImportPreviewDialog.tsx";
 
 interface SkillPathConflict {
   path: string;
@@ -575,26 +579,94 @@ export function SkillsScreen() {
     }
   };
 
-  const doGitImport = async (): Promise<void> => {
+  // SKL-03/04: preview-first git import. Inspect discovers what the repository contains (the
+  // engine caches the clone), the dialog owns per-skill selection, and the confirmed import
+  // materializes exactly what was shown. Cancel discards the cached preview.
+  const [gitPreview, setGitPreview] = useState<{
+    repoId: string;
+    url: string;
+    skills: SkillPreviewItem[];
+  } | null>(null);
+  // Synchronous locks + a request generation: React state commits too late to stop a
+  // double-activation, and a response landing after the input row was dismissed must not
+  // reopen the dialog (review, Codex).
+  const inspectLock = useRef(false);
+  const inspectSeq = useRef(0);
+  const previewRepoId = useRef<string | null>(null);
+  previewRepoId.current = gitPreview?.repoId ?? null;
+
+  const discardPreview = (repoId: string): void => {
+    // best-effort: an unconfirmed preview is also reclaimed by the next inspect
+    void fetch("/resources/skills/discard-git-preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoId }),
+    }).catch(() => undefined);
+  };
+
+  // Leaving the screen with a preview open would leak the engine's cached clone (review, Codex)
+  useEffect(
+    () => () => {
+      if (previewRepoId.current) discardPreview(previewRepoId.current);
+    },
+    [],
+  );
+
+  const doGitInspect = async (): Promise<void> => {
     const url = (gitUrl ?? "").trim();
-    if (!url) return;
+    if (!url || inspectLock.current) return;
+    inspectLock.current = true;
+    const seq = ++inspectSeq.current;
     setGitImporting(true);
     try {
-      const res = await fetch("/resources/skills/import-git", {
+      const res = await fetch("/resources/skills/inspect-git", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "global", url }),
+        body: JSON.stringify({ url }),
       });
-      if (!res.ok) {
-        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(error ?? "Couldn't import from that repository.");
+      if (!res.ok)
+        throw new Error(await responseErrorMessage(res, "Couldn't read that repository."));
+      const data = (await res.json()) as { repoId: string; skills: SkillPreviewItem[] };
+      if (seq !== inspectSeq.current) {
+        // the user dismissed or superseded this request while it was in flight
+        discardPreview(data.repoId);
+        return;
       }
-      setGitUrl(null); // the imported skills arrive via the resources_changed refetch
+      if (data.skills.length === 0) {
+        // the engine already cleaned the empty preview up — nothing importable to show
+        throw new Error("No skills with a SKILL.md were found in that repository.");
+      }
+      setGitPreview((prev) => {
+        if (prev && prev.repoId !== data.repoId) discardPreview(prev.repoId); // no leaked replacement
+        return { repoId: data.repoId, url, skills: data.skills };
+      });
+      setGitUrl(null);
     } catch (err) {
-      setGlobalError(String(err));
+      if (seq === inspectSeq.current) setGlobalError(String(err));
     } finally {
+      inspectLock.current = false;
       setGitImporting(false);
     }
+  };
+
+  const confirmGitImport = async (selected: string[]): Promise<void> => {
+    if (!gitPreview) return;
+    const res = await fetch("/resources/skills/import-git", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "global", url: gitPreview.url, selected }),
+    });
+    if (!res.ok) {
+      // thrown back into the dialog, which stays open with the error visible
+      throw new Error(await responseErrorMessage(res, "Couldn't import from that repository."));
+    }
+    setGitPreview(null); // the imported skills arrive via the resources_changed refetch
+  };
+
+  const cancelGitPreview = (): void => {
+    const repoId = gitPreview?.repoId;
+    setGitPreview(null);
+    if (repoId) discardPreview(repoId);
   };
 
   // Load imported repositories and check each for an available update.
@@ -1154,19 +1226,30 @@ export function SkillsScreen() {
               value={gitUrl}
               onChange={(event) => setGitUrl(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void doGitImport();
-                if (event.key === "Escape") setGitUrl(null);
+                if (event.key === "Enter") void doGitInspect();
+                if (event.key === "Escape") {
+                  inspectSeq.current++; // an in-flight preview must not reopen a dismissed row
+                  setGitUrl(null);
+                }
               }}
             />
             <ControlButton
               data-testid="skill-import-git-confirm"
               className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={!gitUrl.trim() || gitImporting}
-              onClick={() => void doGitImport()}
+              onClick={() => void doGitInspect()}
             >
-              {gitImporting ? "Importing…" : "Import"}
+              {gitImporting ? "Fetching…" : "Preview"}
             </ControlButton>
           </div>
+        ) : null}
+        {gitPreview ? (
+          <SkillImportPreviewDialog
+            repoLabel={gitPreview.url}
+            skills={gitPreview.skills}
+            onImport={confirmGitImport}
+            onCancel={cancelGitPreview}
+          />
         ) : null}
         <div
           data-testid="skill-repo-record-removal-status"

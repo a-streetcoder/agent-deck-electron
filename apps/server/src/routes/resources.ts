@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import {
   AGENT_EXTENSION_MAX_ITEMS,
@@ -483,6 +484,8 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         url: z.string().trim().min(1).max(2000),
         scope: z.enum(["global", "project"]).optional(),
         projectId: z.string().optional(),
+        // SKL-04: import only these skills (names from the preview). Omitted = full import.
+        selected: z.array(z.string().trim().min(1).max(200)).min(1).max(500).optional(),
       })
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
@@ -496,9 +499,70 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       return reply.status(400).send({ error: "Couldn't understand that repository reference." });
     }
     try {
-      const result = skillStore.importGitRepo(source.cloneUrl, source.ref, source.subdir);
+      const result = skillStore.importGitRepo(
+        source.cloneUrl,
+        source.ref,
+        source.subdir,
+        parsed.data.selected,
+      );
       broadcast({ type: "resources_changed" });
       return { imported: result.skills, skipped: [] as string[], repoId: result.collectionId };
+    } catch (error) {
+      return sendResourceMutationFailure(reply, error);
+    }
+  });
+
+  // Preview a repository BEFORE importing (SKL-03): the engine clones + discovers without
+  // materializing anything, and the cached clone makes the following import show-what-you-saw.
+  // Display name/description derive from SKILL.md frontmatter via the pinned Pi parser, the
+  // same one the scanner uses — never a second YAML dialect. No broadcast: nothing changed.
+  fastify.post("/resources/skills/inspect-git", async (request, reply) => {
+    const parsed = z.object({ url: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const source = resolveSkillSource(parsed.data.url);
+    if (!source) {
+      return reply.status(400).send({ error: "Couldn't understand that repository reference." });
+    }
+    try {
+      const result = skillStore.inspectGitRepo(source.cloneUrl, source.ref, source.subdir);
+      return {
+        repoId: result.collectionId,
+        skills: result.skills.map((s) => {
+          let displayName = s.name;
+          let description: string | undefined;
+          if (s.skillMd) {
+            try {
+              const { frontmatter } = parseFrontmatter(s.skillMd);
+              const fmName = frontmatter["name"];
+              const fmDesc = frontmatter["description"];
+              if (typeof fmName === "string" && fmName.trim()) displayName = fmName.trim();
+              if (typeof fmDesc === "string" && fmDesc.trim()) description = fmDesc.trim();
+            } catch {
+              // unparseable frontmatter → folder-name fallback, same as the scanner's posture
+            }
+          }
+          return {
+            name: s.name,
+            displayName,
+            description,
+            // extra material beyond SKILL.md itself (native shows a reference-file badge)
+            extraFileCount: Math.max(0, s.fileCount - 1),
+          };
+        }),
+      };
+    } catch (error) {
+      return sendResourceMutationFailure(reply, error);
+    }
+  });
+
+  // Cancel a preview: idempotent; refuses a genuinely imported collection (that is the
+  // forget/delete flow's job). No broadcast: a preview was never visible resource state.
+  fastify.post("/resources/skills/discard-git-preview", async (request, reply) => {
+    const parsed = z.object({ repoId: z.string().trim().min(1).max(200) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    try {
+      skillStore.discardGitPreview(parsed.data.repoId);
+      return { ok: true };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }

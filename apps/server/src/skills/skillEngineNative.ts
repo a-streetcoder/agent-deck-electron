@@ -48,6 +48,20 @@ export interface GitImportResult {
   skills: string[];
 }
 
+/** One discoverable skill in a repository preview (SKL-03). `skillMd` is the SKILL.md content
+ *  (engine-capped at 64 KB) so the host derives display name/description with the pinned Pi
+ *  frontmatter parser; absent when the skill has no SKILL.md at its root. */
+export interface GitSkillPreview {
+  name: string;
+  fileCount: number;
+  skillMd?: string;
+}
+
+export interface GitInspectResult {
+  collectionId: string;
+  skills: GitSkillPreview[];
+}
+
 export interface GitSyncResult {
   applied: string[];
   conflicts: string[];
@@ -143,7 +157,23 @@ export interface SkillEngineNative {
     url: string,
     gitRef: string | undefined,
     subpath: string | undefined,
+    /** SKL-04 (0.1.6): import only these skills; the selection persists engine-side — later
+     *  check/sync never surface or materialize an upstream skill outside it. Omit = full. */
+    selected: string[] | undefined,
   ): GitImportResult;
+  /** Preview a repo BEFORE importing (SKL-03, 0.1.6): clone + discover, materialize nothing.
+   *  The clone stays cached so a following `importGitRepo` imports exactly what was shown;
+   *  empty `skills` = no SKILL.md anywhere (the preview cleans itself up). Refuses an
+   *  already-imported url/ref/subpath. */
+  inspectGitRepo(
+    home: string,
+    url: string,
+    gitRef: string | undefined,
+    subpath: string | undefined,
+  ): GitInspectResult;
+  /** Remove an unconfirmed preview (user cancelled). Idempotent; refuses an imported
+   *  collection (that is `forgetGitRepo`'s job). (0.1.6) */
+  discardGitPreview(home: string, collectionId: string): void;
   /** Preview upstream drift; fetches, writes nothing. */
   checkGitRepo(home: string, collectionId: string): GitDelta[];
   /** Pull + apply one-sided (three-way-merged) changes; both-sides motion → `conflicts`. */

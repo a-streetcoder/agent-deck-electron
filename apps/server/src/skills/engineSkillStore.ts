@@ -22,6 +22,7 @@ import type {
   GitConflictDetail,
   GitDelta,
   GitImportResult,
+  GitInspectResult,
   GitPathChoice,
   GitRepoInfo,
   GitSyncResult,
@@ -197,10 +198,26 @@ export class EngineSkillStore implements SkillStore {
   }
 
   // ── Git-repo collections (global; the engine owns clone/discover/sanitize/materialize) ──
-  importGitRepo(url: string, ref?: string, subpath?: string): GitImportResult {
+  importGitRepo(url: string, ref?: string, subpath?: string, selected?: string[]): GitImportResult {
     return fromEngine(() =>
-      this.deps.engine.importGitRepo(this.deps.home, undefined, "global", url, ref, subpath),
+      this.deps.engine.importGitRepo(
+        this.deps.home,
+        undefined,
+        "global",
+        url,
+        ref,
+        subpath,
+        selected,
+      ),
     );
+  }
+
+  inspectGitRepo(url: string, ref?: string, subpath?: string): GitInspectResult {
+    return fromEngine(() => this.deps.engine.inspectGitRepo(this.deps.home, url, ref, subpath));
+  }
+
+  discardGitPreview(collectionId: string): void {
+    return fromEngine(() => this.deps.engine.discardGitPreview(this.deps.home, collectionId));
   }
 
   listGitRepos(): GitRepoInfo[] {

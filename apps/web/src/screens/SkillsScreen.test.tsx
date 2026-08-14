@@ -157,3 +157,170 @@ describe("skill repository per-file conflict review", () => {
     expect(JSON.parse(String(refreshCall?.[1]?.body))).toEqual({ name: "mixed-choice" });
   });
 });
+
+describe("git import preview + per-skill selection (SKL-03/04)", () => {
+  const previewSkills = [
+    { name: "alpha", displayName: "Alpha Helper", description: "Alpha things", extraFileCount: 1 },
+    { name: "beta", displayName: "beta", extraFileCount: 0 },
+  ];
+
+  function stubPreviewFetch(inspectSkills: unknown[] = previewSkills) {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/inspect-git") {
+        return Promise.resolve(jsonResponse({ repoId: "preview-1", skills: inspectSkills }));
+      }
+      if (url === "/resources/skills/import-git") {
+        return Promise.resolve(jsonResponse({ imported: ["alpha"], skipped: [], repoId: "c1" }));
+      }
+      if (url === "/resources/skills/discard-git-preview") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  async function openPreview() {
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-import-git"));
+    fireEvent.change(screen.getByTestId("skill-import-git-url"), {
+      target: { value: "owner/repo" },
+    });
+    fireEvent.click(screen.getByTestId("skill-import-git-confirm"));
+    return await screen.findByTestId("skill-import-preview-dialog");
+  }
+
+  it("previews with everything selected, then imports only the remaining selection", async () => {
+    const fetchMock = stubPreviewFetch();
+    await openPreview();
+
+    // preview contract rendered: frontmatter display name, description, file badge, count line
+    expect(screen.getByText("Alpha Helper")).toBeTruthy();
+    expect(screen.getByText("Alpha things")).toBeTruthy();
+    expect(screen.getByTestId("skill-import-preview-count").textContent).toContain("2 selected");
+    const alphaCheck = screen.getByTestId("skill-import-preview-check-alpha") as HTMLInputElement;
+    const betaCheck = screen.getByTestId("skill-import-preview-check-beta") as HTMLInputElement;
+    expect(alphaCheck.checked).toBe(true);
+    expect(betaCheck.checked).toBe(true);
+
+    fireEvent.click(betaCheck);
+    expect(screen.getByTestId("skill-import-preview-count").textContent).toContain("1 selected");
+    fireEvent.click(screen.getByTestId("skill-import-preview-import"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const importCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/import-git",
+    );
+    expect(JSON.parse(String(importCall?.[1]?.body))).toEqual({
+      scope: "global",
+      url: "owner/repo",
+      selected: ["alpha"],
+    });
+  });
+
+  it("cancel discards the cached preview", async () => {
+    const fetchMock = stubPreviewFetch();
+    await openPreview();
+
+    fireEvent.click(screen.getByTestId("skill-import-preview-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      const discardCall = fetchMock.mock.calls.find(
+        ([url]) => String(url) === "/resources/skills/discard-git-preview",
+      );
+      expect(JSON.parse(String(discardCall?.[1]?.body))).toEqual({ repoId: "preview-1" });
+    });
+  });
+
+  it("cancel is inert while an import is in flight, and import fires exactly once", async () => {
+    let resolveImport: ((r: Response) => void) | undefined;
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/inspect-git") {
+        return Promise.resolve(jsonResponse({ repoId: "preview-1", skills: previewSkills }));
+      }
+      if (url === "/resources/skills/import-git") {
+        return new Promise<Response>((resolve) => {
+          resolveImport = resolve; // held open so cancel/double-click race the import
+        });
+      }
+      if (url === "/resources/skills/discard-git-preview") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    await openPreview();
+
+    const importButton = screen.getByTestId("skill-import-preview-import");
+    fireEvent.click(importButton);
+    fireEvent.click(importButton); // double-activation must not issue a second request
+    fireEvent.keyDown(window, { key: "Escape" }); // cancel racing the in-flight import
+    fireEvent.click(screen.getByTestId("skill-import-preview-cancel"));
+
+    // dialog still open, no discard fired, exactly one import request
+    expect(screen.getByTestId("skill-import-preview-dialog")).toBeTruthy();
+    const importCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/resources/skills/import-git",
+    );
+    expect(importCalls).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url) === "/resources/skills/discard-git-preview"),
+    ).toBe(false);
+
+    resolveImport?.(jsonResponse({ imported: ["alpha"], skipped: [], repoId: "c1" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+  });
+
+  it("unmounting the screen discards an open preview instead of leaking it", async () => {
+    const fetchMock = stubPreviewFetch();
+    const { unmount } = render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-import-git"));
+    fireEvent.change(screen.getByTestId("skill-import-git-url"), {
+      target: { value: "owner/repo" },
+    });
+    fireEvent.click(screen.getByTestId("skill-import-git-confirm"));
+    await screen.findByTestId("skill-import-preview-dialog");
+
+    unmount();
+    await waitFor(() => {
+      const discardCall = fetchMock.mock.calls.find(
+        ([url]) => String(url) === "/resources/skills/discard-git-preview",
+      );
+      expect(JSON.parse(String(discardCall?.[1]?.body))).toEqual({ repoId: "preview-1" });
+    });
+  });
+
+  it("a repository with no skills reports an error instead of opening the dialog", async () => {
+    stubPreviewFetch([]);
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-import-git"));
+    fireEvent.change(screen.getByTestId("skill-import-git-url"), {
+      target: { value: "owner/empty" },
+    });
+    fireEvent.click(screen.getByTestId("skill-import-git-confirm"));
+
+    await waitFor(() => {
+      expect(useAppStore.getState().error).toContain("No skills with a SKILL.md");
+    });
+    expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+  });
+});
