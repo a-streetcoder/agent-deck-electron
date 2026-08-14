@@ -25,6 +25,7 @@ import type {
   GitInspectResult,
   GitPathChoice,
   GitRepoInfo,
+  GitSkillPreview,
   GitSyncResult,
   RecoveryInfo,
   SkillEngineNative,
@@ -209,6 +210,16 @@ export class EngineSkillStore implements SkillStore {
         subpath,
         selected,
       ),
+    );
+  }
+
+  inspectLocalFolder(root: string): GitSkillPreview[] {
+    return fromEngine(() => this.deps.engine.inspectLocalFolder(this.deps.home, root));
+  }
+
+  importLocalFolder(root: string, selected?: string[]): string[] {
+    return fromEngine(() =>
+      this.deps.engine.importLocalFolder(this.deps.home, undefined, "global", root, selected),
     );
   }
 

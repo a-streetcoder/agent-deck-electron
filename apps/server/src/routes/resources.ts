@@ -115,6 +115,37 @@ const skillEditBody = z.object({
   }),
 });
 
+/** Engine preview → renderer payload: display name/description derive from SKILL.md
+ * frontmatter via the pinned Pi parser — the same one the scanner uses, never a second YAML
+ * dialect; folder-name fallback on unparseable/absent frontmatter. Shared by the git and
+ * local-folder inspect routes so both feed one preview dialog. */
+function toSkillPreviews(
+  skills: { name: string; fileCount: number; skillMd?: string }[],
+): { name: string; displayName: string; description?: string; extraFileCount: number }[] {
+  return skills.map((s) => {
+    let displayName = s.name;
+    let description: string | undefined;
+    if (s.skillMd) {
+      try {
+        const { frontmatter } = parseFrontmatter(s.skillMd);
+        const fmName = frontmatter["name"];
+        const fmDesc = frontmatter["description"];
+        if (typeof fmName === "string" && fmName.trim()) displayName = fmName.trim();
+        if (typeof fmDesc === "string" && fmDesc.trim()) description = fmDesc.trim();
+      } catch {
+        // unparseable frontmatter → folder-name fallback, same as the scanner's posture
+      }
+    }
+    return {
+      name: s.name,
+      displayName,
+      description,
+      // extra material beyond SKILL.md itself (native shows a reference-file badge)
+      extraFileCount: Math.max(0, s.fileCount - 1),
+    };
+  });
+}
+
 /**
  * REST routes for the resource catalogs — agents, skills (incl. git-imported
  * skill repositories), prompt templates, extensions, and the app-bridge
@@ -456,24 +487,63 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     let name: string;
     try {
+      // The engine speaks RESOURCE_* codes; the legacy writer's string matches ("skill_exists"
+      // etc.) had been unreachable dead branches since the engine swap — removed (review finding).
       name = skillStore.importLocalSkill(scope, nodePath.resolve(sourcePath), projectId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message === "skill_exists") {
-        return reply.status(409).send({ error: `A ${scope} skill of that name already exists.` });
-      }
-      if (message === "not_a_markdown_file") {
-        return reply.status(400).send({ error: "Pick an existing .md file to import." });
-      }
-      if (message === "invalid_skill_name") {
-        return reply
-          .status(400)
-          .send({ error: "Couldn't derive a valid skill name from the file." });
-      }
       return sendResourceMutationFailure(reply, error);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true, name };
+  });
+
+  // Local-path routes work on arbitrary user filesystem paths, so an UNCODED exception (raw IO
+  // error text) must not reach the renderer verbatim — it can carry absolute paths the generic
+  // 500 fallback would otherwise leak (review, Codex). Coded RESOURCE_* errors keep their
+  // sanitized mapping.
+  const sendLocalPathFailure = (
+    reply: { status(code: number): { send(body: { error: string }): unknown } },
+    error: unknown,
+    generic: string,
+  ): unknown => {
+    if (error instanceof ResourceCatalogCapabilityError) {
+      return sendResourceMutationFailure(reply, error);
+    }
+    return reply.status(500).send({ error: generic });
+  };
+
+  // Preview a LOCAL folder of skills (SKL-05): engine discovery, materializes nothing. Shares
+  // the git preview's payload shape so the renderer reuses one dialog.
+  fastify.post("/resources/skills/inspect-local", async (request, reply) => {
+    const parsed = z.object({ path: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    try {
+      const skills = skillStore.inspectLocalFolder(nodePath.resolve(parsed.data.path));
+      return { skills: toSkillPreviews(skills) };
+    } catch (error) {
+      return sendLocalPathFailure(reply, error, "Couldn't read that folder.");
+    }
+  });
+
+  // Import selected skills from a LOCAL folder (SKL-05/06): one-shot full-fileset copy.
+  fastify.post("/resources/skills/import-local-folder", async (request, reply) => {
+    const parsed = z
+      .object({
+        path: z.string().trim().min(1).max(2000),
+        selected: z.array(z.string().trim().min(1).max(200)).min(1).max(500).optional(),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    try {
+      const imported = skillStore.importLocalFolder(
+        nodePath.resolve(parsed.data.path),
+        parsed.data.selected,
+      );
+      broadcast({ type: "resources_changed" });
+      return { imported };
+    } catch (error) {
+      return sendLocalPathFailure(reply, error, "Couldn't import from that folder.");
+    }
   });
 
   // Import a git repo as a managed collection (shared skill engine): clone → discover →
@@ -517,8 +587,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   // Preview a repository BEFORE importing (SKL-03): the engine clones + discovers without
   // materializing anything, and the cached clone makes the following import show-what-you-saw.
-  // Display name/description derive from SKILL.md frontmatter via the pinned Pi parser, the
-  // same one the scanner uses — never a second YAML dialect. No broadcast: nothing changed.
+  // No broadcast: nothing changed.
   fastify.post("/resources/skills/inspect-git", async (request, reply) => {
     const parsed = z.object({ url: z.string().trim().min(1).max(2000) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
@@ -528,31 +597,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     try {
       const result = skillStore.inspectGitRepo(source.cloneUrl, source.ref, source.subdir);
-      return {
-        repoId: result.collectionId,
-        skills: result.skills.map((s) => {
-          let displayName = s.name;
-          let description: string | undefined;
-          if (s.skillMd) {
-            try {
-              const { frontmatter } = parseFrontmatter(s.skillMd);
-              const fmName = frontmatter["name"];
-              const fmDesc = frontmatter["description"];
-              if (typeof fmName === "string" && fmName.trim()) displayName = fmName.trim();
-              if (typeof fmDesc === "string" && fmDesc.trim()) description = fmDesc.trim();
-            } catch {
-              // unparseable frontmatter → folder-name fallback, same as the scanner's posture
-            }
-          }
-          return {
-            name: s.name,
-            displayName,
-            description,
-            // extra material beyond SKILL.md itself (native shows a reference-file badge)
-            extraFileCount: Math.max(0, s.fileCount - 1),
-          };
-        }),
-      };
+      return { repoId: result.collectionId, skills: toSkillPreviews(result.skills) };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }

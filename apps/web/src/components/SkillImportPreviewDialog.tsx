@@ -1,5 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { GitBranch, X } from "lucide-react";
+import { FolderInput, GitBranch, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 
@@ -20,13 +20,16 @@ export interface SkillPreviewItem {
  * chosen skill names. Cancel (button or Escape) tells the parent to discard the cached preview.
  */
 export function SkillImportPreviewDialog({
-  repoLabel,
+  sourceLabel,
+  sourceKind = "git",
   skills,
   onImport,
   onCancel,
 }: {
-  /** The reference the user typed — shown so they know what they're importing from. */
-  repoLabel: string;
+  /** The reference the user gave (repo URL or folder path) — shown so they know the source. */
+  sourceLabel: string;
+  /** Picks the header icon; the selection/import behavior is identical for both. */
+  sourceKind?: "git" | "local";
   skills: SkillPreviewItem[];
   /** Import the selection; reject (throw) to keep the dialog open with the error shown. */
   onImport: (selected: string[]) => Promise<void>;
@@ -119,11 +122,15 @@ export function SkillImportPreviewDialog({
               id="skill-import-preview-title"
               className="flex items-center gap-2 font-medium text-text-primary"
             >
-              <GitBranch size={15} aria-hidden />
+              {sourceKind === "git" ? (
+                <GitBranch size={15} aria-hidden />
+              ) : (
+                <FolderInput size={15} aria-hidden />
+              )}
               Import skills
             </h2>
-            <p className="truncate font-mono text-xs text-text-muted" title={repoLabel}>
-              {repoLabel}
+            <p className="truncate font-mono text-xs text-text-muted" title={sourceLabel}>
+              {sourceLabel}
             </p>
           </div>
           <ControlButton

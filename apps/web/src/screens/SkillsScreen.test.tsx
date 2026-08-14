@@ -5,6 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { SkillsScreen } from "./SkillsScreen.tsx";
 
+// The folder picker is a trusted desktop IPC — stubbed per test via this holder.
+const pickerResult: { dirs: string[] } = { dirs: [] };
+vi.mock("../lib/native.ts", async (importOriginal) => {
+  const mod = (await importOriginal()) as Record<string, unknown>;
+  return { ...mod, chooseDirectory: vi.fn(async () => pickerResult.dirs) };
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -307,6 +314,51 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
       );
       expect(JSON.parse(String(discardCall?.[1]?.body))).toEqual({ repoId: "preview-1" });
     });
+  });
+
+  it("local folder: picks a directory, previews, imports only the selection", async () => {
+    pickerResult.dirs = ["C:/my-skills"];
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/inspect-local") {
+        return Promise.resolve(jsonResponse({ skills: previewSkills }));
+      }
+      if (url === "/resources/skills/import-local-folder") {
+        return Promise.resolve(jsonResponse({ imported: ["alpha"] }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-import"));
+    await screen.findByTestId("skill-import-preview-dialog");
+
+    fireEvent.click(screen.getByTestId("skill-import-preview-check-beta"));
+    fireEvent.click(screen.getByTestId("skill-import-preview-import"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const importCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/import-local-folder",
+    );
+    expect(JSON.parse(String(importCall?.[1]?.body))).toEqual({
+      path: "C:/my-skills",
+      selected: ["alpha"],
+    });
+  });
+
+  it("local folder: a cancelled picker falls back to the path input", async () => {
+    pickerResult.dirs = [];
+    stubPreviewFetch();
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-import"));
+    await screen.findByTestId("skill-import-path");
+    expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
   });
 
   it("a repository with no skills reports an error instead of opening the dialog", async () => {

@@ -161,6 +161,20 @@ export interface SkillEngineNative {
      *  check/sync never surface or materialize an upstream skill outside it. Omit = full. */
     selected: string[] | undefined,
   ): GitImportResult;
+  /** Preview a LOCAL folder of skills (SKL-05, 0.1.7): git-import discovery on a plain path —
+   *  bounds-checked, symlink-refusing, materializing nothing. Refuses a folder overlapping the
+   *  skill catalog itself. */
+  inspectLocalFolder(home: string, root: string): GitSkillPreview[];
+  /** Import skills from a LOCAL folder (SKL-05, 0.1.7): discover, optionally filter by
+   *  `selected`, collision-check everything, materialize each chosen skill's FULL fileset.
+   *  One-shot copy — no collection state. All-or-nothing. */
+  importLocalFolder(
+    home: string,
+    projectRoot: string | undefined,
+    scope: EngineSkillScope,
+    root: string,
+    selected: string[] | undefined,
+  ): string[];
   /** Preview a repo BEFORE importing (SKL-03, 0.1.6): clone + discover, materialize nothing.
    *  The clone stays cached so a following `importGitRepo` imports exactly what was shown;
    *  empty `skills` = no SKILL.md anywhere (the preview cleans itself up). Refuses an

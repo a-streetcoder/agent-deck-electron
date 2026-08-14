@@ -35,6 +35,7 @@ import type {
   GitInspectResult,
   GitPathChoice,
   GitRepoInfo,
+  GitSkillPreview,
   GitSyncResult,
 } from "./skillEngineNative.ts";
 
@@ -82,6 +83,10 @@ export interface SkillStore {
   /** Import a git repo as a managed collection. `url` is the resolved clone URL. `selected`
    *  (SKL-04) imports only those skills; the selection persists engine-side. */
   importGitRepo(url: string, ref?: string, subpath?: string, selected?: string[]): GitImportResult;
+  /** Preview a LOCAL folder of skills (SKL-05): discovery only, materializes nothing. */
+  inspectLocalFolder(root: string): GitSkillPreview[];
+  /** Import skills from a LOCAL folder (SKL-05): one-shot full-fileset copy, all-or-nothing. */
+  importLocalFolder(root: string, selected?: string[]): string[];
   /** Preview a repo BEFORE importing (SKL-03): clone + discover, materialize nothing; the
    *  clone stays cached so the following import matches what was shown. */
   inspectGitRepo(url: string, ref?: string, subpath?: string): GitInspectResult;

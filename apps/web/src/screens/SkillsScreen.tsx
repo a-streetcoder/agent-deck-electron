@@ -60,7 +60,7 @@ import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { deleteSkill, renameSkill, setSkillDisabled, updateProject } from "../state/wsBridge.ts";
 import { ScopeChip } from "../components/ScopeChip.tsx";
-import { trashSkillRecovery } from "../lib/native.ts";
+import { chooseDirectory, trashSkillRecovery } from "../lib/native.ts";
 
 /**
  * Native SkillsScreen: master-detail split; rows with the wand glyph
@@ -614,7 +614,7 @@ export function SkillsScreen() {
 
   const doGitInspect = async (): Promise<void> => {
     const url = (gitUrl ?? "").trim();
-    if (!url || inspectLock.current) return;
+    if (!url || inspectLock.current || localPreview) return;
     inspectLock.current = true;
     const seq = ++inspectSeq.current;
     setGitImporting(true);
@@ -667,6 +667,60 @@ export function SkillsScreen() {
     const repoId = gitPreview?.repoId;
     setGitPreview(null);
     if (repoId) discardPreview(repoId);
+  };
+
+  // SKL-05/06: local FOLDER import — same preview-then-select flow as git, no engine-side
+  // preview state to clean up (local inspect is a pure read).
+  const [localPreview, setLocalPreview] = useState<{
+    path: string;
+    skills: SkillPreviewItem[];
+  } | null>(null);
+
+  const doLocalFolderImport = async (): Promise<void> => {
+    // one import flow at a time: the shared lock + the open-dialog checks keep a second picker,
+    // a stale response, or a SECOND aria-modal dialog from ever appearing (review, Codex)
+    if (inspectLock.current || gitPreview || localPreview) return;
+    inspectLock.current = true;
+    const seq = ++inspectSeq.current;
+    try {
+      const [folder] = await chooseDirectory();
+      if (!folder) {
+        // no native picker (browser dev) or the user cancelled — fall back to the path input,
+        // keeping the button's original toggle-open/close behavior
+        setImportPath((v) => (v === null ? "" : null));
+        return;
+      }
+      const res = await fetch("/resources/skills/inspect-local", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: folder }),
+      });
+      if (!res.ok) throw new Error(await responseErrorMessage(res, "Couldn't read that folder."));
+      const data = (await res.json()) as { skills: SkillPreviewItem[] };
+      if (seq !== inspectSeq.current) return; // superseded while in flight
+      if (data.skills.length === 0) {
+        throw new Error("No skills with a SKILL.md were found in that folder.");
+      }
+      setLocalPreview({ path: folder, skills: data.skills });
+    } catch (err) {
+      if (seq === inspectSeq.current) setGlobalError(String(err));
+    } finally {
+      inspectLock.current = false;
+    }
+  };
+
+  const confirmLocalImport = async (selected: string[]): Promise<void> => {
+    if (!localPreview) return;
+    const res = await fetch("/resources/skills/import-local-folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: localPreview.path, selected }),
+    });
+    if (!res.ok) {
+      // thrown back into the dialog, which stays open with the error visible
+      throw new Error(await responseErrorMessage(res, "Couldn't import from that folder."));
+    }
+    setLocalPreview(null); // the imported skills arrive via the resources_changed refetch
   };
 
   // Load imported repositories and check each for an available update.
@@ -1178,8 +1232,8 @@ export function SkillsScreen() {
           <ControlButton
             data-testid="skill-import"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-            title="Import a local .md file as a skill"
-            onClick={() => setImportPath((v) => (v === null ? "" : null))}
+            title="Import skills from a local folder or .md file"
+            onClick={() => void doLocalFolderImport()}
           >
             <FolderInput size={15} />
           </ControlButton>
@@ -1245,10 +1299,20 @@ export function SkillsScreen() {
         ) : null}
         {gitPreview ? (
           <SkillImportPreviewDialog
-            repoLabel={gitPreview.url}
+            sourceLabel={gitPreview.url}
+            sourceKind="git"
             skills={gitPreview.skills}
             onImport={confirmGitImport}
             onCancel={cancelGitPreview}
+          />
+        ) : null}
+        {localPreview ? (
+          <SkillImportPreviewDialog
+            sourceLabel={localPreview.path}
+            sourceKind="local"
+            skills={localPreview.skills}
+            onImport={confirmLocalImport}
+            onCancel={() => setLocalPreview(null)}
           />
         ) : null}
         <div

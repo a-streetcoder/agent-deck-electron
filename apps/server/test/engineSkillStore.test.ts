@@ -19,6 +19,8 @@ function fakeEngine(overrides: Partial<SkillEngineNative> = {}): SkillEngineNati
     importGitRepo: vi.fn(() => ({ collectionId: "c1", skills: ["a", "b"] })),
     inspectGitRepo: vi.fn(() => ({ collectionId: "c1", skills: [] })),
     discardGitPreview: vi.fn(),
+    inspectLocalFolder: vi.fn(() => []),
+    importLocalFolder: vi.fn(() => ["a"]),
     checkGitRepo: vi.fn(() => []),
     syncGitRepo: vi.fn(() => ({ applied: [], conflicts: [] })),
     conflictPaths: vi.fn(() => ({ mergeId: "m1", paths: [] })),
@@ -196,6 +198,30 @@ describe("EngineSkillStore", () => {
     expect(engine.syncGitRepo).toHaveBeenCalledWith("/home", undefined, "c1");
     store.forgetGitRepo("c1", true);
     expect(engine.forgetGitRepo).toHaveBeenCalledWith("/home", undefined, "c1", true);
+  });
+
+  it("delegates local-folder preview and selected import at global scope", () => {
+    const engine = fakeEngine({
+      inspectLocalFolder: vi.fn(() => [
+        { name: "alpha", fileCount: 3, skillMd: "---\nname: Alpha\n---\n" },
+      ]),
+      importLocalFolder: vi.fn(() => ["alpha"]),
+    });
+    const { store } = makeStore(engine);
+
+    const preview = store.inspectLocalFolder("C:/skills");
+    expect(preview[0]?.name).toBe("alpha");
+    expect(engine.inspectLocalFolder).toHaveBeenCalledWith("/home", "C:/skills");
+
+    const names = store.importLocalFolder("C:/skills", ["alpha"]);
+    expect(names).toEqual(["alpha"]);
+    expect(engine.importLocalFolder).toHaveBeenCalledWith(
+      "/home",
+      undefined,
+      "global",
+      "C:/skills",
+      ["alpha"],
+    );
   });
 
   it("delegates preview ops (inspect/discard) and threads a selection through import", () => {
