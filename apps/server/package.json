@@ -14,7 +14,7 @@
     "test:pi": "vitest run --config vitest.pi.config.ts"
   },
   "dependencies": {
-    "@a-streetcoder/skill-engine-native": "0.1.5",
+    "@a-streetcoder/skill-engine-native": "0.1.6",
     "@agent-deck/contracts": "workspace:*",
     "@agent-deck/domain": "workspace:*",
     "@agent-deck/loop-catalog-native": "workspace:*",
