@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { piAgentHome, type ResourceRoots } from "./paths.ts";
@@ -301,4 +301,125 @@ export function loadPackageSkillEntries(roots: ResourceRoots): {
     entries.push(...result.skills);
   }
   return { entries, warnings };
+}
+
+/**
+ * Package-provided EXTENSIONS (EXT-02), native discoverPackageExtensions:
+ * `package.json → pi.extensions` (string list; each entry a `.ts` file or a
+ * directory), else the conventional `extensions/` dir. A directory contributes
+ * its own `index.ts` when present, else ONE child level (`.ts` files and
+ * subdirectories holding an `index.ts`). Same containment + warning posture as
+ * package skills/prompts.
+ */
+export interface PackageExtensionCandidate {
+  /** The concrete launch source (`.ts` file). */
+  path: string;
+  packageRef: string;
+}
+
+export function scanPackageExtensionCandidates(roots: ResourceRoots): {
+  candidates: PackageExtensionCandidate[];
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const candidates: PackageExtensionCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (target: string, ref: string): void => {
+    const identity = fsIdentity(target);
+    if (!identity || seen.has(identity)) return;
+    seen.add(identity);
+    candidates.push({ path: path.resolve(target), packageRef: ref });
+  };
+  const concreteSources = (location: string): string[] => {
+    let stat;
+    try {
+      stat = statSync(location);
+    } catch {
+      return [];
+    }
+    if (stat.isFile()) return location.toLowerCase().endsWith(".ts") ? [location] : [];
+    const isFile = (p: string): boolean => {
+      try {
+        return statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    };
+    const index = path.join(location, "index.ts");
+    if (isFile(index)) return [index]; // a DIRECTORY named index.ts never counts (review, Codex)
+    let children: string[];
+    try {
+      children = readdirSync(location);
+    } catch {
+      return [];
+    }
+    const sources: string[] = [];
+    for (const child of children) {
+      const childPath = path.join(location, child);
+      try {
+        const childStat = statSync(childPath);
+        if (childStat.isDirectory()) {
+          const childIndex = path.join(childPath, "index.ts");
+          if (isFile(childIndex)) sources.push(childIndex);
+        } else if (child.toLowerCase().endsWith(".ts")) {
+          sources.push(childPath);
+        }
+      } catch {
+        // unreadable child — skip
+      }
+    }
+    return sources;
+  };
+
+  for (const { ref, pkgRoot } of resolvedPackageRoots(roots, warnings)) {
+    let declared: string[] | undefined;
+    const manifest = path.join(pkgRoot, "package.json");
+    if (existsSync(manifest)) {
+      try {
+        const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
+          pi?: { extensions?: unknown };
+        };
+        const value = parsed.pi?.extensions;
+        if (typeof value === "string") declared = [value];
+        else if (Array.isArray(value)) {
+          declared = value.filter((v): v is string => typeof v === "string");
+        }
+      } catch {
+        warnings.push(`Couldn't read ${manifest} (invalid JSON).`);
+      }
+    }
+    const locations: string[] = [];
+    if (declared) {
+      for (const rel of declared) {
+        const target = path.resolve(pkgRoot, rel);
+        if (!existsSync(target)) {
+          warnings.push(
+            `Package ${ref} declares extensions at ${rel}, but that path was not found.`,
+          );
+          continue;
+        }
+        if (!isContained(pkgRoot, target)) {
+          warnings.push(`Package ${ref} declares extensions outside itself (${rel}) — ignored.`);
+          continue;
+        }
+        locations.push(target);
+      }
+    } else {
+      const conventional = path.join(pkgRoot, "extensions");
+      if (existsSync(conventional) && isContained(pkgRoot, conventional)) {
+        locations.push(conventional);
+      }
+    }
+    for (const location of locations) {
+      for (const source of concreteSources(location)) {
+        // per-FILE containment: a symlinked child could still escape the package
+        if (!isContained(pkgRoot, source)) {
+          warnings.push(`Package ${ref} extension ${source} resolves outside itself — ignored.`);
+          continue;
+        }
+        push(source, ref);
+      }
+    }
+  }
+  return { candidates, warnings: [...new Set(warnings)] };
 }

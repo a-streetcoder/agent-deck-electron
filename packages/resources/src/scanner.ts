@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import path from "node:path";
 import {
   applyShadowing,
@@ -17,6 +17,7 @@ import { applyAgentOverride, readAgentOverrides } from "./overrides.ts";
 import {
   isRealpathContained,
   loadPackageSkillEntries,
+  scanPackageExtensionCandidates,
   scanPackagePromptLocations,
 } from "./packageSkills.ts";
 import {
@@ -410,7 +411,9 @@ export interface DiscoveredExtension {
    * How the candidate was found (EXT-01): the standard extension dirs, or a
    * `settings.json` `extensions` entry (native discoveryKind settingsExtension).
    */
-  source?: "auto" | "settings";
+  source?: "auto" | "settings" | "package";
+  /** For package candidates (EXT-02): the settings.json ref that supplied it. */
+  packageRef?: string;
 }
 
 /** pi loads extensions written in TS or JS (any module flavor). */
@@ -471,12 +474,26 @@ function appGeneratedExtensionNames(dir: string): Set<string> {
   return KNOWN_APP_BRIDGE_NAMES;
 }
 
-export function scanExtensions(roots: ResourceRoots): DiscoveredExtension[] {
+export function scanExtensions(
+  roots: ResourceRoots,
+  onWarning?: (warning: string) => void,
+): DiscoveredExtension[] {
   const found: DiscoveredExtension[] = [];
   // dedupe by FILESYSTEM identity — Windows paths are case-insensitive, so two
   // casings of one file must never mint two candidates (review, Codex)
   const seen = new Set<string>();
-  const pathKey = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
+  // FILESYSTEM identity where possible: an aliased path (junction/symlink) to an
+  // already-discovered file must not mint a second candidate that pi would load
+  // twice (review, Codex). Nonexistent candidates fall back to the lexical path.
+  const pathKey = (p: string): string => {
+    let identity: string;
+    try {
+      identity = realpathSync(p);
+    } catch {
+      identity = path.resolve(p);
+    }
+    return process.platform === "win32" ? identity.toLowerCase() : identity;
+  };
   for (const { dir, scope } of extensionCatalogDirs(roots)) {
     let entries: Dirent[];
     try {
@@ -524,6 +541,21 @@ export function scanExtensions(roots: ResourceRoots): DiscoveredExtension[] {
       seen.add(pathKey(resolved));
       found.push({ name: path.basename(resolved), path: resolved, scope, source: "settings" });
     }
+  }
+  // Package-provided extensions (EXT-02): candidates from settings.packages,
+  // same provenance/warning posture as package skills and prompts.
+  const packageScan = scanPackageExtensionCandidates(roots);
+  for (const warning of packageScan.warnings) onWarning?.(warning);
+  for (const candidate of packageScan.candidates) {
+    if (seen.has(pathKey(candidate.path))) continue;
+    seen.add(pathKey(candidate.path));
+    found.push({
+      name: path.basename(candidate.path),
+      path: candidate.path,
+      scope: "package",
+      source: "package",
+      packageRef: candidate.packageRef,
+    });
   }
   return found;
 }

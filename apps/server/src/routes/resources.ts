@@ -1248,19 +1248,28 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const registry = new Set(
       settings.get().extensions.map((filePath) => nodePath.resolve(filePath)),
     );
-    const discovered = scanExtensions(rootsFor(projectId));
+    const packageExtensionWarnings: string[] = [];
+    const discovered = scanExtensions(rootsFor(projectId), (warning) =>
+      packageExtensionWarnings.push(warning),
+    );
     const scopeByPath = new Map(
       discovered.map((entry) => [nodePath.resolve(entry.path), entry.scope]),
     );
-    // provenance for the label: a settings.json entry reads `settings` (EXT-01)
+    // provenance for the label: settings.json entries and package candidates (EXT-01/02)
     const sourceByPath = new Map(
       discovered.map((entry) => [nodePath.resolve(entry.path), entry.source] as const),
+    );
+    const packageRefByPath = new Map(
+      discovered.flatMap((entry) =>
+        entry.packageRef ? [[nodePath.resolve(entry.path), entry.packageRef] as const] : [],
+      ),
     );
     const paths = [
       ...new Set([...registry, ...discovered.map((entry) => nodePath.resolve(entry.path))]),
     ];
     return {
       loadingMode: settings.get().extensionLoadingMode,
+      packageExtensionWarnings,
       extensions: paths.map((filePath) => ({
         path: filePath,
         name: nodePath.basename(filePath),
@@ -1278,7 +1287,10 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           ? "added"
           : sourceByPath.get(filePath) === "settings"
             ? "settings"
-            : "discovered",
+            : sourceByPath.get(filePath) === "package"
+              ? "package"
+              : "discovered",
+        packageRef: packageRefByPath.get(filePath),
         // The app-bridge tool this extension re-registers (else null). A
         // conflicting extension is NOT injected (it would crash pi) — the UI
         // warns that the bridge shadows it (native conflict flag).

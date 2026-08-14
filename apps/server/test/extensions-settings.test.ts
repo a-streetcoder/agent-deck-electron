@@ -20,9 +20,16 @@ beforeAll(async () => {
   mkdirSync(piAgent, { recursive: true });
   mkdirSync(path.join(resourceHome, "tools"), { recursive: true });
   writeFileSync(path.join(resourceHome, "tools", "listed.ts"), "export default () => {};");
+  const pkg = path.join(resourceHome, "node_modules", "ext-pack");
+  mkdirSync(path.join(pkg, "extensions"), { recursive: true });
+  writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "ext-pack" }));
+  writeFileSync(path.join(pkg, "extensions", "packed.ts"), "export default () => {};");
   writeFileSync(
     path.join(piAgent, "settings.json"),
-    JSON.stringify({ extensions: ["../../tools/listed.ts", "../../tools/ghost.ts"] }),
+    JSON.stringify({
+      extensions: ["../../tools/listed.ts", "../../tools/ghost.ts"],
+      packages: [pkg, path.join(resourceHome, "missing-pack")],
+    }),
   );
   server = await startServer({ dataDir });
 });
@@ -55,5 +62,20 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     const ghost = extensions.find((e) => e.name === "ghost.ts")!;
     expect(ghost.source).toBe("settings");
     expect(ghost.exists).toBe(false);
+  });
+
+  it("lists package extensions with `package` provenance and surfaces resolution warnings (EXT-02)", async () => {
+    const { extensions, packageExtensionWarnings } = (await (
+      await fetch(`http://127.0.0.1:${server.port}/resources/extensions`)
+    ).json()) as {
+      extensions: Array<{ name: string; source: string; scope: string; packageRef?: string }>;
+      packageExtensionWarnings: string[];
+    };
+    const packed = extensions.find((e) => e.name === "packed.ts")!;
+    expect(packed.source).toBe("package");
+    expect(packed.scope).toBe("package");
+    expect(packed.packageRef).toContain("ext-pack");
+    // the unresolvable package ref is heard about, not silent
+    expect(packageExtensionWarnings.some((w) => w.includes("missing-pack"))).toBe(true);
   });
 });

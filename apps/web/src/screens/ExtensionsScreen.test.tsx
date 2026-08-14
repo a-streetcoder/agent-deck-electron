@@ -78,6 +78,29 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     // disable still works for any candidate
     expect(screen.getByTestId("extension-toggle-listed.ts")).toBeTruthy();
   });
+
+  it("labels a package extension by its package and offers no Remove (EXT-02)", async () => {
+    installFetch(() =>
+      jsonResponse({
+        extensions: [
+          {
+            path: "C:/node_modules/ext-pack/extensions/packed.ts",
+            name: "packed.ts",
+            exists: true,
+            disabled: false,
+            scope: "package",
+            source: "package",
+            packageRef: "C:/node_modules/ext-pack",
+            bridgeConflict: null,
+          },
+        ],
+      }),
+    );
+    render(<ExtensionsScreen />);
+    const label = await screen.findByTestId("extension-source-packed.ts");
+    expect(label.textContent).toContain("package · ext-pack");
+    expect(screen.queryByTestId("extension-remove-packed.ts")).toBeNull();
+  });
 });
 
 describe("injected command catalog", () => {

@@ -18,7 +18,8 @@ interface ExtensionEntry {
   exists: boolean;
   disabled: boolean;
   /** Where it was found — a standard pi dir (discovered) or the manual registry. */
-  source?: "discovered" | "added" | "settings";
+  source?: "discovered" | "added" | "settings" | "package";
+  packageRef?: string;
   scope?: "global" | "project" | string;
   /** The app-bridge tool this extension re-registers, if any (kept out of launch). */
   bridgeConflict?: string | null;
@@ -689,7 +690,9 @@ export function ExtensionsScreen() {
                         ? "added"
                         : ext.source === "settings"
                           ? `${ext.scope === "project" ? "project" : "global"} · settings.json`
-                          : `${ext.scope === "project" ? "project" : "global"} · discovered`}
+                          : ext.source === "package"
+                            ? `package · ${(ext.packageRef ?? "").split(/[\\/]/).pop() || "package"}`
+                            : `${ext.scope === "project" ? "project" : "global"} · discovered`}
                     </span>
                   </div>
                   <div className="truncate font-mono text-detail text-text-muted">{ext.path}</div>

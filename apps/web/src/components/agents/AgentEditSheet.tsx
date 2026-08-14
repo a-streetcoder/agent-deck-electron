@@ -44,7 +44,7 @@ interface ExtensionCatalogEntry {
   name: string;
   exists: boolean;
   disabled: boolean;
-  source?: "discovered" | "added" | "settings";
+  source?: "discovered" | "added" | "settings" | "package";
   scope?: string;
   bridgeConflict?: string | null;
 }
@@ -900,7 +900,9 @@ export function AgentEditSheet({
                                 ? "added · global"
                                 : entry.source === "settings"
                                   ? `${entry.scope === "project" ? "project" : "global"} · settings.json`
-                                  : `${entry.scope === "project" ? "project" : "global"} · discovered`}
+                                  : entry.source === "package"
+                                    ? "package"
+                                    : `${entry.scope === "project" ? "project" : "global"} · discovered`}
                           </span>
                           {diagnostics.map((diagnostic) => (
                             <span key={diagnostic} className="block text-micro text-warning">

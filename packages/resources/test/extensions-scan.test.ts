@@ -139,6 +139,96 @@ describe("scanExtensions", () => {
     expect(found.filter((e) => e.name === "twice.ts")).toHaveLength(1);
   });
 
+  it("discovers PACKAGE extensions: declarations, conventional dir, index expansion (EXT-02)", () => {
+    const home = makeHome();
+    const piAgent = path.join(home, ".pi", "agent");
+    mkdirSync(piAgent, { recursive: true });
+    const pkg = path.join(home, "node_modules", "tool-pack");
+    // declared: a single .ts file AND a directory-with-index; plus a child-level dir
+    mkdirSync(path.join(pkg, "bundled", "sub"), { recursive: true });
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ name: "tool-pack", pi: { extensions: ["single.ts", "bundled"] } }),
+    );
+    writeFileSync(path.join(pkg, "single.ts"), "export default () => {};");
+    writeFileSync(path.join(pkg, "bundled", "flat.ts"), "export default () => {};");
+    writeFileSync(path.join(pkg, "bundled", "sub", "index.ts"), "export default () => {};");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+    const found = scanExtensions({ home });
+    const pkgEntries = found.filter((e) => e.source === "package");
+    const paths = pkgEntries.map((e) => e.path).sort();
+    expect(paths).toEqual(
+      [
+        path.join(pkg, "single.ts"),
+        path.join(pkg, "bundled", "flat.ts"),
+        path.join(pkg, "bundled", "sub", "index.ts"),
+      ].sort(),
+    );
+    expect(pkgEntries.every((e) => e.scope === "package")).toBe(true);
+    expect(pkgEntries.every((e) => e.packageRef === pkg)).toBe(true);
+
+    // a dir WITH its own index.ts contributes only that index (native rule)
+    const pkg2 = path.join(home, "node_modules", "indexed-pack");
+    mkdirSync(path.join(pkg2, "extensions"), { recursive: true });
+    writeFileSync(path.join(pkg2, "package.json"), JSON.stringify({ name: "indexed-pack" }));
+    writeFileSync(path.join(pkg2, "extensions", "index.ts"), "export default () => {};");
+    writeFileSync(path.join(pkg2, "extensions", "ignored.ts"), "export default () => {};");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg2] }));
+    const conventional = scanExtensions({ home }).filter((e) => e.source === "package");
+    expect(conventional.map((e) => e.path)).toEqual([path.join(pkg2, "extensions", "index.ts")]);
+  });
+
+  it("a DIRECTORY named index.ts never suppresses real children (review, Codex)", () => {
+    const home = makeHome();
+    const piAgent = path.join(home, ".pi", "agent");
+    mkdirSync(piAgent, { recursive: true });
+    const pkg = path.join(home, "node_modules", "weird-pack");
+    mkdirSync(path.join(pkg, "extensions", "index.ts"), { recursive: true }); // a DIR
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "weird-pack" }));
+    writeFileSync(path.join(pkg, "extensions", "real.ts"), "export default () => {};");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+    const found = scanExtensions({ home }).filter((e) => e.source === "package");
+    expect(found.map((e) => e.path)).toEqual([path.join(pkg, "extensions", "real.ts")]);
+  });
+
+  it("an aliased path to an already-discovered file stays ONE candidate (Windows, review Codex)", () => {
+    if (process.platform !== "win32") return;
+    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+    const home = makeHome();
+    const dir = path.join(home, ".pi", "agent", "extensions");
+    write(dir, "shared.ts");
+    const linkDir = path.join(home, "alias-dir");
+    const link = spawnSync("cmd", ["/c", "mklink", "/J", linkDir, dir]);
+    expect(link.status).toBe(0);
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ extensions: [path.join(linkDir, "shared.ts")] }),
+    );
+    const found = scanExtensions({ home });
+    expect(found.filter((e) => e.name === "shared.ts")).toHaveLength(1);
+  });
+
+  it("refuses a declared package extension path escaping its package (EXT-02)", () => {
+    const home = makeHome();
+    const piAgent = path.join(home, ".pi", "agent");
+    mkdirSync(piAgent, { recursive: true });
+    const pkg = path.join(home, "node_modules", "evil-pack");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ name: "evil-pack", pi: { extensions: ["../outside.ts"] } }),
+    );
+    writeFileSync(path.join(home, "node_modules", "outside.ts"), "export default () => {};");
+    writeFileSync(path.join(piAgent, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+    const warnings: string[] = [];
+    const found = scanExtensions({ home }, (w) => warnings.push(w));
+    expect(found.filter((e) => e.source === "package")).toEqual([]);
+    expect(warnings.some((w) => w.includes("outside itself"))).toBe(true);
+  });
+
   it("has no project entries when no project path is set", () => {
     const home = makeHome();
     write(path.join(home, ".pi", "agent", "extensions"), "g.ts");
