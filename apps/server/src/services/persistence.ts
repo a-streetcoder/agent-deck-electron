@@ -229,6 +229,12 @@ export interface AppSettings {
    */
   externalPromptPaths: string[];
   /**
+   * Disabled BUILTIN prompts (PRM-06, native disabledBundledPromptNames): still
+   * listed (re-enableable) but excluded from launch resolution. Only builtin
+   * records are affected — a user's same-named copy keeps working.
+   */
+  disabledBuiltinPromptNames: string[];
+  /**
    * The remembered open-in-editor choice (Slice 11): the editor id last picked
    * from the diff panel's picker, so the next open is one click. An id, never
    * a command — the server only launches editors from its own detected list.
@@ -330,6 +336,10 @@ export interface SettingsStoreHandle {
   readonly removeCodexPluginSkillRef: (ref: CodexPluginSkillRef) => Effect.Effect<AppSettings>;
   readonly addExternalPromptPath: (promptPath: string) => Effect.Effect<AppSettings>;
   readonly removeExternalPromptPath: (promptPath: string) => Effect.Effect<AppSettings>;
+  readonly setBuiltinPromptDisabled: (
+    name: string,
+    disabled: boolean,
+  ) => Effect.Effect<AppSettings>;
   readonly setModelDisabled: (key: string, disabled: boolean) => Effect.Effect<AppSettings>;
   readonly enabledExtensions: Effect.Effect<string[]>;
   readonly forgetSkill: (name: string) => Effect.Effect<AppSettings>;
@@ -505,6 +515,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       skillCollections: [],
       codexPluginSkillRefs: [],
       externalPromptPaths: [],
+      disabledBuiltinPromptNames: [],
       preferredEditor: null,
       piAgentTranscriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
       keybindings: [],
@@ -594,6 +605,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           externalPromptPaths: Array.isArray(record.externalPromptPaths)
             ? record.externalPromptPaths.filter((p): p is string => typeof p === "string")
             : [],
+          disabledBuiltinPromptNames: Array.isArray(record.disabledBuiltinPromptNames)
+            ? record.disabledBuiltinPromptNames.filter((p): p is string => typeof p === "string")
+            : [],
           preferredEditor:
             typeof record.preferredEditor === "string" ? record.preferredEditor : null,
           piAgentTranscriptVisibility: coerceTranscriptVisibility(
@@ -624,6 +638,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       if (value.skillCollections.length === 0) delete persisted.skillCollections;
       if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
       if (value.externalPromptPaths.length === 0) delete persisted.externalPromptPaths;
+      if (value.disabledBuiltinPromptNames.length === 0)
+        delete persisted.disabledBuiltinPromptNames;
       if (value.disabledInjectedCommandIDs.length === 0)
         delete persisted.disabledInjectedCommandIDs;
       if (value.enabledLibraryCommandIDs.length === 0) delete persisted.enabledLibraryCommandIDs;
@@ -857,6 +873,15 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
               (p) => externalPathKey(p) !== key,
             ),
           };
+          flush();
+          return settings;
+        }),
+      setBuiltinPromptDisabled: (name, disabled) =>
+        Effect.sync(() => {
+          const next = new Set(settings.disabledBuiltinPromptNames);
+          if (disabled) next.add(name);
+          else next.delete(name);
+          settings = { ...settings, disabledBuiltinPromptNames: [...next] };
           flush();
           return settings;
         }),

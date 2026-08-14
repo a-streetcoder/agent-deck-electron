@@ -160,6 +160,75 @@ describe("builtin prompt source (PRM-02)", () => {
   });
 });
 
+describe("builtin prompt disable (PRM-06)", () => {
+  it("builtin rows toggle disable via PATCH; a disabled builtin is dimmed and re-enableable", async () => {
+    const builtins: PromptInfo[] = [
+      {
+        name: "active-builtin",
+        invocation: "/active-builtin",
+        description: "on",
+        scope: "builtin",
+        filePath: "/builtin-prompts/active-builtin.md",
+        body: "b",
+      },
+      {
+        name: "silenced",
+        invocation: "/silenced",
+        description: "off",
+        scope: "builtin",
+        filePath: "/builtin-prompts/silenced.md",
+        body: "b",
+        disabled: true,
+      },
+    ];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/prompts") {
+        return Promise.resolve(jsonResponse({ prompts: builtins }));
+      }
+      if (url === "/settings") {
+        if (init?.method === "PATCH") return Promise.resolve(jsonResponse({ settings: {} }));
+        return Promise.resolve(jsonResponse({ settings: {} }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<PromptsScreen />);
+    await screen.findByText("/active-builtin");
+
+    // the silenced builtin is visibly disabled and offers Enable
+    expect(screen.getByTestId("prompt-disabled-badge-silenced")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("prompt-builtin-toggle-silenced"));
+    await waitFor(() => {
+      const patch = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init2]) =>
+            String(url) === "/settings" &&
+            (init2 as RequestInit | undefined)?.method === "PATCH" &&
+            String((init2 as RequestInit).body).includes("setBuiltinPromptDisabled"),
+        );
+      expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({
+        setBuiltinPromptDisabled: { name: "silenced", disabled: false },
+      });
+    });
+
+    // the active builtin offers Disable
+    fireEvent.click(screen.getByTestId("prompt-builtin-toggle-active-builtin"));
+    await waitFor(() => {
+      const calls = vi
+        .mocked(fetch)
+        .mock.calls.filter(([, init2]) =>
+          String((init2 as RequestInit | undefined)?.body ?? "").includes(
+            "setBuiltinPromptDisabled",
+          ),
+        );
+      expect(JSON.parse(String((calls[1]![1] as RequestInit).body))).toEqual({
+        setBuiltinPromptDisabled: { name: "active-builtin", disabled: true },
+      });
+    });
+  });
+});
+
 describe("package prompt source (PRM-03)", () => {
   it("package prompts are read-only like builtins, and resolution warnings surface", async () => {
     const packaged: PromptInfo[] = [

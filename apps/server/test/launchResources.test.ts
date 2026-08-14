@@ -106,6 +106,38 @@ describe("injected command launch matrix", () => {
     ).toBe(true);
   });
 
+  it("a DISABLED builtin never resolves as a default; a user's copy is unaffected (PRM-06)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-disabled-builtin-"));
+    const globalPrompts = path.join(root, ".pi", "agent", "prompts");
+    mkdirSync(globalPrompts, { recursive: true });
+    const copyPath = path.join(globalPrompts, "plan-a-feature.md");
+    writeFileSync(copyPath, "---\ndescription: my copy\n---\n\nmine\n");
+    const settings = {
+      defaultSkills: [],
+      // both names are set as defaults; both builtins are DISABLED
+      defaultPromptTemplates: ["plan-a-feature", "review-my-changes"],
+      disabledSkills: [],
+      defaultThinking: null,
+      disabledBuiltinPromptNames: ["plan-a-feature", "review-my-changes"],
+    };
+    const context = {
+      projects: { find: () => undefined },
+      settings: { get: () => settings },
+      enabledExtensionPaths: () => [],
+      scanSkillCandidatesFor: () => [],
+      rootsFor: () => ({ home: root }),
+      resourceHome: () => root,
+      memoryEnabled: false,
+      memoryBaseDir: path.join(root, "memory"),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const { plan } = resolveLaunchResources(context, {}, {});
+    if (plan.kind !== "parent") throw new Error(`expected a parent plan, got ${plan.kind}`);
+    // the disabled builtin review-my-changes is gone; the USER'S COPY of
+    // plan-a-feature still resolves (disable only silences the bundled record)
+    expect(plan.promptTemplates).toEqual([copyPath]);
+  });
+
   it("resolves an EXTERNAL prompt reference as a launchable default (PRM-05)", () => {
     const root = mkdtempSync(path.join(tmpdir(), "deck-external-prompt-"));
     const refPath = path.join(root, "kept-outside.md");

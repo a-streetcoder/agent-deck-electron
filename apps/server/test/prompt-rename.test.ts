@@ -308,6 +308,95 @@ describe("DELETE /resources/prompts with a builtin fallback (PRM-02)", () => {
   });
 });
 
+describe("builtin prompt disable (PRM-06)", () => {
+  it("disables a builtin (listed + flagged, excluded from launch), then re-enables", async () => {
+    const builtinDir = mkdtempSync(path.join(tmpdir(), "builtin-disable-"));
+    writeFileSync(
+      path.join(builtinDir, "togglable.md"),
+      "---\ndescription: bundled\n---\n\nbody\n",
+    );
+    const prior = process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+    process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = builtinDir;
+    try {
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setBuiltinPromptDisabled: { name: "togglable", disabled: true },
+          })
+        ).status,
+      ).toBe(200);
+      // still LISTED (re-enableable), but flagged disabled
+      const { prompts } = (await (await api("GET", "/resources/prompts")).json()) as {
+        prompts: Array<{ name: string; scope: string; disabled?: boolean }>;
+      };
+      const row = prompts.find((p) => p.name === "togglable")!;
+      expect(row.scope).toBe("builtin");
+      expect(row.disabled).toBe(true);
+
+      // re-enable clears the flag
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setBuiltinPromptDisabled: { name: "togglable", disabled: false },
+          })
+        ).status,
+      ).toBe(200);
+      const after = (await (await api("GET", "/resources/prompts")).json()) as {
+        prompts: Array<{ name: string; disabled?: boolean }>;
+      };
+      expect(after.prompts.find((p) => p.name === "togglable")!.disabled).toBeFalsy();
+    } finally {
+      if (prior === undefined) delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+      else process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = prior;
+    }
+  });
+
+  it("a DISABLED builtin is not a live fallback: deleting the user's copy drops the default", async () => {
+    // review, Codex: cleanup previously counted the silenced builtin as resolving,
+    // stranding a default that launches nothing
+    const builtinDir = mkdtempSync(path.join(tmpdir(), "builtin-dead-fallback-"));
+    writeFileSync(path.join(builtinDir, "dead-end.md"), "---\ndescription: b\n---\n\nbody\n");
+    const prior = process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+    process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = builtinDir;
+    try {
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setBuiltinPromptDisabled: { name: "dead-end", disabled: true },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await api("PUT", "/resources/prompts", {
+            scope: "global",
+            name: "dead-end",
+            edit: { body: "my copy" },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await api("PATCH", "/settings", {
+            setDefaultPromptTemplate: { name: "dead-end", enabled: true },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (await api("DELETE", "/resources/prompts", { scope: "global", name: "dead-end" })).status,
+      ).toBe(200);
+      // only the DISABLED builtin remains — nothing launches, so the default must drop
+      const { settings } = (await (await api("GET", "/settings")).json()) as {
+        settings: { defaultPromptTemplates: string[] };
+      };
+      expect(settings.defaultPromptTemplates).not.toContain("dead-end");
+    } finally {
+      if (prior === undefined) delete process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR;
+      else process.env.AGENT_DECK_BUILTIN_PROMPTS_DIR = prior;
+    }
+  });
+});
+
 describe("external prompt references (PRM-05)", () => {
   it("adds a reference in place, lists it as external, launches it, and removes ONLY the reference", async () => {
     const outside = mkdtempSync(path.join(tmpdir(), "external-prompts-"));

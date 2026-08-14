@@ -364,6 +364,12 @@ export interface PromptInfo {
    * it removes the reference, not the file.
    */
   external?: boolean;
+  /**
+   * App-level disable for BUILTIN prompts (PRM-06, native
+   * disabledBundledPromptNames): still listed and re-enableable, but excluded
+   * from launch resolution.
+   */
+  disabled?: boolean;
 }
 
 export type AgentFilter =

@@ -938,11 +938,17 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   fastify.get("/resources/prompts", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     const packagePromptWarnings: string[] = [];
+    // Disabled BUILTINS (PRM-06) stay listed and re-enableable, flagged for the UI.
+    const disabledBuiltins = new Set(settings.get().disabledBuiltinPromptNames);
     return {
       prompts: scanPrompts(
         rootsFor(projectId),
         (warning) => packagePromptWarnings.push(warning),
         settings.get().externalPromptPaths,
+      ).map((prompt) =>
+        prompt.scope === "builtin" && disabledBuiltins.has(prompt.name)
+          ? { ...prompt, disabled: true }
+          : prompt,
       ),
       packagePromptWarnings,
     };
@@ -982,8 +988,12 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     // still provide it) — the same convention every prompt-removal path follows;
     // native's Remove Reference clears both kinds of reference (review, Codex).
     const remainingRefs = settings.get().externalPromptPaths;
+    // a DISABLED builtin never launches, so it never counts as still-resolving (PRM-06)
+    const disabledBuiltinNames = new Set(settings.get().disabledBuiltinPromptNames);
+    const launchable = (p: { name: string; scope: string }): boolean =>
+      p.name === name && !(p.scope === "builtin" && disabledBuiltinNames.has(p.name));
     const stillResolves = scanPrompts(rootsFor(undefined), undefined, remainingRefs).some(
-      (p) => p.name === name,
+      launchable,
     );
     if (!stillResolves) settings.renameDefaultPromptTemplate(name, null);
     for (const project of projects.list()) {
@@ -992,7 +1002,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         { home: resourceHome(), projectPath: project.path },
         undefined,
         remainingRefs,
-      ).some((p) => p.name === name);
+      ).some(launchable);
       if (resolvesForProject) continue;
       projects.upsert({
         ...project,
@@ -1055,9 +1065,14 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           : existsSync(nodePath.join(location.target, `${targetName}.md`)),
       );
     const globalPromptDir = nodePath.join(resourceHome(), ".pi", "agent", "prompts");
+    // a DISABLED builtin is not a live fallback: launch resolution filters it, so it
+    // must not keep a default/assignment alive that would launch nothing (PRM-06)
+    const builtinResolves =
+      existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`)) &&
+      !settings.get().disabledBuiltinPromptNames.includes(name);
     const globalPromptExists =
       existsSync(nodePath.join(globalPromptDir, `${name}.md`)) ||
-      existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`)) ||
+      builtinResolves ||
       packagePromptResolves(name);
     const stillResolves =
       globalPromptExists ||

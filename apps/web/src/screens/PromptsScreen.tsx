@@ -114,6 +114,24 @@ export function PromptsScreen() {
     }
   };
 
+  // Silence/re-enable a bundled builtin (PRM-06, native setBundledPromptDisabled):
+  // still listed, excluded from launch resolution while disabled.
+  const toggleBuiltinDisabled = async (prompt: PromptInfo): Promise<void> => {
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          setBuiltinPromptDisabled: { name: prompt.name, disabled: !prompt.disabled },
+        }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   // Remove the REFERENCE — the file itself stays where the user keeps it (PRM-05).
   const removeExternalRef = async (prompt: PromptInfo): Promise<void> => {
     try {
@@ -730,6 +748,29 @@ export function PromptsScreen() {
                         </ControlButton>
                       );
                     })()}
+                  {prompt.scope === "builtin" && prompt.disabled ? (
+                    <span
+                      data-testid={`prompt-disabled-badge-${prompt.name}`}
+                      className="shrink-0 rounded-capsule border border-border-strong px-1.5 text-micro text-text-muted"
+                      title="Disabled: excluded from launches until re-enabled"
+                    >
+                      disabled
+                    </span>
+                  ) : null}
+                  {prompt.scope === "builtin" ? (
+                    <ControlButton
+                      data-testid={`prompt-builtin-toggle-${prompt.name}`}
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+                      title={
+                        prompt.disabled
+                          ? "Re-enable this builtin prompt"
+                          : "Disable this builtin prompt (excluded from launches)"
+                      }
+                      onClick={() => void toggleBuiltinDisabled(prompt)}
+                    >
+                      {prompt.disabled ? "Enable" : "Disable"}
+                    </ControlButton>
+                  ) : null}
                   {prompt.external ? (
                     <>
                       <span

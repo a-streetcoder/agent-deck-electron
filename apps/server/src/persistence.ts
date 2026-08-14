@@ -258,6 +258,11 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.removeExternalPromptPath(promptPath));
   }
 
+  /** Silence/re-enable a bundled builtin prompt (PRM-06). */
+  setBuiltinPromptDisabled(name: string, disabled: boolean): AppSettings {
+    return runSyncUnwrapped(this.handle.setBuiltinPromptDisabled(name, disabled));
+  }
+
   /** Hide/show a model in the picker, by its "<provider>:<id>" key. */
   setModelDisabled(key: string, disabled: boolean): AppSettings {
     return runSyncUnwrapped(this.handle.setModelDisabled(key, disabled));

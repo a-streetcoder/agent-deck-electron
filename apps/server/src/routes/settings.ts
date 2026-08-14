@@ -198,6 +198,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         setDefaultPromptTemplate: z
           .object({ name: RESOURCE_NAME, enabled: z.boolean() })
           .optional(),
+        /** Silence/re-enable a bundled builtin prompt (PRM-06). */
+        setBuiltinPromptDisabled: z
+          .object({ name: RESOURCE_NAME, disabled: z.boolean() })
+          .optional(),
         // Onboarding preferences (native OnboardingPreferencesView). null clears
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
@@ -253,6 +257,12 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (parsed.data.setDefaultPromptTemplate) {
       const { name, enabled } = parsed.data.setDefaultPromptTemplate;
       const result = settings.setDefaultPromptTemplate(name, enabled);
+      broadcast({ type: "resources_changed" });
+      return { settings: result };
+    }
+    if (parsed.data.setBuiltinPromptDisabled) {
+      const { name, disabled } = parsed.data.setBuiltinPromptDisabled;
+      const result = settings.setBuiltinPromptDisabled(name, disabled);
       broadcast({ type: "resources_changed" });
       return { settings: result };
     }

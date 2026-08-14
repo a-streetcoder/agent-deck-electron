@@ -233,11 +233,15 @@ export function resolveLaunchResources(
     const promptsByName = new Map<string, PromptInfo>();
     // The same catalog the prompts route shows: external references (PRM-05) are
     // launchable too — omitting them here would be the classic sibling-call-site miss.
+    // A DISABLED builtin (PRM-06) is excluded from resolution entirely; a user's
+    // same-named copy still resolves because only the builtin record is skipped.
+    const disabledBuiltins = new Set(ctx.settings.get().disabledBuiltinPromptNames ?? []);
     for (const prompt of scanPrompts(
       ctx.rootsFor(request.projectId),
       undefined,
       ctx.settings.get().externalPromptPaths ?? [],
     )) {
+      if (prompt.scope === "builtin" && disabledBuiltins.has(prompt.name)) continue;
       if (!promptsByName.has(prompt.name)) promptsByName.set(prompt.name, prompt);
     }
     const promptTemplates = [
