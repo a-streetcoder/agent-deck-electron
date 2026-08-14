@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 52 active P1/P2/P3 rows retained in this register, including running-session/resource refresh, the command universe, and warnings/settings integration. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 51 active P1/P2/P3 rows retained in this register, including running-session/resource refresh, the command universe, and warnings/settings integration. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -89,6 +89,12 @@ These are post-baseline closures and corrections from later Electron work; they 
 Custom and builtin-replacement agent files now preserve the semantic distinction between an absent extension field (use the current enabled catalog), an explicit empty list (load no user extensions), and an ordered explicit file-path allowlist. The editor uses the live extension catalog with provenance plus disabled, missing/non-file, app-bridge-conflict, duplicate-name, loading-mode, and stale-value diagnostics; stale hand-authored values remain removable but fail closed at launch. Builtin extension overrides remain intentionally unsupported. Parent named sessions and fresh, continued, or parallel named managed children resolve the current agent definition against the same current catalog policy; anonymous children are unchanged.
 
 Accepted local macOS arm64 validation passed the native addon build/smoke; the full workspace suite with 1,651 Vitest tests passed and 6 skipped plus all 39 Rust tests; all 98 pinned real-Pi tests; workspace typecheck; lint/design-system/format; and web/backend builds. Real-Pi coverage proves named-parent explicit selection and explicit empty, disabled/loading-mode/bridge-conflict refusal, named-child loading and disabled refusal, named-child continuation, and ordered incremental streaming. Playwright, packaged Electron, and Windows/Linux runtime were not run; no Electron main/preload, native packaging, or sync seam changed. **AGT-07 closed. E:** domain normalization, resource scanner/writer, resource/session routes, named-agent resolver/session manager, `AgentEditSheet.tsx`, `AgentsScreen.tsx`, and focused unit/real-Pi tests. **N:** custom-agent extension picker/persistence behavior.
+
+### AGT-05 — agent identity and configuration profiles
+
+Closed as equivalent after two independent source reviews of the current Electron and native management surfaces. Electron’s sectioned master-detail Agents screen now provides the portable profile outcome: avatar and fallback identity, name/scope/description/provenance, warning state, model/thinking, prompt and mode, tools/direct tools, skills, MCP servers, fallback models, extensions policy, subagent metadata, project assignment/default state, and lifecycle actions. Native presents comparable information in stacked `AppCard`s; differences such as per-card Edit buttons, conditional field chrome, macOS Image Playground generation, collection-member expansion, and the whole-project assignment matrix do not make Electron’s profile surface absent. Edit-time picker validation remains separately tracked by AGT-09.
+
+No code changed for this closure. Existing focused component/browser coverage already exercises profile warnings, metadata, assignments, extension states, avatar rendering/fallback/import lifecycle, replacement state, and detail selection. Independent review found no missing profile-comparison behavior that warranted new UI or persistence work.
 
 ### AGT-12/13 — actionable agent warnings and project-aware skill visibility
 
@@ -360,7 +366,6 @@ There are no active Loop-domain functional parity rows.
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                             | Plain English                                                                         | Why it matters                                                   | Evidence                                                                                  |
 | ------ | -------- | --------- | -------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| AGT-05 | **P3**   | Missing   | Agent profile cards                    | The catalog lacks native profile detail built around identity/configuration.          | Comparing agents is harder.                                      | **E:** Agents UI. **N:** management views.                                                |
 | AGT-09 | **P3**   | Divergent | Picker-backed validation               | Several model/tool/skill/MCP fields use looser text inputs than native pickers.       | Typos and stale names are found later.                           | **E:** `AgentEditSheet.tsx`. **N:** management views.                                     |
 
 ## Skills and repositories
