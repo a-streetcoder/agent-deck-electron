@@ -165,6 +165,61 @@ export function InstructionsScreen() {
     };
   }, [showAncestors, projectBase, setError]);
 
+  // INS-04: which file WINS per slot (server-computed, native status labels).
+  interface SlotStatus {
+    active: "project" | "global" | "builtin" | "none";
+    project?: { path: string; exists: boolean };
+    global: { path: string; exists: boolean };
+  }
+  interface ContextStatus {
+    path: string;
+    exists: boolean;
+    shadowedSibling?: string;
+  }
+  const [status, setStatus] = useState<{
+    base: SlotStatus;
+    append: SlotStatus;
+    context: { global: ContextStatus; project?: ContextStatus };
+  } | null>(null);
+  useEffect(() => {
+    setStatus(null);
+    let cancelled = false;
+    const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+    void (async () => {
+      try {
+        const response = await fetch(`/runtime/instruction-status${query}`);
+        if (!response.ok) throw new Error(await response.text());
+        const data = (await response.json()) as NonNullable<typeof status>;
+        if (!cancelled) setStatus(data);
+      } catch (err) {
+        if (!cancelled) setError(String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // savedContent/fileExists change on every save/remove, refreshing the labels
+  }, [currentProjectId, savedContent, fileExists, setError]);
+
+  const statusChip = ((): string | null => {
+    if (!status) return null;
+    if (fileKind === "context") return null; // context files stack; shadowing is per-dir
+    const slot = fileKind === "system" ? status.base : status.append;
+    if (scope === "project") {
+      if (!currentProjectId) return null;
+      if (slot.active === "project") return "active";
+      if (slot.active === "global") return "global file active";
+      return fileKind === "system" ? "builtin prompt active" : "no append file";
+    }
+    if (slot.active === "project") return "overridden by project";
+    if (slot.active === "global") return "active";
+    return fileKind === "system" ? "builtin prompt active" : "no append file";
+  })();
+  const contextShadowed =
+    fileKind === "context" && status
+      ? (scope === "project" ? status.context.project : status.context.global)?.shadowedSibling
+      : undefined;
+
   const dirty = content !== savedContent;
   const needsProject = scope === "project" && !project;
   // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
@@ -184,6 +239,14 @@ export function InstructionsScreen() {
             >
               {scope === "global" ? "Global" : (project?.name ?? "Project")} · {fileName}
             </h2>
+            {statusChip ? (
+              <span
+                data-testid="instructions-status"
+                className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+              >
+                {statusChip}
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <div
@@ -296,6 +359,14 @@ export function InstructionsScreen() {
                 {scope === "project"
                   ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
                   : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
+              </p>
+            ) : null}
+            {contextShadowed ? (
+              <p
+                className="pb-3 text-xs text-text-muted"
+                data-testid="instructions-context-shadowed"
+              >
+                Shadowed in this folder (AGENTS.md wins): {contextShadowed}
               </p>
             ) : null}
             {showAncestors && ancestors.length > 0 ? (

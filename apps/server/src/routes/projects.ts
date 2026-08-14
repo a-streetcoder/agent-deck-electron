@@ -354,7 +354,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   // (the project's own file belongs to the editor); names are matched against
   // the real directory listing so a case-insensitive filesystem never invents
   // candidates that are not on disk (native insertCaseSensitiveContextMatches).
-  const CONTEXT_CANDIDATE_NAMES = ["AGENTS.md", "CLAUDE.md", "AGENTS.MD", "CLAUDE.MD"];
+  const CONTEXT_CANDIDATE_NAMES = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
   const MAX_ANCESTOR_DEPTH = 32;
 
   fastify.get("/projects/:id/instruction-ancestors", async (request, reply) => {

@@ -239,6 +239,97 @@ describe("project SYSTEM.md routes (INS-01)", () => {
     expect(dirs[0]).not.toBe(root);
   });
 
+  it("labels which file WINS per slot: base/append precedence + context shadowed sibling (INS-04)", async () => {
+    const projectDir = mkdtempSync(path.join(tmpdir(), "status-project-"));
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+    const q = `?projectId=${project.id}`;
+    try {
+      // nothing anywhere: builtin base, no append
+      let status = (await (await api("GET", `/runtime/instruction-status${q}`)).json()) as {
+        base: { active: string };
+        append: { active: string };
+        context: {
+          global: { path: string; exists: boolean; shadowedSibling?: string };
+          project?: { path: string; exists: boolean; shadowedSibling?: string };
+        };
+      };
+      expect(status.base.active).toBe("builtin");
+      expect(status.append.active).toBe("none");
+
+      // global SYSTEM.md only -> global wins; then the project file overrides it
+      await api("PUT", "/runtime/system-prompt", { content: "global base" });
+      status = (await (
+        await api("GET", `/runtime/instruction-status${q}`)
+      ).json()) as typeof status;
+      expect(status.base.active).toBe("global");
+      await api("PUT", `/projects/${project.id}/system-prompt`, { content: "project base" });
+      status = (await (
+        await api("GET", `/runtime/instruction-status${q}`)
+      ).json()) as typeof status;
+      expect(status.base.active).toBe("project");
+
+      // append: project wins over global once both exist
+      await api("PUT", "/runtime/append-prompt", { content: "global append" });
+      status = (await (
+        await api("GET", `/runtime/instruction-status${q}`)
+      ).json()) as typeof status;
+      expect(status.append.active).toBe("global");
+      await api("PUT", `/projects/${project.id}/append-prompt`, { content: "project append" });
+      status = (await (
+        await api("GET", `/runtime/instruction-status${q}`)
+      ).json()) as typeof status;
+      expect(status.append.active).toBe("project");
+
+      // context: both AGENTS.md and CLAUDE.md in the project dir — CLAUDE is shadowed
+      writeFileSync(path.join(projectDir, "AGENTS.md"), "ctx");
+      writeFileSync(path.join(projectDir, "CLAUDE.md"), "old ctx");
+      status = (await (
+        await api("GET", `/runtime/instruction-status${q}`)
+      ).json()) as typeof status;
+      expect(status.context.project!.path.endsWith("AGENTS.md")).toBe(true);
+      expect(status.context.project!.shadowedSibling).toContain("CLAUDE.md");
+
+      // without a project: global-only view still answers
+      const bare = (await (await api("GET", "/runtime/instruction-status")).json()) as {
+        base: { active: string };
+        context: { project?: unknown };
+      };
+      expect(bare.base.active).toBe("global");
+      expect(bare.context.project).toBeUndefined();
+    } finally {
+      // failure-safe cleanup: other tests share this resource home (review, Codex)
+      await api("DELETE", "/runtime/system-prompt");
+      await api("DELETE", "/runtime/append-prompt");
+    }
+  });
+
+  it("uppercase AGENTS.MD outranks CLAUDE.md, and a DIRECTORY named like a prompt never counts (INS-04, review Codex)", async () => {
+    const projectDir = mkdtempSync(path.join(tmpdir(), "status-edge-"));
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+    const q = `?projectId=${project.id}`;
+
+    // pi's family precedence: any AGENTS casing beats any CLAUDE casing
+    writeFileSync(path.join(projectDir, "AGENTS.MD"), "upper agents");
+    writeFileSync(path.join(projectDir, "CLAUDE.md"), "claude");
+    const status = (await (await api("GET", `/runtime/instruction-status${q}`)).json()) as {
+      context: { project?: { path: string; shadowedSibling?: string } };
+      append: { active: string };
+    };
+    expect(status.context.project!.path.endsWith("AGENTS.MD")).toBe(true);
+    expect(status.context.project!.shadowedSibling).toContain("CLAUDE.md");
+
+    // a DIRECTORY named APPEND_SYSTEM.md is not a prompt file — runtime skips it
+    mkdirSync(path.join(projectDir, ".pi", "APPEND_SYSTEM.md"), { recursive: true });
+    const after = (await (await api("GET", `/runtime/instruction-status${q}`)).json()) as {
+      append: { active: string };
+    };
+    expect(after.append.active).toBe("none");
+  });
+
   it("refuses to recreate a VANISHED project path (review, Codex)", async () => {
     const projectDir = mkdtempSync(path.join(tmpdir(), "system-prompt-vanished-"));
     const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {

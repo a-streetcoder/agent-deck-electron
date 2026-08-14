@@ -31,6 +31,21 @@ beforeEach(() => {
           jsonResponse({ content: "global context", path: "/home/.pi/agent/AGENTS.md" }),
         );
       }
+      if (url.startsWith("/runtime/instruction-status")) {
+        return Promise.resolve(
+          jsonResponse({
+            base: {
+              active: "builtin",
+              global: { path: "/home/.pi/agent/SYSTEM.md", exists: false },
+            },
+            append: {
+              active: "none",
+              global: { path: "/home/.pi/agent/APPEND_SYSTEM.md", exists: false },
+            },
+            context: { global: { path: "/home/.pi/agent/AGENTS.md", exists: true } },
+          }),
+        );
+      }
       if (url === "/runtime/system-prompt") {
         if (init?.method === "PUT") return Promise.resolve(jsonResponse({ ok: true }));
         if (init?.method === "DELETE") return Promise.resolve(jsonResponse({ ok: true }));
@@ -188,6 +203,63 @@ describe("SYSTEM.md base-prompt candidate (INS-01)", () => {
     expect(
       vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("instruction-ancestors")),
     ).toBe(false);
+  });
+
+  it("labels the winner: an overridden global SYSTEM.md and a shadowed context sibling (INS-04)", async () => {
+    useAppStore.setState({
+      projects: [{ id: "p1", name: "repo", path: "C:/work/repo" } as never],
+      currentProjectId: "p1",
+    });
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/projects/p1/instructions") {
+        return Promise.resolve(jsonResponse({ content: "ctx", path: "C:/work/repo/AGENTS.md" }));
+      }
+      if (url === "/projects/p1/instruction-ancestors") {
+        return Promise.resolve(jsonResponse({ items: [] }));
+      }
+      if (url === "/runtime/system-prompt") {
+        return Promise.resolve(
+          jsonResponse({ content: "g", path: "/home/.pi/agent/SYSTEM.md", exists: true }),
+        );
+      }
+      if (url.startsWith("/runtime/instruction-status")) {
+        return Promise.resolve(
+          jsonResponse({
+            base: {
+              active: "project",
+              project: { path: "C:/work/repo/.pi/SYSTEM.md", exists: true },
+              global: { path: "/home/.pi/agent/SYSTEM.md", exists: true },
+            },
+            append: {
+              active: "none",
+              global: { path: "/home/.pi/agent/APPEND_SYSTEM.md", exists: false },
+            },
+            context: {
+              global: { path: "/home/.pi/agent/AGENTS.md", exists: false },
+              project: {
+                path: "C:/work/repo/AGENTS.md",
+                exists: true,
+                shadowedSibling: "C:/work/repo/CLAUDE.md",
+              },
+            },
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<InstructionsScreen />);
+    await screen.findByTestId("instructions-editor");
+
+    // context view: the shadowed sibling is called out
+    const shadowed = await screen.findByTestId("instructions-context-shadowed");
+    expect(shadowed.textContent).toContain("CLAUDE.md");
+
+    // global base-prompt view: the project override wins, and the chip says so
+    fireEvent.click(screen.getByTestId("instructions-scope-global"));
+    fireEvent.click(screen.getByTestId("instructions-file-system"));
+    const chip = await screen.findByTestId("instructions-status");
+    expect(chip.textContent?.toLowerCase()).toContain("overridden");
   });
 
   it("the context file view offers no Remove override", async () => {

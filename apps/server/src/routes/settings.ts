@@ -2,6 +2,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -496,4 +497,82 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   };
   registerGlobalPiPromptRoutes("system-prompt", "SYSTEM.md");
   registerGlobalPiPromptRoutes("append-prompt", "APPEND_SYSTEM.md");
+
+  // INS-04: which file WINS per instruction slot (native status(for:activePath:)).
+  // pi resolves at launch; this is the same precedence, computed once server-side:
+  // base: project SYSTEM.md > global SYSTEM.md > the built-in prompt;
+  // append: project > global > none (the project file REPLACES the global one);
+  // context: per-directory AGENTS.md over CLAUDE.md — global and project context
+  // BOTH load (they stack), so shadowing there is within a directory only.
+  fastify.get("/runtime/instruction-status", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
+    const roots = rootsFor(projectId);
+    const globalDir = nodePath.join(roots.home, ".pi", "agent");
+    const projectPi = roots.projectPath ? nodePath.join(roots.projectPath, ".pi") : undefined;
+
+    // a prompt slot counts only when the path is a real FILE — runtime resolution
+    // (appendSystemPromptPath's isFile) skips a directory of the same name (review, Codex)
+    const isPromptFile = (filePath: string): boolean => {
+      try {
+        return statSync(filePath).isFile();
+      } catch {
+        return false;
+      }
+    };
+    const fileState = (dir: string, name: string): { path: string; exists: boolean } => {
+      const filePath = nodePath.join(dir, name);
+      return { path: filePath, exists: isPromptFile(filePath) };
+    };
+
+    const slot = (
+      name: string,
+      fallback: "builtin" | "none",
+    ): {
+      active: "project" | "global" | "builtin" | "none";
+      project?: { path: string; exists: boolean };
+      global: { path: string; exists: boolean };
+    } => {
+      const globalFile = fileState(globalDir, name);
+      const projectFile = projectPi ? fileState(projectPi, name) : undefined;
+      const active = projectFile?.exists ? "project" : globalFile.exists ? "global" : fallback;
+      return { active, ...(projectFile ? { project: projectFile } : {}), global: globalFile };
+    };
+
+    // the per-directory context winner + the sibling it shadows, using the real
+    // directory listing so a case-insensitive filesystem never invents files
+    const contextState = (
+      dir: string,
+    ): { path: string; exists: boolean; shadowedSibling?: string } => {
+      let onDisk: Set<string>;
+      try {
+        onDisk = new Set(readdirSync(dir));
+      } catch {
+        return { path: nodePath.join(dir, "AGENTS.md"), exists: false };
+      }
+      // family precedence: ANY AGENTS casing beats ANY CLAUDE casing — the same
+      // order resolveInstructionsFile uses at runtime (review, Codex)
+      const present = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"].filter((n) =>
+        onDisk.has(n),
+      );
+      if (present.length === 0) return { path: nodePath.join(dir, "AGENTS.md"), exists: false };
+      const winner = present[0]!;
+      const shadowed = present.slice(1);
+      return {
+        path: nodePath.join(dir, winner),
+        exists: true,
+        ...(shadowed.length > 0
+          ? { shadowedSibling: shadowed.map((n) => nodePath.join(dir, n)).join(", ") }
+          : {}),
+      };
+    };
+
+    return {
+      base: slot("SYSTEM.md", "builtin"),
+      append: slot("APPEND_SYSTEM.md", "none"),
+      context: {
+        global: contextState(globalDir),
+        ...(roots.projectPath ? { project: contextState(roots.projectPath) } : {}),
+      },
+    };
+  });
 }
