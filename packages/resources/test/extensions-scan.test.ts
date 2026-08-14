@@ -83,6 +83,62 @@ describe("scanExtensions", () => {
     expect(scanExtensions({ home: makeHome(), projectPath: makeProject() })).toEqual([]);
   });
 
+  it("discovers settings.json extension entries with provenance (EXT-01)", () => {
+    // native PiExtensionDiscoveryService: settings.json `extensions` paths are
+    // candidates too, resolved against the settings FILE's directory
+    const home = makeHome();
+    const project = makeProject();
+    const piAgent = path.join(home, ".pi", "agent");
+    mkdirSync(piAgent, { recursive: true });
+    write(path.join(home, "somewhere"), "global-listed.ts");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({ extensions: ["../../somewhere/global-listed.ts"] }),
+    );
+    mkdirSync(path.join(project, ".pi"), { recursive: true });
+    write(path.join(project, "tools"), "proj-listed.ts");
+    writeFileSync(
+      path.join(project, ".pi", "settings.json"),
+      JSON.stringify({ extensions: ["../tools/proj-listed.ts", 42, ""] }),
+    );
+
+    const found = scanExtensions({ home, projectPath: project });
+    const globalEntry = found.find((e) => e.name === "global-listed.ts")!;
+    expect(globalEntry.scope).toBe("global");
+    expect(globalEntry.source).toBe("settings");
+    expect(globalEntry.path).toBe(path.resolve(piAgent, "../../somewhere/global-listed.ts"));
+    const projEntry = found.find((e) => e.name === "proj-listed.ts")!;
+    expect(projEntry.scope).toBe("project");
+    expect(projEntry.source).toBe("settings");
+    // malformed entries never become candidates
+    expect(found.filter((e) => e.source === "settings")).toHaveLength(2);
+  });
+
+  it("dedupe is case-insensitive on Windows: one file, one candidate (review, Codex)", () => {
+    if (process.platform !== "win32") return;
+    const home = makeHome();
+    const dir = path.join(home, ".pi", "agent", "extensions");
+    write(dir, "Cased.ts");
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ extensions: ["./extensions/cased.ts"] }),
+    );
+    const found = scanExtensions({ home });
+    expect(found.filter((e) => e.name.toLowerCase() === "cased.ts")).toHaveLength(1);
+  });
+
+  it("a settings entry already auto-discovered stays ONE candidate (EXT-01)", () => {
+    const home = makeHome();
+    const dir = path.join(home, ".pi", "agent", "extensions");
+    write(dir, "twice.ts");
+    writeFileSync(
+      path.join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ extensions: ["./extensions/twice.ts"] }),
+    );
+    const found = scanExtensions({ home });
+    expect(found.filter((e) => e.name === "twice.ts")).toHaveLength(1);
+  });
+
   it("has no project entries when no project path is set", () => {
     const home = makeHome();
     write(path.join(home, ".pi", "agent", "extensions"), "g.ts");

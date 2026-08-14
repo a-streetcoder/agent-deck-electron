@@ -52,6 +52,34 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("settings-defined extension candidates (EXT-01)", () => {
+  it("labels a settings.json entry and offers no Remove (only settings.json can drop it)", async () => {
+    installFetch(() =>
+      jsonResponse({
+        extensions: [
+          {
+            path: "C:/tools/listed.ts",
+            name: "listed.ts",
+            exists: true,
+            disabled: false,
+            scope: "global",
+            source: "settings",
+            bridgeConflict: null,
+          },
+        ],
+      }),
+    );
+    render(<ExtensionsScreen />);
+    const label = await screen.findByTestId("extension-source-listed.ts");
+    expect(label.textContent).toContain("settings.json");
+    // removing goes through the app registry, which cannot touch settings.json —
+    // offering Remove here would silently no-op (review-derived gating)
+    expect(screen.queryByTestId("extension-remove-listed.ts")).toBeNull();
+    // disable still works for any candidate
+    expect(screen.getByTestId("extension-toggle-listed.ts")).toBeTruthy();
+  });
+});
+
 describe("injected command catalog", () => {
   it("shows loading and reports a command-catalog error without inventing rows", async () => {
     let rejectCommands!: (error: Error) => void;

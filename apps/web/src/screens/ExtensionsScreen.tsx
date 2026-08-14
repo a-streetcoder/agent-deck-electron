@@ -18,7 +18,7 @@ interface ExtensionEntry {
   exists: boolean;
   disabled: boolean;
   /** Where it was found — a standard pi dir (discovered) or the manual registry. */
-  source?: "discovered" | "added";
+  source?: "discovered" | "added" | "settings";
   scope?: "global" | "project" | string;
   /** The app-bridge tool this extension re-registers, if any (kept out of launch). */
   bridgeConflict?: string | null;
@@ -687,7 +687,9 @@ export function ExtensionsScreen() {
                     >
                       {ext.source === "added"
                         ? "added"
-                        : `${ext.scope === "project" ? "project" : "global"} · discovered`}
+                        : ext.source === "settings"
+                          ? `${ext.scope === "project" ? "project" : "global"} · settings.json`
+                          : `${ext.scope === "project" ? "project" : "global"} · discovered`}
                     </span>
                   </div>
                   <div className="truncate font-mono text-detail text-text-muted">{ext.path}</div>
@@ -730,9 +732,9 @@ export function ExtensionsScreen() {
                       ? "Enable"
                       : "Disable"}
                 </ControlButton>
-                {/* Only registry entries can be removed; a discovered file is
-                    managed on disk (disable to exclude it). */}
-                {ext.source !== "discovered" ? (
+                {/* Only registry entries can be removed; discovered files live on
+                    disk and settings.json entries belong to that file (EXT-01). */}
+                {ext.source === "added" ? (
                   <ControlButton
                     data-testid={`extension-remove-${ext.name}`}
                     className="rounded p-1 text-text-muted hover:text-danger disabled:opacity-40"

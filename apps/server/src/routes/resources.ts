@@ -1252,6 +1252,10 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const scopeByPath = new Map(
       discovered.map((entry) => [nodePath.resolve(entry.path), entry.scope]),
     );
+    // provenance for the label: a settings.json entry reads `settings` (EXT-01)
+    const sourceByPath = new Map(
+      discovered.map((entry) => [nodePath.resolve(entry.path), entry.source] as const),
+    );
     const paths = [
       ...new Set([...registry, ...discovered.map((entry) => nodePath.resolve(entry.path))]),
     ];
@@ -1270,7 +1274,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         disabled: disabled.has(filePath),
         // Where it came from, so the UI can label it (native scope/source).
         scope: scopeByPath.get(filePath) ?? "global",
-        source: registry.has(filePath) ? "added" : "discovered",
+        source: registry.has(filePath)
+          ? "added"
+          : sourceByPath.get(filePath) === "settings"
+            ? "settings"
+            : "discovered",
         // The app-bridge tool this extension re-registers (else null). A
         // conflicting extension is NOT injected (it would crash pi) — the UI
         // warns that the bridge shadows it (native conflict flag).

@@ -22,6 +22,7 @@ import {
 import {
   agentCatalogDirs,
   extensionCatalogDirs,
+  piAgentHome,
   promptCatalogDirs,
   skillCatalogDirs,
   type ResourceRoots,
@@ -405,6 +406,11 @@ export interface DiscoveredExtension {
   name: string;
   path: string;
   scope: ResourceScope;
+  /**
+   * How the candidate was found (EXT-01): the standard extension dirs, or a
+   * `settings.json` `extensions` entry (native discoveryKind settingsExtension).
+   */
+  source?: "auto" | "settings";
 }
 
 /** pi loads extensions written in TS or JS (any module flavor). */
@@ -467,7 +473,10 @@ function appGeneratedExtensionNames(dir: string): Set<string> {
 
 export function scanExtensions(roots: ResourceRoots): DiscoveredExtension[] {
   const found: DiscoveredExtension[] = [];
+  // dedupe by FILESYSTEM identity — Windows paths are case-insensitive, so two
+  // casings of one file must never mint two candidates (review, Codex)
   const seen = new Set<string>();
+  const pathKey = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
   for (const { dir, scope } of extensionCatalogDirs(roots)) {
     let entries: Dirent[];
     try {
@@ -480,9 +489,40 @@ export function scanExtensions(roots: ResourceRoots): DiscoveredExtension[] {
       if (!entry.isFile() || !EXTENSION_FILE_RE.test(entry.name)) continue;
       if (appGenerated.has(entry.name)) continue; // app's own bridge, not a user extension
       const full = path.join(dir, entry.name);
-      if (seen.has(full)) continue;
-      seen.add(full);
-      found.push({ name: entry.name, path: full, scope });
+      if (seen.has(pathKey(full))) continue;
+      seen.add(pathKey(full));
+      found.push({ name: entry.name, path: full, scope, source: "auto" });
+    }
+  }
+  // settings.json `extensions` entries are candidates too (EXT-01, native
+  // discoveryKind settingsExtension): each path resolves against the settings
+  // FILE's directory. Auto-discovered files win the dedupe so their entry keeps
+  // the richer auto provenance.
+  const settingsFiles: Array<{ file: string; scope: ResourceScope }> = [
+    { file: path.join(piAgentHome(roots), "settings.json"), scope: "global" },
+    ...(roots.projectPath
+      ? [
+          {
+            file: path.join(roots.projectPath, ".pi", "settings.json"),
+            scope: "project" as ResourceScope,
+          },
+        ]
+      : []),
+  ];
+  for (const { file, scope } of settingsFiles) {
+    let listed: unknown;
+    try {
+      listed = (JSON.parse(readFileSync(file, "utf8")) as { extensions?: unknown }).extensions;
+    } catch {
+      continue; // missing or malformed settings — nothing to add
+    }
+    if (!Array.isArray(listed)) continue;
+    for (const entry of listed) {
+      if (typeof entry !== "string" || entry.trim() === "") continue;
+      const resolved = path.resolve(path.dirname(file), entry);
+      if (seen.has(pathKey(resolved))) continue;
+      seen.add(pathKey(resolved));
+      found.push({ name: path.basename(resolved), path: resolved, scope, source: "settings" });
     }
   }
   return found;
