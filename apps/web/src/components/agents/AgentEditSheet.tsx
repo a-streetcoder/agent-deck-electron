@@ -23,12 +23,13 @@ import { AgentAvatar } from "./AgentAvatar.tsx";
  * icon tile + title) and a Config / Prompt / Tools / Skills tab strip.
  */
 
-type EditTab = "config" | "prompt" | "tools" | "skills" | "mcp";
+type EditTab = "config" | "prompt" | "tools" | "skills" | "extensions" | "mcp";
 const TABS: Array<{ id: EditTab; label: string }> = [
   { id: "config", label: "Config" },
   { id: "prompt", label: "Prompt" },
   { id: "tools", label: "Tools" },
   { id: "skills", label: "Skills" },
+  { id: "extensions", label: "Extensions" },
   { id: "mcp", label: "MCP" },
 ];
 
@@ -36,6 +37,16 @@ const inputClass =
   "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+interface ExtensionCatalogEntry {
+  path: string;
+  name: string;
+  exists: boolean;
+  disabled: boolean;
+  source?: "discovered" | "added";
+  scope?: string;
+  bridgeConflict?: string | null;
+}
 
 export function AgentEditSheet({
   agent,
@@ -49,8 +60,10 @@ export function AgentEditSheet({
   onClose: () => void;
 }) {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const seed = agent ?? createFromBuiltin;
   const isReplacement = createFromBuiltin !== undefined;
+  const isBuiltin = agent?.scope === "builtin";
   const [tab, setTab] = useState<EditTab>("config");
   const [name, setName] = useState(seed?.name ?? "");
   const [scope, setScope] = useState<ResourceScope>(
@@ -68,6 +81,15 @@ export function AgentEditSheet({
     ),
   );
   const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
+  const [useDefaultExtensions, setUseDefaultExtensions] = useState(seed?.extensions === undefined);
+  const [extensions, setExtensions] = useState<string[]>(seed?.extensions ?? []);
+  const [extensionCatalog, setExtensionCatalog] = useState<ExtensionCatalogEntry[]>([]);
+  const [extensionCatalogRequested, setExtensionCatalogRequested] = useState(false);
+  const [extensionCatalogLoading, setExtensionCatalogLoading] = useState(false);
+  const [extensionLoadingMode, setExtensionLoadingMode] = useState<
+    "useMyExtensions" | "agentDeckManaged"
+  >("useMyExtensions");
+  const [extensionCatalogError, setExtensionCatalogError] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState((seed?.mcpServers ?? []).join(", "));
   const [defaultReads, setDefaultReads] = useState((seed?.defaultReads ?? []).join("\n"));
   const [defaultExpectedOutcome, setDefaultExpectedOutcome] = useState<
@@ -84,6 +106,7 @@ export function AgentEditSheet({
   const [saving, setSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const extensionCatalogSeq = useRef(0);
 
   // Snapshot of the managed fields at open time — used both for dirty
   // detection (backdrop/Escape only dismiss when clean) and for the
@@ -102,6 +125,8 @@ export function AgentEditSheet({
       ...(seed?.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
     ].join(", "),
     skills: (seed?.skills ?? []).join(", "),
+    useDefaultExtensions: seed?.extensions === undefined,
+    extensions: seed?.extensions ?? [],
     mcpServers: (seed?.mcpServers ?? []).join(", "),
     defaultReads: (seed?.defaultReads ?? []).join("\n"),
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
@@ -122,6 +147,8 @@ export function AgentEditSheet({
     mode !== initial.mode ||
     tools !== initial.tools ||
     skills !== initial.skills ||
+    useDefaultExtensions !== initial.useDefaultExtensions ||
+    extensions.join("\0") !== initial.extensions.join("\0") ||
     mcpServers !== initial.mcpServers ||
     defaultReads !== initial.defaultReads ||
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
@@ -168,14 +195,79 @@ export function AgentEditSheet({
     return () => dialog.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const isBuiltin = agent?.scope === "builtin";
+  useEffect(() => {
+    if (isBuiltin || !extensionCatalogRequested) return;
+    const seq = ++extensionCatalogSeq.current;
+    const controller = new AbortController();
+    // Never present the previous project/version as the current picker, and do
+    // not let explicit mode look like a settled empty catalog while loading.
+    setExtensionCatalog([]);
+    setExtensionLoadingMode("useMyExtensions");
+    setExtensionCatalogError(null);
+    setExtensionCatalogLoading(true);
+    void (async () => {
+      try {
+        const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+        const response = await fetch(`/resources/extensions${query}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const data = (await response.json()) as {
+          loadingMode?: "useMyExtensions" | "agentDeckManaged";
+          extensions: ExtensionCatalogEntry[];
+        };
+        if (seq !== extensionCatalogSeq.current) return;
+        setExtensionCatalog(data.extensions);
+        setExtensionLoadingMode(data.loadingMode ?? "useMyExtensions");
+      } catch (error) {
+        if (!controller.signal.aborted && seq === extensionCatalogSeq.current) {
+          setExtensionCatalogError(String(error));
+        }
+      } finally {
+        if (seq === extensionCatalogSeq.current) setExtensionCatalogLoading(false);
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (extensionCatalogSeq.current === seq) extensionCatalogSeq.current += 1;
+    };
+  }, [currentProjectId, extensionCatalogRequested, isBuiltin, resourcesVersion]);
+
   const parseList = (value: string): string[] =>
     value
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
+  const extensionEntries = (() => {
+    const byPath = new Map(extensionCatalog.map((entry) => [entry.path, entry]));
+    for (const selected of extensions) {
+      if (!byPath.has(selected)) {
+        byPath.set(selected, {
+          path: selected,
+          name: selected.split(/[\\/]/).pop() || selected,
+          exists: false,
+          disabled: false,
+        });
+      }
+    }
+    return [...byPath.values()];
+  })();
+  const extensionNameCounts = new Map<string, number>();
+  for (const entry of extensionCatalog) {
+    if (!entry.disabled) {
+      extensionNameCounts.set(entry.name, (extensionNameCounts.get(entry.name) ?? 0) + 1);
+    }
+  }
+  const toggleExtension = (filePath: string): void => {
+    setExtensions((current) =>
+      current.includes(filePath)
+        ? current.filter((entry) => entry !== filePath)
+        : [...current, filePath],
+    );
+  };
 
   const save = async (): Promise<void> => {
+    if (extensionCatalogLoading) return;
     setSaving(true);
     setError(null);
     try {
@@ -201,6 +293,8 @@ export function AgentEditSheet({
                 ...(live.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
               ].join(", ") !== initial.tools ||
               (live.skills ?? []).join(", ") !== initial.skills ||
+              (live.extensions === undefined) !== initial.useDefaultExtensions ||
+              (live.extensions ?? []).join("\0") !== initial.extensions.join("\0") ||
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
               (live.defaultReads ?? []).join("\n") !== initial.defaultReads ||
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
@@ -234,6 +328,9 @@ export function AgentEditSheet({
             systemPromptMode: mode,
             tools: parseList(tools),
             skills: parseList(skills),
+            // Builtin override support intentionally remains absent. For custom
+            // agents null removes the field (defaults); [] is explicit none.
+            extensions: isBuiltin ? undefined : useDefaultExtensions ? null : extensions,
             mcpServers: parseList(mcpServers),
             // Newline authoring keeps paths containing spaces intact. Builtins
             // use the normal effective diff override; bundled bytes stay pristine.
@@ -331,7 +428,7 @@ export function AgentEditSheet({
 
         {/* Tab strip */}
         <div className="flex gap-1 border-b border-border-subtle px-4 pt-2">
-          {TABS.map((t) => (
+          {TABS.filter((item) => !isBuiltin || item.id !== "extensions").map((t) => (
             <ControlButton
               key={t.id}
               data-testid={`editor-tab-${t.id}`}
@@ -342,7 +439,10 @@ export function AgentEditSheet({
                   : "text-text-muted hover:text-text-primary",
               )}
               style={{ fontStretch: "expanded" }}
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id);
+                if (t.id === "extensions") setExtensionCatalogRequested(true);
+              }}
             >
               {t.label}
             </ControlButton>
@@ -620,6 +720,105 @@ export function AgentEditSheet({
             </label>
           ) : null}
 
+          {tab === "extensions" && !isBuiltin ? (
+            <div
+              className="space-y-3"
+              data-testid="editor-extensions"
+              aria-busy={extensionCatalogLoading}
+            >
+              <label className="flex items-start gap-2 text-xs text-text-muted">
+                <ControlInput
+                  type="checkbox"
+                  data-testid="editor-extensions-default"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                  checked={useDefaultExtensions}
+                  onChange={(event) => setUseDefaultExtensions(event.target.checked)}
+                />
+                <span>
+                  <span className="block text-text-secondary">Use Default Extensions</span>
+                  <span className="mt-1 block">
+                    Uses the current enabled extension catalog. Turn this off to choose an explicit
+                    allowlist; choosing none is supported.
+                  </span>
+                </span>
+              </label>
+              {!extensionCatalogLoading && extensionLoadingMode === "agentDeckManaged" ? (
+                <div className="rounded-lg border border-warning px-3 py-2 text-xs text-warning">
+                  Agent Deck managed loading mode currently blocks all user extensions, including
+                  this agent’s selections.
+                </div>
+              ) : null}
+              {extensionCatalogLoading ? (
+                <div className="text-xs text-text-muted" role="status">
+                  Loading extension catalog…
+                </div>
+              ) : extensionCatalogError ? (
+                <div className="text-xs text-danger" role="alert">
+                  Extension catalog unavailable: {extensionCatalogError}
+                </div>
+              ) : null}
+              {!useDefaultExtensions && !extensionCatalogLoading ? (
+                <div className="space-y-1.5" aria-label="Extension allowlist">
+                  {extensionEntries.map((entry, index) => {
+                    const selected = extensions.includes(entry.path);
+                    const stale = !extensionCatalog.some((item) => item.path === entry.path);
+                    const diagnostics = [
+                      stale ? "not in current catalog; preserved but not loaded" : null,
+                      !entry.exists ? "missing or not a file; not loaded" : null,
+                      entry.disabled ? "disabled globally; not loaded" : null,
+                      entry.bridgeConflict
+                        ? `conflicts with Agent Deck bridge “${entry.bridgeConflict}”; not loaded`
+                        : null,
+                      (extensionNameCounts.get(entry.name) ?? 0) > 1
+                        ? "same filename as another enabled catalog entry"
+                        : null,
+                    ].filter((value): value is string => Boolean(value));
+                    return (
+                      <label
+                        key={entry.path}
+                        className="flex items-start gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
+                      >
+                        <ControlInput
+                          type="checkbox"
+                          data-testid={`editor-extension-${index}`}
+                          data-extension-path={entry.path}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                          checked={selected}
+                          onChange={() => toggleExtension(entry.path)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs text-text-primary">
+                            {entry.name}
+                          </span>
+                          <span className="block truncate font-mono text-micro text-text-muted">
+                            {entry.path}
+                          </span>
+                          <span className="block text-micro text-text-muted">
+                            {stale
+                              ? "hand-authored"
+                              : entry.source === "added"
+                                ? "added · global"
+                                : `${entry.scope === "project" ? "project" : "global"} · discovered`}
+                          </span>
+                          {diagnostics.map((diagnostic) => (
+                            <span key={diagnostic} className="block text-micro text-warning">
+                              {diagnostic}
+                            </span>
+                          ))}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {extensionEntries.length === 0 ? (
+                    <div className="rounded-lg border border-border-subtle px-3 py-4 text-center text-xs text-text-muted">
+                      No catalog extensions are available. Saving keeps an explicit empty allowlist.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {tab === "mcp" ? (
             <label className="block text-xs text-text-muted">
               MCP servers (comma-separated names from mcp.json this agent uses)
@@ -655,7 +854,7 @@ export function AgentEditSheet({
                 "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
               color: "var(--color-accent-foreground)",
             }}
-            disabled={saving || (!agent && !name.trim())}
+            disabled={saving || extensionCatalogLoading || (!agent && !name.trim())}
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}

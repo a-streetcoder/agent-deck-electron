@@ -46,13 +46,14 @@ function systemText(request: ChatCompletionRequest): string {
     .join("\n");
 }
 
-async function promptAndReadSystem(): Promise<string> {
+async function promptAndReadSystem(agentName?: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       cwd: project,
       projectId,
+      agentName,
       provider: MOCK_PROVIDER_ID,
       model: MOCK_MODEL_ID,
       extensions: [writeMockProviderExtension(mock.baseUrl)],
@@ -81,6 +82,17 @@ beforeAll(async () => {
 }
 `,
   );
+  const agentsDir = path.join(tmpHome, ".pi", "agent", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    path.join(agentsDir, "extension-none.md"),
+    "---\nname: extension-none\nextensions: []\n---\n\nUse no user extensions.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "extension-picked.md"),
+    `---\nname: extension-picked\nextensions:\n  - ${extPath}\n  - ${conflictPath}\n---\n\nUse the selected extension.\n`,
+  );
+
   // A rogue extension that re-registers an app-bridge tool — pi would crash if it
   // were injected, so the app must flag it AND exclude it from the launch.
   writeFileSync(
@@ -141,7 +153,13 @@ describe("extension discovery", () => {
     expect(await promptAndReadSystem()).toContain(SENTINEL);
   });
 
-  it("stops injecting the extension once it is disabled by path", async () => {
+  it("honors explicit picked and empty allowlists for named parents", async () => {
+    // Positive proof: useMyExtensions + enabled + explicit catalog path loads.
+    expect(await promptAndReadSystem("extension-picked")).toContain(SENTINEL);
+    expect(await promptAndReadSystem("extension-none")).not.toContain(SENTINEL);
+  });
+
+  it("stops injecting the extension once it is disabled by path, including a named allowlist", async () => {
     const toggle = await fetch(`http://127.0.0.1:${server.port}/resources/extensions/disabled`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -149,6 +167,7 @@ describe("extension discovery", () => {
     });
     expect(toggle.status).toBe(200);
     expect(await promptAndReadSystem()).not.toContain(SENTINEL);
+    expect(await promptAndReadSystem("extension-picked")).not.toContain(SENTINEL);
   });
 
   it("agentDeckManaged loading mode keeps the user extension off even when enabled", async () => {
@@ -170,6 +189,7 @@ describe("extension discovery", () => {
     // stays off, so its hook never runs.
     expect((await setMode("agentDeckManaged")).status).toBe(200);
     expect(await promptAndReadSystem()).not.toContain(SENTINEL);
+    expect(await promptAndReadSystem("extension-picked")).not.toContain(SENTINEL);
 
     // Back to "use my extensions" → the same enabled extension loads again.
     expect((await setMode("useMyExtensions")).status).toBe(200);

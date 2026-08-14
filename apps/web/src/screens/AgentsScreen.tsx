@@ -623,15 +623,36 @@ export function AgentDetail({
             </div>
             <div className="text-sm text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
           </div>
-          {/* Native "Extensions" card (AgentManagementViews.swift:1377) — an
-              explicit pi-extension allowlist for the agent's sessions. Shown only
-              when declared, like native's `if !extensions.isEmpty`. */}
-          {agent.extensions?.length ? (
+          {agent.scope !== "builtin" ? (
             <div
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-extensions"
             >
-              <ChipList label="Extensions" items={agent.extensions} />
+              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                Extensions
+              </div>
+              {agent.extensions === undefined ? (
+                <div className="text-sm text-text-secondary">Default catalog policy</div>
+              ) : agent.extensions.length === 0 ? (
+                <div className="text-sm text-text-secondary">None (explicit)</div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="text-sm text-text-secondary">
+                    {agent.extensions.length} selected
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {agent.extensions.map((extension) => (
+                      <span
+                        key={extension}
+                        title={extension}
+                        className="max-w-full truncate rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
+                      >
+                        {extension}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
         </div>

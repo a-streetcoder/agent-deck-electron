@@ -16,7 +16,10 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { validateAgentDefaultReadsForAuthoring } from "@agent-deck/domain";
+import {
+  validateAgentDefaultReadsForAuthoring,
+  validateAgentExtensionsForAuthoring,
+} from "@agent-deck/domain";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import {
   copyResourceTree,
@@ -354,6 +357,7 @@ const AGENT_FIELD_ORDER = [
   "systemPromptMode",
   "tools",
   "skills",
+  "extensions",
   "mcpServers",
   "defaultReads",
   "defaultExpectedOutcome",
@@ -415,6 +419,11 @@ export function writeAgentFile(
   if (edit.skills !== undefined) {
     if (edit.skills.length > 0) frontmatter.skills = edit.skills.join(", ");
     else delete frontmatter.skills;
+  }
+  if (edit.extensions !== undefined) {
+    // null removes the field (use defaults); [] is meaningful explicit none.
+    if (edit.extensions === null) delete frontmatter.extensions;
+    else frontmatter.extensions = validateAgentExtensionsForAuthoring(edit.extensions);
   }
   if (edit.mcpServers !== undefined) {
     if (edit.mcpServers.length > 0) frontmatter.mcpServers = edit.mcpServers.join(", ");

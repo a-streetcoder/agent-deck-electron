@@ -157,6 +157,8 @@ export type AgentResolver = (
       /** External adapter names supplied only through MCP_DIRECT_TOOLS. */
       mcpDirectTools?: string[];
       skillDirs?: string[];
+      /** Current safe catalog-resolved user extension policy for this named run. */
+      extensions?: string[];
       defaultReads?: string[];
       defaultExpectedOutcome?: SubagentExpectedOutcome;
       /** Advisory output metadata; it never changes child capabilities. */
@@ -1912,9 +1914,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               : artifactSessionsDirectory
                 ? { sessionDir: artifactSessionsDirectory }
                 : {}),
-            extensions: childBridge
-              ? [...(helperContext.extensions ?? []), childBridge.extension]
-              : helperContext.extensions,
+            extensions: resolved
+              ? [
+                  ...new Set([
+                    ...(helperContext.extensions ?? []),
+                    ...(resolved.extensions ?? []),
+                    ...(childBridge ? [childBridge.extension] : []),
+                  ]),
+                ]
+              : childBridge
+                ? [...(helperContext.extensions ?? []), childBridge.extension]
+                : helperContext.extensions,
           }),
           cwd: childCwd,
           // External pi-mcp-adapter policy is separate from Agent Deck's MCP

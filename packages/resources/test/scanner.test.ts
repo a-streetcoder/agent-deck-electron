@@ -22,6 +22,26 @@ function writeAgent(dir: string, name: string, frontmatter = ""): void {
 }
 
 describe("scanAgents", () => {
+  it("preserves absent versus explicit empty extension policy with stable dedupe", () => {
+    const absent = scanAgents({ home: makeHome() });
+    expect(absent.find((agent) => agent.scope === "builtin")?.extensions).toBeUndefined();
+
+    const home = makeHome();
+    writeAgent(
+      path.join(home, ".pi", "agent", "agents"),
+      "extension-policy",
+      "extensions:\n  - /one.ts\n  - /two.ts\n  - /one.ts\n",
+    );
+    expect(
+      scanAgents({ home }).find((agent) => agent.name === "extension-policy")?.extensions,
+    ).toEqual(["/one.ts", "/two.ts"]);
+
+    writeAgent(path.join(home, ".pi", "agent", "agents"), "extension-none", "extensions: []\n");
+    expect(
+      scanAgents({ home }).find((agent) => agent.name === "extension-none")?.extensions,
+    ).toEqual([]);
+  });
+
   it("always includes the bundled builtin agents", () => {
     const agents = scanAgents({ home: makeHome() });
     const names = agents.filter((a) => a.scope === "builtin").map((a) => a.name);

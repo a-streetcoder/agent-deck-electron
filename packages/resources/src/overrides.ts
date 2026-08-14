@@ -30,6 +30,9 @@ export interface AgentEdit {
   /** Native-compatible combined tools list; direct adapter names use `mcp:<name>`. */
   tools?: string[];
   skills?: string[];
+  /** Custom-agent extension policy: undefined uses catalog defaults; [] loads no
+   * user extensions. Builtin overrides intentionally never manage this field. */
+  extensions?: string[] | null;
   mcpServers?: string[];
   defaultReads?: string[];
   defaultExpectedOutcome?: SubagentExpectedOutcome | "";

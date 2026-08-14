@@ -1418,9 +1418,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // Base extensions (request or env defaults) + the user's enabled ones,
     // deduped and re-validated as real files at launch time.
     const baseExtensions = body.extensions ?? defaults.extensions ?? [];
+    // Named agents resolve their own default-vs-explicit catalog policy below.
+    // Plain/anonymous parents retain the global enabled catalog behavior.
     const finalizedBase = finalizeExtensions([
       ...baseExtensions,
-      ...enabledExtensionPaths(body.projectId),
+      ...(body.agentName ? [] : enabledExtensionPaths(body.projectId)),
     ]);
     const extensions = finalizedBase.length > 0 ? finalizedBase : undefined;
 

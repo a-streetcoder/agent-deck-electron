@@ -148,7 +148,7 @@ export interface ServerContext {
     projectId?: string,
   ): { status: "ok"; agent: NamedAgentLaunch } | { status: "not_found" } | { status: "disabled" };
   extensionBridgeConflictAt(filePath: string): string | null;
-  enabledExtensionPaths(projectId?: string): string[];
+  enabledExtensionPaths(projectId?: string, allowlist?: readonly string[]): string[];
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
   scanSkillsFor(projectId?: string): SkillInfo[];

@@ -24,6 +24,7 @@ async function createReplacement(description: string): Promise<Response> {
       edit: {
         description,
         defaultReads: [" AGENTS.md ", "../unsafe", "docs/review.md"],
+        extensions: [" /catalog/reviewer.ts ", "/catalog/reviewer.ts"],
         defaultProgress: true,
         interactive: true,
         output: "Concise review summary",
@@ -55,6 +56,8 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(content).toContain("defaultExpectedOutcome: reportOnly");
     expect(content).toContain("defaultReads:");
     expect(content).not.toContain("../unsafe");
+    expect(content).toContain("extensions:");
+    expect(content.match(/\/catalog\/reviewer\.ts/g)).toHaveLength(1);
     expect(content).toContain("defaultProgress: true");
     expect(content).toContain("interactive: true");
     expect(content).toContain("output: Concise review summary");
@@ -69,6 +72,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
         shadowed: boolean;
         replacesBuiltin: boolean;
         defaultReads?: string[];
+        extensions?: string[];
         defaultProgress?: boolean;
         interactive?: boolean;
         output?: string;
@@ -82,6 +86,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           shadowed: false,
           replacesBuiltin: true,
           defaultReads: ["AGENTS.md", "docs/review.md"],
+          extensions: ["/catalog/reviewer.ts"],
           defaultProgress: true,
           interactive: true,
           output: "Concise review summary",
@@ -245,6 +250,31 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
       expect(existsSync(invalidFile)).toBe(false);
     },
   );
+
+  it.each([
+    [
+      Array.from({ length: 65 }, (_, index) => `/extension-${index}.ts`),
+      /cannot exceed 64 entries/u,
+    ],
+    [["x".repeat(4097)], /Each extension entry cannot exceed 4096 characters/u],
+  ])("returns an actionable 400 for invalid extension authoring", async (extensions, message) => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "global",
+        name: "invalid-extensions",
+        edit: { extensions, body: "Must not persist." },
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string }).toEqual({
+      error: expect.stringMatching(message),
+    });
+    expect(existsSync(path.join(home, ".pi", "agent", "agents", "invalid-extensions.md"))).toBe(
+      false,
+    );
+  });
 
   it("rejects replacement creation outside global scope", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {

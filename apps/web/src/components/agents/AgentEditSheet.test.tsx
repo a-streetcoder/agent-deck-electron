@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AgentInfo } from "@agent-deck/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../../state/store.ts";
@@ -30,7 +30,7 @@ const builtin: AgentInfo = {
 };
 
 beforeEach(() => {
-  useAppStore.setState({ currentProjectId: null });
+  useAppStore.setState({ currentProjectId: null, resourcesVersion: 0 });
 });
 
 afterEach(() => {
@@ -295,6 +295,239 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).edit.defaultExpectedOutcome).toBe(
       "writeProjectFile",
     );
+  });
+
+  it("uses the extension catalog picker while preserving removable stale values and explicit none", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+      extensions: ["/catalog/active.ts", "package:unsupported"],
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/resources/extensions") {
+        return new Response(
+          JSON.stringify({
+            loadingMode: "useMyExtensions",
+            extensions: [
+              {
+                path: "/catalog/active.ts",
+                name: "active.ts",
+                exists: true,
+                disabled: false,
+                source: "discovered",
+                scope: "global",
+                bridgeConflict: null,
+              },
+              {
+                path: "/catalog/disabled.ts",
+                name: "disabled.ts",
+                exists: true,
+                disabled: true,
+                source: "added",
+                scope: "global",
+                bridgeConflict: null,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.startsWith("/resources/agents?") && !init?.method) {
+        return new Response(JSON.stringify({ agents: [custom] }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId("editor-tab-extensions"));
+    expect(
+      await screen.findByText(/not in current catalog; preserved but not loaded/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/disabled globally; not loaded/i)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("editor-extension-0"));
+    fireEvent.click(screen.getByTestId("editor-extension-2"));
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) => url === "/resources/agents" && init?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const saveCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/resources/agents" && init?.method === "PUT",
+    )!;
+    expect(JSON.parse(String(saveCall[1]!.body)).edit.extensions).toEqual([]);
+  });
+
+  it("shows catalog loading without a false empty state and blocks save until settled", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+      extensions: [],
+    };
+    let resolveCatalog!: (response: Response) => void;
+    const catalog = new Promise<Response>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/resources/extensions") return catalog;
+      return Promise.resolve(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId("editor-tab-extensions"));
+    expect((await screen.findByRole("status")).textContent).toContain("Loading extension catalog");
+    expect(screen.getByTestId("editor-extensions").getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByText(/No catalog extensions are available/i)).toBeNull();
+    expect((screen.getByTestId("editor-save") as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      resolveCatalog(
+        new Response(JSON.stringify({ loadingMode: "useMyExtensions", extensions: [] }), {
+          status: 200,
+        }),
+      );
+      await catalog;
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-extensions").getAttribute("aria-busy")).toBe("false"),
+    );
+    expect(screen.getByText(/No catalog extensions are available/i)).toBeTruthy();
+    expect((screen.getByTestId("editor-save") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("refreshes the open extension catalog when resources change", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+      extensions: [],
+    };
+    let request = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/resources/extensions") {
+        request += 1;
+        const name = request === 1 ? "first.ts" : "refreshed.ts";
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              loadingMode: "useMyExtensions",
+              extensions: [
+                {
+                  path: `/catalog/${name}`,
+                  name,
+                  exists: true,
+                  disabled: false,
+                  source: "discovered",
+                  scope: "global",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("editor-tab-extensions"));
+    expect(await screen.findByText("first.ts")).toBeTruthy();
+
+    act(() => useAppStore.setState({ resourcesVersion: 1 }));
+    expect(await screen.findByText("refreshed.ts")).toBeTruthy();
+    expect(screen.queryByText("first.ts")).toBeNull();
+  });
+
+  it("ignores a stale extension response after the project changes", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+      extensions: [],
+    };
+    useAppStore.setState({ currentProjectId: "project-a" });
+    let resolveA!: (response: Response) => void;
+    let resolveB!: (response: Response) => void;
+    const responseA = new Promise<Response>((resolve) => {
+      resolveA = resolve;
+    });
+    const responseB = new Promise<Response>((resolve) => {
+      resolveB = resolve;
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/resources/extensions?projectId=project-a") return responseA;
+      if (url === "/resources/extensions?projectId=project-b") return responseB;
+      return Promise.resolve(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("editor-tab-extensions"));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/resources/extensions?projectId=project-a",
+        expect.any(Object),
+      ),
+    );
+
+    act(() => useAppStore.setState({ currentProjectId: "project-b" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/resources/extensions?projectId=project-b",
+        expect.any(Object),
+      ),
+    );
+    await act(async () => {
+      resolveB(
+        new Response(
+          JSON.stringify({
+            loadingMode: "useMyExtensions",
+            extensions: [
+              {
+                path: "/project-b/new.ts",
+                name: "new.ts",
+                exists: true,
+                disabled: false,
+                source: "discovered",
+                scope: "project",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+      await responseB;
+    });
+    expect(await screen.findByText("new.ts")).toBeTruthy();
+
+    await act(async () => {
+      resolveA(
+        new Response(
+          JSON.stringify({
+            loadingMode: "useMyExtensions",
+            extensions: [
+              {
+                path: "/project-a/old.ts",
+                name: "old.ts",
+                exists: true,
+                disabled: false,
+                source: "discovered",
+                scope: "project",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+      await responseA;
+    });
+    expect(screen.queryByText("old.ts")).toBeNull();
+    expect(screen.getByText("new.ts")).toBeTruthy();
   });
 
   it("keeps the seeded name editable like native custom-agent drafts", async () => {

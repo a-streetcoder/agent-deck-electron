@@ -69,6 +69,23 @@ describe("AgentDetail delegation metadata", () => {
     const depth = screen.getByTestId("agent-max-subagent-depth");
     expect(depth.textContent).toContain("Max Subagent Depth Metadata");
     expect(depth.textContent).toContain("0");
+    expect(screen.getByTestId("agent-extensions").textContent).toContain("Default catalog policy");
+  });
+
+  it.each([
+    [[], "None (explicit)"],
+    [["/one.ts", "/two.ts"], "2 selected"],
+  ] as const)("labels explicit extension policy %# accurately", (extensions, label) => {
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    render(
+      <AgentDetail
+        agent={{ ...agent, extensions: [...extensions] }}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("agent-extensions").textContent).toContain(label);
   });
 
   it("turns legacy-open availability into an explicit stable assignment set", () => {

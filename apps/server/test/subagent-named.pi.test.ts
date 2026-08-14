@@ -25,6 +25,7 @@ process.env.AGENT_DECK_TEST = "1";
 
 const PERSONA_SENTINEL = "PERSONA_SENTINEL: You are Reviewer Bot, a meticulous code reviewer.";
 const SKILL_SENTINEL = "SKILL_SENTINEL_REVIEW_CHECKLIST";
+const EXTENSION_SENTINEL = "NAMED_AGENT_EXTENSION_SENTINEL";
 
 let mock: MockProviderServer;
 let server: AgentDeckServer;
@@ -32,6 +33,7 @@ let projectId: string;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const project = mkdtempSync(path.join(tmpdir(), "pi-named-subagent-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
+const namedExtensionPath = path.join(tmpHome, ".pi", "agent", "extensions", "named-agent.ts");
 
 function systemText(request: ChatCompletionRequest): string {
   return request.messages
@@ -88,6 +90,15 @@ beforeAll(async () => {
     `---\nname: review-checklist\ndescription: ${SKILL_SENTINEL} — run each review step in order\n---\n\nWork through the checklist strictly.\n`,
   );
 
+  mkdirSync(path.dirname(namedExtensionPath), { recursive: true });
+  writeFileSync(
+    namedExtensionPath,
+    `export default function (pi) {
+  pi.on("before_agent_start", (event) => ({ systemPrompt: event.systemPrompt + "\\n\\n${EXTENSION_SENTINEL}" }));
+}
+`,
+  );
+
   // A named global agent with a distinctive persona body, a declared model
   // distinct from the session default (proves the child runs on the AGENT's
   // model), an assigned skill, and a thinking level — all of which the child
@@ -96,7 +107,7 @@ beforeAll(async () => {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "reviewer-bot.md"),
-    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read, write, edit, bash, mcp:remote-mutate\nskills: review-checklist\ndefaultExpectedOutcome: directProjectWrites\noutput: Concise quoted review summary\n---\n\n${PERSONA_SENTINEL}\n`,
+    `---\nname: reviewer-bot\ndescription: Meticulous reviewer\nmodel: ${MOCK_NOREASON_MODEL_ID}\nthinking: low\ntools: read, write, edit, bash, mcp:remote-mutate\nskills: review-checklist\nextensions:\n  - ${namedExtensionPath}\ndefaultExpectedOutcome: directProjectWrites\noutput: Concise quoted review summary\n---\n\n${PERSONA_SENTINEL}\n`,
   );
   writeFileSync(
     path.join(agentsDir, "fallback-bot.md"),
@@ -188,6 +199,8 @@ describe("managed_subagent{agent}: named delegation", () => {
     // child's system prompt proves BOTH the agent's `read` tool AND its assigned
     // skill were threaded into the child launch.
     expect(childSystem).toContain(SKILL_SENTINEL);
+    // The named agent's explicit catalog allowlist reaches the real child Pi.
+    expect(childSystem).toContain(EXTENSION_SENTINEL);
 
     // The child ran on the AGENT's declared model, not the session default.
     expect(childRequest!.model).toBe(MOCK_NOREASON_MODEL_ID);
@@ -232,10 +245,16 @@ describe("managed_subagent{agent}: named delegation", () => {
 
   it("falls back an unspecified named outcome to an enforced report-only contract", async () => {
     const id = await startSession();
+    const before = mock.requests.length;
     await server.sessions.get(id)!.prompt("delegate and use-fallback");
     await server.receipts.waitFor("idle", id);
 
-    const childRequest = [...mock.requests].reverse().find(isChildRequest)!;
+    const childRequest = mock.requests
+      .slice(before)
+      .findLast(
+        (request) =>
+          isChildRequest(request) && systemText(request).includes("# Agent: fallback-bot"),
+      )!;
     const childSystem = systemText(childRequest);
     expect(childSystem).toContain("Configured default outcome: Report only");
     expect(childSystem).toContain("Effective outcome: Report only");
@@ -244,6 +263,23 @@ describe("managed_subagent{agent}: named delegation", () => {
     // The default outcome adds nothing, but it also does not revoke the named
     // agent's already-configured capability.
     expect(tools).toContain('"name":"write"');
+  });
+
+  it("refuses a named extension after it is globally disabled", async () => {
+    const disabled = await fetch(`http://127.0.0.1:${server.port}/resources/extensions/disabled`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: namedExtensionPath, disabled: true }),
+    });
+    expect(disabled.status).toBe(200);
+
+    const before = mock.requests.length;
+    const id = await startSession();
+    await server.sessions.get(id)!.prompt("delegate a code review");
+    await server.receipts.waitFor("idle", id);
+    const childRequest = mock.requests.slice(before).findLast(isChildRequest);
+    expect(childRequest).toBeDefined();
+    expect(systemText(childRequest!)).not.toContain(EXTENSION_SENTINEL);
   });
 
   it("surfaces a clean error when the named agent does not exist", async () => {

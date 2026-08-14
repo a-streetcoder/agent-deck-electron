@@ -30,6 +30,10 @@ export const SUBAGENT_EXPECTED_OUTCOME_LABELS: Record<SubagentExpectedOutcome, s
 };
 
 export const AGENT_OUTPUT_MAX_LENGTH = 1000;
+/** Agent extension entries are catalog file paths. Keep authored metadata bounded
+ * without conflating an absent default policy with an explicit empty allowlist. */
+export const AGENT_EXTENSION_MAX_ITEMS = 64;
+export const AGENT_EXTENSION_MAX_LENGTH = 4096;
 export const AGENT_DEFAULT_READ_MAX_BYTES = 512;
 export const AGENT_DEFAULT_READ_MAX_ITEMS = 32;
 export const AGENT_DEFAULT_READ_TOTAL_MAX_BYTES = 1102;
@@ -96,6 +100,36 @@ export function validateAgentDefaultReadsForAuthoring(
     );
   }
   return normalized;
+}
+
+/** Preserve absence vs explicit empty while trimming, bounding, and stably
+ * de-duplicating hand-authored extension entries. Invalid entries fail soft. */
+export function normalizeAgentExtensions(
+  value: readonly string[] | undefined,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const entry = raw.trim();
+    if (!entry || entry.length > AGENT_EXTENSION_MAX_LENGTH || seen.has(entry)) continue;
+    seen.add(entry);
+    normalized.push(entry);
+    if (normalized.length === AGENT_EXTENSION_MAX_ITEMS) break;
+  }
+  return normalized;
+}
+
+/** Strict authoring counterpart. Unlike scanning, API writes reject overflow so
+ * the renderer cannot silently lose a selection. */
+export function validateAgentExtensionsForAuthoring(value: readonly string[]): string[] {
+  if (value.length > AGENT_EXTENSION_MAX_ITEMS) {
+    throw new Error(`Extensions cannot exceed ${AGENT_EXTENSION_MAX_ITEMS} entries.`);
+  }
+  if (value.some((entry) => entry.length > AGENT_EXTENSION_MAX_LENGTH)) {
+    throw new Error(`Each extension entry cannot exceed ${AGENT_EXTENSION_MAX_LENGTH} characters.`);
+  }
+  return normalizeAgentExtensions(value) ?? [];
 }
 
 /** Native output metadata enters a child prompt as exactly one advisory value. */

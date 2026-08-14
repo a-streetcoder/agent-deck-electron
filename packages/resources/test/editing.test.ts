@@ -157,6 +157,42 @@ describe("builtin override edit safety", () => {
 });
 
 describe("agent/skill file writer", () => {
+  it("round-trips default, explicit empty, and ordered extension allowlists", () => {
+    const home = makeHome();
+    const roots = { home };
+    writeAgentFile(roots, "global", "extension-policy", { body: "Policy." });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "extension-policy")?.extensions,
+    ).toBeUndefined();
+
+    writeAgentFile(roots, "global", "extension-policy", { extensions: [] });
+    let content = readFileSync(
+      path.join(home, ".pi", "agent", "agents", "extension-policy.md"),
+      "utf8",
+    );
+    expect(content).toContain("extensions: []");
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "extension-policy")?.extensions,
+    ).toEqual([]);
+
+    writeAgentFile(roots, "global", "extension-policy", {
+      extensions: [" /one.ts ", "/two.ts", "/one.ts"],
+    });
+    content = readFileSync(
+      path.join(home, ".pi", "agent", "agents", "extension-policy.md"),
+      "utf8",
+    );
+    expect(content).toContain("- /one.ts");
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "extension-policy")?.extensions,
+    ).toEqual(["/one.ts", "/two.ts"]);
+
+    writeAgentFile(roots, "global", "extension-policy", { extensions: null });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "extension-policy")?.extensions,
+    ).toBeUndefined();
+  });
+
   it("writes a new global agent to existing ~/.agents, otherwise the modern catalog", () => {
     const modernHome = makeHome();
     expect(writeAgentFile({ home: modernHome }, "global", "modern", { body: "Modern." })).toBe(

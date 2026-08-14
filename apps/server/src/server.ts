@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
@@ -434,6 +434,7 @@ async function initServer(
         defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
         output: agent.output,
+        extensions: agent.extensions,
       };
     },
     // Live autoTitle preference (native OnboardingPreferencesView). `settings` is
@@ -575,7 +576,7 @@ async function initServer(
         tools: agent.tools?.filter((tool) => !BRIDGE_ONLY_TOOLS.has(tool)),
         mcpDirectTools: agent.mcpDirectTools,
         skillDirs,
-        extensions: agent.extensions ?? [],
+        extensions: enabledExtensionPaths(projectId, agent.extensions),
         mcpServers: agent.mcpServers ?? [],
         defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
@@ -603,16 +604,38 @@ async function initServer(
   // flag is keyed by the absolute path, so it applies to discovered and added
   // alike. Excluding bridge-conflicting extensions is a SAFETY requirement: pi
   // crashes if a user extension re-registers a bridge tool name.
-  function enabledExtensionPaths(projectId?: string): string[] {
+  function enabledExtensionPaths(projectId?: string, allowlist?: readonly string[]): string[] {
     // "agentDeckManaged" (native PiAgentExtensionLoadingMode): load ONLY the app
-    // bridges — the user's own pi extensions stay off (still listed in the UI).
+    // bridges — neither defaults nor an agent-authored path may bypass this mode.
     if (settings.get().extensionLoadingMode === "agentDeckManaged") return [];
-    const disabled = new Set(settings.get().disabledExtensions);
-    const registry = settings.get().extensions;
-    const discovered = scanExtensions(rootsFor(projectId)).map((e) => e.path);
-    return [...new Set([...registry, ...discovered])].filter(
-      (p) => !disabled.has(p) && extensionBridgeConflictAt(p) === null,
+    const disabled = new Set(
+      settings.get().disabledExtensions.map((entry) => nodePath.resolve(entry)),
     );
+    const registry = settings.get().extensions.map((entry) => nodePath.resolve(entry));
+    const discovered = scanExtensions(rootsFor(projectId)).map((entry) =>
+      nodePath.resolve(entry.path),
+    );
+    const catalog = [...new Set([...registry, ...discovered])];
+    const requested =
+      allowlist === undefined ? catalog : allowlist.map((entry) => nodePath.resolve(entry));
+    const catalogSet = new Set(catalog);
+    return [...new Set(requested)].filter((entry) => {
+      // Agent metadata can only narrow the current extension catalog. Package
+      // refs, stale paths, directories, disabled files, and bridge conflicts
+      // remain authored for diagnosis but fail closed at execution.
+      if (
+        !catalogSet.has(entry) ||
+        disabled.has(entry) ||
+        extensionBridgeConflictAt(entry) !== null
+      ) {
+        return false;
+      }
+      try {
+        return statSync(entry).isFile();
+      } catch {
+        return false;
+      }
+    });
   }
 
   // Native memory tools (memory.md), registered on the bridge and scoped to each

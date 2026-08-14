@@ -2,9 +2,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import {
+  AGENT_EXTENSION_MAX_ITEMS,
+  AGENT_EXTENSION_MAX_LENGTH,
   AGENT_OUTPUT_MAX_LENGTH,
   normalizeAgentOutput,
   validateAgentDefaultReadsForAuthoring,
+  validateAgentExtensionsForAuthoring,
   type AgentInfo,
   type SkillInfo,
 } from "@agent-deck/domain";
@@ -45,6 +48,11 @@ const agentEditFields = z.object({
   systemPromptMode: z.enum(["replace", "append"]).optional(),
   tools: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
+  extensions: z
+    .array(z.string().max(AGENT_EXTENSION_MAX_LENGTH))
+    .max(AGENT_EXTENSION_MAX_ITEMS)
+    .nullable()
+    .optional(),
   mcpServers: z.array(z.string()).optional(),
   // Writer/scanner/runtime sanitization is deliberately entry-by-entry so one
   // unsafe manually authored path does not erase its safe peers.
@@ -861,20 +869,37 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   // session's --extension list. Enable/disable without removing the entry.
   fastify.get("/resources/extensions", async (request) => {
     const projectId = (request.query as { projectId?: string }).projectId;
-    const disabled = new Set(settings.get().disabledExtensions);
+    // Match launch normalization so a legacy relative setting cannot appear
+    // enabled in the catalog while its resolved launch path is disabled.
+    const disabled = new Set(
+      settings.get().disabledExtensions.map((filePath) => nodePath.resolve(filePath)),
+    );
     // Merge the manually-added registry with the ones DISCOVERED in the standard
     // pi dirs (global + this project's), so a user sees their existing extensions
     // without adding each by hand. Deduped by absolute path; a discovered file
     // that was also added manually is shown once, marked as added.
-    const registry = new Set(settings.get().extensions);
+    const registry = new Set(
+      settings.get().extensions.map((filePath) => nodePath.resolve(filePath)),
+    );
     const discovered = scanExtensions(rootsFor(projectId));
-    const scopeByPath = new Map(discovered.map((e) => [e.path, e.scope]));
-    const paths = [...new Set([...settings.get().extensions, ...discovered.map((e) => e.path)])];
+    const scopeByPath = new Map(
+      discovered.map((entry) => [nodePath.resolve(entry.path), entry.scope]),
+    );
+    const paths = [
+      ...new Set([...registry, ...discovered.map((entry) => nodePath.resolve(entry.path))]),
+    ];
     return {
+      loadingMode: settings.get().extensionLoadingMode,
       extensions: paths.map((filePath) => ({
         path: filePath,
         name: nodePath.basename(filePath),
-        exists: existsSync(filePath),
+        exists: (() => {
+          try {
+            return statSync(filePath).isFile();
+          } catch {
+            return false;
+          }
+        })(),
         disabled: disabled.has(filePath),
         // Where it came from, so the UI can label it (native scope/source).
         scope: scopeByPath.get(filePath) ?? "global",
@@ -987,21 +1012,47 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   // any prior override (reverting a field back to base clears it).
   fastify.put("/resources/agents", async (request, reply) => {
     const parsed = agentEditBody.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    const { projectId, scope, name, edit, createFromBuiltin } = parsed.data;
-    let validatedEdit = edit;
-    if (edit.defaultReads !== undefined) {
-      try {
-        validatedEdit = {
-          ...edit,
-          defaultReads: validateAgentDefaultReadsForAuthoring(edit.defaultReads) ?? [],
-        };
-      } catch (error) {
+    if (!parsed.success) {
+      const extensionIssue = parsed.error.issues.find(
+        (issue) => issue.path[0] === "edit" && issue.path[1] === "extensions",
+      );
+      if (extensionIssue) {
         return reply.status(400).send({
           error:
-            error instanceof Error ? error.message : "Default reads exceed the authoring budget.",
+            extensionIssue.code === "invalid_type"
+              ? "Extensions must be a list of file paths or null."
+              : extensionIssue.path.length > 2
+                ? `Each extension entry cannot exceed ${AGENT_EXTENSION_MAX_LENGTH} characters.`
+                : `Extensions cannot exceed ${AGENT_EXTENSION_MAX_ITEMS} entries.`,
         });
       }
+      return reply.status(400).send({ error: parsed.error.message });
+    }
+    const { projectId, scope, name, edit, createFromBuiltin } = parsed.data;
+    if (scope === "builtin" && edit.extensions !== undefined) {
+      return reply.status(400).send({ error: "Builtin extension overrides are not supported." });
+    }
+    let validatedEdit = edit;
+    try {
+      if (edit.extensions !== undefined && edit.extensions !== null) {
+        validatedEdit = {
+          ...validatedEdit,
+          extensions: validateAgentExtensionsForAuthoring(edit.extensions),
+        };
+      }
+      if (edit.defaultReads !== undefined) {
+        validatedEdit = {
+          ...validatedEdit,
+          defaultReads: validateAgentDefaultReadsForAuthoring(edit.defaultReads) ?? [],
+        };
+      }
+    } catch (error) {
+      return reply.status(400).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Agent extension or default-read metadata exceeds the authoring budget.",
+      });
     }
     const roots = rootsFor(projectId);
     try {
