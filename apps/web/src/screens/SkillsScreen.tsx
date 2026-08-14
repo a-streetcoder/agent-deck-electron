@@ -554,6 +554,27 @@ export function SkillsScreen() {
     return names;
   }, [projects]);
 
+  // SKL-12: which managed collection (imported repository) each catalog skill belongs to —
+  // native's repositoryBySkillID, joined by catalog name because the engine materializes
+  // collection skills into the GLOBAL catalog. Only confirmed collection-v1 records
+  // participate, and only a global-scope skill can be the materialized one — a project
+  // skill sharing the name is a different file and must not inherit the provenance
+  // (review, Codex).
+  const collectionByName = useMemo(() => {
+    const map = new Map<string, SkillRepo>();
+    for (const repo of repos) {
+      if (repo.storageMode !== "collection-v1") continue;
+      for (const name of repo.skillNames) if (!map.has(name)) map.set(name, repo);
+    }
+    return map;
+  }, [repos]);
+
+  const collectionFor = (skill: SkillInfo): SkillRepo | undefined =>
+    skill.scope === "global" ? collectionByName.get(skill.name) : undefined;
+
+  const repoLabel = (repo: SkillRepo): string =>
+    repo.remoteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "");
+
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     return skills.filter(
@@ -1702,7 +1723,7 @@ export function SkillsScreen() {
                         className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
                         title={repo.remoteUrl}
                       >
-                        {repo.remoteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "")}
+                        {repoLabel(repo)}
                       </span>
                       {repo.available === false ? (
                         <span
@@ -2003,6 +2024,32 @@ export function SkillsScreen() {
                       {skill.filePath}
                     </div>
                   ) : null}
+                  {(() => {
+                    // SKL-12: native's synced-repository binding, inline on the row
+                    const repo = collectionFor(skill);
+                    if (!repo) return null;
+                    return (
+                      <div
+                        className="flex min-w-0 items-center gap-1.5 truncate text-micro text-text-muted"
+                        data-testid={`skill-collection-${skill.name}`}
+                        title={repo.remoteUrl}
+                      >
+                        <span className="truncate">Synced · {repoLabel(repo)}</span>
+                        {repo.available !== false && updatable.has(repo.id) ? (
+                          <span
+                            data-testid={`skill-collection-update-${skill.name}`}
+                            className="shrink-0 rounded-capsule px-1.5 text-micro font-medium"
+                            style={{
+                              background: "var(--color-selection-fill)",
+                              color: "var(--color-brand-accent)",
+                            }}
+                          >
+                            Update available
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {!isReadOnlyScope(skill.scope) ? (
                   <ControlButton
@@ -2155,6 +2202,57 @@ export function SkillsScreen() {
 
           <div className="mt-5 space-y-4">
             <AssignmentCard skill={selected} />
+            {(() => {
+              // SKL-12: native's "Synced Repository" card — this skill's managed collection,
+              // with the update action wired to the same repo endpoint the panel uses.
+              const repo = collectionFor(selected);
+              if (!repo) return null;
+              return (
+                <div
+                  data-testid="skill-detail-collection"
+                  className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                >
+                  <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    Synced collection
+                  </div>
+                  <div className="space-y-1 text-xs text-text-secondary">
+                    <div className="truncate" title={repo.remoteUrl}>
+                      <span className="text-text-muted">Source</span> · {repoLabel(repo)}
+                    </div>
+                    {repo.ref ? (
+                      <div>
+                        <span className="text-text-muted">Ref</span> · {repo.ref}
+                      </div>
+                    ) : null}
+                    <div>
+                      <span className="text-text-muted">Selection</span> · {repo.skillNames.length}{" "}
+                      skill{repo.skillNames.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                  {repo.available !== false && updatable.has(repo.id) ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span
+                        className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
+                        style={{
+                          background: "var(--color-selection-fill)",
+                          color: "var(--color-brand-accent)",
+                        }}
+                      >
+                        Update available
+                      </span>
+                      <ControlButton
+                        data-testid="skill-detail-collection-update"
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        disabled={repoBusy[repo.id] !== undefined}
+                        onClick={() => void updateRepo(repo.id)}
+                      >
+                        {repoBusy[repo.id] === "update" ? "Updating…" : "Update collection"}
+                      </ControlButton>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
             <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
               <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
                 SKILL.md

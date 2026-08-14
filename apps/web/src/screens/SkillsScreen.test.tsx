@@ -602,6 +602,161 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     });
   });
 
+  it("collection membership renders on synced skills with the repo's update state (SKL-12)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "synced from a collection",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                disabled: false,
+              },
+              {
+                name: "loose",
+                description: "not in any collection",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/loose/SKILL.md",
+                disabled: false,
+              },
+              {
+                name: "proj-skill",
+                description: "a PROJECT skill shadowing a collection name",
+                scope: "project",
+                filePath: "C:/proj/.pi/skills/proj-skill/SKILL.md",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(
+          jsonResponse({
+            repos: [
+              {
+                id: "c1",
+                remoteUrl: "https://github.com/owner/repo.git",
+                skillNames: ["alpha", "proj-skill"],
+                storageMode: "collection-v1",
+                available: true,
+                lastSyncedCommit: "abc",
+                importedAt: "2026-08-14",
+              },
+              {
+                // a legacy record WITHOUT collection-v1 storage must never attach provenance
+                id: "legacy-1",
+                remoteUrl: "https://github.com/legacy/repo.git",
+                skillNames: ["loose"],
+                available: true,
+                lastSyncedCommit: "def",
+                importedAt: "2026-08-14",
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-repos/legacy-1/check" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ updateAvailable: false }));
+      }
+      if (url === "/resources/skill-repos/c1/check" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ updateAvailable: true }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    // the collection-bound skill carries a provenance line naming its repository
+    const provenance = await screen.findByTestId("skill-collection-alpha");
+    expect(provenance.textContent).toContain("owner/repo");
+    // the repo's update state surfaces on the skill row too (native's synced-repo card)
+    await screen.findByTestId("skill-collection-update-alpha");
+    // a skill outside every collection shows no such line — including one that a LEGACY
+    // (non-collection-v1) repository record claims by name (review, Codex)
+    expect(screen.queryByTestId("skill-collection-loose")).toBeNull();
+    // collections materialize GLOBAL skills — a project skill sharing a collection name is a
+    // different file and must NOT inherit the provenance (review, Codex)
+    expect(screen.queryByTestId("skill-collection-proj-skill")).toBeNull();
+  });
+
+  it("the skill detail shows the synced-collection card with an update action (SKL-12)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "synced",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(
+          jsonResponse({
+            repos: [
+              {
+                id: "c1",
+                remoteUrl: "https://github.com/owner/repo.git",
+                ref: "main",
+                skillNames: ["alpha", "beta"],
+                storageMode: "collection-v1",
+                available: true,
+                lastSyncedCommit: "abc",
+                importedAt: "2026-08-14",
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-repos/c1/check" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ updateAvailable: true }));
+      }
+      if (url === "/resources/skill-repos/c1/update" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true, conflicts: [] }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    // the (only) skill is auto-selected; its detail carries the collection card
+    const card = await screen.findByTestId("skill-detail-collection");
+    expect(card.textContent).toContain("owner/repo");
+    expect(card.textContent).toContain("main");
+    expect(card.textContent).toContain("2 skills");
+
+    // the update action drives the SAME repo update endpoint the panel uses; the shared
+    // synchronous per-repo lock keeps a rapid double-click to ONE request (review, Codex)
+    const updateButton = await screen.findByTestId("skill-detail-collection-update");
+    fireEvent.click(updateButton);
+    fireEvent.click(updateButton);
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(
+        ([url, init2]) =>
+          String(url) === "/resources/skill-repos/c1/update" && init2?.method === "POST",
+      );
+      expect(calls).toHaveLength(1);
+    });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);
