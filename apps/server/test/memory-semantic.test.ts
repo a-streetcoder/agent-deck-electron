@@ -162,6 +162,93 @@ describe("semantic memory opt-in via /memory/search", () => {
     expect(await search(projectId, query)).toEqual(expected);
   });
 
+  it("keeps GET and preference PATCH passive until explicit check or search", async () => {
+    await setup(conceptEmbedder);
+    const base = `http://127.0.0.1:${server!.port}`;
+
+    expect((await (await fetch(`${base}/memory/semantic-status`)).json()) as unknown).toMatchObject(
+      {
+        recall: { readiness: "not_requested", mode: "lexical", reason: null },
+      },
+    );
+    await setSemantic(true);
+    expect((await (await fetch(`${base}/memory/semantic-status`)).json()) as unknown).toMatchObject(
+      {
+        recall: { readiness: "not_checked", mode: "lexical", reason: null },
+      },
+    );
+    const checked = await fetch(`${base}/memory/semantic-status/check`, { method: "POST" });
+    expect(checked.status).toBe(200);
+    expect((await checked.json()) as unknown).toMatchObject({
+      recall: { readiness: "ready", mode: "semantic", reason: null },
+    });
+  });
+
+  it("returns the same recall metadata from HTTP search and the memory tool", async () => {
+    const { projectId, projectPath } = await setup({
+      async embed() {
+        throw new Error("private runtime detail");
+      },
+    });
+    await setSemantic(true);
+    const base = `http://127.0.0.1:${server!.port}`;
+    const response = (await (
+      await fetch(
+        `${base}/memory/search?projectId=${encodeURIComponent(projectId)}&q=${encodeURIComponent("oauth token")}`,
+      )
+    ).json()) as { recall: unknown };
+    expect(response.recall).toMatchObject({
+      readiness: "error",
+      mode: "lexical_fallback",
+      reason: "embedding_failed",
+    });
+    expect(JSON.stringify(response.recall)).not.toContain("private runtime detail");
+
+    const sessionId = "semantic-metadata-session";
+    const liveSessions = (
+      server!.sessions as unknown as { sessions: Map<string, { meta: { cwd: string } }> }
+    ).sessions;
+    liveSessions.set(sessionId, { meta: { cwd: projectPath } });
+    try {
+      const tool = await server!.bridge.dispatch(
+        {
+          tool: "agent_deck_memory_search",
+          sessionId,
+          toolCallId: "metadata-call",
+          token: "test-token",
+          params: { query: "oauth token" },
+        },
+        { token: "test-token" },
+      );
+      expect(tool.details).toMatchObject({
+        recall: { mode: "lexical_fallback", reason: "embedding_failed" },
+      });
+    } finally {
+      liveSessions.delete(sessionId);
+    }
+  });
+
+  it("includes passive recall metadata when the memory tool has no project", async () => {
+    await setup(conceptEmbedder);
+    await setSemantic(true);
+
+    const tool = await server!.bridge.dispatch(
+      {
+        tool: "agent_deck_memory_search",
+        sessionId: "session-without-project",
+        toolCallId: "no-project-memory",
+        token: "test-token",
+        params: { query: "oauth" },
+      },
+      { token: "test-token" },
+    );
+
+    expect(tool.details).toMatchObject({
+      hits: 0,
+      recall: { readiness: "not_checked", mode: "lexical", reason: null },
+    });
+  });
+
   it("toggles semantic ranking on the same server while an injected embedder only supplies implementation", async () => {
     let embedCalls = 0;
     const countingEmbedder: Embedder = {

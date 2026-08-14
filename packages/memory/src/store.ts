@@ -343,31 +343,46 @@ function discriminativeOverlaps(
  * `semanticWeight` remains accepted for source compatibility with earlier
  * callers, but native-calibrated hybrid scoring intentionally does not vary it.
  */
-export async function semanticSearchMemories(
+export type SemanticSearchFailure = "embedding_failed" | "invalid_embedding";
+
+export type SemanticSearchOutcome =
+  | { hits: MemorySearchHit[]; mode: "semantic" }
+  | { hits: MemorySearchHit[]; mode: "lexical_fallback"; reason: SemanticSearchFailure };
+
+/** Outcome-bearing semantic search for owners that must surface fallback truthfully. */
+export async function semanticSearchMemoriesWithOutcome(
   store: MemoryStore,
   query: string,
   embedder: Embedder,
   options: { limit?: number; semanticWeight?: number } = {},
-): Promise<MemorySearchHit[]> {
+): Promise<SemanticSearchOutcome> {
   const limit = Math.max(0, options.limit ?? DEFAULT_SEARCH_LIMIT);
   const records = injectable(listMemories(store));
-  if (limit === 0 || records.length === 0 || !query.trim()) return [];
+  if (limit === 0 || records.length === 0 || !query.trim()) return { hits: [], mode: "semantic" };
 
-  let rawScores: number[];
+  let vectors: number[][];
   try {
-    const vectors = await embedder.embed([query, ...records.map(memoryEmbedText)]);
-    if (!validEmbeddingBatch(vectors, records.length + 1)) {
-      throw new Error("invalid embedding batch");
-    }
-    const [queryVec, ...docVecs] = vectors as [number[], ...number[][]];
-    rawScores = centeredCosineScores(queryVec, docVecs);
+    vectors = await embedder.embed([query, ...records.map(memoryEmbedText)]);
   } catch {
-    return searchMemories(store, query, limit);
+    return {
+      hits: searchMemories(store, query, limit),
+      mode: "lexical_fallback",
+      reason: "embedding_failed",
+    };
   }
+  if (!validEmbeddingBatch(vectors, records.length + 1)) {
+    return {
+      hits: searchMemories(store, query, limit),
+      mode: "lexical_fallback",
+      reason: "invalid_embedding",
+    };
+  }
+  const [queryVec, ...docVecs] = vectors as [number[], ...number[][]];
+  const rawScores = centeredCosineScores(queryVec, docVecs);
 
   // An exactly-centroid query has no semantic direction and must abstain rather
   // than turning lexical overlap into a result on ambiguous geometry.
-  if (rawScores.length !== records.length) return [];
+  if (rawScores.length !== records.length) return { hits: [], mode: "semantic" };
 
   const overlaps = discriminativeOverlaps(records, semanticInformativeTerms(query));
   const centered = records.length >= 2;
@@ -406,13 +421,26 @@ export async function semanticSearchMemories(
       : overlap >= MIN_QUERY_OVERLAP,
   );
   const best = qualified[0]?.hit.score;
-  if (best === undefined || best < MIN_BEST_SCORE) return [];
+  if (best === undefined || best < MIN_BEST_SCORE) return { hits: [], mode: "semantic" };
 
   const keepCutoff = best * KEEP_SCORE_RATIO;
-  return qualified
-    .filter(({ hit }) => hit.score >= keepCutoff)
-    .slice(0, limit)
-    .map(({ hit }) => hit);
+  return {
+    mode: "semantic",
+    hits: qualified
+      .filter(({ hit }) => hit.score >= keepCutoff)
+      .slice(0, limit)
+      .map(({ hit }) => hit),
+  };
+}
+
+/** Backward-compatible hit-only API. Fallback remains intentionally transparent here. */
+export async function semanticSearchMemories(
+  store: MemoryStore,
+  query: string,
+  embedder: Embedder,
+  options: { limit?: number; semanticWeight?: number } = {},
+): Promise<MemorySearchHit[]> {
+  return (await semanticSearchMemoriesWithOutcome(store, query, embedder, options)).hits;
 }
 
 /**

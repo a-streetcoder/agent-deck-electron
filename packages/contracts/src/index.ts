@@ -7,6 +7,7 @@ export * from "./editor.ts";
 export * from "./files.ts";
 export * from "./history.ts";
 export * from "./keybindings.ts";
+export * from "./memory.ts";
 export * from "./protocol.ts";
 export * from "./rpc.ts";
 export * from "./scripts.ts";

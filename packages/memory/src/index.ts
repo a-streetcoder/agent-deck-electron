@@ -16,9 +16,12 @@ export {
   markStale,
   searchMemories,
   semanticSearchMemories,
+  semanticSearchMemoriesWithOutcome,
   setMemoryStatus,
   writeMemory,
   type MemoryStore,
+  type SemanticSearchFailure,
+  type SemanticSearchOutcome,
 } from "./store.ts";
 export { centeredCosineScores, cosineSimilarity, meanCenter, type Embedder } from "./semantic.ts";
 export { createOnDeviceEmbedder, EmbedderUnavailableError } from "./embedder.ts";

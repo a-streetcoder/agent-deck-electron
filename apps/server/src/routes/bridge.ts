@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { buildRecalledMemories, type MemoryStore } from "@agent-deck/memory";
 import { z } from "zod";
 import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts";
@@ -56,7 +57,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     pendingSupervisor,
     memoryEnabled,
     memoryBaseDir,
-    recallMemories,
+    semanticRecall,
   } = ctx;
 
   // Handle a child subagent's contact_supervisor call. progress_update records +
@@ -213,14 +214,17 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   async function handleRecall(
     sessionId: string,
     params: Record<string, unknown>,
-  ): Promise<{ content: string }> {
-    if (!memoryEnabled) return { content: "" };
+  ): Promise<{ content: string; recall: SemanticRecallStatus }> {
+    if (!memoryEnabled) return { content: "", recall: semanticRecall.getStatus() };
     const query = typeof params.query === "string" ? params.query : "";
     const cwd = sessions.get(sessionId)?.meta.cwd;
-    if (!cwd || !query.trim()) return { content: "" };
+    if (!cwd || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
     const store: MemoryStore = { baseDir: memoryBaseDir, projectPath: cwd };
-    const hits = await recallMemories(store, query, RECALL_LIMIT);
-    return { content: buildRecalledMemories(hits.map((h) => h.record)) };
+    const result = await semanticRecall.recall(store, query, RECALL_LIMIT);
+    return {
+      content: buildRecalledMemories(result.hits.map((hit) => hit.record)),
+      recall: result.recall,
+    };
   }
 
   // The app side of the bridge: a session's generated extension POSTs each

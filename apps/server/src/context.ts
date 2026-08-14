@@ -1,7 +1,6 @@
 import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
 import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
-import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
 import type {
   ProviderLoginManager,
   ResourceRoots,
@@ -21,6 +20,7 @@ import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
+import type { SemanticRecallCoordinator } from "./semanticRecall.ts";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -143,7 +143,7 @@ export interface ServerContext {
   memoryBaseDir: string;
   worktreesRoot: string;
   sessionWorktreeStore: SessionWorktreeStore;
-  recallMemories(store: MemoryStore, query: string, limit?: number): Promise<MemorySearchHit[]>;
+  semanticRecall: SemanticRecallCoordinator;
   resolveNamedAgent(
     name: string,
     projectId?: string,

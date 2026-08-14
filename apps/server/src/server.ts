@@ -23,17 +23,7 @@ import {
 import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
-import {
-  buildMemoryPreamble,
-  createOnDeviceEmbedder,
-  EmbedderUnavailableError,
-  injectableIndex,
-  searchMemories,
-  semanticSearchMemories,
-  type Embedder,
-  type MemorySearchHit,
-  type MemoryStore,
-} from "@agent-deck/memory";
+import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
 import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
@@ -94,6 +84,7 @@ import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
 import { setupWebSocket } from "./wsHandler.ts";
+import { SemanticRecallCoordinator } from "./semanticRecall.ts";
 
 /** Child-only tools must not leak into a parent agent's launch allowlist.
  * Parent bridge tools remain eligible because their bridge is actually exposed. */
@@ -248,47 +239,13 @@ async function initServer(
   const sessionWorktreeStore = new SessionWorktreeStore(dataDir);
   const worktreesRoot = sessionWorktreeStore.rootPath;
 
-  // Recall engine. The persisted global preference owns enablement; an injected
-  // embedder supplies only the implementation. Every recall reads the live
-  // setting, so Memory search, bridge-tool recall, and the next turn all switch
-  // immediately without replacing Pi. A successfully loaded embedder remains
-  // cached across disable/re-enable. Availability/fallback visibility is MEM-04/05.
-  let embedderPromise: Promise<Embedder> | undefined;
-  let embedderFailed = false;
-  async function resolveEmbedder(): Promise<Embedder | undefined> {
-    if (options.memoryEmbedder) return options.memoryEmbedder;
-    if (embedderFailed) return undefined;
-    if (!embedderPromise) embedderPromise = createOnDeviceEmbedder();
-    try {
-      return await embedderPromise;
-    } catch (error) {
-      embedderPromise = undefined;
-      const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof EmbedderUnavailableError) {
-        // A missing optional dep can't appear without a restart — stop retrying.
-        embedderFailed = true;
-        console.warn(`[memory] semantic recall unavailable, using lexical: ${message}`);
-      } else {
-        // A transient init failure (e.g. first-run model download) — allow retry.
-        console.warn(
-          `[memory] semantic embedder init failed (will retry), using lexical: ${message}`,
-        );
-      }
-      return undefined;
-    }
-  }
-  async function recallMemories(
-    store: MemoryStore,
-    query: string,
-    limit?: number,
-  ): Promise<MemorySearchHit[]> {
-    if (!settings.get().semanticMemoryEnabled) return searchMemories(store, query, limit);
-    const embedder = await resolveEmbedder();
-    // semanticSearchMemories itself falls back to lexical if an embed call throws.
-    return embedder
-      ? semanticSearchMemories(store, query, embedder, limit === undefined ? {} : { limit })
-      : searchMemories(store, query, limit);
-  }
+  // The backend owns readiness, optional-runtime initialization, and truthful
+  // per-recall fallback metadata. Construction and passive status reads do not
+  // initialize the optional embedder; search or the explicit check does.
+  const semanticRecall = new SemanticRecallCoordinator(
+    () => settings.get().semanticMemoryEnabled,
+    options.memoryEmbedder,
+  );
 
   // `broadcast` lives in the WebSocket layer (wsHandler.ts) and
   // `cancelChildSupervisorRequests` in the bridge/supervisor route module —
@@ -662,7 +619,8 @@ async function initServer(
       bridge,
       memoryBaseDir,
       (sessionId) => sessions.get(sessionId)?.meta.cwd,
-      recallMemories,
+      (store, query, limit) => semanticRecall.recall(store, query, limit),
+      () => semanticRecall.getStatus(),
     );
   }
 
@@ -1084,7 +1042,7 @@ async function initServer(
     memoryBaseDir,
     worktreesRoot,
     sessionWorktreeStore,
-    recallMemories,
+    semanticRecall,
     resolveNamedAgent,
     extensionBridgeConflictAt,
     enabledExtensionPaths,

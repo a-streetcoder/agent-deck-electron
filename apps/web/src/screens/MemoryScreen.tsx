@@ -6,6 +6,7 @@ import {
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Archive, Brain, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
@@ -50,46 +51,77 @@ const STATUS_STYLE: Record<MemoryStatus, string> = {
 
 type SemanticPreferenceState = "loading" | "ready" | "error";
 
-function SemanticMemoryPreference({ onChanged }: { onChanged: () => void }) {
+function SemanticMemoryPreference({
+  onChanged,
+  recall,
+  setRecall,
+}: {
+  onChanged: () => void;
+  recall: SemanticRecallStatus | null;
+  setRecall: (status: SemanticRecallStatus) => void;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [state, setState] = useState<SemanticPreferenceState>("loading");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const loadSeq = useRef(0);
+  const checkSeq = useRef(0);
+  const toggleSeq = useRef(0);
+  const authoritativeRecall = useRef<SemanticRecallStatus | null>(null);
 
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    const seq = ++loadSeq.current;
-    setState("loading");
-    setMessage(null);
-    try {
-      const response = await fetch("/settings", { signal });
-      if (!response.ok) throw new Error("We couldn’t load the semantic memory preference.");
-      const data = (await response.json()) as {
-        settings: { semanticMemoryEnabled: boolean };
-      };
-      if (seq !== loadSeq.current || signal?.aborted) return;
-      setEnabled(data.settings.semanticMemoryEnabled);
-      setState("ready");
-    } catch (cause) {
-      if (seq !== loadSeq.current || signal?.aborted) return;
-      setState("error");
-      setMessage(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, []);
+  const load = useCallback(
+    async (signal?: AbortSignal): Promise<void> => {
+      const seq = ++loadSeq.current;
+      setState("loading");
+      setMessage(null);
+      try {
+        const [settingsResponse, statusResponse] = await Promise.all([
+          fetch("/settings", { signal }),
+          fetch("/memory/semantic-status", { signal }),
+        ]);
+        if (!settingsResponse.ok || !statusResponse.ok) {
+          throw new Error("We couldn’t load semantic memory status.");
+        }
+        const settingsData = (await settingsResponse.json()) as {
+          settings: { semanticMemoryEnabled: boolean };
+        };
+        const statusData = (await statusResponse.json()) as { recall: SemanticRecallStatus };
+        if (seq !== loadSeq.current || signal?.aborted) return;
+        setEnabled(settingsData.settings.semanticMemoryEnabled);
+        authoritativeRecall.current = statusData.recall;
+        setRecall(statusData.recall);
+        setState("ready");
+      } catch (cause) {
+        if (seq !== loadSeq.current || signal?.aborted) return;
+        setState("error");
+        setMessage(cause instanceof Error ? cause.message : String(cause));
+      }
+    },
+    [setRecall],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => {
       loadSeq.current += 1;
+      checkSeq.current += 1;
+      toggleSeq.current += 1;
       controller.abort();
     };
   }, [load]);
+
+  useEffect(() => {
+    if (recall && recall.readiness !== "checking") authoritativeRecall.current = recall;
+  }, [recall]);
 
   const toggle = async (): Promise<void> => {
     if (state !== "ready" || saving) return;
     const previous = enabled;
     const next = !previous;
+    const seq = ++toggleSeq.current;
+    const recallBeforeToggle = authoritativeRecall.current;
+    checkSeq.current += 1;
     setEnabled(next);
     setSaving(true);
     setMessage("Saving…");
@@ -103,16 +135,89 @@ function SemanticMemoryPreference({ onChanged }: { onChanged: () => void }) {
       const data = (await response.json()) as {
         settings: { semanticMemoryEnabled: boolean };
       };
+      if (seq !== toggleSeq.current) return;
       setEnabled(data.settings.semanticMemoryEnabled);
+      const statusResponse = await fetch("/memory/semantic-status");
+      if (seq !== toggleSeq.current) return;
+      if (statusResponse.ok) {
+        const statusData = (await statusResponse.json()) as { recall: SemanticRecallStatus };
+        authoritativeRecall.current = statusData.recall;
+        setRecall(statusData.recall);
+      }
       setMessage("Saved");
       onChanged();
     } catch (cause) {
+      if (seq !== toggleSeq.current) return;
       setEnabled(previous);
+      let recoveredRecall = recallBeforeToggle;
+      try {
+        const statusResponse = await fetch("/memory/semantic-status");
+        if (statusResponse.ok) {
+          const statusData = (await statusResponse.json()) as { recall: SemanticRecallStatus };
+          recoveredRecall = statusData.recall;
+        }
+      } catch {
+        // The last authoritative snapshot is safer than retaining the
+        // optimistic checking state after the preference mutation failed.
+      }
+      if (seq !== toggleSeq.current) return;
+      if (recoveredRecall) {
+        authoritativeRecall.current = recoveredRecall;
+        setRecall(recoveredRecall);
+      }
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setSaving(false);
+      if (seq === toggleSeq.current) setSaving(false);
     }
   };
+
+  const runtimeFailure =
+    recall?.reason === "embedding_failed" || recall?.reason === "invalid_embedding";
+  const canCheck =
+    recall?.readiness === "not_checked" ||
+    recall?.readiness === "checking" ||
+    recall?.readiness === "unavailable" ||
+    recall?.reason === "initialization_failed";
+
+  const check = async (): Promise<void> => {
+    if (!enabled || !recall || !canCheck || recall.readiness === "checking") return;
+    const seq = ++checkSeq.current;
+    const previousRecall = recall;
+    authoritativeRecall.current = previousRecall;
+    setMessage(null);
+    setRecall({
+      readiness: "checking",
+      mode: "lexical",
+      reason: null,
+      message:
+        "Checking semantic ranking readiness. Recall remains available with lexical ranking.",
+    });
+    try {
+      const response = await fetch("/memory/semantic-status/check", { method: "POST" });
+      if (!response.ok) throw new Error("We couldn’t check semantic ranking readiness.");
+      const data = (await response.json()) as { recall: SemanticRecallStatus };
+      if (seq !== checkSeq.current) return;
+      authoritativeRecall.current = data.recall;
+      setRecall(data.recall);
+    } catch (cause) {
+      if (seq !== checkSeq.current) return;
+      setRecall(previousRecall);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const readinessLabel =
+    recall?.readiness === "ready"
+      ? "Ready · Semantic"
+      : recall?.readiness === "unavailable"
+        ? "Unavailable · Lexical fallback"
+        : recall?.readiness === "error"
+          ? "Error · Lexical fallback"
+          : recall?.readiness === "checking"
+            ? "Checking"
+            : recall?.readiness === "not_checked"
+              ? "Not checked · Lexical"
+              : "Not requested · Lexical";
 
   return (
     <div
@@ -151,6 +256,19 @@ function SemanticMemoryPreference({ onChanged }: { onChanged: () => void }) {
               <p id="semantic-memory-description" className="mt-1 text-xs text-text-muted">
                 Request semantic ranking for memory search and agent recall when it is available.
               </p>
+              {recall ? (
+                <p
+                  className="mt-1 text-xs text-text-muted"
+                  role="status"
+                  data-testid="semantic-memory-readiness"
+                >
+                  <span className="font-medium" data-testid="semantic-memory-readiness-mode">
+                    {readinessLabel}
+                  </span>
+                  {" — "}
+                  {recall.message}
+                </p>
+              ) : null}
             </div>
             <ControlButton
               role="switch"
@@ -173,6 +291,22 @@ function SemanticMemoryPreference({ onChanged }: { onChanged: () => void }) {
               />
             </ControlButton>
           </div>
+          {enabled && recall && canCheck ? (
+            <ControlButton
+              className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary disabled:opacity-50"
+              disabled={recall.readiness === "checking"}
+              onClick={() => void check()}
+              data-testid="semantic-memory-check"
+            >
+              <RefreshCw size={13} aria-hidden="true" />
+              {recall.readiness === "not_checked" ? "Check readiness" : "Try again"}
+            </ControlButton>
+          ) : null}
+          {enabled && runtimeFailure ? (
+            <p className="mt-2 text-xs text-text-muted" data-testid="semantic-memory-runtime-retry">
+              The next memory search or agent recall will retry semantic ranking automatically.
+            </p>
+          ) : null}
           {message ? (
             <p
               className={cn(
@@ -205,6 +339,7 @@ export function MemoryScreen() {
   const [searchResults, setSearchResults] = useState<MemoryItem[] | null>(null);
   const searchSeq = useRef(0);
   const [semanticPreferenceVersion, setSemanticPreferenceVersion] = useState(0);
+  const [semanticRecall, setSemanticRecall] = useState<SemanticRecallStatus | null>(null);
   const semanticPreferenceChanged = useCallback((): void => {
     // Invalidate the old ranking immediately, then rerun a non-empty current
     // search under the newly persisted preference without a global resource
@@ -228,9 +363,20 @@ export function MemoryScreen() {
     void fetch(
       `/memory/search?projectId=${encodeURIComponent(currentProjectId)}&q=${encodeURIComponent(q)}`,
     )
-      .then((r) => r.json() as Promise<{ memories?: MemoryItem[] }>)
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Memory search failed.");
+        const data = (await response.json()) as {
+          memories?: MemoryItem[];
+          recall?: SemanticRecallStatus;
+        };
+        if (!data.recall) throw new Error("Memory search returned no recall status.");
+        return data;
+      })
       .then((data) => {
-        if (seq === searchSeq.current) setSearchResults(data.memories ?? []);
+        if (seq === searchSeq.current) {
+          setSearchResults(data.memories ?? []);
+          setSemanticRecall(data.recall!);
+        }
       })
       .catch(() => {
         if (seq === searchSeq.current) setSearchResults([]);
@@ -338,7 +484,11 @@ export function MemoryScreen() {
           <p className="pb-2 text-xs text-text-muted">
             Durable project knowledge agents recall across sessions.
           </p>
-          <SemanticMemoryPreference onChanged={semanticPreferenceChanged} />
+          <SemanticMemoryPreference
+            onChanged={semanticPreferenceChanged}
+            recall={semanticRecall}
+            setRecall={setSemanticRecall}
+          />
           <div
             className="py-10 text-center text-sm text-text-muted"
             data-testid="memory-no-project"
@@ -393,7 +543,11 @@ export function MemoryScreen() {
           Durable project knowledge agents recall across sessions. Active and pinned memories are
           injected; stale and archived are kept but not injected.
         </p>
-        <SemanticMemoryPreference onChanged={semanticPreferenceChanged} />
+        <SemanticMemoryPreference
+          onChanged={semanticPreferenceChanged}
+          recall={semanticRecall}
+          setRecall={setSemanticRecall}
+        />
         <ControlInput
           data-testid="memory-search"
           className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"

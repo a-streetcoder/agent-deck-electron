@@ -313,6 +313,11 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
     const updated = settings.update(patch);
+    if (d.semanticMemoryEnabled !== undefined) {
+      // Preference mutation is intentionally passive: update only the lifecycle
+      // snapshot. Initialization belongs to search or the explicit check route.
+      ctx.semanticRecall.preferenceChanged(d.semanticMemoryEnabled);
+    }
     if (
       d.defaultSkills !== undefined ||
       d.defaultPromptTemplates !== undefined ||

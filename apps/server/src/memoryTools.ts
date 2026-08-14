@@ -1,3 +1,4 @@
+import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import {
   markStale,
   searchMemories,
@@ -11,11 +12,16 @@ import type { BridgeRegistry } from "./bridge.ts";
 
 /** Ranks a project's memories for a query. Async so a semantic (embedding-backed)
  *  ranker can be injected; defaults to the lexical+fuzzy searchMemories. */
+export interface MemorySearchResult {
+  hits: MemorySearchHit[];
+  recall: SemanticRecallStatus;
+}
+
 export type MemorySearch = (
   store: MemoryStore,
   query: string,
   limit?: number,
-) => Promise<MemorySearchHit[]>;
+) => Promise<MemorySearchResult>;
 
 /**
  * Registers the native memory tools (agent_deck_memory_write / _search /
@@ -58,7 +64,21 @@ export function registerMemoryTools(
   baseDir: string,
   resolveProjectPath: (sessionId: string) => string | undefined,
   search: MemorySearch = (store, query, limit) =>
-    Promise.resolve(searchMemories(store, query, limit)),
+    Promise.resolve({
+      hits: searchMemories(store, query, limit),
+      recall: {
+        readiness: "not_requested",
+        mode: "lexical",
+        reason: null,
+        message: "Semantic ranking is not requested. Recall is using lexical ranking.",
+      },
+    }),
+  getRecallStatus: () => SemanticRecallStatus = () => ({
+    readiness: "not_requested",
+    mode: "lexical",
+    reason: null,
+    message: "Semantic ranking is not requested. Recall is using lexical ranking.",
+  }),
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -146,7 +166,12 @@ export function registerMemoryTools(
     },
     async (params, ctx) => {
       const store = storeFor(ctx.sessionId);
-      if (!store) return { content: "No project memory (no project set).", details: { hits: 0 } };
+      if (!store) {
+        return {
+          content: "No project memory (no project set).",
+          details: { hits: 0, recall: getRecallStatus() },
+        };
+      }
       const parsed = searchParams.safeParse(params);
       if (!parsed.success) {
         return {
@@ -154,16 +179,22 @@ export function registerMemoryTools(
           isError: true,
         };
       }
-      const hits = await search(store, parsed.data.query, parsed.data.limit);
-      if (hits.length === 0)
-        return { content: "No matching project memory.", details: { hits: 0 } };
-      const rendered = hits
+      const result = await search(store, parsed.data.query, parsed.data.limit);
+      if (result.hits.length === 0)
+        return {
+          content: "No matching project memory.",
+          details: { hits: 0, recall: result.recall },
+        };
+      const rendered = result.hits
         .map(
           (h) =>
             `### ${h.record.title} (${h.record.type}, id ${h.record.id})\n${clampBody(h.record.body)}`,
         )
         .join("\n\n");
-      return { content: rendered, details: { hits: hits.length } };
+      return {
+        content: rendered,
+        details: { hits: result.hits.length, recall: result.recall },
+      };
     },
   );
 

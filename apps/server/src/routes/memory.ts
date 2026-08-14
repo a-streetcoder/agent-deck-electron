@@ -15,7 +15,7 @@ import type { ServerContext } from "../context.ts";
  * (the visible half of memory.md). Moved verbatim from server.ts.
  */
 export function registerMemoryRoutes(ctx: ServerContext): void {
-  const { fastify, projects, memoryEnabled, memoryBaseDir, recallMemories, broadcast } = ctx;
+  const { fastify, projects, memoryEnabled, memoryBaseDir, semanticRecall, broadcast } = ctx;
 
   // Memory inspection: browse and manage a project's stored memories (the
   // visible half of memory.md). Project-scoped by the project's path — the same
@@ -60,6 +60,16 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     return { memories: listMemories(store) };
   });
 
+  // Passive by contract: opening Memory or refreshing status must never load a
+  // model, import the optional dependency, or start a download.
+  fastify.get("/memory/semantic-status", async () => ({ recall: semanticRecall.getStatus() }));
+
+  // The sole readiness-only initialization path. Search may also initialize
+  // because it is an active recall request; preference PATCH deliberately may not.
+  fastify.post("/memory/semantic-status/check", async () => ({
+    recall: await semanticRecall.check(),
+  }));
+
   // Memory recall search (native Memory search 11.8): runs the SAME recall engine
   // the agent recalls with (recallMemories — lexical+fuzzy, or semantic when
   // opted in) and returns the ranked hits — active/pinned only, abstaining
@@ -69,8 +79,9 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     const store = memoryStoreFor(projectId);
     if (!store) return reply.code(400).send({ error: "memory requires a known project" });
     const query = (q ?? "").trim();
-    if (!query) return { memories: [] };
-    return { memories: (await recallMemories(store, query)).map((hit) => hit.record) };
+    if (!query) return { memories: [], recall: semanticRecall.getStatus() };
+    const result = await semanticRecall.recall(store, query);
+    return { memories: result.hits.map((hit) => hit.record), recall: result.recall };
   });
 
   fastify.post("/memory", async (request, reply) => {
