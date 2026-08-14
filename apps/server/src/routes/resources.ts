@@ -18,6 +18,7 @@ import {
   computeBuiltinOverride,
   deleteAgentFile,
   deletePromptFile,
+  enumerateCodexPluginSkills,
   mergeWithUnmanagedOverrideFields,
   materializeBuiltinAgentOverrideContent,
   parseAgentFile,
@@ -25,6 +26,7 @@ import {
   renameAgentFile,
   ResourceCatalogCapabilityError,
   renamePromptFile,
+  resolveCodexPluginSkillRefs,
   resolveSkillSource,
   scanAgents,
   scanPackageSkillLocations,
@@ -371,9 +373,15 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     // contributes nothing is exactly what the user needs to hear about). The locations pass
     // is metadata-only — no skill files are loaded twice.
     const { warnings } = scanPackageSkillLocations(rootsFor(projectId));
+    // SKL-09: plugin refs re-resolve every request — a ref gone stale (plugin removed,
+    // version dropped the skill) warns here instead of silently vanishing from the catalog.
+    const refs = settings.get().codexPluginSkillRefs;
+    const pluginResolution = resolveCodexPluginSkillRefs(resourceHome(), refs);
     return {
       skills: enrichSkills(skillStore.listSkills(projectId)),
       packageWarnings: warnings,
+      codexPluginRefs: refs,
+      codexPluginWarnings: pluginResolution.warnings,
     };
   });
 
@@ -547,6 +555,48 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       add(nodePath.join(project.path, ".codex", "skills"), `Codex · ${project.name}`, "codex");
     }
     return { sources };
+  });
+
+  // Codex plugin skills (SKL-09): what the plugin cache offers right now, plus the refs the
+  // user already holds. REFERENCE semantics — importing records a ref, never copies files, so
+  // the skill version-follows Codex's active plugin version.
+  fastify.get("/resources/skills/codex-plugin-catalog", async () => {
+    const { items, warnings } = enumerateCodexPluginSkills(resourceHome());
+    return { items, warnings, refs: settings.get().codexPluginSkillRefs };
+  });
+
+  const pluginRefShape = z.object({
+    marketplace: z.string().trim().min(1).max(200),
+    plugin: z.string().trim().min(1).max(200),
+    relPath: z.string().trim().min(1).max(500),
+  });
+
+  fastify.post("/resources/skills/codex-plugin-refs", async (request, reply) => {
+    const parsed = z
+      .object({ refs: z.array(pluginRefShape).min(1).max(100) })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    // Accept only refs that resolve RIGHT NOW (active plugin, contained, SKILL.md present) —
+    // recording a dead ref would mint a permanent warning the user never asked for.
+    const rejected: string[] = [];
+    for (const ref of parsed.data.refs) {
+      const { roots, warnings } = resolveCodexPluginSkillRefs(resourceHome(), [ref]);
+      if (roots.length === 0) {
+        rejected.push(warnings[0] ?? `${ref.plugin}@${ref.marketplace}/${ref.relPath}`);
+      }
+    }
+    if (rejected.length > 0) return reply.status(400).send({ error: rejected.join(" ") });
+    settings.addCodexPluginSkillRefs(parsed.data.refs);
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
+  });
+
+  fastify.delete("/resources/skills/codex-plugin-refs", async (request, reply) => {
+    const parsed = pluginRefShape.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    settings.removeCodexPluginSkillRef(parsed.data);
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
   });
 
   // Preview a LOCAL folder of skills (SKL-05): engine discovery, materializes nothing. Shares

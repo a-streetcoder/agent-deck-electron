@@ -108,6 +108,13 @@ export {
   type PackageSkillScanResult,
 } from "./packageSkills.ts";
 export {
+  enumerateCodexPluginSkills,
+  resolveCodexPluginSkillRefs,
+  type CodexPluginScanResult,
+  type CodexPluginSkillItem,
+  type CodexPluginSkillRef,
+} from "./codexPluginSkills.ts";
+export {
   detectProjectType,
   discoverProjects,
   discoverProjectsInRoot,

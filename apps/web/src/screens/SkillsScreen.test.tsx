@@ -462,6 +462,146 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     });
   });
 
+  it("known-source scan merges Codex plugin skills as REFERENCES (SKL-09)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/known-sources") {
+        return Promise.resolve(
+          jsonResponse({
+            sources: [{ path: "C:/home/.claude/skills", label: "Claude · Global" }],
+          }),
+        );
+      }
+      if (url === "/resources/skills/inspect-local") {
+        return Promise.resolve(
+          jsonResponse({ skills: [{ name: "helper", displayName: "Helper", extraFileCount: 0 }] }),
+        );
+      }
+      if (url === "/resources/skills/codex-plugin-catalog") {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              {
+                marketplace: "mkt",
+                plugin: "toolbox",
+                version: "1.2.0",
+                name: "pluginer",
+                description: "from a plugin",
+                relPath: "pluginer",
+              },
+              {
+                marketplace: "mkt",
+                plugin: "toolbox",
+                version: "1.2.0",
+                name: "already",
+                relPath: "already",
+              },
+            ],
+            warnings: [],
+            // `already` is referenced — it must NOT be offered again
+            refs: [{ marketplace: "mkt", plugin: "toolbox", relPath: "already" }],
+          }),
+        );
+      }
+      if (url === "/resources/skills/import-local-folder") {
+        return Promise.resolve(jsonResponse({ imported: ["helper"] }));
+      }
+      if (url === "/resources/skills/codex-plugin-refs") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-scan-known"));
+    await screen.findByTestId("skill-import-preview-dialog");
+
+    // the plugin skill joins the scan, labeled by plugin identity, selected by default
+    const pluginCheck = screen.getByTestId(
+      "skill-import-preview-check-plugin::mkt::toolbox::pluginer",
+    ) as HTMLInputElement;
+    expect(pluginCheck.checked).toBe(true);
+    expect(screen.getAllByText(/Codex Plugin · toolbox 1\.2\.0/).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("skill-import-preview-check-plugin::mkt::toolbox::already")).toBe(
+      null,
+    );
+
+    // confirming records a REFERENCE for the plugin skill and copies only the folder skill
+    fireEvent.click(screen.getByTestId("skill-import-preview-import"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const refCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/codex-plugin-refs",
+    );
+    expect(JSON.parse(String(refCall?.[1]?.body))).toEqual({
+      refs: [{ marketplace: "mkt", plugin: "toolbox", relPath: "pluginer" }],
+    });
+    const importCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/resources/skills/import-local-folder",
+    );
+    expect(importCalls).toHaveLength(1);
+    expect(JSON.parse(String(importCalls[0]?.[1]?.body))).toEqual({
+      path: "C:/home/.claude/skills",
+      selected: ["helper"],
+    });
+  });
+
+  it("plugin references list shows stale-ref warnings and un-imports via DELETE (SKL-09)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [],
+            codexPluginRefs: [
+              { marketplace: "mkt", plugin: "toolbox", relPath: "helper" },
+              { marketplace: "mkt", plugin: "toolbox", relPath: "vanished" },
+            ],
+            codexPluginWarnings: ["Codex plugin toolbox@mkt (2.0.0) no longer contains vanished."],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/codex-plugin-refs" && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    // references render with plugin identity; the stale one is heard about, not hidden
+    await screen.findByTestId("skill-plugin-refs");
+    expect(screen.getByTestId("skill-plugin-refs").textContent).toContain("toolbox");
+    expect(screen.getByTestId("skill-package-warnings").textContent).toContain("vanished");
+
+    fireEvent.click(screen.getByTestId("skill-plugin-ref-remove-mkt::toolbox::vanished"));
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.find(
+        ([url, init2]) =>
+          String(url) === "/resources/skills/codex-plugin-refs" && init2?.method === "DELETE",
+      );
+      expect(JSON.parse(String(del?.[1]?.body))).toEqual({
+        marketplace: "mkt",
+        plugin: "toolbox",
+        relPath: "vanished",
+      });
+    });
+    // the removed row leaves the list without waiting for a server round-trip
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-plugin-ref-remove-mkt::toolbox::vanished")).toBeNull();
+    });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);

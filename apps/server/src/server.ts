@@ -9,6 +9,7 @@ import {
   appendSystemPromptPath,
   projectWatchDirs,
   readMcpServerCatalog,
+  resolveCodexPluginSkillRefs,
   scanAgents,
   scanEnv,
   scanExtensions,
@@ -573,7 +574,8 @@ async function initServer(
     const skills = resolveExplicitSkills({
       agentName: agent.name,
       skillNames: agent.skills ?? [],
-      candidates: scanSkillCandidates(roots),
+      // pluginRootsFor is initialized during startup, before any request reaches this handler
+      candidates: scanSkillCandidates(roots, pluginRootsFor()),
       disabledSkills: new Set(settings.get().disabledSkills),
       strict: true,
       tools: agent.tools,
@@ -685,13 +687,18 @@ async function initServer(
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
-  const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId));
-  const scanSkillCandidatesFor = (projectId?: string) => scanSkillCandidates(rootsFor(projectId));
+  // SKL-09: Codex plugin skill REFERENCES resolve against the plugin cache's active version
+  // on every scan (version-follow, never copied) and join as read-only collection roots.
+  const pluginRootsFor = (): string[] =>
+    resolveCodexPluginSkillRefs(resourceHome(), settings.get().codexPluginSkillRefs).roots;
+  const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId), pluginRootsFor());
+  const scanSkillCandidatesFor = (projectId?: string) =>
+    scanSkillCandidates(rootsFor(projectId), pluginRootsFor());
 
   const createAgentWarningContext = (projectId?: string) => {
     const roots = rootsFor(projectId);
     const skillCandidateCounts = new Map<string, number>();
-    for (const skill of scanSkillCandidates(roots)) {
+    for (const skill of scanSkillCandidatesFor(projectId)) {
       skillCandidateCounts.set(skill.name, (skillCandidateCounts.get(skill.name) ?? 0) + 1);
     }
     const inheritedExa = envDefaults().env?.EXA_API_KEY ?? process.env.EXA_API_KEY;

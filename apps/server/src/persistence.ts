@@ -238,6 +238,17 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.removeSkillRepositoryCollection(repoId, collectionId));
   }
 
+  /** Record Codex plugin skill references (SKL-09), deduped by identity. */
+  addCodexPluginSkillRefs(
+    refs: readonly AppSettings["codexPluginSkillRefs"][number][],
+  ): AppSettings {
+    return runSyncUnwrapped(this.handle.addCodexPluginSkillRefs(refs));
+  }
+
+  removeCodexPluginSkillRef(ref: AppSettings["codexPluginSkillRefs"][number]): AppSettings {
+    return runSyncUnwrapped(this.handle.removeCodexPluginSkillRef(ref));
+  }
+
   /** Hide/show a model in the picker, by its "<provider>:<id>" key. */
   setModelDisabled(key: string, disabled: boolean): AppSettings {
     return runSyncUnwrapped(this.handle.setModelDisabled(key, disabled));

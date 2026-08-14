@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ResourceScope } from "@agent-deck/domain";
+import { codexHome } from "./codexPluginSkills.ts";
 
 function isFile(filePath: string): boolean {
   try {
@@ -163,6 +164,11 @@ export function watchDirs(roots: ResourceRoots): string[] {
     // Native watches this exact file even before it exists. It can change
     // builtin-agent overrides and other Pi-discovered resource configuration.
     path.join(piAgentHome(roots), "settings.json"),
+    // SKL-09: plugin activity flips via this file. The plugin CACHE is deliberately not
+    // watched (deep, version-swapped; polling it on Windows would be costly) — version
+    // bumps surface on the next scan instead of live. A CODEX_HOME outside `home` falls
+    // outside the watch boundary and degrades the same way.
+    path.join(codexHome(roots.home), "config.toml"),
   ];
 }
 

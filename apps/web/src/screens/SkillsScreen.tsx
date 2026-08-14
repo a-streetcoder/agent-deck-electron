@@ -45,6 +45,13 @@ interface SkillRecovery {
   skillName: string;
 }
 
+/** A Codex plugin skill reference (SKL-09) — the persisted identity, never a path. */
+interface CodexPluginRef {
+  marketplace: string;
+  plugin: string;
+  relPath: string;
+}
+
 interface SkillRepo {
   id: string;
   remoteUrl: string;
@@ -470,12 +477,16 @@ export function SkillsScreen() {
   // in-app (SKL-08/11 — native's "Package Skill" read-only posture).
   const isReadOnlyScope = (scope: SkillInfo["scope"]): boolean =>
     scope === "library" || scope === "package";
+  // Package + Codex-plugin resolution warnings share one notice block.
   const [packageWarnings, setPackageWarnings] = useState<string[]>([]);
+  // SKL-09: persisted Codex plugin skill references (resolved server-side each scan).
+  const [pluginRefs, setPluginRefs] = useState<CodexPluginRef[]>([]);
 
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     setSkills([]);
     setPackageWarnings([]);
+    setPluginRefs([]);
     let cancelled = false;
     void (async () => {
       try {
@@ -491,10 +502,16 @@ export function SkillsScreen() {
         const data = (await response.json()) as {
           skills: SkillInfo[];
           packageWarnings?: string[];
+          codexPluginRefs?: CodexPluginRef[];
+          codexPluginWarnings?: string[];
         };
         if (!cancelled) {
           setSkills(data.skills);
-          setPackageWarnings(data.packageWarnings ?? []);
+          setPackageWarnings([
+            ...(data.packageWarnings ?? []),
+            ...(data.codexPluginWarnings ?? []),
+          ]);
+          setPluginRefs(data.codexPluginRefs ?? []);
         }
       } catch (error) {
         if (!cancelled) setGlobalError(String(error));
@@ -726,8 +743,10 @@ export function SkillsScreen() {
   // SKL-07/10: scan the KNOWN external skill folders (Claude/Codex, global + per-project) and
   // feed every discovered skill into the same preview dialog, labeled by source. Copy-on-import
   // like every engine import; per-root scan failures degrade to a note instead of killing the scan.
+  // SKL-09: Codex plugin skills join the same scan, but as REFERENCES — confirming records a
+  // ref the server resolves fresh each scan (version-follow), never a copy.
   const [knownPreview, setKnownPreview] = useState<{
-    items: (SkillPreviewItem & { sourcePath: string })[];
+    items: (SkillPreviewItem & { sourcePath: string; pluginRef?: CodexPluginRef })[];
     failures: string[];
     defaultSelected: string[];
   } | null>(null);
@@ -744,7 +763,7 @@ export function SkillsScreen() {
       const { sources } = (await res.json()) as {
         sources: { path: string; label: string }[];
       };
-      const items: (SkillPreviewItem & { sourcePath: string })[] = [];
+      const items: (SkillPreviewItem & { sourcePath: string; pluginRef?: CodexPluginRef })[] = [];
       const failures: string[] = [];
       for (const src of sources) {
         try {
@@ -768,6 +787,39 @@ export function SkillsScreen() {
           // root must not kill the whole scan or masquerade as "no skills" (review, Codex)
           failures.push(src.label);
         }
+      }
+      // SKL-09: plugin-cache skills join the same dialog as reference candidates. Already-
+      // referenced skills are not offered again; the catalog degrades like any other root.
+      try {
+        const r = await fetch("/resources/skills/codex-plugin-catalog");
+        if (!r.ok) throw new Error(await responseErrorMessage(r, "unreadable"));
+        const data = (await r.json()) as {
+          items: (CodexPluginRef & { version: string; name: string; description?: string })[];
+          refs: CodexPluginRef[];
+        };
+        const referenced = new Set(
+          data.refs.map((ref) => `${ref.marketplace}::${ref.plugin}::${ref.relPath}`),
+        );
+        for (const item of data.items) {
+          const key = `${item.marketplace}::${item.plugin}::${item.relPath}`;
+          if (referenced.has(key)) continue;
+          items.push({
+            name: item.name,
+            displayName: item.name,
+            description: item.description,
+            extraFileCount: 0,
+            id: `plugin::${key}`,
+            sourceLabel: `Codex Plugin · ${item.plugin} ${item.version} · ${item.marketplace}`,
+            sourcePath: "",
+            pluginRef: {
+              marketplace: item.marketplace,
+              plugin: item.plugin,
+              relPath: item.relPath,
+            },
+          });
+        }
+      } catch {
+        failures.push("Codex Plugins");
       }
       if (seq !== inspectSeq.current) return; // superseded while in flight
       if (items.length === 0) {
@@ -796,17 +848,52 @@ export function SkillsScreen() {
 
   const confirmKnownImport = async (selectedIds: string[]): Promise<void> => {
     if (!knownPreview) return;
-    // group the selection back into per-root imports (ids are path-qualified)
+    // group the selection back into per-root imports (ids are path-qualified);
+    // plugin candidates become REFERENCES instead (SKL-09)
     const byRoot = new Map<string, { label: string; selected: string[] }>();
+    const refs: CodexPluginRef[] = [];
     for (const id of selectedIds) {
       const item = knownPreview.items.find((i) => i.id === id);
       if (!item) continue;
+      if (item.pluginRef) {
+        refs.push(item.pluginRef);
+        continue;
+      }
       const entry = byRoot.get(item.sourcePath) ?? {
         label: item.sourceLabel ?? item.sourcePath,
         selected: [],
       };
       entry.selected.push(item.name);
       byRoot.set(item.sourcePath, entry);
+    }
+    // record references first: idempotent server-side, so a later folder failure + retry
+    // may re-post them safely, while a ref failure aborts before any folder copies
+    if (refs.length > 0) {
+      const res = await fetch("/resources/skills/codex-plugin-refs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refs }),
+      });
+      if (!res.ok) {
+        const message = await responseErrorMessage(res, "reference failed");
+        throw new Error(`Codex Plugins failed: ${message}`);
+      }
+      // the just-referenced skills leave the dialog so a folder-failure retry won't re-offer them
+      const recorded = new Set(refs.map((r) => `${r.marketplace}::${r.plugin}::${r.relPath}`));
+      setKnownPreview((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter(
+                (i) =>
+                  !i.pluginRef ||
+                  !recorded.has(
+                    `${i.pluginRef.marketplace}::${i.pluginRef.plugin}::${i.pluginRef.relPath}`,
+                  ),
+              ),
+            }
+          : prev,
+      );
     }
     const done: string[] = [];
     for (const [rootPath, { label, selected }] of byRoot) {
@@ -831,6 +918,31 @@ export function SkillsScreen() {
       done.push(rootPath);
     }
     setKnownPreview(null);
+  };
+
+  // Un-import a plugin reference (SKL-09): the skill leaves the catalog on the next scan;
+  // nothing on disk to delete, because a reference never copied anything.
+  const removePluginRef = async (ref: CodexPluginRef): Promise<void> => {
+    try {
+      const res = await fetch("/resources/skills/codex-plugin-refs", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(ref),
+      });
+      if (!res.ok) {
+        throw new Error(await responseErrorMessage(res, "Couldn't remove the plugin reference."));
+      }
+      setPluginRefs((prev) =>
+        prev.filter(
+          (item) =>
+            item.marketplace !== ref.marketplace ||
+            item.plugin !== ref.plugin ||
+            item.relPath !== ref.relPath,
+        ),
+      );
+    } catch (error) {
+      setGlobalError(String(error));
+    }
   };
 
   const confirmLocalImport = async (selected: string[]): Promise<void> => {
@@ -1472,6 +1584,34 @@ export function SkillsScreen() {
                 {warning}
               </div>
             ))}
+          </div>
+        ) : null}
+        {pluginRefs.length > 0 ? (
+          <div
+            data-testid="skill-plugin-refs"
+            className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+          >
+            <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+              Codex plugin references
+            </div>
+            {pluginRefs.map((ref) => {
+              const key = `${ref.marketplace}::${ref.plugin}::${ref.relPath}`;
+              return (
+                <div key={key} className="flex items-center justify-between gap-2">
+                  <span className="truncate" title={key}>
+                    {ref.plugin} · {ref.relPath}{" "}
+                    <span className="text-text-muted">({ref.marketplace})</span>
+                  </span>
+                  <ControlButton
+                    data-testid={`skill-plugin-ref-remove-${key}`}
+                    className="rounded-capsule border border-border-strong px-2 text-micro text-text-secondary hover:text-text-primary"
+                    onClick={() => void removePluginRef(ref)}
+                  >
+                    Remove
+                  </ControlButton>
+                </div>
+              );
+            })}
           </div>
         ) : null}
         <div

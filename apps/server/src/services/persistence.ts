@@ -14,6 +14,7 @@ import {
   isValidChord,
 } from "@agent-deck/contracts";
 import { PI_THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
+import type { CodexPluginSkillRef } from "@agent-deck/resources";
 import { Context, Effect, Layer, Option } from "effect";
 
 /**
@@ -217,6 +218,11 @@ export interface AppSettings {
   /** In-place skill collections. Legacy copy-based records have no collection. */
   skillCollections: SkillCollection[];
   /**
+   * Codex plugin skill REFERENCES (SKL-09): resolved against the plugin cache's
+   * active version on every scan so they version-follow — never copied.
+   */
+  codexPluginSkillRefs: CodexPluginSkillRef[];
+  /**
    * The remembered open-in-editor choice (Slice 11): the editor id last picked
    * from the diff panel's picker, so the next open is one click. An id, never
    * a command — the server only launches editors from its own detected list.
@@ -246,6 +252,22 @@ function coerceCommandIds(value: unknown, pattern: RegExp): string[] {
     ...new Set(value.filter((id): id is string => typeof id === "string" && pattern.test(id))),
   ].slice(0, MAX_INJECTED_COMMAND_IDS);
 }
+
+/** Keep only well-formed plugin refs — a stored blob is re-validated on load (fail closed). */
+function coerceCodexPluginRefs(value: unknown): CodexPluginSkillRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is CodexPluginSkillRef =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as CodexPluginSkillRef).marketplace === "string" &&
+      typeof (item as CodexPluginSkillRef).plugin === "string" &&
+      typeof (item as CodexPluginSkillRef).relPath === "string",
+  );
+}
+
+const refKey = (ref: CodexPluginSkillRef): string =>
+  `${ref.marketplace} ${ref.plugin} ${ref.relPath}`;
 
 /** Keep only well-formed overrides (known command + a valid, modifier-bearing chord). */
 function coerceKeybindings(value: unknown): KeybindingBinding[] {
@@ -292,6 +314,10 @@ export interface SettingsStoreHandle {
     repoId: string,
     collectionId: string,
   ) => Effect.Effect<AppSettings>;
+  readonly addCodexPluginSkillRefs: (
+    refs: readonly CodexPluginSkillRef[],
+  ) => Effect.Effect<AppSettings>;
+  readonly removeCodexPluginSkillRef: (ref: CodexPluginSkillRef) => Effect.Effect<AppSettings>;
   readonly setModelDisabled: (key: string, disabled: boolean) => Effect.Effect<AppSettings>;
   readonly enabledExtensions: Effect.Effect<string[]>;
   readonly forgetSkill: (name: string) => Effect.Effect<AppSettings>;
@@ -465,6 +491,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       extensionLoadingMode: "useMyExtensions", // port default: load discovered extensions
       importedSkillRepositories: [],
       skillCollections: [],
+      codexPluginSkillRefs: [],
       preferredEditor: null,
       piAgentTranscriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
       keybindings: [],
@@ -550,6 +577,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           skillCollections: Array.isArray(record.skillCollections)
             ? (record.skillCollections as SkillCollection[])
             : [],
+          codexPluginSkillRefs: coerceCodexPluginRefs(record.codexPluginSkillRefs),
           preferredEditor:
             typeof record.preferredEditor === "string" ? record.preferredEditor : null,
           piAgentTranscriptVisibility: coerceTranscriptVisibility(
@@ -578,6 +606,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // exist before collection-v1 and an empty list has identical semantics.
       const persisted: Partial<AppSettings> = { ...value };
       if (value.skillCollections.length === 0) delete persisted.skillCollections;
+      if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
       if (value.disabledInjectedCommandIDs.length === 0)
         delete persisted.disabledInjectedCommandIDs;
       if (value.enabledLibraryCommandIDs.length === 0) delete persisted.enabledLibraryCommandIDs;
@@ -756,6 +785,33 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
               (item) => item.id !== repoId,
             ),
             skillCollections: settings.skillCollections.filter((item) => item.id !== collectionId),
+          };
+          flush();
+          return settings;
+        }),
+      addCodexPluginSkillRefs: (refs) =>
+        Effect.sync(() => {
+          const seen = new Set(settings.codexPluginSkillRefs.map(refKey));
+          const additions = refs.filter((ref) => {
+            if (seen.has(refKey(ref))) return false;
+            seen.add(refKey(ref));
+            return true;
+          });
+          if (additions.length === 0) return settings;
+          settings = {
+            ...settings,
+            codexPluginSkillRefs: [...settings.codexPluginSkillRefs, ...additions],
+          };
+          flush();
+          return settings;
+        }),
+      removeCodexPluginSkillRef: (ref) =>
+        Effect.sync(() => {
+          settings = {
+            ...settings,
+            codexPluginSkillRefs: settings.codexPluginSkillRefs.filter(
+              (item) => refKey(item) !== refKey(ref),
+            ),
           };
           flush();
           return settings;
