@@ -931,6 +931,135 @@ describe("SessionManager Effect service (services/sessionManager.ts)", () => {
     });
   });
 
+  it("ingests recall live without duplicates and replays only active fork ancestry in order", async () => {
+    const session = makeParams().meta;
+    session.projectId = "authoritative-project";
+    const recallEntry = {
+      id: "recall-entry",
+      parentId: "user-entry",
+      type: "custom" as const,
+      customType: "agent-deck.memory-recall",
+      data: {
+        version: 1,
+        memories: [{ id: "decision-oauth", title: "OAuth callback", type: "decision" }],
+      },
+    };
+    const baseHandle = {
+      exit: Effect.succeed(Option.none()),
+      isRunning: Effect.succeed(true),
+      compact: Effect.void,
+      abort: Effect.void,
+      getState: Effect.succeed({}),
+      getForkMessages: Effect.succeed({}),
+      getSessionStats: Effect.succeed({}),
+      getAvailableModels: Effect.succeed([]),
+      getCommands: Effect.succeed([]),
+    };
+    const live = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = {
+            ...baseHandle,
+            events: Stream.fromIterable([
+              { _tag: "PiEvent", event: { type: "entry_appended", entry: recallEntry } },
+              { _tag: "PiEvent", event: { type: "entry_appended", entry: recallEntry } },
+              {
+                _tag: "PiEvent",
+                event: {
+                  type: "entry_appended",
+                  entry: {
+                    ...recallEntry,
+                    id: "malformed",
+                    data: { ...recallEntry.data, query: "x" },
+                  },
+                },
+              },
+            ]),
+            getEntries: Effect.succeed({ leafId: null, entries: [] }),
+          } as unknown as PiHostHandle;
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.ingest;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(live.state.cells).toEqual([
+      expect.objectContaining({
+        kind: "memory_recall",
+        projectId: "authoritative-project",
+        memories: [expect.objectContaining({ id: "decision-oauth" })],
+      }),
+    ]);
+
+    const replay = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = {
+            ...baseHandle,
+            events: Stream.empty,
+            getEntries: Effect.succeed({
+              leafId: "assistant-entry",
+              entries: [
+                {
+                  id: "user-entry",
+                  parentId: null,
+                  type: "message",
+                  message: { role: "user", content: "question", timestamp: 1 },
+                },
+                {
+                  ...recallEntry,
+                  id: "abandoned-recall-entry",
+                  parentId: "user-entry",
+                  data: {
+                    version: 1,
+                    memories: [
+                      { id: "abandoned-memory", title: "Abandoned memory", type: "failure" },
+                    ],
+                  },
+                },
+                recallEntry,
+                {
+                  id: "assistant-entry",
+                  parentId: "recall-entry",
+                  type: "message",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "answer" }],
+                    api: "openai-completions",
+                    provider: "mock",
+                    model: "mock-model",
+                    usage: { input: 1, output: 1 },
+                    stopReason: "stop",
+                    timestamp: 2,
+                  },
+                },
+              ],
+            }),
+          } as unknown as PiHostHandle;
+          const rt = yield* makeManagedSessionRuntime(
+            { spawn: () => Effect.succeed(handle) },
+            buses,
+            makeParams({ meta: session }),
+          );
+          yield* rt.seedFromHistory;
+          return yield* rt.snapshot;
+        }),
+      ),
+    );
+    expect(replay.state.cells.map((cell) => cell.kind)).toEqual([
+      "user",
+      "memory_recall",
+      "assistant",
+    ]);
+    expect(replay.state.cells.filter((cell) => cell.kind === "memory_recall")).toHaveLength(1);
+    expect(JSON.stringify(replay.state.cells)).toContain("decision-oauth");
+    expect(JSON.stringify(replay.state.cells)).not.toContain("abandoned-memory");
+  });
+
   it("tail-emits a gave-up retry whose final error anchor was truncated without hiding history", async () => {
     const user = { role: "user", content: "retry this", timestamp: 1 };
     const session = makeParams().meta;

@@ -12,7 +12,52 @@ afterEach(() => {
   vi.unstubAllGlobals();
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
   delete window.agentDeck;
-  useAppStore.setState({ session: null });
+  useAppStore.setState({
+    session: null,
+    currentProjectId: null,
+    view: "chat",
+    memoryNavigationRequest: null,
+  });
+});
+
+describe("memory recall transcript card", () => {
+  it("renders retained snapshot rows as accessible native buttons and requests exact navigation", () => {
+    render(
+      <CellView
+        cell={{
+          kind: "memory_recall",
+          id: "memory-recall-entry-1",
+          projectId: "project-a",
+          memories: [
+            { id: "decision-oauth", title: "OAuth callback", type: "decision" },
+            { id: "runbook-release", title: "Release procedure", type: "runbook" },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Memory recalled" })).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Open memory OAuth callback" });
+    expect(button.tagName).toBe("BUTTON");
+    expect((button as HTMLButtonElement).type).toBe("button");
+    expect(button.className).toContain("focus-visible:ring-2");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    fireEvent.click(button);
+
+    expect(useAppStore.getState()).toMatchObject({
+      currentProjectId: "project-a",
+      view: "memory",
+      memoryNavigationRequest: {
+        projectId: "project-a",
+        memoryId: "decision-oauth",
+        titleSnapshot: "OAuth callback",
+      },
+    });
+    expect(useAppStore.getState().memoryNavigationRequest?.requestId).toEqual(expect.any(Number));
+    expect(screen.getByRole("button", { name: "Open memory OAuth callback" })).toBe(button);
+    expect(screen.getByRole("button", { name: "Open memory Release procedure" })).toBeTruthy();
+  });
 });
 
 describe("per-message copy actions", () => {

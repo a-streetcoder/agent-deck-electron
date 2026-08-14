@@ -16,13 +16,27 @@ const recallStatus: SemanticRecallStatus = {
   message: "Semantic ranking has not been checked.",
 };
 
-function harness(memoryEnabled: boolean, cwd?: string) {
+function harness(
+  memoryEnabled: boolean,
+  cwd?: string,
+  project?: { id: string; path: string },
+  sessionProjectId = project?.id,
+) {
   const fastify = Fastify();
   fastifies.push(fastify);
   const recall = vi.fn();
   registerBridgeRoutes({
     fastify,
-    sessions: { get: () => (cwd ? { meta: { cwd } } : undefined) },
+    sessions: {
+      get: () =>
+        cwd
+          ? { meta: { cwd, ...(sessionProjectId ? { projectId: sessionProjectId } : {}) } }
+          : undefined,
+    },
+    projects: {
+      find: (predicate: (value: { id: string; path: string }) => boolean) =>
+        project && predicate(project) ? project : undefined,
+    },
     bridge: { dispatch: vi.fn() },
     bridgeTokens: new Map([["session-a", "token-a"]]),
     askUser: {},
@@ -49,6 +63,80 @@ function harness(memoryEnabled: boolean, cwd?: string) {
 }
 
 describe("__recall__ bridge metadata", () => {
+  it("uses the registered project path and returns bounded payload-free hit metadata", async () => {
+    const { invoke, recall } = harness(true, "/worktrees/session", {
+      id: "project-a",
+      path: "/registered/project",
+    });
+    recall.mockResolvedValue({
+      recall: recallStatus,
+      hits: [
+        {
+          record: {
+            id: "decision-oauth",
+            title: "OAuth callback",
+            type: "decision",
+            body: "private body",
+          },
+        },
+      ],
+    });
+
+    const response = await invoke({ query: "oauth callback" });
+
+    expect(recall).toHaveBeenCalledWith(
+      { baseDir: "/tmp/memory", projectPath: "/registered/project" },
+      "oauth callback",
+      4,
+    );
+    expect(response.json()).toEqual({
+      content: expect.any(String),
+      recall: recallStatus,
+      recalled: [{ id: "decision-oauth", title: "OAuth callback", type: "decision" }],
+    });
+    expect(JSON.stringify(response.json().recalled)).not.toContain("private body");
+  });
+
+  it("injects legacy cwd recall content without unrenderable navigation metadata", async () => {
+    const { invoke, recall } = harness(true, "/legacy/project");
+    recall.mockResolvedValue({
+      recall: recallStatus,
+      hits: [
+        {
+          record: {
+            id: "decision-oauth",
+            title: "OAuth callback",
+            type: "decision",
+            body: "legacy recall body",
+          },
+        },
+      ],
+    });
+
+    const response = await invoke({ query: "oauth callback" });
+
+    expect(recall).toHaveBeenCalledWith(
+      { baseDir: "/tmp/memory", projectPath: "/legacy/project" },
+      "oauth callback",
+      4,
+    );
+    expect(response.json()).toEqual({
+      content: expect.stringContaining("legacy recall body"),
+      recall: recallStatus,
+    });
+    expect(response.json()).not.toHaveProperty("recalled");
+  });
+
+  it("fails closed when an authoritative project id is stale", async () => {
+    const { invoke, recall } = harness(true, "/mismatched/session-cwd", undefined, "stale-id");
+
+    const response = await invoke({ query: "oauth callback" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ content: "", recall: recallStatus });
+    expect(recall).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "memory is disabled",

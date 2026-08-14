@@ -5,6 +5,7 @@ import type {
   BlockKind,
   DomainEvent,
   ProviderRetryCell,
+  RecalledMemoryReference,
   ToolCell,
   TranscriptCell,
 } from "./transcript.ts";
@@ -46,6 +47,95 @@ export interface IngestState {
 
 export function createIngestState(): IngestState {
   return { counter: 0, seenToolCalls: new Set(), messageCount: 0 };
+}
+
+export const MEMORY_RECALL_ENTRY_TYPE = "agent-deck.memory-recall";
+export const MEMORY_RECALL_ENTRY_VERSION = 1;
+const MAX_RECALLED_MEMORIES = 4;
+const MEMORY_TYPES = new Set<RecalledMemoryReference["type"]>([
+  "context",
+  "decision",
+  "runbook",
+  "failure",
+  "preference",
+]);
+
+export interface MemoryRecallEntryData {
+  version: typeof MEMORY_RECALL_ENTRY_VERSION;
+  memories: RecalledMemoryReference[];
+}
+
+/** Strict payload validator for untrusted Pi custom entries. */
+export function parseMemoryRecallEntryData(value: unknown): MemoryRecallEntryData | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).some((key) => key !== "version" && key !== "memories") ||
+    record.version !== MEMORY_RECALL_ENTRY_VERSION ||
+    !Array.isArray(record.memories) ||
+    record.memories.length === 0 ||
+    record.memories.length > MAX_RECALLED_MEMORIES
+  ) {
+    return null;
+  }
+  const ids = new Set<string>();
+  const memories: RecalledMemoryReference[] = [];
+  for (const item of record.memories) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const memory = item as Record<string, unknown>;
+    if (
+      Object.keys(memory).some((key) => key !== "id" && key !== "title" && key !== "type") ||
+      typeof memory.id !== "string" ||
+      !memory.id ||
+      memory.id.length > 256 ||
+      ids.has(memory.id) ||
+      typeof memory.title !== "string" ||
+      !memory.title.trim() ||
+      memory.title.length > 256 ||
+      typeof memory.type !== "string" ||
+      !MEMORY_TYPES.has(memory.type as RecalledMemoryReference["type"])
+    ) {
+      return null;
+    }
+    ids.add(memory.id);
+    memories.push({
+      id: memory.id,
+      title: memory.title,
+      type: memory.type as RecalledMemoryReference["type"],
+    });
+  }
+  return { version: MEMORY_RECALL_ENTRY_VERSION, memories };
+}
+
+/** Convert a valid Pi custom entry into a payload-free transcript card. */
+export function ingestMemoryRecallEntry(
+  entry: unknown,
+  projectId: string | undefined,
+): DomainEvent[] {
+  if (!projectId || !entry || typeof entry !== "object") return [];
+  const candidate = entry as Record<string, unknown>;
+  if (
+    candidate.type !== "custom" ||
+    candidate.customType !== MEMORY_RECALL_ENTRY_TYPE ||
+    typeof candidate.id !== "string" ||
+    !candidate.id ||
+    candidate.id.length > 256
+  ) {
+    return [];
+  }
+  const data = parseMemoryRecallEntryData(candidate.data);
+  if (!data) return [];
+  return [
+    {
+      type: "cell_final",
+      cell: {
+        kind: "memory_recall",
+        id: `memory-recall-${candidate.id}`,
+        projectId,
+        memories: data.memories,
+      },
+    },
+  ];
 }
 
 function coinId(state: IngestState, prefix: string): string {

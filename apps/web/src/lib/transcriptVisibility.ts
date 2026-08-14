@@ -14,6 +14,7 @@ export function isTranscriptCellVisible(
   if (cell.kind === "assistant") {
     return Boolean(cell.errorMessage) || visibleAssistantBlocks(cell.blocks, visibility).length > 0;
   }
+  if (cell.kind === "memory_recall") return visibility.showMemoryCards;
   if (cell.kind !== "tool") return true;
 
   if (memoryToolCardLabel(cell)) return visibility.showMemoryCards;

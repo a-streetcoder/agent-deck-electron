@@ -71,6 +71,22 @@ export interface ToolCell {
   result?: unknown;
 }
 
+export interface RecalledMemoryReference {
+  id: string;
+  title: string;
+  type: "context" | "decision" | "runbook" | "failure" | "preference";
+}
+
+/** Durable, payload-free evidence that a turn used project memories. */
+export interface MemoryRecallCell {
+  kind: "memory_recall";
+  /** Stable Pi custom-entry identity. */
+  id: string;
+  /** Derived from authoritative SessionMeta, never trusted from Pi entry data. */
+  projectId: string;
+  memories: RecalledMemoryReference[];
+}
+
 /** Durable, sanitized status for one Pi provider auto-retry burst. */
 export interface ProviderRetryCell {
   kind: "provider_retry";
@@ -195,6 +211,7 @@ export type TranscriptCell =
   | UserCell
   | AssistantCell
   | ToolCell
+  | MemoryRecallCell
   | ProviderRetryCell
   | QuestionCell
   | SubagentCell

@@ -7,6 +7,7 @@ import {
   createIngestState,
   emptyTranscript,
   finalizeOpenProviderRetry,
+  ingestMemoryRecallEntry,
   ingestPiEvent,
   normalizeAgentOutput,
   reduceTranscript,
@@ -976,7 +977,13 @@ export const makeManagedSessionRuntime = (
         markNeedsAttention();
       }
       let retryChanged = false;
-      for (const domainEvent of ingestPiEvent(ingest, piEvent)) {
+      const customEntry =
+        type === "entry_appended" ? (piEvent as unknown as { entry?: unknown }).entry : undefined;
+      const domainEvents = [
+        ...ingestMemoryRecallEntry(customEntry, meta.projectId),
+        ...ingestPiEvent(ingest, piEvent),
+      ];
+      for (const domainEvent of domainEvents) {
         if (
           domainEvent.type === "cell_final" &&
           domainEvent.cell.kind === "user" &&
@@ -1161,6 +1168,12 @@ export const makeManagedSessionRuntime = (
           rawMessage: unknown;
         }> = [];
         for (const entry of entries) {
+          if (entry.type === "custom") {
+            for (const domainEvent of ingestMemoryRecallEntry(entry, meta.projectId)) {
+              emit(domainEvent);
+            }
+            continue;
+          }
           if (entry.type !== "message") continue;
           messageOrdinal += 1;
           const retry = retryByOrdinal.get(messageOrdinal);

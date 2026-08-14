@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
 
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { MemoryScreen } from "./MemoryScreen.tsx";
 
 beforeEach(() => {
-  useAppStore.setState({ currentProjectId: null, error: null });
+  useAppStore.setState({
+    currentProjectId: null,
+    projects: [],
+    projectsLoaded: false,
+    memoryNavigationRequest: null,
+    error: null,
+  });
 });
 
 afterEach(() => {
@@ -21,7 +27,11 @@ const status = (
   reason: SemanticRecallStatus["reason"] = null,
 ): SemanticRecallStatus => ({ readiness, mode, reason, message: `Safe ${readiness} status.` });
 
-const jsonResponse = (data: unknown, ok = true) => ({ ok, json: async () => data });
+const jsonResponse = (data: unknown, ok = true, statusCode = ok ? 200 : 500) => ({
+  ok,
+  status: statusCode,
+  json: async () => data,
+});
 
 function initialFetch(enabled: boolean, recall: SemanticRecallStatus) {
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -33,6 +43,229 @@ function initialFetch(enabled: boolean, recall: SemanticRecallStatus) {
     throw new Error(`unexpected request: ${url}`);
   });
 }
+
+const project = (id: string) => ({
+  id,
+  path: `/tmp/${id}`,
+  name: id,
+  createdAt: "2026-01-01T00:00:00.000Z",
+});
+
+const memory = (
+  id: string,
+  title: string,
+): {
+  id: string;
+  type: "decision";
+  status: "active";
+  title: string;
+  summary: string;
+  body: string;
+  tags: string[];
+  updatedAt: string;
+} => ({
+  id,
+  type: "decision",
+  status: "active",
+  title,
+  summary: `${title} summary`,
+  body: `${title} body`,
+  tags: [],
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
+
+function memoryNavigationFetch(
+  direct: (url: string, init?: RequestInit) => Promise<ReturnType<typeof jsonResponse>>,
+) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/settings") {
+      return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+    }
+    if (url === "/memory/semantic-status") {
+      return jsonResponse({ recall: status("not_requested", "lexical") });
+    }
+    if (url.startsWith("/memory?projectId=")) return jsonResponse({ memories: [] });
+    if (url.startsWith("/memory/")) return direct(url, init);
+    throw new Error(`unexpected request: ${url}`);
+  });
+}
+
+describe("MemoryScreen transcript navigation", () => {
+  it("GETs the exact project/id and opens the renamed live record, never the title snapshot", async () => {
+    const fetchMock = memoryNavigationFetch(async () =>
+      jsonResponse({ memory: memory("memory-a", "Renamed live title") }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.getState().requestMemoryNavigation({
+      projectId: "project-a",
+      memoryId: "memory-a",
+      titleSnapshot: "Historical title",
+    });
+
+    render(<MemoryScreen />);
+
+    expect(await screen.findByTestId("memory-editor")).toBeTruthy();
+    expect((screen.getByTestId("memory-title") as HTMLInputElement).value).toBe(
+      "Renamed live title",
+    );
+    expect((screen.getByTestId("memory-body") as HTMLTextAreaElement).value).toBe(
+      "Renamed live title body",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/memory/memory-a?projectId=project-a",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(document.body.textContent).not.toContain("Historical title");
+    await waitFor(() => expect(useAppStore.getState().memoryNavigationRequest).toBeNull());
+  });
+
+  it("shows an accessible snapshot-specific alert for a deleted exact ID", async () => {
+    const fetchMock = memoryNavigationFetch(async () => jsonResponse({}, false, 404));
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.getState().requestMemoryNavigation({
+      projectId: "project-a",
+      memoryId: "deleted-memory",
+      titleSnapshot: "Deleted title",
+    });
+
+    render(<MemoryScreen />);
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Memory “Deleted title” no longer exists",
+    );
+    expect(screen.queryByTestId("memory-editor")).toBeNull();
+  });
+
+  it("does not fetch or open another item when the historical project is unavailable", async () => {
+    const fetchMock = memoryNavigationFetch(async () => {
+      throw new Error("exact memory fetch must not run");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({ projects: [project("other-project")], projectsLoaded: true });
+    useAppStore.getState().requestMemoryNavigation({
+      projectId: "removed-project",
+      memoryId: "memory-a",
+      titleSnapshot: "Historical title",
+    });
+
+    render(<MemoryScreen />);
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Memory “Historical title” no longer exists",
+    );
+    expect(screen.queryByTestId("memory-editor")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).startsWith("/memory/memory-a?projectId=removed-project"),
+      ),
+    ).toBe(false);
+  });
+
+  it("clears an existing same-project draft as soon as exact navigation is admitted", async () => {
+    const pending = new Promise<ReturnType<typeof jsonResponse>>(() => undefined);
+    const fetchMock = memoryNavigationFetch(async () => pending);
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+    fireEvent.click(screen.getByRole("button", { name: "New memory" }));
+    expect(screen.getByTestId("memory-editor")).toBeTruthy();
+
+    act(() => {
+      useAppStore.getState().requestMemoryNavigation({
+        projectId: "project-a",
+        memoryId: "memory-a",
+        titleSnapshot: "Historical title",
+      });
+    });
+
+    expect(screen.queryByTestId("memory-editor")).toBeNull();
+    expect(screen.queryByDisplayValue("Historical title")).toBeNull();
+  });
+
+  it.each([
+    { name: "an unavailable request", response: () => jsonResponse({}, false, 400) },
+    { name: "a server failure", response: () => jsonResponse({}, false, 503) },
+    {
+      name: "a network failure",
+      response: () => Promise.reject(new Error("private network detail")),
+    },
+  ])("shows an honest alert for $name without fallback", async ({ name, response }) => {
+    const fetchMock = memoryNavigationFetch(async () => response());
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.getState().requestMemoryNavigation({
+      projectId: "project-a",
+      memoryId: "exact-memory",
+      titleSnapshot: "Snapshot title",
+    });
+
+    render(<MemoryScreen />);
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      name === "an unavailable request"
+        ? "Memory “Snapshot title” no longer exists"
+        : "Couldn’t open memory. Try again.",
+    );
+    expect(screen.queryByTestId("memory-editor")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/memory/exact-memory?projectId=project-a",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("lets the latest repeated click win when an older exact GET resolves last", async () => {
+    let resolveFirst!: (response: ReturnType<typeof jsonResponse>) => void;
+    const first = new Promise<ReturnType<typeof jsonResponse>>(
+      (resolve) => (resolveFirst = resolve),
+    );
+    const fetchMock = memoryNavigationFetch(async (url) => {
+      if (url.startsWith("/memory/memory-a?")) return first;
+      if (url.startsWith("/memory/memory-b?")) {
+        return jsonResponse({ memory: memory("memory-b", "Latest live title") });
+      }
+      throw new Error(`unexpected direct request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.getState().requestMemoryNavigation({
+      projectId: "project-a",
+      memoryId: "memory-a",
+      titleSnapshot: "First snapshot",
+    });
+    render(<MemoryScreen />);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).startsWith("/memory/memory-a?")),
+      ).toBe(true),
+    );
+
+    act(() => {
+      useAppStore.getState().requestMemoryNavigation({
+        projectId: "project-a",
+        memoryId: "memory-b",
+        titleSnapshot: "Second snapshot",
+      });
+    });
+    expect(await screen.findByDisplayValue("Latest live title")).toBeTruthy();
+
+    resolveFirst(jsonResponse({ memory: memory("memory-a", "Late stale title") }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect((screen.getByTestId("memory-title") as HTMLInputElement).value).toBe(
+      "Latest live title",
+    );
+  });
+});
 
 describe("MemoryScreen semantic readiness", () => {
   it("loads passive status and shows the not-requested lexical state", async () => {

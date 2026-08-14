@@ -214,16 +214,37 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   async function handleRecall(
     sessionId: string,
     params: Record<string, unknown>,
-  ): Promise<{ content: string; recall: SemanticRecallStatus }> {
+  ): Promise<{
+    content: string;
+    recall: SemanticRecallStatus;
+    recalled?: Array<{ id: string; title: string; type: string }>;
+  }> {
     if (!memoryEnabled) return { content: "", recall: semanticRecall.getStatus() };
     const query = typeof params.query === "string" ? params.query : "";
-    const cwd = sessions.get(sessionId)?.meta.cwd;
-    if (!cwd || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
-    const store: MemoryStore = { baseDir: memoryBaseDir, projectPath: cwd };
+    const meta = sessions.get(sessionId)?.meta;
+    // A registered project's path is canonical for memory ownership. Session cwd
+    // can be a worktree, so a stale authoritative project link fails closed;
+    // cwd is only the legacy fallback when no project id was ever recorded.
+    const canonicalProjectPath = meta?.projectId
+      ? ctx.projects.find((project) => project.id === meta.projectId)?.path
+      : undefined;
+    const projectPath = meta?.projectId ? canonicalProjectPath : meta?.cwd;
+    if (!projectPath || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
+    const store: MemoryStore = { baseDir: memoryBaseDir, projectPath };
     const result = await semanticRecall.recall(store, query, RECALL_LIMIT);
+    const hits = result.hits.slice(0, RECALL_LIMIT);
     return {
-      content: buildRecalledMemories(result.hits.map((hit) => hit.record)),
+      content: buildRecalledMemories(hits.map((hit) => hit.record)),
       recall: result.recall,
+      ...(meta?.projectId && canonicalProjectPath && hits.length > 0
+        ? {
+            recalled: hits.map(({ record }) => ({
+              id: record.id,
+              title: record.title,
+              type: record.type,
+            })),
+          }
+        : {}),
     };
   }
 

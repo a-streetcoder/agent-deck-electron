@@ -116,6 +116,9 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
   // Per-extension/runtime sequence. A resumed/rebound Pi loads a new extension
   // and starts again at one; the server fences only within that live owner.
   let promptAuditSequence = 0;
+  // At most one turn's bounded recall evidence waits for Pi to begin its first
+  // assistant message. before_agent_start always replaces/clears it before I/O.
+  let pendingRecall;
   for (const t of tools) {
     pi.registerTool({
       name: t.name,
@@ -163,8 +166,22 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
     }
   });
 ${
-  opts.recall || opts.promptAudit
-    ? `  // This extension is appended after every provider/user extension. Pi runs
+  opts.recall
+    ? `  // Pi 0.82 emits extension message_end before persisting that message,
+  // and turn_start can also precede user persistence. The first assistant
+  // message_start is the deterministic boundary after the user entry and before
+  // assistant persistence/output. Clearing first makes retries idempotent.
+  pi.on("message_start", (event) => {
+    if (!event.message || event.message.role !== "assistant" || !pendingRecall) return;
+    const recall = pendingRecall;
+    pendingRecall = undefined;
+    pi.appendEntry("agent-deck.memory-recall", recall);
+  });
+`
+    : ""
+}${
+      opts.recall || opts.promptAudit
+        ? `  // This extension is appended after every provider/user extension. Pi runs
   // before_agent_start handlers in extension order, so this is the last prompt
   // observer. Recall (when enabled) is applied before the audit in this SAME
   // handler; the captured value is therefore exactly the value returned to Pi.
@@ -172,7 +189,10 @@ ${
     let finalSystemPrompt = event.systemPrompt ?? ctx.getSystemPrompt();
 ${
   opts.recall
-    ? `    // Recall is best-effort and bounded: a broken bridge must not stall or
+    ? `    // Never let an aborted/failed previous prompt leak evidence into a
+    // later turn. A successful fetch below may install one fresh bounded value.
+    pendingRecall = undefined;
+    // Recall is best-effort and bounded: a broken bridge must not stall or
     // otherwise alter the turn.
     const recallController = new AbortController();
     const recallTimer = setTimeout(() => recallController.abort(), 5000);
@@ -186,7 +206,27 @@ ${
       if (res.ok) {
         const data = await res.json();
         const block = data && typeof data.content === "string" ? data.content : "";
-        if (block) finalSystemPrompt += "\\n\\n" + block;
+        // Persist only bounded, payload-free source metadata. Bodies, query,
+        // filesystem paths and project identity never enter the Pi entry.
+        const recalledRaw = data && Array.isArray(data.recalled) ? data.recalled : [];
+        const memoryTypes = new Set(["context", "decision", "runbook", "failure", "preference"]);
+        const recalled = recalledRaw.length <= 4 && recalledRaw.every((memory) =>
+          memory && typeof memory === "object" &&
+          Object.keys(memory).every((key) => key === "id" || key === "title" || key === "type") &&
+          typeof memory.id === "string" && memory.id.length > 0 && memory.id.length <= 256 &&
+          typeof memory.title === "string" && memory.title.trim().length > 0 && memory.title.length <= 256 &&
+          memoryTypes.has(memory.type)
+        ) && new Set(recalledRaw.map((memory) => memory.id)).size === recalledRaw.length
+          ? recalledRaw.map(({ id, title, type }) => ({ id, title, type }))
+          : [];
+        if (block) {
+          if (recalled.length > 0) {
+            pendingRecall = { version: 1, memories: recalled };
+          }
+          // Prompt injection is independent from optional transcript metadata:
+          // a malformed/legacy bridge response must not silently drop recall.
+          finalSystemPrompt += "\\n\\n" + block;
+        }
       }
     } catch (err) {
       // Best-effort: leave the prompt unchanged.
@@ -196,8 +236,8 @@ ${
 `
     : ""
 }${
-        opts.promptAudit
-          ? `    // Sensitive, internal audit callback. It is authenticated by this
+            opts.promptAudit
+              ? `    // Sensitive, internal audit callback. It is authenticated by this
     // session's bridge token and is never registered as a model-facing tool.
     const sequence = ++promptAuditSequence;
     const auditController = new AbortController();
@@ -223,14 +263,14 @@ ${
       clearTimeout(auditTimer);
     }
 `
-          : ""
-      }    return finalSystemPrompt === (event.systemPrompt ?? ctx.getSystemPrompt())
+              : ""
+          }    return finalSystemPrompt === (event.systemPrompt ?? ctx.getSystemPrompt())
       ? undefined
       : { systemPrompt: finalSystemPrompt };
   });
 `
-    : ""
-}}
+        : ""
+    }}
 `,
   );
   return file;

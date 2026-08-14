@@ -84,6 +84,16 @@ describe("transcript visibility projection", () => {
   });
 
   it("gates exact web, diff, memory, and MCP cards while retaining generic tools", () => {
+    const recall: TranscriptCell = {
+      kind: "memory_recall",
+      id: "memory-recall-entry-1",
+      projectId: "project-1",
+      memories: [{ id: "decision-1", title: "OAuth callback", type: "decision" }],
+    };
+    expect(isTranscriptCellVisible(recall, hidden)).toBe(false);
+    expect(isTranscriptCellVisible(recall, DEFAULT_TRANSCRIPT_VISIBILITY)).toBe(true);
+    expect(recall.memories).toHaveLength(1);
+
     for (const name of ["web_search", "web_fetch", "fetch_content", "get_search_content"]) {
       expect(isTranscriptCellVisible(tool(name), hidden), name).toBe(false);
     }

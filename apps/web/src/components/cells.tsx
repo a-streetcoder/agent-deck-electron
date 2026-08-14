@@ -2,6 +2,7 @@ import { AppCopyButton } from "@/design-system/components/AppCopyButton";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
+  Brain,
   CheckCircle2,
   FolderOpen,
   GitFork,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   memoryToolCardLabel,
+  type MemoryRecallCell,
   type ProviderRetryCell,
   type QuestionCell,
   type SubagentCell,
@@ -135,6 +137,49 @@ function ToolCellView({
         }
       />
     </div>
+  );
+}
+
+function MemoryRecallCellView({ cell }: { cell: MemoryRecallCell }) {
+  const titleId = useId();
+  const requestMemoryNavigation = useAppStore((state) => state.requestMemoryNavigation);
+
+  return (
+    <section
+      className="rounded-xl border border-border-subtle bg-surface-elevated px-3 py-2"
+      aria-labelledby={titleId}
+      data-testid="memory-recall-cell"
+    >
+      <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+        <Brain size={16} className="shrink-0 text-accent" aria-hidden />
+        <h3 id={titleId}>Memory recalled</h3>
+      </div>
+      <div className="mt-2 space-y-1" data-testid="memory-recall-list">
+        {cell.memories.map((memory) => (
+          <ControlButton
+            key={memory.id}
+            type="button"
+            className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-2 text-left hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onClick={() =>
+              requestMemoryNavigation({
+                projectId: cell.projectId,
+                memoryId: memory.id,
+                titleSnapshot: memory.title,
+              })
+            }
+            aria-label={`Open memory ${memory.title}`}
+            data-testid={`memory-recall-${memory.id}`}
+          >
+            <span className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+              {memory.type}
+            </span>
+            <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+              {memory.title}
+            </span>
+          </ControlButton>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -869,6 +914,8 @@ export function CellView({
       return <AssistantCellView cell={cell} transcriptVisibility={transcriptVisibility} />;
     case "tool":
       return <ToolCellView cell={cell} editorController={editorController} />;
+    case "memory_recall":
+      return <MemoryRecallCellView cell={cell} />;
     case "provider_retry":
       return <ProviderRetryCellView cell={cell} />;
     case "subagent":

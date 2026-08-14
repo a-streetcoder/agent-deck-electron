@@ -42,6 +42,10 @@ interface Draft {
   projectId: string;
 }
 
+const memoryMissingMessage = (titleSnapshot: string): string =>
+  `Memory “${titleSnapshot}” no longer exists`;
+const MEMORY_OPEN_FAILED_MESSAGE = "Couldn’t open memory. Try again.";
+
 const STATUS_STYLE: Record<MemoryStatus, string> = {
   active: "border-border-subtle text-text-muted",
   pinned: "border-accent text-accent",
@@ -327,10 +331,15 @@ function SemanticMemoryPreference({
 
 export function MemoryScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const projects = useAppStore((state) => state.projects);
+  const projectsLoaded = useAppStore((state) => state.projectsLoaded);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const setError = useAppStore((state) => state.setError);
+  const navigationRequest = useAppStore((state) => state.memoryNavigationRequest);
+  const clearNavigationRequest = useAppStore((state) => state.clearMemoryNavigationRequest);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [navigationAlert, setNavigationAlert] = useState<string | null>(null);
   // Monotonic request id: a slow response for a previously-selected project must
   // not clobber the list once a newer load (e.g. after switching projects) began.
   const loadSeq = useRef(0);
@@ -384,7 +393,11 @@ export function MemoryScreen() {
   }, [searchQuery, currentProjectId, resourcesVersion, semanticPreferenceVersion]);
 
   const load = useCallback(async (): Promise<void> => {
-    if (!currentProjectId) {
+    if (
+      !currentProjectId ||
+      (projectsLoaded && !projects.some((project) => project.id === currentProjectId))
+    ) {
+      loadSeq.current += 1;
       setMemories([]);
       return;
     }
@@ -397,7 +410,7 @@ export function MemoryScreen() {
     } catch (err) {
       if (seq === loadSeq.current) setError(String(err));
     }
-  }, [currentProjectId, setError]);
+  }, [currentProjectId, projects, projectsLoaded, setError]);
 
   useEffect(() => {
     void load();
@@ -407,12 +420,86 @@ export function MemoryScreen() {
   // previous project's recall hits never flash under the new project.
   useLayoutEffect(() => {
     setDraft(null);
+    setNavigationAlert(null);
     // Drop the previous project's search so its recall hits can't render under
     // the new project before the re-keyed search effect resolves (native 11.8).
     searchSeq.current += 1;
     setSearchQuery("");
     setSearchResults(null);
   }, [currentProjectId]);
+
+  useLayoutEffect(() => {
+    if (!navigationRequest) return;
+    const { requestId, projectId, memoryId, titleSnapshot } = navigationRequest;
+    if (projectId !== currentProjectId) {
+      clearNavigationRequest(requestId);
+      return;
+    }
+    if (!projectsLoaded) return;
+    if (!projects.some((project) => project.id === projectId)) {
+      setDraft(null);
+      setNavigationAlert(memoryMissingMessage(titleSnapshot));
+      clearNavigationRequest(requestId);
+      return;
+    }
+
+    const controller = new AbortController();
+    // Admission is synchronous before paint: a prior editor can never flash
+    // while the exact-ID request is in flight.
+    setDraft(null);
+    setNavigationAlert(null);
+    // Defer admission by one microtask so React StrictMode's setup/cleanup probe
+    // aborts the probe without issuing a duplicate one-shot GET.
+    void Promise.resolve()
+      .then(async () => {
+        if (controller.signal.aborted) return null;
+        const response = await fetch(
+          `/memory/${encodeURIComponent(memoryId)}?projectId=${encodeURIComponent(projectId)}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) {
+          throw new Error(
+            response.status === 400 || response.status === 404
+              ? memoryMissingMessage(titleSnapshot)
+              : MEMORY_OPEN_FAILED_MESSAGE,
+          );
+        }
+        const data = (await response.json()) as { memory?: MemoryItem };
+        if (!data.memory || data.memory.id !== memoryId) {
+          throw new Error(memoryMissingMessage(titleSnapshot));
+        }
+        return data.memory;
+      })
+      .then((memory) => {
+        if (!memory) return;
+        if (useAppStore.getState().memoryNavigationRequest?.requestId !== requestId) return;
+        setDraft({
+          id: memory.id,
+          type: memory.type,
+          title: memory.title,
+          summary: memory.summary,
+          body: memory.body,
+          projectId,
+        });
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        if (useAppStore.getState().memoryNavigationRequest?.requestId !== requestId) return;
+        setDraft(null);
+        setNavigationAlert(
+          cause instanceof Error &&
+            (cause.message === memoryMissingMessage(titleSnapshot) ||
+              cause.message === MEMORY_OPEN_FAILED_MESSAGE)
+            ? cause.message
+            : MEMORY_OPEN_FAILED_MESSAGE,
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) clearNavigationRequest(requestId);
+      });
+
+    return () => controller.abort();
+  }, [clearNavigationRequest, currentProjectId, navigationRequest, projects, projectsLoaded]);
 
   const setStatus = async (id: string, status: MemoryStatus): Promise<void> => {
     if (!currentProjectId) return;
@@ -548,6 +635,15 @@ export function MemoryScreen() {
           recall={semanticRecall}
           setRecall={setSemanticRecall}
         />
+        {navigationAlert ? (
+          <div
+            className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-sm text-danger"
+            role="alert"
+            data-testid="memory-navigation-alert"
+          >
+            {navigationAlert}
+          </div>
+        ) : null}
         <ControlInput
           data-testid="memory-search"
           className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"

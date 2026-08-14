@@ -62,6 +62,14 @@ export interface QuestionNavigationRequest {
   token: number;
 }
 
+/** Exact historical memory identity selected from a transcript recall card. */
+export interface MemoryNavigationRequest {
+  requestId: number;
+  projectId: string;
+  memoryId: string;
+  titleSnapshot: string;
+}
+
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
 export interface ComposerDraftImage extends ImageAttachment {
@@ -366,6 +374,8 @@ export interface AppState {
   gitActionRequest: GitActionRequest | null;
   /** One-shot, session-bound request consumed only by the matching Transcript. */
   questionNavigationRequest: QuestionNavigationRequest | null;
+  /** One-shot exact-ID request consumed only by MemoryScreen for its project. */
+  memoryNavigationRequest: MemoryNavigationRequest | null;
   /** Last question card reached programmatically in the current session. */
   questionNavigationAnchorId: string | null;
   transcript: TranscriptState;
@@ -409,6 +419,9 @@ export interface AppState {
   requestQuestionNavigation(direction: QuestionNavigationDirection, sessionId: string): void;
   /** Consume only this request; a newer request cannot be cleared by an older effect. */
   completeQuestionNavigation(token: number, targetId?: string): void;
+  requestMemoryNavigation(request: Omit<MemoryNavigationRequest, "requestId">): void;
+  /** Request-scoped so a late fetch cannot clear a newer card click. */
+  clearMemoryNavigationRequest(requestId: number): void;
   setTerminalOpen(open: boolean): void;
   /** Open `kind` as a tab for `sessionId` (add if absent) and make it active. */
   openWorkspaceTab(sessionId: string, kind: WorkspaceTabKind): void;
@@ -479,6 +492,7 @@ function initialPanelExpanded(): boolean {
 let nextGitActionToken = 0;
 let nextQuestionNavigationToken = 0;
 let nextResourceCommandToken = 0;
+let nextMemoryNavigationRequestId = 0;
 
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
@@ -519,6 +533,7 @@ export const useAppStore = create<AppState>((set) => ({
   resourceCommandRequest: null,
   gitActionRequest: null,
   questionNavigationRequest: null,
+  memoryNavigationRequest: null,
   questionNavigationAnchorId: null,
   transcript: emptyTranscript(),
   lastSeq: 0,
@@ -532,7 +547,16 @@ export const useAppStore = create<AppState>((set) => ({
   // Leaving chat for another nav section auto-collapses the panel (revealing the
   // nav it covers); staying in chat — e.g. selecting a session — leaves the
   // expansion untouched so it persists across session switches.
-  setView: (view) => set(view === "chat" ? { view } : { view, panelExpanded: false }),
+  setView: (view) =>
+    set(
+      view === "chat"
+        ? { view, memoryNavigationRequest: null }
+        : {
+            view,
+            panelExpanded: false,
+            ...(view !== "memory" ? { memoryNavigationRequest: null } : {}),
+          },
+    ),
   // Explicit expand/collapse persists so the panel launches as you left it.
   // (setView's auto-collapse is transient and deliberately does not persist.)
   setPanelExpanded: (panelExpanded) => {
@@ -546,7 +570,12 @@ export const useAppStore = create<AppState>((set) => ({
   bumpResourcesVersion: () => set((state) => ({ resourcesVersion: state.resourcesVersion + 1 })),
   setProjects: (projects) => set({ projects, projectsLoaded: true }),
   setCurrentProject: (currentProjectId) =>
-    set({ currentProjectId, selectedAgentFilePath: null, selectedPromptFilePath: null }),
+    set({
+      currentProjectId,
+      selectedAgentFilePath: null,
+      selectedPromptFilePath: null,
+      memoryNavigationRequest: null,
+    }),
   setCurrentAgent: (currentAgentName) => set({ currentAgentName }),
   setSession: (session) =>
     set((state) =>
@@ -646,6 +675,24 @@ export const useAppStore = create<AppState>((set) => ({
             questionNavigationRequest: null,
             ...(targetId !== undefined ? { questionNavigationAnchorId: targetId } : {}),
           }
+        : {},
+    ),
+  requestMemoryNavigation: (request) =>
+    set({
+      currentProjectId: request.projectId,
+      view: "memory",
+      panelExpanded: false,
+      selectedAgentFilePath: null,
+      selectedPromptFilePath: null,
+      memoryNavigationRequest: {
+        requestId: ++nextMemoryNavigationRequestId,
+        ...request,
+      },
+    }),
+  clearMemoryNavigationRequest: (requestId) =>
+    set((state) =>
+      state.memoryNavigationRequest?.requestId === requestId
+        ? { memoryNavigationRequest: null }
         : {},
     ),
   setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
