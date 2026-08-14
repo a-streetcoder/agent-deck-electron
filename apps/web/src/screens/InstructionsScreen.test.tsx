@@ -262,6 +262,52 @@ describe("SYSTEM.md base-prompt candidate (INS-01)", () => {
     expect(chip.textContent?.toLowerCase()).toContain("overridden");
   });
 
+  it("the Preview panel shows the assembled sections in order, placeholders labeled (INS-05)", async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/runtime/instructions") {
+        return Promise.resolve(jsonResponse({ content: "", path: "/home/.pi/agent/AGENTS.md" }));
+      }
+      if (url.startsWith("/runtime/instruction-status")) {
+        return Promise.resolve(
+          jsonResponse({
+            base: { active: "builtin", global: { path: "/g/SYSTEM.md", exists: false } },
+            append: { active: "none", global: { path: "/g/APPEND_SYSTEM.md", exists: false } },
+            context: { global: { path: "/g/AGENTS.md", exists: false } },
+          }),
+        );
+      }
+      if (url.startsWith("/runtime/instruction-preview")) {
+        return Promise.resolve(
+          jsonResponse({
+            sections: [
+              {
+                kind: "placeholder",
+                title: "pi's built-in base prompt",
+                content: "[not available here]",
+              },
+              { kind: "append", title: "Append prompt", path: "/g/APPEND.md", content: "rules" },
+              { kind: "placeholder", title: "Runtime additions", content: "[added at launch]" },
+            ],
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<InstructionsScreen />);
+    await screen.findByTestId("instructions-editor");
+
+    fireEvent.click(screen.getByTestId("instructions-preview-toggle"));
+    const panel = await screen.findByTestId("instructions-preview");
+    const text = panel.textContent ?? "";
+    // ORDER is the contract: base placeholder, then append content, then trailer
+    expect(text.indexOf("built-in base prompt")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("built-in base prompt")).toBeLessThan(text.indexOf("rules"));
+    expect(text.indexOf("rules")).toBeLessThan(text.indexOf("Runtime additions"));
+    // the contributing file's path is shown
+    expect(text).toContain("/g/APPEND.md");
+  });
+
   it("the context file view offers no Remove override", async () => {
     render(<InstructionsScreen />);
     await screen.findByTestId("instructions-editor");

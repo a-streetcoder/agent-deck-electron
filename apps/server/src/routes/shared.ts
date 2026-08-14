@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { z } from "zod";
 
@@ -69,4 +69,23 @@ export const ancestorDirsOf = (
   }
   dirs.reverse();
   return { dirs, truncated };
+};
+
+/**
+ * True when `<project>/.pi` resolves OUTSIDE the project after realpath (a
+ * repo-checked-in junction/symlink). Shared by the instruction editors AND the
+ * preview so no read path can leak what the write paths refuse (review, Codex).
+ * Fail closed on unresolvable paths; a missing .pi is fine (nothing to traverse).
+ */
+export const projectPiDirEscapes = (projectPath: string): boolean => {
+  const piDir = nodePath.join(projectPath, ".pi");
+  if (!existsSync(piDir)) return false;
+  try {
+    const realDir = realpathSync(piDir);
+    const realRoot = realpathSync(projectPath);
+    const rel = nodePath.relative(realRoot, realDir);
+    return rel.startsWith("..") || nodePath.isAbsolute(rel);
+  } catch {
+    return true;
+  }
 };

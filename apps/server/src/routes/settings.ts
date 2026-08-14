@@ -29,6 +29,8 @@ import { z } from "zod";
 import type { AppSettings } from "../persistence.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import {
+  ancestorDirsOf,
+  projectPiDirEscapes,
   INSTRUCTIONS_MAX,
   RESOURCE_NAME,
   instructionsBody,
@@ -504,6 +506,141 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // append: project > global > none (the project file REPLACES the global one);
   // context: per-directory AGENTS.md over CLAUDE.md — global and project context
   // BOTH load (they stack), so shadowing there is within a directory only.
+  // INS-05: the assembled system-prompt PREVIEW — the same winners the status
+  // route reports, in pi's assembly order (base, append, context: global then
+  // ancestors then project), each with size-capped content. What electron cannot
+  // know is a LABELED placeholder, never fabricated: pi's built-in base prompt
+  // text and the runtime trailer pi adds at launch.
+  const PREVIEW_CONTENT_MAX = 20_000;
+  const previewContent = (
+    filePath: string,
+  ): { content: string; contentTruncated?: boolean } | null => {
+    try {
+      const stat = statSync(filePath);
+      if (!stat.isFile()) return null;
+      // gate on SIZE before reading: the editors refuse >INSTRUCTIONS_MAX files
+      // and the preview must never read-then-slice an unbounded file (review, Codex)
+      if (stat.size > INSTRUCTIONS_MAX) {
+        return {
+          content: "[file too large to preview — the editor refuses it too]",
+          contentTruncated: true,
+        };
+      }
+      const raw = readFileSync(filePath, "utf8");
+      return raw.length > PREVIEW_CONTENT_MAX
+        ? { content: raw.slice(0, PREVIEW_CONTENT_MAX), contentTruncated: true }
+        : { content: raw };
+    } catch {
+      return null;
+    }
+  };
+
+  fastify.get("/runtime/instruction-preview", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
+    const roots = rootsFor(projectId);
+    const globalDir = nodePath.join(roots.home, ".pi", "agent");
+    const contextWinner = (dir: string): string | undefined => {
+      let onDisk: Set<string>;
+      try {
+        onDisk = new Set(readdirSync(dir));
+      } catch {
+        return undefined;
+      }
+      // the winner must be a real FILE — a directory named AGENTS.md never wins,
+      // the usable sibling does (review, Codex; matches the status route)
+      for (const name of ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]) {
+        if (!onDisk.has(name)) continue;
+        const candidate = nodePath.join(dir, name);
+        try {
+          if (statSync(candidate).isFile()) return candidate;
+        } catch {
+          // unreadable — try the next candidate
+        }
+      }
+      return undefined;
+    };
+
+    const sections: Array<{
+      kind: "base" | "append" | "context" | "placeholder";
+      title: string;
+      path?: string;
+      content?: string;
+      contentTruncated?: boolean;
+    }> = [];
+
+    // the same .pi containment guard the editors enforce: a junctioned .pi must
+    // not leak outside content through the preview either (review, Codex)
+    const projectPiSafe = roots.projectPath ? !projectPiDirEscapes(roots.projectPath) : false;
+    // base: project SYSTEM.md > global SYSTEM.md > pi's built-in (placeholder)
+    const basePaths = [
+      projectPiSafe && roots.projectPath
+        ? nodePath.join(roots.projectPath, ".pi", "SYSTEM.md")
+        : undefined,
+      nodePath.join(globalDir, "SYSTEM.md"),
+    ];
+    let baseAdded = false;
+    for (const candidate of basePaths) {
+      if (!candidate) continue;
+      const body = previewContent(candidate);
+      if (body) {
+        sections.push({ kind: "base", title: "Base prompt", path: candidate, ...body });
+        baseAdded = true;
+        break;
+      }
+    }
+    if (!baseAdded) {
+      sections.push({
+        kind: "placeholder",
+        title: "pi's built-in base prompt",
+        content:
+          "[pi generates its built-in base prompt at runtime when no SYSTEM.md exists — its text is not available here.]",
+      });
+    }
+
+    // append: project APPEND_SYSTEM.md > global (absent -> no section)
+    for (const candidate of [
+      projectPiSafe && roots.projectPath
+        ? nodePath.join(roots.projectPath, ".pi", "APPEND_SYSTEM.md")
+        : undefined,
+      nodePath.join(globalDir, "APPEND_SYSTEM.md"),
+    ]) {
+      if (!candidate) continue;
+      const body = previewContent(candidate);
+      if (body) {
+        sections.push({ kind: "append", title: "Append prompt", path: candidate, ...body });
+        break;
+      }
+    }
+
+    // context files STACK: global dir first, then ancestors outermost-first, then
+    // the project dir — one winner per directory (native activeContextFiles)
+    const contextDirs = [globalDir];
+    if (roots.projectPath) {
+      contextDirs.push(
+        ...ancestorDirsOf(roots.projectPath).dirs,
+        nodePath.resolve(roots.projectPath),
+      );
+    }
+    const seenContext = new Set<string>();
+    for (const dir of contextDirs) {
+      const winner = contextWinner(dir);
+      if (!winner || seenContext.has(winner)) continue;
+      seenContext.add(winner);
+      const body = previewContent(winner);
+      if (!body) continue;
+      sections.push({ kind: "context", title: "Context file", path: winner, ...body });
+    }
+
+    sections.push({
+      kind: "placeholder",
+      title: "Runtime additions",
+      content:
+        "[pi adds the skill catalog, current date, and working directory at launch; Agent Deck may append its agent catalog.]",
+    });
+
+    return { sections };
+  });
+
   fastify.get("/runtime/instruction-status", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     const roots = rootsFor(projectId);
@@ -551,9 +688,14 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       }
       // family precedence: ANY AGENTS casing beats ANY CLAUDE casing — the same
       // order resolveInstructionsFile uses at runtime (review, Codex)
-      const present = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"].filter((n) =>
-        onDisk.has(n),
-      );
+      const present = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"].filter((n) => {
+        if (!onDisk.has(n)) return false;
+        try {
+          return statSync(nodePath.join(dir, n)).isFile();
+        } catch {
+          return false;
+        }
+      });
       if (present.length === 0) return { path: nodePath.join(dir, "AGENTS.md"), exists: false };
       const winner = present[0]!;
       const shadowed = present.slice(1);

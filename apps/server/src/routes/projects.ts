@@ -23,6 +23,7 @@ import { normalizeGitHubIssueList, type RawGitHubIssueListRow } from "../githubI
 import {
   ancestorDirsOf,
   INSTRUCTIONS_MAX,
+  projectPiDirEscapes,
   RESOURCE_NAME,
   instructionsBody,
   resolveInstructionsFile,
@@ -272,18 +273,8 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   // never redirect a read/write/delete outside the project (review, Codex). REAL-path
   // containment, fail closed on unresolvable paths; the file itself may not exist yet,
   // so the check anchors on its nearest existing ancestor via the dirname.
-  const piPromptDirEscapes = (target: { path: string; projectPath: string }): boolean => {
-    const piDir = nodePath.dirname(target.path);
-    if (!existsSync(piDir)) return false; // nothing to traverse yet; mkdir creates it fresh
-    try {
-      const realDir = realpathSync(piDir);
-      const realRoot = realpathSync(target.projectPath);
-      const rel = nodePath.relative(realRoot, realDir);
-      return rel.startsWith("..") || nodePath.isAbsolute(rel);
-    } catch {
-      return true;
-    }
-  };
+  const piPromptDirEscapes = (target: { path: string; projectPath: string }): boolean =>
+    projectPiDirEscapes(target.projectPath);
 
   const registerPiPromptRoutes = (routeName: string, fileName: string): void => {
     fastify.get(`/projects/:id/${routeName}`, async (request, reply) => {

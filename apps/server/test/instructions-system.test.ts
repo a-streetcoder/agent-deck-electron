@@ -330,6 +330,111 @@ describe("project SYSTEM.md routes (INS-01)", () => {
     expect(after.append.active).toBe("none");
   });
 
+  it("assembles the ordered prompt PREVIEW: winners + labeled placeholders, never fabricated (INS-05)", async () => {
+    const rootDir = mkdtempSync(path.join(tmpdir(), "preview-"));
+    const projectDir = path.join(rootDir, "repo");
+    mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+    writeFileSync(path.join(rootDir, "AGENTS.md"), "ancestor context");
+    writeFileSync(path.join(projectDir, "AGENTS.md"), "project context");
+    writeFileSync(path.join(projectDir, ".pi", "SYSTEM.md"), "project base prompt");
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+    try {
+      // a global append participates after the base
+      await api("PUT", "/runtime/append-prompt", { content: "global house rules" });
+
+      const { sections } = (await (
+        await api("GET", `/runtime/instruction-preview?projectId=${project.id}`)
+      ).json()) as {
+        sections: Array<{ kind: string; title: string; path?: string; content?: string }>;
+      };
+      const kinds = sections.map((s) => s.kind);
+      // order: base -> append -> context (outermost ancestors before project) -> runtime trailer
+      expect(kinds[0]).toBe("base");
+      expect(sections[0]!.content).toBe("project base prompt");
+      expect(kinds[1]).toBe("append");
+      expect(sections[1]!.content).toBe("global house rules");
+      const contextPaths = sections.filter((s) => s.kind === "context").map((s) => s.path!);
+      expect(contextPaths.some((p) => p === path.join(rootDir, "AGENTS.md"))).toBe(true);
+      expect(contextPaths[contextPaths.length - 1]).toBe(path.join(projectDir, "AGENTS.md"));
+      expect(contextPaths.indexOf(path.join(rootDir, "AGENTS.md"))).toBeLessThan(
+        contextPaths.indexOf(path.join(projectDir, "AGENTS.md")),
+      );
+      // the runtime trailer is a labeled placeholder, last
+      expect(sections[sections.length - 1]!.kind).toBe("placeholder");
+
+      // with NO base file anywhere the preview shows a labeled builtin placeholder,
+      // never fabricated text
+      const { rmSync } = await import("node:fs");
+      rmSync(path.join(projectDir, ".pi", "SYSTEM.md"));
+      const bare = (await (
+        await api("GET", `/runtime/instruction-preview?projectId=${project.id}`)
+      ).json()) as { sections: Array<{ kind: string; title: string; content?: string }> };
+      expect(bare.sections[0]!.kind).toBe("placeholder");
+      expect(bare.sections[0]!.title.toLowerCase()).toContain("built-in");
+      expect(bare.sections[0]!.content ?? "").not.toContain("You are");
+    } finally {
+      await api("DELETE", "/runtime/append-prompt");
+    }
+  });
+
+  it("preview honors the .pi containment guard and the size gates (INS-05, review Codex)", async () => {
+    // 1) a junctioned .pi must not leak outside content through the preview (Windows)
+    if (process.platform === "win32") {
+      const { spawnSync } = await import("node:child_process");
+      const projectDir = mkdtempSync(path.join(tmpdir(), "preview-junction-"));
+      const outside = mkdtempSync(path.join(tmpdir(), "preview-outside-"));
+      writeFileSync(path.join(outside, "SYSTEM.md"), "SECRET OUTSIDE BASE");
+      const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+        project: { id: string };
+      };
+      const link = spawnSync("cmd", ["/c", "mklink", "/J", path.join(projectDir, ".pi"), outside]);
+      expect(link.status).toBe(0);
+      const { sections } = (await (
+        await api("GET", `/runtime/instruction-preview?projectId=${project.id}`)
+      ).json()) as { sections: Array<{ content?: string }> };
+      expect(JSON.stringify(sections)).not.toContain("SECRET OUTSIDE BASE");
+    }
+
+    // 2) a file the editor refuses as too large is not silently previewed either
+    const bigDir = mkdtempSync(path.join(tmpdir(), "preview-big-"));
+    mkdirSync(path.join(bigDir, ".pi"), { recursive: true });
+    writeFileSync(path.join(bigDir, ".pi", "SYSTEM.md"), "x".repeat(1_100_000));
+    const { project: bigProject } = (await (
+      await api("POST", "/projects", { path: bigDir })
+    ).json()) as { project: { id: string } };
+    const big = (await (
+      await api("GET", `/runtime/instruction-preview?projectId=${bigProject.id}`)
+    ).json()) as {
+      sections: Array<{ kind: string; content?: string; contentTruncated?: boolean }>;
+    };
+    const base = big.sections[0]!;
+    expect(base.kind).toBe("base");
+    expect(base.contentTruncated).toBe(true);
+    expect((base.content ?? "").length).toBeLessThan(1000);
+
+    // 3) a DIRECTORY named AGENTS.md never wins the context slot — the usable
+    // sibling does (status and preview must agree)
+    const dirDir = mkdtempSync(path.join(tmpdir(), "preview-dirctx-"));
+    mkdirSync(path.join(dirDir, "AGENTS.md"), { recursive: true });
+    writeFileSync(path.join(dirDir, "CLAUDE.md"), "usable context");
+    const { project: dirProject } = (await (
+      await api("POST", "/projects", { path: dirDir })
+    ).json()) as { project: { id: string } };
+    const dirPreview = (await (
+      await api("GET", `/runtime/instruction-preview?projectId=${dirProject.id}`)
+    ).json()) as { sections: Array<{ kind: string; path?: string; content?: string }> };
+    const ctx = dirPreview.sections.filter((s) => s.kind === "context");
+    expect(ctx.some((s) => s.path?.endsWith("CLAUDE.md") && s.content === "usable context")).toBe(
+      true,
+    );
+    const dirStatus = (await (
+      await api("GET", `/runtime/instruction-status?projectId=${dirProject.id}`)
+    ).json()) as { context: { project?: { path: string } } };
+    expect(dirStatus.context.project!.path.endsWith("CLAUDE.md")).toBe(true);
+  });
+
   it("refuses to recreate a VANISHED project path (review, Codex)", async () => {
     const projectDir = mkdtempSync(path.join(tmpdir(), "system-prompt-vanished-"));
     const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {

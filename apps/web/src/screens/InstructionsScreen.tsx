@@ -220,6 +220,43 @@ export function InstructionsScreen() {
       ? (scope === "project" ? status.context.project : status.context.global)?.shadowedSibling
       : undefined;
 
+  // INS-05: the assembled prompt preview (read-only; fetched on open).
+  interface PreviewSection {
+    kind: "base" | "append" | "context" | "placeholder";
+    title: string;
+    path?: string;
+    content?: string;
+    contentTruncated?: boolean;
+  }
+  const [preview, setPreview] = useState<PreviewSection[] | null>(null);
+  const previewLoading = useRef(false);
+  // a preview is a snapshot of ANOTHER project's files the moment the selection
+  // changes — clear it rather than display stale paths (review, Codex)
+  useEffect(() => {
+    setPreview(null);
+    previewLoading.current = false;
+  }, [currentProjectId]);
+  const togglePreview = async (): Promise<void> => {
+    if (preview) {
+      setPreview(null);
+      return;
+    }
+    if (previewLoading.current) return; // a rapid second click must not race the first
+    previewLoading.current = true;
+    const targetProject = currentProjectId;
+    try {
+      const query = targetProject ? `?projectId=${encodeURIComponent(targetProject)}` : "";
+      const response = await fetch(`/runtime/instruction-preview${query}`);
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { sections: PreviewSection[] };
+      if (currentProjectId === targetProject) setPreview(data.sections);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      previewLoading.current = false;
+    }
+  };
+
   const dirty = content !== savedContent;
   const needsProject = scope === "project" && !project;
   // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
@@ -314,6 +351,15 @@ export function InstructionsScreen() {
               </ControlButton>
             ) : null}
             <ControlButton
+              data-testid="instructions-preview-toggle"
+              aria-pressed={preview !== null}
+              className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              title="Preview the assembled system prompt pi builds from these files"
+              onClick={() => void togglePreview()}
+            >
+              Preview
+            </ControlButton>
+            <ControlButton
               data-testid="instructions-save"
               className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
               style={{
@@ -360,6 +406,32 @@ export function InstructionsScreen() {
                   ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
                   : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
               </p>
+            ) : null}
+            {preview ? (
+              <div
+                data-testid="instructions-preview"
+                className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border px-2.5 py-1.5"
+              >
+                {preview.map((section, index) => (
+                  <div key={`${section.kind}-${index}`}>
+                    <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                      {section.title}
+                      {section.contentTruncated ? " (truncated)" : ""}
+                    </div>
+                    {section.path ? (
+                      <div
+                        className="truncate font-mono text-micro text-text-muted"
+                        title={section.path}
+                      >
+                        {section.path}
+                      </div>
+                    ) : null}
+                    <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-text-secondary">
+                      {section.content ?? ""}
+                    </pre>
+                  </div>
+                ))}
+              </div>
             ) : null}
             {contextShadowed ? (
               <p
