@@ -193,9 +193,9 @@ describe("scanExtensions", () => {
     expect(found.map((e) => e.path)).toEqual([path.join(pkg, "extensions", "real.ts")]);
   });
 
-  it("an aliased path to an already-discovered file stays ONE candidate (Windows, review Codex)", () => {
+  it("an aliased path to an already-discovered file stays ONE candidate (Windows, review Codex)", async () => {
     if (process.platform !== "win32") return;
-    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+    const { spawnSync } = await import("node:child_process");
     const home = makeHome();
     const dir = path.join(home, ".pi", "agent", "extensions");
     write(dir, "shared.ts");
