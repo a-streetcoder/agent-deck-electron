@@ -307,8 +307,13 @@ describe("scanner integration", () => {
     expect(skills.find((s) => s.name === "clash")?.description).toBe("wins");
   });
 
-  it("watches the codex config.toml so plugin activity flips refresh the catalog", () => {
+  it("watches the codex config.toml ONLY when the codex home exists", () => {
+    // a missing ~/.codex must not become a watch target: its nearest-existing parent is the
+    // user's whole home, which chokidar would then walk recursively (polling on Windows) —
+    // a price no non-Codex machine should pay (CI fix-forward, SKL-09)
     const home = makeHome("watch");
+    expect(watchDirs({ home })).not.toContain(path.join(home, ".codex", "config.toml"));
+    mkdirSync(path.join(home, ".codex"), { recursive: true });
     expect(watchDirs({ home })).toContain(path.join(home, ".codex", "config.toml"));
   });
 });

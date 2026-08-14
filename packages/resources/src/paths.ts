@@ -167,9 +167,22 @@ export function watchDirs(roots: ResourceRoots): string[] {
     // SKL-09: plugin activity flips via this file. The plugin CACHE is deliberately not
     // watched (deep, version-swapped; polling it on Windows would be costly) — version
     // bumps surface on the next scan instead of live. A CODEX_HOME outside `home` falls
-    // outside the watch boundary and degrades the same way.
-    path.join(codexHome(roots.home), "config.toml"),
+    // outside the watch boundary and degrades the same way. Included ONLY when the codex
+    // home exists: a missing `.codex`'s nearest-existing watch root is the user's whole
+    // home, which the watcher would walk recursively (polling on Windows) — a price no
+    // non-Codex machine should pay. Codex appearing later is seen on the next start.
+    ...(isDirectory(codexHome(roots.home))
+      ? [path.join(codexHome(roots.home), "config.toml")]
+      : []),
   ];
+}
+
+function isDirectory(dirPath: string): boolean {
+  try {
+    return statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** A selected project's resource catalog dirs and exact settings file observed
