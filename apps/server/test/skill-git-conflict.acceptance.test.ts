@@ -77,6 +77,7 @@ beforeAll(async () => {
     resourceHome: () => resourceHome,
     rootsFor: () => ({ home: resourceHome }),
     extensionBridgeConflictAt: () => null,
+    agentMemoryEnabled: () => false,
     broadcast: () => undefined,
   } as unknown as ServerContext);
   await fastify.ready();

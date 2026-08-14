@@ -199,6 +199,9 @@ function makeRoute(
         },
       })),
     enabledExtensionPaths: () => [],
+    // This route harness does not configure the memory subsystem. Model
+    // automation is therefore truthfully unavailable rather than undefined.
+    agentMemoryEnabled: () => false,
     prepareProjectMcpSession: state.prepareProjectMcpSession,
     sessionImages: { deleteSession: state.deleteSessionImages },
     sessionPastes: { deleteSession: state.deleteSessionPastes },
@@ -617,7 +620,7 @@ describe("POST /sessions worktree transaction", () => {
     };
     const globalInstructions = resolveInstructionsFile(path.join(homedir(), ".pi", "agent"));
     const bridgePolicy = {
-      memoryEnabled: undefined,
+      memoryEnabled: false,
       assignedMcpServers: [],
       named: undefined,
     };

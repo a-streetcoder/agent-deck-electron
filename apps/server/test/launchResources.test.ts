@@ -1,8 +1,10 @@
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { projectMemoryDir } from "@agent-deck/memory";
 import { describe, expect, it } from "vitest";
 import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
+import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
 describe("injected command launch matrix", () => {
   it("injects plain and named project parents, but not no-project or absent-store launches", () => {
@@ -42,7 +44,7 @@ describe("injected command launch matrix", () => {
         projectPath: projectId ? projectPath : undefined,
       }),
       resourceHome: () => root,
-      memoryEnabled: false,
+      agentMemoryEnabled: () => false,
       memoryBaseDir: path.join(root, "memory"),
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
@@ -89,7 +91,7 @@ describe("injected command launch matrix", () => {
       scanSkillCandidatesFor: () => [],
       rootsFor: () => ({ home: root }),
       resourceHome: () => root,
-      memoryEnabled: false,
+      agentMemoryEnabled: () => false,
       memoryBaseDir: path.join(root, "memory"),
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
@@ -127,7 +129,7 @@ describe("injected command launch matrix", () => {
       scanSkillCandidatesFor: () => [],
       rootsFor: () => ({ home: root }),
       resourceHome: () => root,
-      memoryEnabled: false,
+      agentMemoryEnabled: () => false,
       memoryBaseDir: path.join(root, "memory"),
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
@@ -156,13 +158,67 @@ describe("injected command launch matrix", () => {
       scanSkillCandidatesFor: () => [],
       rootsFor: () => ({ home: root }),
       resourceHome: () => root,
-      memoryEnabled: false,
+      agentMemoryEnabled: () => false,
       memoryBaseDir: path.join(root, "memory"),
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
     const { plan } = resolveLaunchResources(context, {}, {});
     if (plan.kind !== "parent") throw new Error(`expected a parent plan, got ${plan.kind}`);
     expect(plan.promptTemplates).toEqual([refPath]);
+  });
+});
+
+describe("agent memory launch resources", () => {
+  it("removes the memory input and changes the fingerprint while paused, then restores it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-memory-launch-"));
+    const projectPath = path.join(root, "project");
+    mkdirSync(projectPath);
+    const project = { id: "project-1", path: projectPath };
+    let enabled = true;
+    const context = {
+      projects: {
+        find: (predicate: (candidate: typeof project) => boolean) =>
+          predicate(project) ? project : undefined,
+      },
+      settings: {
+        get: () => ({
+          defaultSkills: [],
+          defaultPromptTemplates: [],
+          disabledSkills: [],
+          defaultThinking: null,
+        }),
+      },
+      enabledExtensionPaths: () => [],
+      injectedCommands: { enabledExtensionPaths: () => [] },
+      scanSkillCandidatesFor: () => [],
+      rootsFor: (projectId?: string) => ({
+        home: root,
+        projectPath: projectId ? projectPath : undefined,
+      }),
+      resourceHome: () => root,
+      agentMemoryEnabled: () => enabled,
+      memoryBaseDir: path.join(root, "memory"),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const active = resolveLaunchResources(context, { projectId: project.id }, {});
+    enabled = false;
+    const paused = resolveLaunchResources(context, { projectId: project.id }, {});
+    enabled = true;
+    const resumed = resolveLaunchResources(context, { projectId: project.id }, {});
+
+    const compatibilityFingerprint = fingerprintLaunchResources(
+      active.plan,
+      [
+        resolveInstructionsFile(path.join(root, ".pi", "agent")),
+        resolveInstructionsFile(projectPath),
+        projectMemoryDir(path.join(root, "memory"), projectPath),
+      ],
+      { memoryEnabled: true, assignedMcpServers: [] },
+    );
+    expect(active.fingerprint).toBe(compatibilityFingerprint);
+    expect(paused.fingerprint).not.toBe(active.fingerprint);
+    expect(resumed.fingerprint).toBe(active.fingerprint);
+    expect(paused.plan).toEqual(active.plan);
   });
 });
 

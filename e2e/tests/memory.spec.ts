@@ -87,6 +87,47 @@ test("lists a project's memories and pins, edits, and deletes one", async ({ pag
   await expect(page.getByTestId("memory-empty")).toBeVisible();
 });
 
+test("pauses project memory automation without hiding the stored library", async ({ page }) => {
+  const projectsRes = await fetch(`${harness.baseUrl}/projects`);
+  const { projects } = (await projectsRes.json()) as {
+    projects: Array<{ id: string; path: string }>;
+  };
+  const projectId = projects.find((candidate) => candidate.path === project)!.id;
+  const created = await fetch(`${harness.baseUrl}/memory`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId,
+      type: "context",
+      title: "Stored while automation is paused",
+      summary: "the Memory library remains usable",
+      body: "This entry must remain visible.",
+    }),
+  });
+  const { memory } = (await created.json()) as { memory: { id: string } };
+
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-memory").click();
+  const toggle = page.getByRole("switch", { name: "Memory automation" });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(page.getByTestId("agent-memory-state")).toHaveText("Paused");
+  await expect(page.getByTestId(`memory-${memory.id}`)).toBeVisible();
+
+  await page.reload();
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-memory").click();
+  await expect(page.getByTestId("agent-memory-state")).toHaveText("Paused");
+  await expect(page.getByTestId(`memory-${memory.id}`)).toBeVisible();
+  await page.getByRole("switch", { name: "Memory automation" }).click();
+  await expect(page.getByTestId("agent-memory-state")).toHaveText("On");
+
+  await fetch(`${harness.baseUrl}/memory/${memory.id}?projectId=${projectId}`, {
+    method: "DELETE",
+  });
+});
+
 test("recall search surfaces the relevant memory and hides the rest (native 11.8)", async ({
   page,
 }) => {

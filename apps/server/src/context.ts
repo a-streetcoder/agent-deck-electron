@@ -139,7 +139,10 @@ export interface ServerContext {
   globalMcpConfigs(): { configs: McpServerConfig[]; valid: boolean };
   isMcpEnvOverride(id: string): boolean;
   oauthKey(scope: string, id: string): string;
+  /** Hard server capability controlled by AGENT_DECK_MEMORY=0. */
   memoryEnabled: boolean;
+  /** Live effective parent-agent automation preference (capability && setting). */
+  agentMemoryEnabled(): boolean;
   memoryBaseDir: string;
   worktreesRoot: string;
   sessionWorktreeStore: SessionWorktreeStore;

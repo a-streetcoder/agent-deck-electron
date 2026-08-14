@@ -165,6 +165,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     projects,
     settings,
     bridge,
+    agentMemoryEnabled,
     broadcast,
     resourceHome,
     rootsFor,
@@ -1504,7 +1505,7 @@ ${content}
       id: "memory",
       displayName: "Memory",
       summary: "Stores and recalls durable project memory the agent writes and reads.",
-      condition: "When memory is enabled (AGENT_DECK_MEMORY≠0)",
+      condition: "When the server memory capability and Memory automation preference are enabled",
       match: (name: string): boolean => name.startsWith("agent_deck_memory_"),
     },
     {
@@ -1544,6 +1545,7 @@ ${content}
       bridges: APP_BRIDGE_GROUPS.map((group) => {
         const toolNames = specs
           .filter((s) => group.match(s.name))
+          .filter(() => group.id !== "memory" || agentMemoryEnabled())
           .map((s) => s.name)
           .sort();
         return {

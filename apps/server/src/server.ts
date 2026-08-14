@@ -232,6 +232,10 @@ async function initServer(
   // Native memory (memory.md), on by default like the native app; storage under
   // the app data dir. AGENT_DECK_MEMORY=0 disables it entirely.
   const memoryEnabled = process.env.AGENT_DECK_MEMORY !== "0";
+  // The environment remains the hard compatibility capability. The persisted
+  // preference can pause automation only while that capability exists; it can
+  // never falsely re-enable a server launched with AGENT_DECK_MEMORY=0.
+  const agentMemoryEnabled = (): boolean => memoryEnabled && settings.get().agentMemoryEnabled;
   const memoryBaseDir = nodePath.join(dataDir, "memory");
   // Construct the deletion authority once from trusted app data. Its held native
   // direct-child capability and authoritative physical path own ordinary session
@@ -305,7 +309,10 @@ async function initServer(
       // Plain sessions see assigned servers; named-agent policy can only narrow that set.
       // Non-MCP bridge tools remain independently available.
       const scope = meta.projectId;
-      const nonMcpTools = bridge.specs().filter((spec) => !spec.name.startsWith("mcp__"));
+      const nonMcpTools = bridge
+        .specs()
+        .filter((spec) => !spec.name.startsWith("mcp__"))
+        .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"));
       let tools = scope ? [...nonMcpTools, ...mcp.specs(scope)] : nonMcpTools;
       const allow = mcpAllowlistForSession(meta);
       tools = scopeMcpBridgeSpecs(tools, allow);
@@ -317,20 +324,20 @@ async function initServer(
         // The generated bridge is appended after every provider/user extension.
         // Its single final hook applies recall first, then captures the exact
         // chained prompt Pi will use for this turn.
-        recall: memoryEnabled,
+        recall: agentMemoryEnabled(),
         promptAudit: true,
       });
     },
     (cwd, home) => {
-      // Parent system-prompt appends. When memory is off we add nothing, so pi
-      // auto-discovers APPEND_SYSTEM.md itself. When on, we inject the memory
-      // block — which suppresses that discovery — so we re-add the resolved
-      // APPEND_SYSTEM.md path FIRST, then the memory block. Both are passed as
+      // Parent system-prompt appends. While memory automation is paused, add
+      // nothing and leave APPEND_SYSTEM discovery entirely to Pi. When active,
+      // memory's explicit append suppresses that discovery, so put the resolved
+      // APPEND_SYSTEM path FIRST and the memory block second. Both are passed as
       // FILE PATHS (pi reads a path entry as a file): a multi-line literal
       // --append value is truncated on Windows, where pi runs via a .cmd shim
       // through cmd.exe. `home` is the pi child's HOME so the global
       // APPEND_SYSTEM.md resolves where pi would find it.
-      if (!memoryEnabled) return { appends: [] };
+      if (!agentMemoryEnabled()) return { appends: [] };
       const appends: string[] = [];
       const appendPath = appendSystemPromptPath({ home, projectPath: cwd });
       if (appendPath) appends.push(appendPath);
@@ -626,6 +633,7 @@ async function initServer(
       (sessionId) => sessions.get(sessionId)?.meta.cwd,
       (store, query, limit) => semanticRecall.recall(store, query, limit),
       () => semanticRecall.getStatus(),
+      agentMemoryEnabled,
     );
   }
 
@@ -1044,6 +1052,7 @@ async function initServer(
     isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
     oauthKey,
     memoryEnabled,
+    agentMemoryEnabled,
     memoryBaseDir,
     worktreesRoot,
     sessionWorktreeStore,

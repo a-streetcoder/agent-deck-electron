@@ -124,6 +124,8 @@ export interface AppSettings {
    * Commit/Push/Merge actions.
    */
   autoTitle: boolean;
+  /** Allow automatic parent-session recall and model-facing memory tools. */
+  agentMemoryEnabled: boolean;
   /** Request semantic ranking for every memory recall path when an embedder is available. */
   semanticMemoryEnabled: boolean;
   /** Stop resumable parent Pi processes after an authoritative idle boundary. */
@@ -417,6 +419,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       enabledLibraryCommandIDs: [],
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
+      agentMemoryEnabled: true,
       semanticMemoryEnabled: persistLegacySemanticSeed,
       piAgentIdleParkingEnabled: true,
       piAgentIdleParkingTimeoutMinutes: 10,
@@ -474,6 +477,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           // semantic env flag seeds only an absent field; malformed persisted values
           // fail closed instead of being re-enabled by the environment.
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
+          // Pause is opt-out: legacy absence and malformed values both retain the
+          // shipped enabled behavior. Only an explicit false pauses automation.
+          agentMemoryEnabled:
+            typeof record.agentMemoryEnabled === "boolean" ? record.agentMemoryEnabled : true,
           semanticMemoryEnabled:
             typeof record.semanticMemoryEnabled === "boolean"
               ? record.semanticMemoryEnabled
@@ -554,6 +561,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       if (value.piAgentIdleParkingEnabled === true) delete persisted.piAgentIdleParkingEnabled;
       if (value.piAgentIdleParkingTimeoutMinutes === 10)
         delete persisted.piAgentIdleParkingTimeoutMinutes;
+      // Absence is the shipped enabled state, preserving legacy settings bytes.
+      // Persist only the user's explicit pause.
+      if (value.agentMemoryEnabled === true) delete persisted.agentMemoryEnabled;
       // Omit only the untouched shipped false default. Once the user explicitly
       // chooses a value, retain false too: it must continue to override a legacy
       // AGENT_DECK_SEMANTIC_MEMORY=1 environment after restart.

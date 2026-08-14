@@ -59,7 +59,7 @@ type ResolverContext = Pick<
   | "scanSkillCandidatesFor"
   | "rootsFor"
   | "resourceHome"
-  | "memoryEnabled"
+  | "agentMemoryEnabled"
   | "memoryBaseDir"
 >;
 
@@ -284,7 +284,7 @@ export function resolveLaunchResources(
     resolveInstructionsFile(nodePath.join(home, ".pi", "agent")),
     ...(effectiveCwd ? [resolveInstructionsFile(effectiveCwd)] : []),
     ...(append ? [append] : []),
-    ...(ctx.memoryEnabled && effectiveCwd
+    ...(ctx.agentMemoryEnabled() && effectiveCwd
       ? [projectMemoryDir(ctx.memoryBaseDir, effectiveCwd)]
       : []),
   ];
@@ -299,7 +299,10 @@ export function resolveLaunchResources(
     config,
     mcpServerIds,
     fingerprint: fingerprintLaunchResources(plan, instructions, {
-      memoryEnabled: ctx.memoryEnabled,
+      // Compatibility key: existing enabled-session fingerprints used
+      // `memoryEnabled`. Keep that semantic field name while feeding it the
+      // new effective capability && preference value, so only a pause changes it.
+      memoryEnabled: ctx.agentMemoryEnabled(),
       assignedMcpServers: project?.assignedMcpServers ?? [],
       named: namedBridgePolicy,
     }),

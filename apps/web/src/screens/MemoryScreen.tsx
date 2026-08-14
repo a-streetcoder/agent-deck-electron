@@ -55,6 +55,182 @@ const STATUS_STYLE: Record<MemoryStatus, string> = {
 
 type SemanticPreferenceState = "loading" | "ready" | "error";
 
+function AgentMemoryPreference() {
+  const resourcesVersion = useAppStore((state) => state.resourcesVersion);
+  const [enabled, setEnabled] = useState(true);
+  const [capabilityAvailable, setCapabilityAvailable] = useState(true);
+  const [state, setState] = useState<SemanticPreferenceState>("loading");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const loadSeq = useRef(0);
+  const saveSeq = useRef(0);
+  const loaded = useRef(false);
+  const saveInFlight = useRef(false);
+
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const seq = ++loadSeq.current;
+    if (!loaded.current) {
+      setState("loading");
+      setMessage(null);
+    } else if (!saveInFlight.current) {
+      setMessage(null);
+    }
+    try {
+      const response = await fetch("/settings", { signal });
+      if (!response.ok) throw new Error("We couldn’t load the memory automation preference.");
+      const data = (await response.json()) as {
+        settings: { agentMemoryEnabled?: boolean };
+        capabilities?: { agentMemory?: boolean };
+      };
+      if (seq !== loadSeq.current || signal?.aborted) return;
+      setEnabled(data.settings.agentMemoryEnabled !== false);
+      setCapabilityAvailable(data.capabilities?.agentMemory !== false);
+      loaded.current = true;
+      setState("ready");
+    } catch (cause) {
+      if (seq !== loadSeq.current || signal?.aborted) return;
+      const error = cause instanceof Error ? cause.message : String(cause);
+      if (!loaded.current) setState("error");
+      setMessage(error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => {
+      loadSeq.current += 1;
+      controller.abort();
+    };
+  }, [load, resourcesVersion]);
+
+  useEffect(
+    () => () => {
+      saveSeq.current += 1;
+    },
+    [],
+  );
+
+  const toggle = async (): Promise<void> => {
+    if (state !== "ready" || saving || !capabilityAvailable) return;
+    const previous = enabled;
+    const next = !previous;
+    // A pre-save GET must not roll back the optimistic state. Resource-change
+    // reloads use their own sequence and may safely run during this save.
+    loadSeq.current += 1;
+    const seq = ++saveSeq.current;
+    saveInFlight.current = true;
+    setEnabled(next);
+    setSaving(true);
+    setMessage("Saving…");
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemoryEnabled: next }),
+      });
+      if (!response.ok) throw new Error("We couldn’t save the memory automation preference.");
+      const data = (await response.json()) as {
+        settings: { agentMemoryEnabled: boolean };
+        capabilities?: { agentMemory?: boolean };
+      };
+      if (seq !== saveSeq.current) return;
+      setEnabled(data.settings.agentMemoryEnabled);
+      setCapabilityAvailable(data.capabilities?.agentMemory !== false);
+      setMessage("Saved");
+    } catch (cause) {
+      if (seq !== saveSeq.current) return;
+      setEnabled(previous);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (seq === saveSeq.current) {
+        saveInFlight.current = false;
+        setSaving(false);
+      }
+    }
+  };
+
+  return (
+    <div
+      className="mb-4 rounded-xl border border-border-subtle bg-surface-elevated p-3"
+      data-testid="agent-memory-preference"
+    >
+      {state === "loading" ? (
+        <p className="text-sm text-text-muted" role="status">
+          Loading memory automation preference…
+        </p>
+      ) : state === "error" ? (
+        <div>
+          <p className="text-sm text-danger" role="alert">
+            {message}
+          </p>
+          <ControlButton
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary"
+            onClick={() => void load()}
+          >
+            <RefreshCw size={13} aria-hidden="true" /> Retry memory automation
+          </ControlButton>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                Memory automation
+                <span
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro uppercase tracking-wider text-text-muted"
+                  data-testid="agent-memory-state"
+                >
+                  {capabilityAvailable ? (enabled ? "On" : "Paused") : "Unavailable"}
+                </span>
+              </div>
+              <p id="agent-memory-description" className="mt-1 text-xs text-text-muted">
+                {capabilityAvailable
+                  ? "Across all projects, pausing stops automatic recall and agent memory tools. Stored memories remain available."
+                  : "Memory automation is unavailable because it is disabled by this server’s configuration."}
+              </p>
+            </div>
+            <ControlButton
+              role="switch"
+              aria-label="Memory automation"
+              aria-describedby="agent-memory-description"
+              aria-checked={capabilityAvailable && enabled}
+              data-testid="agent-memory-toggle"
+              disabled={saving || !capabilityAvailable}
+              onClick={() => void toggle()}
+              className={cn(
+                "relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+                capabilityAvailable && enabled
+                  ? "border-accent bg-accent"
+                  : "border-border-strong bg-surface-muted",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+                  capabilityAvailable && enabled ? "translate-x-5" : "translate-x-0.5",
+                )}
+              />
+            </ControlButton>
+          </div>
+          {message ? (
+            <p
+              className={cn(
+                "mt-2 text-xs",
+                message === "Saving…" || message === "Saved" ? "text-text-muted" : "text-danger",
+              )}
+              role={message === "Saving…" || message === "Saved" ? "status" : "alert"}
+              data-testid="agent-memory-save-status"
+            >
+              {message}
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SemanticMemoryPreference({
   onChanged,
   recall,
@@ -571,6 +747,7 @@ export function MemoryScreen() {
           <p className="pb-2 text-xs text-text-muted">
             Durable project knowledge agents recall across sessions.
           </p>
+          <AgentMemoryPreference />
           <SemanticMemoryPreference
             onChanged={semanticPreferenceChanged}
             recall={semanticRecall}
@@ -630,6 +807,7 @@ export function MemoryScreen() {
           Durable project knowledge agents recall across sessions. Active and pinned memories are
           injected; stale and archived are kept but not injected.
         </p>
+        <AgentMemoryPreference />
         <SemanticMemoryPreference
           onChanged={semanticPreferenceChanged}
           recall={semanticRecall}

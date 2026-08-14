@@ -115,8 +115,11 @@ describe("semantic memory opt-in via /memory/search", () => {
     await setup(undefined);
     const url = `http://127.0.0.1:${server!.port}/settings`;
     const initial = (await (await fetch(url)).json()) as {
-      settings: { semanticMemoryEnabled: boolean };
+      settings: { agentMemoryEnabled: boolean; semanticMemoryEnabled: boolean };
+      capabilities: { agentMemory: boolean };
     };
+    expect(initial.settings.agentMemoryEnabled).toBe(true);
+    expect(initial.capabilities.agentMemory).toBe(true);
     expect(initial.settings.semanticMemoryEnabled).toBe(false);
 
     expect(
@@ -129,14 +132,25 @@ describe("semantic memory opt-in via /memory/search", () => {
       ).status,
     ).toBe(400);
 
+    expect(
+      (
+        await fetch(url, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ agentMemoryEnabled: "paused" }),
+        })
+      ).status,
+    ).toBe(400);
+
     const response = await fetch(url, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ semanticMemoryEnabled: true }),
+      body: JSON.stringify({ semanticMemoryEnabled: true, agentMemoryEnabled: false }),
     });
     expect(response.status).toBe(200);
     expect((await response.json()) as unknown).toMatchObject({
-      settings: { semanticMemoryEnabled: true },
+      settings: { semanticMemoryEnabled: true, agentMemoryEnabled: false },
+      capabilities: { agentMemory: true },
     });
   });
 

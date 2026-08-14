@@ -214,7 +214,7 @@ describe("MemoryScreen transcript navigation", () => {
         : "Couldn’t open memory. Try again.",
     );
     expect(screen.queryByTestId("memory-editor")).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(fetchMock).toHaveBeenCalledWith(
       "/memory/exact-memory?projectId=project-a",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -264,6 +264,125 @@ describe("MemoryScreen transcript navigation", () => {
     expect((screen.getByTestId("memory-title") as HTMLInputElement).value).toBe(
       "Latest live title",
     );
+  });
+});
+
+describe("MemoryScreen project memory preference", () => {
+  it("shows On/Paused, fences a busy save, and rolls back an error", async () => {
+    let patchResolve: ((value: ReturnType<typeof jsonResponse>) => void) | undefined;
+    const patch = new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+      patchResolve = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/settings" && init?.method === "PATCH") return await patch;
+      if (url === "/settings") {
+        return jsonResponse({
+          settings: { agentMemoryEnabled: true, semanticMemoryEnabled: false },
+        });
+      }
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryScreen />);
+
+    const toggle = await screen.findByRole("switch", { name: "Memory automation" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("agent-memory-state").textContent).toBe("On");
+    expect(document.body.textContent).toContain(
+      "Across all projects, pausing stops automatic recall and agent memory tools. Stored memories remain available.",
+    );
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle).toHaveProperty("disabled", true);
+    expect(screen.getByTestId("agent-memory-state").textContent).toBe("Paused");
+    patchResolve!(jsonResponse({}, false));
+
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    expect(screen.getByTestId("agent-memory-save-status").getAttribute("role")).toBe("alert");
+  });
+
+  it("resyncs external changes without letting its own broadcast strand an in-flight save", async () => {
+    let serverEnabled = true;
+    let resolvePatch!: () => void;
+    const patchPending = new Promise<void>((resolve) => {
+      resolvePatch = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/settings" && init?.method === "PATCH") {
+        await patchPending;
+        return jsonResponse({
+          settings: { agentMemoryEnabled: serverEnabled, semanticMemoryEnabled: false },
+          capabilities: { agentMemory: true },
+        });
+      }
+      if (url === "/settings") {
+        return jsonResponse({
+          settings: { agentMemoryEnabled: serverEnabled, semanticMemoryEnabled: false },
+          capabilities: { agentMemory: true },
+        });
+      }
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryScreen />);
+
+    const toggle = await screen.findByRole("switch", { name: "Memory automation" });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveProperty("disabled", true);
+    serverEnabled = false;
+    act(() => {
+      useAppStore.setState((state) => ({ resourcesVersion: state.resourcesVersion + 1 }));
+    });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(toggle).toHaveProperty("disabled", true);
+
+    resolvePatch();
+    await waitFor(() => expect(toggle).toHaveProperty("disabled", false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    serverEnabled = true;
+    act(() => {
+      useAppStore.setState((state) => ({ resourcesVersion: state.resourcesVersion + 1 }));
+    });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("shows an unavailable disabled switch without claiming the stored library is available", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/settings") {
+        return jsonResponse({
+          settings: { agentMemoryEnabled: true, semanticMemoryEnabled: false },
+          capabilities: { agentMemory: false },
+        });
+      }
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryScreen />);
+
+    const toggle = await screen.findByRole("switch", { name: "Memory automation" });
+    expect(toggle).toHaveProperty("disabled", true);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByTestId("agent-memory-state").textContent).toBe("Unavailable");
+    expect(document.body.textContent).toContain(
+      "Memory automation is unavailable because it is disabled by this server’s configuration.",
+    );
+    expect(document.body.textContent).not.toContain("Stored memories remain available.");
+    fireEvent.click(toggle);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
   });
 });
 

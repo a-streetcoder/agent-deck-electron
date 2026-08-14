@@ -181,6 +181,36 @@ describe("memory inspection routes", () => {
     expect((await api("GET", "/memory/search?q=anything")).status).toBe(400);
   });
 
+  it("keeps the stored library and manual search/mutations usable while agent memory is paused", async () => {
+    expect(
+      (
+        await api("PATCH", "/settings", {
+          agentMemoryEnabled: false,
+        })
+      ).status,
+    ).toBe(200);
+    try {
+      const created = await api("POST", "/memory", {
+        projectId,
+        type: "decision",
+        title: "Paused library entry",
+        summary: "manual library remains available while paused",
+        body: "stored body",
+      });
+      expect(created.status).toBe(201);
+      const result = (await (
+        await api(
+          "GET",
+          `/memory/search?projectId=${projectId}&q=${encodeURIComponent("paused library")}`,
+        )
+      ).json()) as { memories: MemoryRecord[] };
+      expect(result.memories.map((item) => item.title)).toContain("Paused library entry");
+      expect((await api("GET", `/memory?projectId=${projectId}`)).status).toBe(200);
+    } finally {
+      expect((await api("PATCH", "/settings", { agentMemoryEnabled: true })).status).toBe(200);
+    }
+  });
+
   it("deletes a memory", async () => {
     const list = (await (await api("GET", `/memory?projectId=${projectId}`)).json()) as {
       memories: MemoryRecord[];

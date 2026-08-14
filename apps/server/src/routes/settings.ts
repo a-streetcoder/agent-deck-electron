@@ -196,7 +196,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
-  fastify.get("/settings", async () => ({ settings: settings.get() }));
+  fastify.get("/settings", async () => ({
+    settings: settings.get(),
+    capabilities: { agentMemory: ctx.memoryEnabled },
+  }));
 
   fastify.patch("/settings", async (request, reply) => {
     const parsed = z
@@ -216,6 +219,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // Onboarding preferences (native OnboardingPreferencesView). null clears
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
+        agentMemoryEnabled: z.boolean().optional(),
         semanticMemoryEnabled: z.boolean().optional(),
         piAgentIdleParkingEnabled: z.boolean().optional(),
         piAgentIdleParkingTimeoutMinutes: z.number().int().min(1).max(120).optional(),
@@ -292,6 +296,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (d.defaultPromptTemplates !== undefined)
       patch.defaultPromptTemplates = d.defaultPromptTemplates;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
+    if (d.agentMemoryEnabled !== undefined) patch.agentMemoryEnabled = d.agentMemoryEnabled;
     if (d.semanticMemoryEnabled !== undefined)
       patch.semanticMemoryEnabled = d.semanticMemoryEnabled;
     if (d.piAgentIdleParkingEnabled !== undefined)
@@ -324,6 +329,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (
       d.defaultSkills !== undefined ||
       d.defaultPromptTemplates !== undefined ||
+      d.agentMemoryEnabled !== undefined ||
       d.defaultModel !== undefined ||
       d.defaultThinking !== undefined ||
       d.extensionLoadingMode !== undefined
@@ -340,7 +346,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
           : null,
       );
     }
-    return { settings: updated };
+    return {
+      settings: updated,
+      capabilities: { agentMemory: ctx.memoryEnabled },
+    };
   });
 
   // Session-independent model discovery. This runs Pi's exiting --list-models

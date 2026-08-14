@@ -43,6 +43,7 @@ function harness() {
     childSupervisors: new Map(),
     pendingSupervisor: new Map(),
     memoryEnabled: false,
+    agentMemoryEnabled: () => false,
     memoryBaseDir: "",
     recallMemories: vi.fn(),
   } as unknown as ServerContext);

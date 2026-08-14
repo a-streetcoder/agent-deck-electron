@@ -79,6 +79,7 @@ export function registerMemoryTools(
     reason: null,
     message: "Semantic ranking is not requested. Recall is using lexical ranking.",
   }),
+  isAgentMemoryEnabled: () => boolean = () => true,
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -116,6 +117,9 @@ export function registerMemoryTools(
         "agent_deck_memory_write — persist a durable project fact (decision/failure/runbook/context/preference).",
     },
     (params, ctx) => {
+      if (!isAgentMemoryEnabled()) {
+        return { content: "Agent Deck memory is paused", isError: true };
+      }
       const store = storeFor(ctx.sessionId);
       if (!store) {
         return { content: "Memory needs a project; none is set for this session.", isError: true };
@@ -165,6 +169,9 @@ export function registerMemoryTools(
       promptSnippet: "agent_deck_memory_search — pull relevant project memory mid-conversation.",
     },
     async (params, ctx) => {
+      if (!isAgentMemoryEnabled()) {
+        return { content: "Agent Deck memory is paused", isError: true };
+      }
       const store = storeFor(ctx.sessionId);
       if (!store) {
         return {
@@ -180,6 +187,11 @@ export function registerMemoryTools(
         };
       }
       const result = await search(store, parsed.data.query, parsed.data.limit);
+      // The preference can change while semantic ranking is in flight. Never
+      // leak ranked content from a call admitted before a live pause.
+      if (!isAgentMemoryEnabled()) {
+        return { content: "Agent Deck memory is paused", isError: true };
+      }
       if (result.hits.length === 0)
         return {
           content: "No matching project memory.",
@@ -214,6 +226,9 @@ export function registerMemoryTools(
         "agent_deck_memory_mark_stale — retire a memory the repo has since contradicted.",
     },
     (params, ctx) => {
+      if (!isAgentMemoryEnabled()) {
+        return { content: "Agent Deck memory is paused", isError: true };
+      }
       const store = storeFor(ctx.sessionId);
       if (!store) return { content: "No project memory (no project set).", isError: true };
       const parsed = markStaleParams.safeParse(params);

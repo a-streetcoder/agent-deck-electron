@@ -21,6 +21,7 @@ function harness(
   cwd?: string,
   project?: { id: string; path: string },
   sessionProjectId = project?.id,
+  agentMemoryPreference = memoryEnabled,
 ) {
   const fastify = Fastify();
   fastifies.push(fastify);
@@ -44,6 +45,7 @@ function harness(
     childSupervisors: new Map(),
     pendingSupervisor: new Map(),
     memoryEnabled,
+    agentMemoryEnabled: () => memoryEnabled && agentMemoryPreference,
     memoryBaseDir: "/tmp/memory",
     semanticRecall: { getStatus: () => recallStatus, recall },
   } as unknown as ServerContext);
@@ -59,7 +61,13 @@ function harness(
         params,
       },
     });
-  return { invoke, recall };
+  return {
+    invoke,
+    recall,
+    setAgentMemoryPreference: (enabled: boolean) => {
+      agentMemoryPreference = enabled;
+    },
+  };
 }
 
 describe("__recall__ bridge metadata", () => {
@@ -125,6 +133,63 @@ describe("__recall__ bridge metadata", () => {
       recall: recallStatus,
     });
     expect(response.json()).not.toHaveProperty("recalled");
+  });
+
+  it("discards completed ranking when memory pauses during recall", async () => {
+    const project = { id: "project-a", path: "/registered/project" };
+    const { invoke, recall, setAgentMemoryPreference } = harness(
+      true,
+      "/worktrees/session",
+      project,
+    );
+    let resolveRecall!: (value: {
+      recall: SemanticRecallStatus;
+      hits: Array<{
+        record: { id: string; title: string; type: string; body: string };
+      }>;
+    }) => void;
+    recall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRecall = resolve;
+      }),
+    );
+
+    const response = invoke({ query: "oauth callback" });
+    await vi.waitFor(() => expect(recall).toHaveBeenCalledTimes(1));
+    setAgentMemoryPreference(false);
+    resolveRecall({
+      recall: { ...recallStatus, readiness: "ready", mode: "semantic" },
+      hits: [
+        {
+          record: {
+            id: "decision-oauth",
+            title: "Should not inject",
+            type: "decision",
+            body: "private recalled body",
+          },
+        },
+      ],
+    });
+
+    const completed = await response;
+    expect(completed.json()).toEqual({ content: "", recall: recallStatus });
+    expect(JSON.stringify(completed.json())).not.toContain("Should not inject");
+    expect(JSON.stringify(completed.json())).not.toContain("private recalled body");
+  });
+
+  it("returns no card and never ranks while agent memory is paused", async () => {
+    const { invoke, recall } = harness(
+      true,
+      "/worktrees/session",
+      { id: "project-a", path: "/registered/project" },
+      "project-a",
+      false,
+    );
+
+    const response = await invoke({ query: "oauth callback" });
+
+    expect(response.json()).toEqual({ content: "", recall: recallStatus });
+    expect(recall).not.toHaveBeenCalled();
   });
 
   it("fails closed when an authoritative project id is stale", async () => {

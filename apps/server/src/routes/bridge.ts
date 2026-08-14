@@ -56,6 +56,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     childSupervisors,
     pendingSupervisor,
     memoryEnabled,
+    agentMemoryEnabled,
     memoryBaseDir,
     semanticRecall,
   } = ctx;
@@ -219,7 +220,9 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     recall: SemanticRecallStatus;
     recalled?: Array<{ id: string; title: string; type: string }>;
   }> {
-    if (!memoryEnabled) return { content: "", recall: semanticRecall.getStatus() };
+    if (!memoryEnabled || !agentMemoryEnabled()) {
+      return { content: "", recall: semanticRecall.getStatus() };
+    }
     const query = typeof params.query === "string" ? params.query : "";
     const meta = sessions.get(sessionId)?.meta;
     // A registered project's path is canonical for memory ownership. Session cwd
@@ -232,6 +235,11 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     if (!projectPath || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
     const store: MemoryStore = { baseDir: memoryBaseDir, projectPath };
     const result = await semanticRecall.recall(store, query, RECALL_LIMIT);
+    // A pause may land while ranking is in flight. Discard that completed work
+    // rather than injecting content/card metadata admitted under the old state.
+    if (!agentMemoryEnabled()) {
+      return { content: "", recall: semanticRecall.getStatus() };
+    }
     const hits = result.hits.slice(0, RECALL_LIMIT);
     return {
       content: buildRecalledMemories(hits.map((hit) => hit.record)),

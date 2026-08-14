@@ -45,6 +45,7 @@ function harness(requestId = "request-1", parentSessionId = "parent-a") {
     childSupervisors: new Map(),
     pendingSupervisor,
     memoryEnabled: false,
+    agentMemoryEnabled: () => false,
     memoryBaseDir: "",
     recallMemories: vi.fn(),
   } as unknown as ServerContext);

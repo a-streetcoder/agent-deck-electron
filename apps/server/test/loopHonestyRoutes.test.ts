@@ -176,6 +176,7 @@ function makeRoutes(
       rootsFor,
       resolveNamedAgent,
       enabledExtensionPaths: () => [],
+      agentMemoryEnabled: () => false,
       worktreesRoot: path.join(home, "managed-worktrees"),
     } as unknown as ServerContext,
     {

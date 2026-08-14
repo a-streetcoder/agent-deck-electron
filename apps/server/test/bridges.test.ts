@@ -21,10 +21,12 @@ afterEach(async () => {
   delete process.env.AGENT_DECK_MEMORY;
 });
 
-async function bridges(): Promise<Array<{ id: string; active: boolean; toolNames: string[] }>> {
+async function bridges(): Promise<
+  Array<{ id: string; active: boolean; toolNames: string[]; condition: string }>
+> {
   const res = await fetch(`http://127.0.0.1:${server!.port}/runtime/bridges`);
   const { bridges } = (await res.json()) as {
-    bridges: Array<{ id: string; active: boolean; toolNames: string[] }>;
+    bridges: Array<{ id: string; active: boolean; toolNames: string[]; condition: string }>;
   };
   return bridges;
 }
@@ -36,6 +38,8 @@ describe("GET /runtime/bridges", () => {
 
     const memory = list.find((b) => b.id === "memory");
     expect(memory?.active).toBe(true);
+    expect(memory?.condition).toContain("server memory capability");
+    expect(memory?.condition).toContain("Memory automation preference");
     expect(memory?.toolNames).toEqual(
       expect.arrayContaining([
         "agent_deck_memory_write",
@@ -65,11 +69,41 @@ describe("GET /runtime/bridges", () => {
     expect(mcp?.toolNames).toEqual([]);
   });
 
-  it("reports the memory bridge OFF when memory is disabled", async () => {
+  it("reflects a live pause and resume in the memory bridge inventory", async () => {
+    server = await startServer({ dataDir: mkdtempSync(path.join(tmpdir(), "agent-deck-data-")) });
+    const settingsUrl = `http://127.0.0.1:${server.port}/settings`;
+    const patch = async (enabled: boolean): Promise<void> => {
+      const response = await fetch(settingsUrl, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemoryEnabled: enabled }),
+      });
+      expect(response.status).toBe(200);
+    };
+
+    await patch(false);
+    expect((await bridges()).find((item) => item.id === "memory")).toMatchObject({
+      active: false,
+      toolNames: [],
+    });
+
+    await patch(true);
+    const resumed = (await bridges()).find((item) => item.id === "memory");
+    expect(resumed?.active).toBe(true);
+    expect(resumed?.toolNames).toContain("agent_deck_memory_search");
+  });
+
+  it("reports the memory bridge and settings capability OFF when memory is disabled", async () => {
     process.env.AGENT_DECK_MEMORY = "0";
     server = await startServer({ dataDir: mkdtempSync(path.join(tmpdir(), "agent-deck-data-")) });
     const memory = (await bridges()).find((b) => b.id === "memory");
     expect(memory?.active).toBe(false);
     expect(memory?.toolNames).toEqual([]);
+    const settings = (await (await fetch(`http://127.0.0.1:${server.port}/settings`)).json()) as {
+      settings: { agentMemoryEnabled: boolean };
+      capabilities: { agentMemory: boolean };
+    };
+    expect(settings.settings.agentMemoryEnabled).toBe(true);
+    expect(settings.capabilities.agentMemory).toBe(false);
   });
 });
