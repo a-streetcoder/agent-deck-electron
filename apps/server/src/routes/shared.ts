@@ -40,3 +40,33 @@ export const resolveInstructionsFile = (dir: string): string => {
 };
 
 export const INSTRUCTIONS_MAX = 1_000_000;
+
+/**
+ * Strict ancestor directories of a project path, ordered root -> nearest, capped
+ * at `maxDepth` NEAREST levels (a >32-deep tree keeps the levels closest to the
+ * project — the outermost are the least likely to matter — and reports
+ * `truncated` so the UI never claims completeness it doesn't have). The project
+ * directory itself is never included, even at a filesystem root where
+ * dirname(root) === root (INS-03, review/Codex).
+ */
+export const ancestorDirsOf = (
+  projectPath: string,
+  maxDepth = 32,
+): { dirs: string[]; truncated: boolean } => {
+  const resolved = nodePath.resolve(projectPath);
+  const dirs: string[] = [];
+  let current = nodePath.dirname(resolved);
+  let truncated = false;
+  while (current !== resolved) {
+    if (dirs.length >= maxDepth) {
+      truncated = true;
+      break;
+    }
+    dirs.push(current);
+    const parent = nodePath.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  dirs.reverse();
+  return { dirs, truncated };
+};

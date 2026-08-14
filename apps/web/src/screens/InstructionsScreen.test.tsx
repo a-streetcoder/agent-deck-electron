@@ -149,6 +149,47 @@ describe("SYSTEM.md base-prompt candidate (INS-01)", () => {
     });
   });
 
+  it("the PROJECT context view lists inherited ancestor candidates (INS-03)", async () => {
+    useAppStore.setState({
+      projects: [{ id: "p1", name: "repo", path: "C:/work/team/repo" } as never],
+      currentProjectId: "p1",
+    });
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/projects/p1/instructions") {
+        return Promise.resolve(
+          jsonResponse({ content: "project ctx", path: "C:/work/team/repo/AGENTS.md" }),
+        );
+      }
+      if (url === "/projects/p1/instruction-ancestors") {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              { dir: "C:/work", name: "CLAUDE.md", path: "C:/work/CLAUDE.md" },
+              { dir: "C:/work/team", name: "AGENTS.md", path: "C:/work/team/AGENTS.md" },
+            ],
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<InstructionsScreen />);
+    await screen.findByTestId("instructions-editor");
+
+    const list = await screen.findByTestId("instructions-ancestors");
+    expect(list.textContent).toContain("C:/work/CLAUDE.md");
+    expect(list.textContent).toContain("C:/work/team/AGENTS.md");
+  });
+
+  it("the GLOBAL context view fetches no ancestors and shows no list", async () => {
+    render(<InstructionsScreen />);
+    await screen.findByTestId("instructions-editor");
+    expect(screen.queryByTestId("instructions-ancestors")).toBeNull();
+    expect(
+      vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("instruction-ancestors")),
+    ).toBe(false);
+  });
+
   it("the context file view offers no Remove override", async () => {
     render(<InstructionsScreen />);
     await screen.findByTestId("instructions-editor");

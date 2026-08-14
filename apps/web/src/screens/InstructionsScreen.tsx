@@ -132,6 +132,39 @@ export function InstructionsScreen() {
     }
   };
 
+  // INS-03: the inherited ancestor context candidates (read-only) — which parent
+  // folders contribute instructions before the project's own context file.
+  const [ancestors, setAncestors] = useState<{ dir: string; name: string; path: string }[]>([]);
+  const [ancestorsTruncated, setAncestorsTruncated] = useState(false);
+  const showAncestors = fileKind === "context" && scope === "project" && Boolean(currentProjectId);
+  useEffect(() => {
+    // clear FIRST: a project switch must never show the previous project's
+    // ancestors while (or after) the new fetch runs (review, Codex)
+    setAncestors([]);
+    setAncestorsTruncated(false);
+    if (!showAncestors || !projectBase) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`${projectBase}/instruction-ancestors`);
+        if (!response.ok) throw new Error(await response.text());
+        const data = (await response.json()) as {
+          items: { dir: string; name: string; path: string }[];
+          truncated?: boolean;
+        };
+        if (!cancelled) {
+          setAncestors(data.items);
+          setAncestorsTruncated(data.truncated === true);
+        }
+      } catch (err) {
+        if (!cancelled) setError(String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAncestors, projectBase, setError]);
+
   const dirty = content !== savedContent;
   const needsProject = scope === "project" && !project;
   // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
@@ -264,6 +297,28 @@ export function InstructionsScreen() {
                   ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
                   : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
               </p>
+            ) : null}
+            {showAncestors && ancestors.length > 0 ? (
+              <div
+                data-testid="instructions-ancestors"
+                className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+              >
+                <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  Inherited context
+                </div>
+                <p className="pb-1 text-micro text-text-muted">
+                  pi also loads these ancestor files, outermost first, before the project's own
+                  context.
+                  {ancestorsTruncated
+                    ? " Outermost ancestors beyond the depth limit are omitted."
+                    : ""}
+                </p>
+                {ancestors.map((item) => (
+                  <div key={item.path} className="truncate font-mono text-micro" title={item.path}>
+                    {item.path}
+                  </div>
+                ))}
+              </div>
             ) : null}
             {loaded ? (
               <ControlTextArea

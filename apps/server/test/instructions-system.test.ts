@@ -189,6 +189,56 @@ describe("project SYSTEM.md routes (INS-01)", () => {
     }
   });
 
+  it("lists inherited ANCESTOR context candidates, nearest-last, project dir excluded (INS-03)", async () => {
+    // pi walks ancestors from the project dir loading AGENTS.md/CLAUDE.md at each
+    // level — the catalog must show which parent folders contribute instructions.
+    const rootDir = mkdtempSync(path.join(tmpdir(), "ancestors-"));
+    const mid = path.join(rootDir, "team");
+    const projectDir = path.join(mid, "repo");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(path.join(rootDir, "CLAUDE.md"), "grandparent context");
+    writeFileSync(path.join(mid, "AGENTS.md"), "team context");
+    writeFileSync(path.join(mid, "CLAUDE.md"), "team fallback");
+    writeFileSync(path.join(projectDir, "AGENTS.md"), "project context — NOT an ancestor");
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+
+    const { items } = (await (
+      await api("GET", `/projects/${project.id}/instruction-ancestors`)
+    ).json()) as { items: Array<{ dir: string; name: string; path: string }> };
+
+    // only EXISTING ancestor files, ordered root -> nearest; the project's own
+    // file belongs to the editor, not this list
+    const named = items.map((i) => `${path.basename(i.dir)}/${i.name}`);
+    expect(named).toContain(`${path.basename(rootDir)}/CLAUDE.md`);
+    expect(named).toContain("team/AGENTS.md");
+    expect(named).toContain("team/CLAUDE.md");
+    expect(items.some((i) => i.dir === projectDir)).toBe(false);
+    // nearest ancestor (team) comes AFTER the grandparent
+    expect(named.indexOf(`${path.basename(rootDir)}/CLAUDE.md`)).toBeLessThan(
+      named.indexOf("team/AGENTS.md"),
+    );
+
+    expect((await api("GET", "/projects/ghost/instruction-ancestors")).status).toBe(404);
+  });
+
+  it("ancestorDirsOf: a root project has NO ancestors; deep trees keep the NEAREST levels (review, Codex)", async () => {
+    const { ancestorDirsOf } = await import("../src/routes/shared.ts");
+    // a project at the filesystem root must never list itself as an ancestor
+    const root = process.platform === "win32" ? "C:\\" : "/";
+    expect(ancestorDirsOf(root)).toEqual({ dirs: [], truncated: false });
+
+    // beyond the cap, the OUTERMOST levels are dropped and truncation is reported
+    const deep = path.join(root, ...Array.from({ length: 40 }, (_, i) => `d${i}`));
+    const { dirs, truncated } = ancestorDirsOf(deep, 32);
+    expect(truncated).toBe(true);
+    expect(dirs).toHaveLength(32);
+    // nearest ancestor retained; the filesystem root dropped
+    expect(dirs[dirs.length - 1]).toBe(path.dirname(deep));
+    expect(dirs[0]).not.toBe(root);
+  });
+
   it("refuses to recreate a VANISHED project path (review, Codex)", async () => {
     const projectDir = mkdtempSync(path.join(tmpdir(), "system-prompt-vanished-"));
     const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {

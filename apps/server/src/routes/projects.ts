@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -20,6 +21,7 @@ import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { normalizeGitHubIssueList, type RawGitHubIssueListRow } from "../githubIssues.ts";
 import {
+  ancestorDirsOf,
   INSTRUCTIONS_MAX,
   RESOURCE_NAME,
   instructionsBody,
@@ -344,6 +346,36 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   };
   registerPiPromptRoutes("system-prompt", "SYSTEM.md");
   registerPiPromptRoutes("append-prompt", "APPEND_SYSTEM.md");
+
+  // INS-03: the inherited ANCESTOR context candidates. pi walks every parent
+  // directory from the filesystem root down to the project dir, loading
+  // AGENTS.md (preferred) or CLAUDE.md per level — this read-only listing shows
+  // which parent folders contribute instructions. Only EXISTING files appear
+  // (the project's own file belongs to the editor); names are matched against
+  // the real directory listing so a case-insensitive filesystem never invents
+  // candidates that are not on disk (native insertCaseSensitiveContextMatches).
+  const CONTEXT_CANDIDATE_NAMES = ["AGENTS.md", "CLAUDE.md", "AGENTS.MD", "CLAUDE.MD"];
+  const MAX_ANCESTOR_DEPTH = 32;
+
+  fastify.get("/projects/:id/instruction-ancestors", async (request, reply) => {
+    const project = projects.find((p) => p.id === (request.params as { id: string }).id);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+    const { dirs, truncated } = ancestorDirsOf(project.path, MAX_ANCESTOR_DEPTH);
+    const items: Array<{ dir: string; name: string; path: string }> = [];
+    for (const dir of dirs) {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      const onDisk = new Set(entries);
+      for (const name of CONTEXT_CANDIDATE_NAMES) {
+        if (onDisk.has(name)) items.push({ dir, name, path: nodePath.join(dir, name) });
+      }
+    }
+    return { items, truncated };
+  });
 
   // GitHub issues for a project, via the gh CLI (reuses the user's gh auth so
   // there's no OAuth to build). AGENT_DECK_GH_BIN overrides the binary (tests).
