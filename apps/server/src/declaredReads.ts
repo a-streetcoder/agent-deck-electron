@@ -1,28 +1,20 @@
-import path from "node:path";
+import {
+  AGENT_DEFAULT_READ_MAX_BYTES,
+  AGENT_DEFAULT_READ_MAX_ITEMS,
+  AGENT_DEFAULT_READ_TOTAL_MAX_BYTES,
+  normalizeAgentDefaultReads,
+  projectRelativeReadError,
+} from "@agent-deck/domain";
 
 export const MAX_MANAGED_SUBAGENT_TASK_BYTES = 50_000;
-export const MAX_DECLARED_READS = 32;
-export const MAX_DECLARED_READ_BYTES = 512;
+export const MAX_DECLARED_READS = AGENT_DEFAULT_READ_MAX_ITEMS;
+export const MAX_DECLARED_READ_BYTES = AGENT_DEFAULT_READ_MAX_BYTES;
 export const SUBAGENT_ARTIFACT_INPUT_MAX_BYTES = 50 * 1024;
 const DECLARED_READS_ARTIFACT_PREFIX =
   "\n\nRead first (project-relative hints; contents are not preloaded):\n";
-/**
- * Leaves room at the maximum task size for the fixed artifact wrapper and the
- * worst-case 31 list separators. This is intentionally a UTF-8 byte budget.
- */
-export const MAX_DECLARED_READS_TOTAL_BYTES =
-  SUBAGENT_ARTIFACT_INPUT_MAX_BYTES -
-  MAX_MANAGED_SUBAGENT_TASK_BYTES -
-  Buffer.byteLength(DECLARED_READS_ARTIFACT_PREFIX, "utf8") -
-  (MAX_DECLARED_READS - 1);
-
-const hasControlContent = (value: string): boolean =>
-  [...value].some((character) => {
-    const point = character.codePointAt(0)!;
-    return (
-      point <= 0x1f || (point >= 0x7f && point <= 0x9f) || point === 0x2028 || point === 0x2029
-    );
-  });
+/** Shared path-byte budget; with the fixed wrapper and worst-case separators,
+ * this keeps a maximum task inside the native artifact input limit. */
+export const MAX_DECLARED_READS_TOTAL_BYTES = AGENT_DEFAULT_READ_TOTAL_MAX_BYTES;
 
 /** Validate model-authored path hints once at the managed_subagent boundary. */
 export function normalizeDeclaredReads(reads: readonly string[] | undefined): string[] | undefined {
@@ -31,26 +23,14 @@ export function normalizeDeclaredReads(reads: readonly string[] | undefined): st
   const seen = new Set<string>();
   let totalBytes = 0;
   for (const raw of reads) {
-    if (hasControlContent(raw)) {
-      throw new Error("declared reads cannot contain multiline or control content");
-    }
+    const safetyError = projectRelativeReadError(raw);
+    if (safetyError) throw new Error(`declared read paths ${safetyError}`);
     const value = raw.trim();
-    if (!value) throw new Error("declared read paths cannot be empty");
-    const valueBytes = Buffer.byteLength(value, "utf8");
-    if (valueBytes > MAX_DECLARED_READ_BYTES) {
-      throw new Error(`declared read paths cannot exceed ${MAX_DECLARED_READ_BYTES} UTF-8 bytes`);
-    }
-    if (
-      path.posix.isAbsolute(value) ||
-      path.win32.isAbsolute(value) ||
-      /^[A-Za-z]:/u.test(value) ||
-      value.split(/[\\/]/u).includes("..")
-    ) {
-      throw new Error(
-        "declared reads must be single-line project-relative paths without traversal",
-      );
-    }
     if (seen.has(value)) continue;
+    if (normalized.length >= MAX_DECLARED_READS) {
+      throw new Error(`declared reads cannot exceed ${MAX_DECLARED_READS} paths`);
+    }
+    const valueBytes = Buffer.byteLength(value, "utf8");
     if (totalBytes + valueBytes > MAX_DECLARED_READS_TOTAL_BYTES) {
       throw new Error(
         `declared read paths cannot exceed ${MAX_DECLARED_READS_TOTAL_BYTES} UTF-8 bytes in total`,
@@ -61,6 +41,18 @@ export function normalizeDeclaredReads(reads: readonly string[] | undefined): st
     normalized.push(value);
   }
   return normalized;
+}
+
+/** Merge current authored defaults before strict caller hints. Defaults fail soft
+ * entry-by-entry; the effective list itself must fit the shared hard budget. */
+export function effectiveDeclaredReads(
+  defaults: readonly string[] | undefined,
+  caller: readonly string[] | undefined,
+): string[] {
+  return (
+    normalizeDeclaredReads([...(normalizeAgentDefaultReads(defaults) ?? []), ...(caller ?? [])]) ??
+    []
+  );
 }
 
 export function renderSubagentArtifactInput(

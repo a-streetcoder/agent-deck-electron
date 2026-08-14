@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import { registerDeckBridgeTools } from "../src/bridgeTools.ts";
-import { MAX_MANAGED_SUBAGENT_TASK_BYTES, normalizeDeclaredReads } from "../src/declaredReads.ts";
+import {
+  effectiveDeclaredReads,
+  MAX_MANAGED_SUBAGENT_TASK_BYTES,
+  normalizeDeclaredReads,
+} from "../src/declaredReads.ts";
 import type { SessionManager } from "../src/SessionManager.ts";
 import { ChildRunError } from "../src/services/sessionManager.ts";
 
@@ -93,6 +97,21 @@ describe("managed_subagent continuation bridge contract", () => {
     expect(response.isError).toBe(true);
     expect(response.content).toContain("1102 UTF-8 bytes in total");
     expect(sessions.runManagedSubagent).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes authored defaults independently, orders them first, and hard-fails the effective budget", () => {
+    expect(
+      effectiveDeclaredReads(
+        [" defaults.md ", "../unsafe", "shared.md", "C:\\unsafe", "shared.md"],
+        [" shared.md ", "caller.md"],
+      ),
+    ).toEqual(["defaults.md", "shared.md", "caller.md"]);
+    expect(() =>
+      effectiveDeclaredReads(
+        Array.from({ length: 32 }, (_, index) => `default-${index}.md`),
+        ["caller.md"],
+      ),
+    ).toThrow(/32 paths/);
   });
 
   it("includes the stable ID when an accepted run later fails", async () => {

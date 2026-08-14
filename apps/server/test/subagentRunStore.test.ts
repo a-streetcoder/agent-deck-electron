@@ -116,6 +116,23 @@ describe("SubagentRunStore", () => {
     expect(new SubagentRunStore(dataDir, vi.fn()).get(run.id)?.declaredReads).toEqual([]);
   });
 
+  it("rejects non-normalized or over-budget effective reads at the durable store boundary", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-read-store-boundary-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    expect(() => store.create(record({ declaredReads: [" AGENTS.md "] }))).toThrow();
+    expect(() => store.create(record({ declaredReads: ["../unsafe"] }))).toThrow();
+    expect(() =>
+      store.create(
+        record({
+          declaredReads: Array.from({ length: 32 }, (_, index) =>
+            index === 31 ? "z".repeat(512) : `${index}-${"a".repeat(32)}`,
+          ),
+        }),
+      ),
+    ).toThrow(/UTF-8 bytes in total/);
+    expect(store.list(PARENT_A)).toEqual([]);
+  });
+
   it("allocates distinct detached child worktrees, retains restart proof, and safely deletes them", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-worktrees-"));
     const repo = mkdtempSync(path.join(tmpdir(), "subagent-worktree-repo-space -"));

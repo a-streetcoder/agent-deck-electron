@@ -1,4 +1,12 @@
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -26,6 +34,15 @@ const cwd = mkdtempSync(path.join(tmpdir(), "pi-subagent-continuation-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "deck-subagent-continuation-"));
 const childRequests: ChatCompletionRequest[] = [];
 const CONTINUATION_COMPLETION_TIMEOUT_MS = 60_000;
+const agentFile = path.join(home, ".pi", "agent", "agents", "default-reader.md");
+
+function writeNamedAgent(defaultReads: readonly string[]): void {
+  mkdirSync(path.dirname(agentFile), { recursive: true });
+  writeFileSync(
+    agentFile,
+    `---\nname: default-reader\ntools: read\ndefaultReads:\n${defaultReads.map((item) => `  - ${JSON.stringify(item)}`).join("\n")}\n---\n\nRead the requested project context before answering.\n`,
+  );
+}
 
 async function waitUntil(
   predicate: () => boolean,
@@ -54,6 +71,7 @@ function isChild(body: ChatCompletionRequest): boolean {
 }
 
 beforeAll(async () => {
+  writeNamedAgent([" defaults-first.md ", "../unsafe-default", "shared.md", "C:\\unsafe"]);
   mock = await startMockProvider({
     toolCall: (lastUser, body) => {
       if (isChild(body) || body.messages.at(-1)?.role === "tool") return null;
@@ -62,7 +80,8 @@ beforeAll(async () => {
           name: "managed_subagent",
           arguments: {
             task: FIRST_TASK,
-            reads: [" AGENTS.md ", "src/SessionManager.ts", "AGENTS.md"],
+            agent: "default-reader",
+            reads: [" shared.md ", "caller-first.md", "shared.md"],
           },
         };
       }
@@ -90,6 +109,11 @@ beforeAll(async () => {
     },
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
+  process.env.AGENT_DECK_PI_ENV = JSON.stringify({
+    HOME: home,
+    USERPROFILE: home,
+    PI_SKIP_VERSION_CHECK: "1",
+  });
   server = await startServer({ dataDir });
 });
 
@@ -97,6 +121,7 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  delete process.env.AGENT_DECK_PI_ENV;
 });
 
 describe("managed_subagent real-Pi continuation", () => {
@@ -121,6 +146,10 @@ describe("managed_subagent real-Pi continuation", () => {
       .snapshot()
       .state.cells.find((cell): cell is SubagentCell => cell.kind === "subagent")!;
     expect(firstCard.text).toContain("CHILD_HISTORY_SENTINEL");
+
+    // Continuation omission inherits the durable agent name but resolves its
+    // current definition, not a stale launch snapshot.
+    writeNamedAgent([" current-default.md ", "..\\unsafe-default", "shared.md"]);
 
     const continuationDeltas: Array<{ seq: number; delta: string }> = [];
     const unsubscribe = managed.bus.subscribe((event) => {
@@ -157,7 +186,12 @@ describe("managed_subagent real-Pi continuation", () => {
     expect(continuationContext).toContain(FIRST_TASK);
     expect(continuationContext).toContain("CHILD_HISTORY_SENTINEL");
     expect(continuationContext).not.toContain("PARENT_ONLY_SENTINEL");
-    expect(continuationContext).toContain("docs/sync-seams.md");
+    const continuationPrompt = JSON.stringify(childRequests[1]!.messages.at(-1));
+    expect(continuationPrompt).toContain("current-default.md");
+    expect(continuationPrompt).toContain("shared.md");
+    expect(continuationPrompt).toContain("docs/sync-seams.md");
+    expect(continuationPrompt).not.toContain("caller-first.md");
+    expect(continuationContext).not.toContain("unsafe-default");
     expect(continuationContext).toContain("task below is the only active assignment");
     expect(continuationContext).toContain("has not preloaded their contents");
 
@@ -177,7 +211,8 @@ describe("managed_subagent real-Pi continuation", () => {
         artifactRootId: firstCard.id,
         artifactRootToken: expect.any(String),
         currentTurnId: expect.any(String),
-        declaredReads: ["docs/sync-seams.md"],
+        agent: "default-reader",
+        declaredReads: ["current-default.md", "shared.md", "docs/sync-seams.md"],
       }),
     );
     const run = persisted.runs[0]! as {
@@ -189,10 +224,10 @@ describe("managed_subagent real-Pi continuation", () => {
     );
     const turn = path.join(root, "turns", run.currentTurnId);
     expect(readFileSync(path.join(root, "input.md"), "utf8")).toBe(
-      `${FIRST_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\nAGENTS.md\nsrc/SessionManager.ts`,
+      `${FIRST_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\ndefaults-first.md\nshared.md\ncaller-first.md`,
     );
     expect(readFileSync(path.join(turn, "input.md"), "utf8")).toBe(
-      `${SECOND_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\ndocs/sync-seams.md`,
+      `${SECOND_TASK}\n\nRead first (project-relative hints; contents are not preloaded):\ncurrent-default.md\nshared.md\ndocs/sync-seams.md`,
     );
     expect(readFileSync(path.join(turn, "system-prompt.md"), "utf8")).toContain(
       `Artifact directory: ${turn}`,

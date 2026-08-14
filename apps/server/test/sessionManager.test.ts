@@ -652,6 +652,44 @@ describe("child tool capability policy", () => {
     expect(managedNamedOutputAdvisory("x".repeat(1001))).toBe("");
   });
 
+  it.each([
+    ["item count", Array.from({ length: 32 }, (_, index) => `default-${index}.md`), ["caller.md"]],
+    ["total UTF-8 bytes", ["é".repeat(256), "a".repeat(512)], ["c".repeat(79)]],
+  ])(
+    "rejects defaults-plus-caller %s overflow before durable allocation or child spawn",
+    async (_label, defaultReads, declaredReads) => {
+      const { piHost, pids } = makeFakePiHost();
+      const create = vi.fn();
+      const update = vi.fn();
+      const prepareTurn = vi.fn();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* makeManagedSessionRuntime(
+              piHost,
+              buses,
+              makeParams({
+                resolveAgent: () => ({ body: "Reader", defaultReads }),
+                childRuns: { create, update, prepareTurn },
+              }),
+            );
+            const exit = yield* Effect.exit(
+              runtime.runChildAgent("inspect", "reader", undefined, undefined, {
+                source: "single",
+                declaredReads,
+              }),
+            );
+            expect(exit._tag).toBe("Failure");
+          }),
+        ),
+      );
+      expect(prepareTurn).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      expect(pids).toHaveLength(1); // only the parent Pi owned by the session scope
+    },
+  );
+
   it("launches named children with ordered direct adapter policy and fails closed otherwise", async () => {
     const { piHost } = makeFakePiHost();
     const spawns: Parameters<PiHostShape["spawn"]>[0][] = [];

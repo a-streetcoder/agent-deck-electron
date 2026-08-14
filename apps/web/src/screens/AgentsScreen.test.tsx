@@ -17,6 +17,7 @@ const agent: AgentInfo = {
   name: "writer",
   description: "Writes when separately approved",
   systemPromptMode: "replace",
+  defaultReads: ["AGENTS.md", "src/main.ts"],
   defaultExpectedOutcome: "writeProjectFile",
   defaultProgress: true,
   interactive: true,
@@ -44,6 +45,10 @@ describe("AgentDetail delegation metadata", () => {
     const output = screen.getByTestId("agent-output");
     expect(output.textContent).toContain("Output Advisory");
     expect(output.textContent).toContain("Concise review summary");
+    const reads = screen.getByTestId("agent-default-reads");
+    expect(reads.textContent).toContain("Default Reads");
+    expect(reads.textContent).toContain("AGENTS.md");
+    expect(reads.textContent).toContain("src/main.ts");
     const card = screen.getByTestId("agent-default-outcome");
     expect(card.textContent).toContain("Default Outcome");
     expect(card.textContent).toContain("Write/update project file");

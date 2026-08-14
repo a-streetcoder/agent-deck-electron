@@ -1,7 +1,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  normalizeAgentDefaultReads,
   normalizeAgentOutput,
+  validateAgentDefaultReadsForAuthoring,
   type AgentInfo,
   type SubagentExpectedOutcome,
 } from "@agent-deck/domain";
@@ -29,6 +31,7 @@ export interface AgentEdit {
   tools?: string[];
   skills?: string[];
   mcpServers?: string[];
+  defaultReads?: string[];
   defaultExpectedOutcome?: SubagentExpectedOutcome | "";
   /** `false` clears the custom-agent frontmatter value, matching native writes. */
   defaultProgress?: boolean;
@@ -122,6 +125,7 @@ export const EDITABLE_OVERRIDE_KEYS = new Set([
   "tools",
   "skills",
   "mcpServers",
+  "defaultReads",
   // The builtin editor intentionally omits this field, so it remains unmanaged
   // unless an explicit API edit computes a replacement value below.
   "systemPrompt",
@@ -154,6 +158,7 @@ export function computeBuiltinOverride(
     | "mcpDirectTools"
     | "skills"
     | "mcpServers"
+    | "defaultReads"
     | "defaultExpectedOutcome"
     | "output"
     | "body"
@@ -189,6 +194,12 @@ export function computeBuiltinOverride(
   }
   if (edit.mcpServers !== undefined && !listsEqual(edit.mcpServers, base.mcpServers)) {
     values.mcpServers = edit.mcpServers.length > 0 ? edit.mcpServers : false;
+  }
+  if (edit.defaultReads !== undefined) {
+    const defaultReads = validateAgentDefaultReadsForAuthoring(edit.defaultReads) ?? [];
+    if (!listsEqual(defaultReads, base.defaultReads)) {
+      values.defaultReads = defaultReads.length > 0 ? defaultReads : false;
+    }
   }
   if (
     edit.defaultExpectedOutcome !== undefined &&
@@ -265,6 +276,9 @@ export function applyAgentOverride(
         break;
       case "mcpServers":
         next.mcpServers = overrideList(value);
+        break;
+      case "defaultReads":
+        next.defaultReads = normalizeAgentDefaultReads(overrideList(value));
         break;
       case "defaultExpectedOutcome":
         next.defaultExpectedOutcome =

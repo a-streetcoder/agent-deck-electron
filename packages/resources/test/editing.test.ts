@@ -210,6 +210,61 @@ describe("agent/skill file writer", () => {
     expect(materialized).not.toContain("defaultProgress:");
   });
 
+  it("sanitizes authored defaultReads entry-by-entry and round-trips custom edits", () => {
+    const home = makeHome();
+    const roots = { home };
+    const filePath = writeAgentFile(roots, "global", "reader", {
+      defaultReads: [" AGENTS.md ", "../secret", "src/main.ts", "AGENTS.md", "C:\\secret"],
+      body: "Read first.",
+    });
+    expect(readFileSync(filePath, "utf8")).toContain("defaultReads:");
+    expect(readFileSync(filePath, "utf8")).not.toContain("secret");
+    expect(scanAgents(roots).find((agent) => agent.name === "reader")?.defaultReads).toEqual([
+      "AGENTS.md",
+      "src/main.ts",
+    ]);
+
+    writeAgentFile(roots, "global", "reader", { defaultReads: [] });
+    expect(readFileSync(filePath, "utf8")).not.toContain("defaultReads:");
+  });
+
+  it("refuses to persist sanitized defaultReads that exceed the launch budget", () => {
+    const home = makeHome();
+    const filePath = path.join(home, ".pi", "agent", "agents", "oversized-reader.md");
+    expect(() =>
+      writeAgentFile({ home }, "global", "oversized-reader", {
+        defaultReads: Array.from({ length: 33 }, (_, index) => `path-${index}.md`),
+        body: "Must not persist.",
+      }),
+    ).toThrow(/cannot exceed 32 safe, unique paths/u);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("applies effective builtin defaultReads overrides and materializes false without data loss", () => {
+    const home = makeHome();
+    const roots = { home };
+    const builtin = readFileSync(path.join(BUILTIN_AGENTS_DIR, "reviewer.md"), "utf8");
+    writeBuiltinAgentOverride(roots, "reviewer", {
+      defaultReads: [" AGENTS.md ", "../unsafe", "docs/review.md"],
+      futureField: "keep-me",
+    });
+    expect(
+      scanAgents(roots).find((agent) => agent.name === "reviewer" && agent.scope === "builtin")
+        ?.defaultReads,
+    ).toEqual(["AGENTS.md", "docs/review.md"]);
+
+    const base = parseAgentFile("reviewer.md", builtin, "builtin");
+    expect(base.defaultReads).toEqual(["plan.md", "progress.md"]);
+    const cleared = mergeWithUnmanagedOverrideFields(
+      readAgentOverrides(roots).reviewer,
+      computeBuiltinOverride(base, { defaultReads: [] }),
+    );
+    expect(cleared).toMatchObject({ defaultReads: false, futureField: "keep-me" });
+    const materialized = materializeBuiltinAgentOverrideContent(builtin, cleared ?? undefined);
+    expect(materialized).not.toContain("defaultReads:");
+    expect(materialized).toContain("futureField: keep-me");
+  });
+
   it("creates from builtin content without clobbering a colliding custom agent", () => {
     const home = makeHome();
     const roots = { home };

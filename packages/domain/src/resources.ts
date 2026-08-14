@@ -30,6 +30,73 @@ export const SUBAGENT_EXPECTED_OUTCOME_LABELS: Record<SubagentExpectedOutcome, s
 };
 
 export const AGENT_OUTPUT_MAX_LENGTH = 1000;
+export const AGENT_DEFAULT_READ_MAX_BYTES = 512;
+export const AGENT_DEFAULT_READ_MAX_ITEMS = 32;
+export const AGENT_DEFAULT_READ_TOTAL_MAX_BYTES = 1102;
+
+const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
+
+/** Cross-platform safety check shared by authored defaults and the strict bridge boundary. */
+export function projectRelativeReadError(raw: string): string | undefined {
+  for (const character of raw) {
+    const point = character.codePointAt(0)!;
+    if (point <= 0x1f || (point >= 0x7f && point <= 0x9f) || point === 0x2028 || point === 0x2029) {
+      return "cannot contain multiline or control content";
+    }
+  }
+  const value = raw.trim();
+  if (!value) return "cannot be empty";
+  if (utf8Bytes(value) > AGENT_DEFAULT_READ_MAX_BYTES) {
+    return `cannot exceed ${AGENT_DEFAULT_READ_MAX_BYTES} UTF-8 bytes`;
+  }
+  if (
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:/u.test(value) ||
+    value.split(/[\\/]/u).includes("..")
+  ) {
+    return "must be a single-line project-relative path without traversal";
+  }
+  return undefined;
+}
+
+/** Manually authored defaults fail soft: keep each safe entry in authored order. */
+export function normalizeAgentDefaultReads(
+  value: readonly string[] | undefined,
+): string[] | undefined {
+  if (!value) return undefined;
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (projectRelativeReadError(raw)) continue;
+    const path = raw.trim();
+    if (seen.has(path)) continue;
+    seen.add(path);
+    normalized.push(path);
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/** Authoring is fail-soft for unsafe individual entries but rejects a sanitized
+ * definition that can never fit the managed-subagent launch/artifact budget. */
+export function validateAgentDefaultReadsForAuthoring(
+  value: readonly string[] | undefined,
+): string[] | undefined {
+  const normalized = normalizeAgentDefaultReads(value);
+  if (!normalized) return undefined;
+  if (normalized.length > AGENT_DEFAULT_READ_MAX_ITEMS) {
+    throw new Error(
+      `Default reads cannot exceed ${AGENT_DEFAULT_READ_MAX_ITEMS} safe, unique paths after sanitization. Remove ${normalized.length - AGENT_DEFAULT_READ_MAX_ITEMS} path(s).`,
+    );
+  }
+  const totalBytes = normalized.reduce((total, path) => total + utf8Bytes(path), 0);
+  if (totalBytes > AGENT_DEFAULT_READ_TOTAL_MAX_BYTES) {
+    throw new Error(
+      `Default reads cannot exceed ${AGENT_DEFAULT_READ_TOTAL_MAX_BYTES.toLocaleString("en-US")} UTF-8 bytes in total after sanitization (received ${totalBytes.toLocaleString("en-US")}). Shorten or remove paths.`,
+    );
+  }
+  return normalized;
+}
 
 /** Native output metadata enters a child prompt as exactly one advisory value. */
 export function normalizeAgentOutput(value: unknown): string | undefined {
@@ -79,6 +146,9 @@ export interface AgentInfo {
   extensions?: string[];
   /** MCP server names (from mcp.json) this agent declares for its sessions. */
   mcpServers?: string[];
+  /** Ordered, project-relative read-first hints for named delegation. Unsafe
+   * manually authored entries are omitted independently during scanning. */
+  defaultReads?: string[];
   /** Requested default for managed named delegation. Mutation still requires
    * the runtime's per-run worktree/approval/path policy. */
   defaultExpectedOutcome?: SubagentExpectedOutcome;

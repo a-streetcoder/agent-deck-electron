@@ -126,7 +126,14 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           // unexpected field is rejected rather than silently stripped.
           z
             .object({
-              task: z.string().trim().min(1),
+              task: z
+                .string()
+                .trim()
+                .min(1)
+                .refine(
+                  (value) => Buffer.byteLength(value, "utf8") <= MAX_MANAGED_SUBAGENT_TASK_BYTES,
+                  `task cannot exceed ${MAX_MANAGED_SUBAGENT_TASK_BYTES} UTF-8 bytes`,
+                ),
               agent: z.string().trim().min(1).optional(),
             })
             .strict(),

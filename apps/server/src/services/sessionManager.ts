@@ -46,6 +46,7 @@ import {
 import type { ReceiptBus } from "../receipts.ts";
 import { normalizeSessionError, processFailureMessage } from "../sessionFailure.ts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
+import { effectiveDeclaredReads, MAX_MANAGED_SUBAGENT_TASK_BYTES } from "../declaredReads.ts";
 import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
 import {
   PiExited,
@@ -156,6 +157,7 @@ export type AgentResolver = (
       /** External adapter names supplied only through MCP_DIRECT_TOOLS. */
       mcpDirectTools?: string[];
       skillDirs?: string[];
+      defaultReads?: string[];
       defaultExpectedOutcome?: SubagentExpectedOutcome;
       /** Advisory output metadata; it never changes child capabilities. */
       output?: string;
@@ -1632,7 +1634,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const boundaryPrompt = isContinuation
       ? SUBAGENT_CONTINUATION_SYSTEM_PROMPT
       : SUBAGENT_SYSTEM_PROMPT;
-    const declaredReads = runOptions?.declaredReads ?? [];
+    // Resolver output is an injectable/manual-authoring boundary: sanitize
+    // defaults again, then enforce one effective budget before artifacts or Pi.
+    if (Buffer.byteLength(task, "utf8") > MAX_MANAGED_SUBAGENT_TASK_BYTES) {
+      return yield* Effect.fail(
+        new Error(`subagent task cannot exceed ${MAX_MANAGED_SUBAGENT_TASK_BYTES} UTF-8 bytes`),
+      );
+    }
+    const declaredReads = yield* Effect.try({
+      try: () => effectiveDeclaredReads(resolved?.defaultReads, runOptions?.declaredReads),
+      catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+    });
     const outcomeContract = resolved
       ? `\n\n${managedNamedOutcomeContract(
           resolved.defaultExpectedOutcome ?? "reportOnly",
@@ -1660,7 +1672,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         createdAt,
         updatedAt: createdAt,
         source: runOptions?.source ?? "single",
-        ...(runOptions?.declaredReads ? { declaredReads: [...runOptions.declaredReads] } : {}),
+        declaredReads: [...declaredReads],
       };
       const allocation = durable.prepareTurn
         ? yield* persistChildRun(() =>
@@ -1690,7 +1702,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           durable.update(runId, {
             task,
             ...(agentName ? { agent: agentName } : {}),
-            ...(runOptions?.declaredReads ? { declaredReads: [...runOptions.declaredReads] } : {}),
+            declaredReads: [...declaredReads],
             status: "starting",
             updatedAt: createdAt,
             completedAt: undefined,

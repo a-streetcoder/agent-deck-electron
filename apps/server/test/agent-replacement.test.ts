@@ -23,6 +23,7 @@ async function createReplacement(description: string): Promise<Response> {
       createFromBuiltin: "reviewer",
       edit: {
         description,
+        defaultReads: [" AGENTS.md ", "../unsafe", "docs/review.md"],
         defaultProgress: true,
         interactive: true,
         output: "Concise review summary",
@@ -52,6 +53,8 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     const content = readFileSync(customFile, "utf8");
     expect(content).toContain("description: Editable reviewer");
     expect(content).toContain("defaultExpectedOutcome: reportOnly");
+    expect(content).toContain("defaultReads:");
+    expect(content).not.toContain("../unsafe");
     expect(content).toContain("defaultProgress: true");
     expect(content).toContain("interactive: true");
     expect(content).toContain("output: Concise review summary");
@@ -65,6 +68,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
         scope: string;
         shadowed: boolean;
         replacesBuiltin: boolean;
+        defaultReads?: string[];
         defaultProgress?: boolean;
         interactive?: boolean;
         output?: string;
@@ -77,6 +81,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           scope: "global",
           shadowed: false,
           replacesBuiltin: true,
+          defaultReads: ["AGENTS.md", "docs/review.md"],
           defaultProgress: true,
           interactive: true,
           output: "Concise review summary",
@@ -117,6 +122,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
                 tools: ["read", "grep"],
                 systemPrompt: "Effective overridden prompt.",
                 defaultExpectedOutcome: "reportOnly",
+                defaultReads: [" AGENTS.md ", "..\\unsafe", "docs/coder.md"],
                 interactive: true,
                 output: "Effective report summary",
                 defaultProgress: false,
@@ -147,6 +153,7 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
           tools: ["read", "grep"],
           skills: [],
           mcpServers: [],
+          defaultReads: ["AGENTS.md", "docs/coder.md"],
           body: "Effective overridden prompt.",
         },
       }),
@@ -156,6 +163,9 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(custom).toContain("description: Effective coder");
     expect(custom).toContain("tools: read, grep");
     expect(custom).toContain("defaultExpectedOutcome: reportOnly");
+    expect(custom).toContain("defaultReads:");
+    expect(custom).toContain("docs/coder.md");
+    expect(custom).not.toContain("unsafe");
     expect(custom).toContain("interactive: true");
     expect(custom).toContain("output: Effective report summary");
     expect(custom).not.toContain("defaultProgress:");
@@ -200,6 +210,39 @@ describe("builtin custom replacement through PUT /resources/agents", () => {
     expect(response.status).toBe(400);
     expect(existsSync(invalidFile)).toBe(false);
   });
+
+  it.each([
+    [
+      "count",
+      Array.from({ length: 33 }, (_, index) => `path-${index}.md`),
+      /cannot exceed 32 safe, unique paths.*Remove 1 path/u,
+    ],
+    [
+      "total UTF-8 bytes",
+      ["é".repeat(256), "a".repeat(512), "c".repeat(79)],
+      /cannot exceed 1,102 UTF-8 bytes.*received 1,103.*Shorten or remove paths/u,
+    ],
+  ])(
+    "rejects authored defaultReads over the %s budget without writing",
+    async (_label, defaultReads, message) => {
+      const name = `invalid-default-reads-${_label.replaceAll(" ", "-")}`;
+      const invalidFile = path.join(home, ".pi", "agent", "agents", `${name}.md`);
+      const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "global",
+          name,
+          edit: { defaultReads, body: "Must not persist." },
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()) as { error: string }).toEqual({
+        error: expect.stringMatching(message),
+      });
+      expect(existsSync(invalidFile)).toBe(false);
+    },
+  );
 
   it("rejects replacement creation outside global scope", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/resources/agents`, {

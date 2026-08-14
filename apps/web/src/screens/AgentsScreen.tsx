@@ -420,6 +420,14 @@ export function AgentDetail({
               <div className="text-sm text-text-secondary">{agent.output}</div>
             </div>
           ) : null}
+          {agent.defaultReads?.length ? (
+            <div
+              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-default-reads"
+            >
+              <ChipList label="Default Reads" items={agent.defaultReads} />
+            </div>
+          ) : null}
           {agent.defaultExpectedOutcome ? (
             <div
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"

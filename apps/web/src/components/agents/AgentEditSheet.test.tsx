@@ -16,6 +16,7 @@ const builtin: AgentInfo = {
   mcpDirectTools: ["search", "stale-tool"],
   skills: ["reviewing"],
   mcpServers: ["github"],
+  defaultReads: ["AGENTS.md", "src/reviewer.ts"],
   defaultExpectedOutcome: "directProjectWrites",
   defaultProgress: true,
   interactive: true,
@@ -88,6 +89,9 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect((screen.getByTestId("editor-description") as HTMLInputElement).value).toBe(
       "Review changes",
     );
+    expect((screen.getByTestId("editor-default-reads") as HTMLTextAreaElement).value).toBe(
+      "AGENTS.md\nsrc/reviewer.ts",
+    );
     expect((screen.getByTestId("editor-default-outcome") as HTMLSelectElement).value).toBe(
       "directProjectWrites",
     );
@@ -146,6 +150,7 @@ describe("AgentEditSheet builtin replacement create mode", () => {
         tools: ["read", "grep", "mcp:search", "mcp:stale-tool"],
         skills: ["reviewing"],
         mcpServers: ["github"],
+        defaultReads: ["AGENTS.md", "src/reviewer.ts"],
         defaultExpectedOutcome: "directProjectWrites",
         defaultProgress: true,
         interactive: true,

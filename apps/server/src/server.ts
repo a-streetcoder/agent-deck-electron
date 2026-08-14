@@ -428,6 +428,7 @@ async function initServer(
         tools: agent.tools,
         mcpDirectTools: agent.mcpDirectTools,
         skillDirs: agent.skillDirs,
+        defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
         output: agent.output,
       };
@@ -569,6 +570,7 @@ async function initServer(
         skillDirs,
         extensions: agent.extensions ?? [],
         mcpServers: agent.mcpServers ?? [],
+        defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
         output: agent.output,
       },

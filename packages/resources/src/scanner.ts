@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   applyShadowing,
   type AgentInfo,
+  normalizeAgentDefaultReads,
   normalizeAgentOutput,
   SUBAGENT_EXPECTED_OUTCOMES,
   type PromptInfo,
@@ -102,6 +103,7 @@ export function parseAgentFile(
     skills: asList(frontmatter.skills),
     extensions: asList(frontmatter.extensions),
     mcpServers: asList(frontmatter.mcpServers),
+    defaultReads: normalizeAgentDefaultReads(asList(frontmatter.defaultReads)),
     defaultExpectedOutcome: asExpectedOutcome(frontmatter.defaultExpectedOutcome),
     defaultProgress:
       typeof frontmatter.defaultProgress === "boolean" ? frontmatter.defaultProgress : undefined,

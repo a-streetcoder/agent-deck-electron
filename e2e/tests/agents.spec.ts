@@ -137,6 +137,7 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
 
   // A file appearing after the editor opens is rejected rather than overwritten.
   await page.getByTestId("agent-create-replacement").click();
+  await page.getByTestId("editor-default-reads").fill("AGENTS.md\nsrc/reviewer.ts");
   await page.getByTestId("editor-output").fill("Concise browser-tested review summary");
   mkdirSync(path.dirname(customFile), { recursive: true });
   writeFileSync(customFile, "---\nname: reviewer\n---\n\nCollision sentinel.\n");
@@ -152,6 +153,8 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
   expect(readFileSync(builtinFile).equals(builtinBefore)).toBe(true);
   expect(readFileSync(settingsFile).equals(seededSettingsBytes)).toBe(true);
   expect(readFileSync(customFile, "utf8")).toContain("defaultExpectedOutcome: reportOnly");
+  expect(readFileSync(customFile, "utf8")).toContain("defaultReads:");
+  expect(readFileSync(customFile, "utf8")).toContain("src/reviewer.ts");
   expect(readFileSync(customFile, "utf8")).toContain(
     "output: Concise browser-tested review summary",
   );
@@ -164,6 +167,8 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
   await expect(page.getByTestId("agent-output")).toContainText(
     "Concise browser-tested review summary",
   );
+  await expect(page.getByTestId("agent-default-reads")).toContainText("AGENTS.md");
+  await expect(page.getByTestId("agent-default-reads")).toContainText("src/reviewer.ts");
   await expect(page.getByTestId("agent-create-replacement")).toHaveCount(0);
   expect(readFileSync(builtinFile).equals(builtinBefore)).toBe(true);
   expect(readFileSync(settingsFile).equals(seededSettingsBytes)).toBe(true);

@@ -69,6 +69,7 @@ export function AgentEditSheet({
   );
   const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
   const [mcpServers, setMcpServers] = useState((seed?.mcpServers ?? []).join(", "));
+  const [defaultReads, setDefaultReads] = useState((seed?.defaultReads ?? []).join("\n"));
   const [defaultExpectedOutcome, setDefaultExpectedOutcome] = useState<
     SubagentExpectedOutcome | ""
   >(seed?.defaultExpectedOutcome ?? "");
@@ -99,6 +100,7 @@ export function AgentEditSheet({
     ].join(", "),
     skills: (seed?.skills ?? []).join(", "),
     mcpServers: (seed?.mcpServers ?? []).join(", "),
+    defaultReads: (seed?.defaultReads ?? []).join("\n"),
     defaultExpectedOutcome: seed?.defaultExpectedOutcome ?? "",
     defaultProgress: seed?.defaultProgress ?? false,
     interactive: seed?.interactive ?? false,
@@ -117,6 +119,7 @@ export function AgentEditSheet({
     tools !== initial.tools ||
     skills !== initial.skills ||
     mcpServers !== initial.mcpServers ||
+    defaultReads !== initial.defaultReads ||
     defaultExpectedOutcome !== initial.defaultExpectedOutcome ||
     defaultProgress !== initial.defaultProgress ||
     interactive !== initial.interactive ||
@@ -193,6 +196,7 @@ export function AgentEditSheet({
               ].join(", ") !== initial.tools ||
               (live.skills ?? []).join(", ") !== initial.skills ||
               (live.mcpServers ?? []).join(", ") !== initial.mcpServers ||
+              (live.defaultReads ?? []).join("\n") !== initial.defaultReads ||
               (live.defaultExpectedOutcome ?? "") !== initial.defaultExpectedOutcome ||
               (live.defaultProgress ?? false) !== initial.defaultProgress ||
               (live.interactive ?? false) !== initial.interactive ||
@@ -223,6 +227,12 @@ export function AgentEditSheet({
             tools: parseList(tools),
             skills: parseList(skills),
             mcpServers: parseList(mcpServers),
+            // Newline authoring keeps paths containing spaces intact. Builtins
+            // use the normal effective diff override; bundled bytes stay pristine.
+            defaultReads: defaultReads
+              .split("\n")
+              .map((item) => item.trim())
+              .filter(Boolean),
             // Native exposes this authored default only for custom definitions.
             // Builtin edits continue to preserve any unmanaged override value.
             defaultExpectedOutcome: isBuiltin ? undefined : defaultExpectedOutcome,
@@ -416,6 +426,21 @@ export function AgentEditSheet({
                   value={fallbackModels}
                   onChange={(e) => setFallbackModels(e.target.value)}
                 />
+              </label>
+              <label className="block text-xs text-text-muted">
+                Default reads (one project-relative path per line)
+                <ControlTextArea
+                  data-testid="editor-default-reads"
+                  className={cn(inputClass, "min-h-[88px] font-mono text-caption")}
+                  aria-describedby="editor-default-reads-help"
+                  placeholder={"AGENTS.md\nsrc/main.ts"}
+                  value={defaultReads}
+                  onChange={(event) => setDefaultReads(event.target.value)}
+                />
+                <span id="editor-default-reads-help" className="mt-1 block text-xs text-text-muted">
+                  Read-first hints for named delegation. Contents are not preloaded; unsafe manually
+                  authored entries are ignored independently.
+                </span>
               </label>
               {!isBuiltin ? (
                 <>

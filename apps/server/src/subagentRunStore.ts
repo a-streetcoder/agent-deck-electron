@@ -26,7 +26,11 @@ import {
   type SubagentArtifactAllocation,
 } from "@agent-deck/loop-catalog-native";
 import { z } from "zod";
-import { renderSubagentArtifactInput } from "./declaredReads.ts";
+import {
+  MAX_DECLARED_READS_TOTAL_BYTES,
+  normalizeDeclaredReads,
+  renderSubagentArtifactInput,
+} from "./declaredReads.ts";
 import {
   gitDetachedWorktreeAdd,
   gitDetachedWorktreeRegistrationMatches,
@@ -172,6 +176,28 @@ const runSchema = z
         code: z.ZodIssueCode.custom,
         message: "Worktree lifecycle lacks ownership",
       });
+    }
+    if (run.declaredReads !== undefined) {
+      try {
+        const normalized = normalizeDeclaredReads(run.declaredReads) ?? [];
+        if (
+          normalized.length !== run.declaredReads.length ||
+          normalized.some((value, index) => value !== run.declaredReads?.[index])
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Declared reads are not normalized effective paths",
+          });
+        }
+      } catch (error) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            error instanceof Error
+              ? error.message
+              : `Declared reads exceed ${MAX_DECLARED_READS_TOTAL_BYTES} bytes`,
+        });
+      }
     }
   });
 

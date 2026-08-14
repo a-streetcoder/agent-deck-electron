@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
-import { AGENT_OUTPUT_MAX_LENGTH, normalizeAgentOutput, type SkillInfo } from "@agent-deck/domain";
+import {
+  AGENT_OUTPUT_MAX_LENGTH,
+  normalizeAgentOutput,
+  validateAgentDefaultReadsForAuthoring,
+  type SkillInfo,
+} from "@agent-deck/domain";
 import {
   BUILTIN_AGENTS_DIR,
   computeBuiltinOverride,
@@ -38,6 +43,9 @@ const agentEditFields = z.object({
   tools: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   mcpServers: z.array(z.string()).optional(),
+  // Writer/scanner/runtime sanitization is deliberately entry-by-entry so one
+  // unsafe manually authored path does not erase its safe peers.
+  defaultReads: z.array(z.string()).optional(),
   defaultExpectedOutcome: z
     .union([
       z.enum(["reportOnly", "editFilesInWorktree", "writeProjectFile", "directProjectWrites"]),
@@ -861,6 +869,20 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     const parsed = agentEditBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { projectId, scope, name, edit, createFromBuiltin } = parsed.data;
+    let validatedEdit = edit;
+    if (edit.defaultReads !== undefined) {
+      try {
+        validatedEdit = {
+          ...edit,
+          defaultReads: validateAgentDefaultReadsForAuthoring(edit.defaultReads) ?? [],
+        };
+      } catch (error) {
+        return reply.status(400).send({
+          error:
+            error instanceof Error ? error.message : "Default reads exceed the authoring budget.",
+        });
+      }
+    }
     const roots = rootsFor(projectId);
     try {
       if (createFromBuiltin && scope !== "global") {
@@ -876,7 +898,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         // survive; managed fields are fully recomputed from the form state.
         const merged = mergeWithUnmanagedOverrideFields(
           readAgentOverrides(roots)[name],
-          computeBuiltinOverride(base, edit),
+          computeBuiltinOverride(base, validatedEdit),
         );
         writeBuiltinAgentOverride(roots, name, merged);
       } else {
@@ -894,7 +916,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
             readAgentOverrides(roots)[createFromBuiltin],
           );
         }
-        writeAgentFile(roots, scope, name, edit, {
+        writeAgentFile(roots, scope, name, validatedEdit, {
           createOnly: createFromBuiltin !== undefined,
           baseContent,
         });
