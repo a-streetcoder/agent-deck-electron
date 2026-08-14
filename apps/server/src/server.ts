@@ -32,6 +32,7 @@ import {
   type MemoryStore,
 } from "@agent-deck/memory";
 import { FileMcpOAuthStore } from "@agent-deck/mcp";
+import { projectAllowsAgent } from "./agentCuration.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
 import { registerAskUserBridgeTool } from "./askUserBridgeTool.ts";
 import { BridgeRegistry } from "./bridge.ts";
@@ -549,8 +550,12 @@ async function initServer(
     projectId?: string,
   ): { status: "ok"; agent: NamedAgentLaunch } | { status: "not_found" } | { status: "disabled" } {
     const roots = rootsFor(projectId);
+    const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
     const agent = scanAgents(roots).find((a) => a.name === name && !a.shadowed);
-    if (!agent) return { status: "not_found" };
+    // Missing and unassigned are deliberately indistinguishable to direct
+    // launch/delegation callers. Disabled is reported only for an otherwise
+    // curated agent so stale assignments never widen access.
+    if (!agent || !projectAllowsAgent(project, agent)) return { status: "not_found" };
     if (agent.disabled) return { status: "disabled" };
     const skillsByName = new Map(scanSkillsFor(projectId).map((s) => [s.name, s]));
     const disabledSkills = new Set(settings.get().disabledSkills);

@@ -182,8 +182,9 @@ export function AgentEditSheet({
       if (agent) {
         // Conflict guard: the sheet sends complete form state, so refuse to
         // save when the agent changed on disk since the sheet opened.
-        const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
-        const response = await fetch(`/resources/agents${query}`);
+        const query = new URLSearchParams({ includeUnassigned: "true" });
+        if (currentProjectId) query.set("projectId", currentProjectId);
+        const response = await fetch(`/resources/agents?${query.toString()}`);
         if (response.ok) {
           const { agents } = (await response.json()) as { agents: AgentInfo[] };
           const live = agents.find((a) => a.name === agent.name && a.scope === agent.scope);

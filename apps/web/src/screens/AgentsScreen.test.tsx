@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentInfo } from "@agent-deck/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { AgentDetail } from "./AgentsScreen.tsx";
+import { updateProject } from "../state/wsBridge.ts";
 
 vi.mock("../state/wsBridge.ts", () => ({
   deleteAgent: vi.fn(),
@@ -12,6 +13,8 @@ vi.mock("../state/wsBridge.ts", () => ({
   setAgentDisabled: vi.fn(),
   updateProject: vi.fn(),
 }));
+
+const updateProjectMock = vi.mocked(updateProject);
 
 const agent: AgentInfo = {
   name: "writer",
@@ -30,7 +33,10 @@ const agent: AgentInfo = {
   replacesBuiltin: false,
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("AgentDetail delegation metadata", () => {
   it("displays the native outcome and progress labels", () => {
@@ -62,6 +68,63 @@ describe("AgentDetail delegation metadata", () => {
     const depth = screen.getByTestId("agent-max-subagent-depth");
     expect(depth.textContent).toContain("Max Subagent Depth Metadata");
     expect(depth.textContent).toContain("0");
+  });
+
+  it("turns legacy-open availability into an explicit stable assignment set", () => {
+    useAppStore.setState({
+      projects: [
+        {
+          id: "project",
+          path: "/tmp/project",
+          name: "Project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      currentProjectId: "project",
+    });
+    render(
+      <AgentDetail
+        agent={agent}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+        availableCustomAgentNames={["writer", "reviewer", "writer"]}
+      />,
+    );
+
+    const assignment = screen.getByTestId("assigned-agent-writer");
+    expect(assignment.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("default-agent-writer").textContent).toContain("session default");
+    fireEvent.click(assignment);
+    expect(updateProjectMock).toHaveBeenCalledWith("project", {
+      assignedAgentNames: ["reviewer"],
+    });
+  });
+
+  it("keeps builtin project access distinct from active-session default", () => {
+    useAppStore.setState({
+      projects: [
+        {
+          id: "project",
+          path: "/tmp/project",
+          name: "Project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedAgentNames: [],
+        },
+      ],
+      currentProjectId: "project",
+    });
+    render(
+      <AgentDetail
+        agent={{ ...agent, scope: "builtin" }}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("builtin-project-access").textContent).toContain("every project");
+    expect(screen.queryByTestId("assigned-agent-writer")).toBeNull();
+    expect(screen.getByTestId("default-agent-writer").hasAttribute("disabled")).toBe(false);
   });
 
   it("does not display effective output metadata on a builtin", () => {

@@ -12,7 +12,8 @@ import { homedir } from "node:os";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 import type { ProjectMeta } from "@agent-deck/contracts";
-import { detectProjectType, discoverProjects } from "@agent-deck/resources";
+import { detectProjectType, discoverProjects, scanAgents } from "@agent-deck/resources";
+import { projectAllowsAgent } from "../agentCuration.ts";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { normalizeGitHubIssueList, type RawGitHubIssueListRow } from "../githubIssues.ts";
@@ -29,6 +30,7 @@ const createProjectBody = z.object({
 });
 
 const patchProjectBody = z.object({
+  assignedAgentNames: z.array(RESOURCE_NAME).optional(),
   assignedSkills: z.array(RESOURCE_NAME).optional(),
   assignedPrompts: z.array(RESOURCE_NAME).optional(),
   assignedMcpServers: z.array(RESOURCE_NAME).optional(),
@@ -42,8 +44,16 @@ const patchProjectBody = z.object({
  * server.ts.
  */
 export function registerProjectRoutes(ctx: ServerContext): void {
-  const { fastify, projects, sessions, settings, watchProject, reconcileProjectMcp, broadcast } =
-    ctx;
+  const {
+    fastify,
+    projects,
+    sessions,
+    settings,
+    watchProject,
+    reconcileProjectMcp,
+    broadcast,
+    rootsFor,
+  } = ctx;
 
   fastify.get("/projects", async () => ({
     projects: projects.list().filter((p) => !p.hidden),
@@ -150,6 +160,9 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
     const next: ProjectMeta = { ...project };
+    if (parsed.data.assignedAgentNames !== undefined) {
+      next.assignedAgentNames = [...new Set(parsed.data.assignedAgentNames)];
+    }
     if (parsed.data.assignedSkills !== undefined) next.assignedSkills = parsed.data.assignedSkills;
     if (parsed.data.assignedPrompts !== undefined)
       next.assignedPrompts = parsed.data.assignedPrompts;
@@ -159,6 +172,20 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       next.defaultAgentName = parsed.data.defaultAgentName ?? undefined;
     }
     if (parsed.data.enabled !== undefined) next.enabled = parsed.data.enabled;
+
+    const effectiveAgents = scanAgents(rootsFor(id)).filter(
+      (agent) => !agent.shadowed && !agent.disabled,
+    );
+    if (next.defaultAgentName) {
+      const defaultAgent = effectiveAgents.find((agent) => agent.name === next.defaultAgentName);
+      if (!defaultAgent || !projectAllowsAgent(next, defaultAgent)) {
+        if (parsed.data.defaultAgentName !== undefined) {
+          return reply.status(400).send({ error: "agent is unavailable for this project" });
+        }
+        // Tightening curation cannot leave an inaccessible active-session default.
+        next.defaultAgentName = undefined;
+      }
+    }
     projects.upsert(next);
     if (parsed.data.assignedMcpServers !== undefined) {
       const reconciled = await reconcileProjectMcp(id);

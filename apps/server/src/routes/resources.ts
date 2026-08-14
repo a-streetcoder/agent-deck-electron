@@ -30,6 +30,7 @@ import {
   type ResourceRecovery,
 } from "@agent-deck/resources";
 import { z } from "zod";
+import { curateProjectAgents } from "../agentCuration.ts";
 import type { ServerContext } from "../context.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
@@ -185,8 +186,15 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   };
 
   fastify.get("/resources/agents", async (request) => {
-    const { projectId } = request.query as { projectId?: string };
-    return { agents: scanAgents(rootsFor(projectId)) };
+    const { projectId, includeUnassigned } = request.query as {
+      projectId?: string;
+      includeUnassigned?: string;
+    };
+    const agents = scanAgents(rootsFor(projectId));
+    const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
+    return {
+      agents: includeUnassigned === "true" ? agents : curateProjectAgents(project, agents),
+    };
   });
 
   // Skills carry the app-level disabled flag from settings.
@@ -971,6 +979,15 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       }
       return sendResourceMutationFailure(reply, error);
     }
+    if (disabled) {
+      for (const project of projects.list()) {
+        if (project.defaultAgentName !== name) continue;
+        const stillEffective = scanAgents(rootsFor(project.id)).some(
+          (agent) => agent.name === name && !agent.shadowed && !agent.disabled,
+        );
+        if (!stillEffective) projects.upsert({ ...project, defaultAgentName: undefined });
+      }
+    }
     broadcast({ type: "resources_changed" });
     return { ok: true };
   });
@@ -1002,17 +1019,25 @@ export function registerResourceRoutes(ctx: ServerContext): void {
           return reply.status(400).send({ error: "projectId required for project scope" });
         }
         deleteAgentFile(roots, scope, name);
-        // A shadowed library copy is not the active source for a bare-name
-        // default, so deleting it must not clear that still-valid reference.
-        const stillActive =
-          scope === "library" &&
-          scanAgents(roots).some((agent) => agent.name === name && !agent.shadowed);
-        if (!stillActive) {
-          for (const project of projects.list()) {
-            if (project.defaultAgentName === name) {
-              projects.upsert({ ...project, defaultAgentName: undefined });
-            }
+        // Re-evaluate each project's effective bare-name source after deletion.
+        // Defaults may remain when another source (including a builtin) takes
+        // over; custom assignment entries remain only while a custom source does.
+        for (const project of projects.list()) {
+          if (project.defaultAgentName !== name && !project.assignedAgentNames?.includes(name)) {
+            continue;
           }
+          const effective = scanAgents(rootsFor(project.id)).find(
+            (agent) => agent.name === name && !agent.shadowed && !agent.disabled,
+          );
+          const next = { ...project };
+          if (project.defaultAgentName === name && !effective) next.defaultAgentName = undefined;
+          if (
+            project.assignedAgentNames?.includes(name) &&
+            (!effective || effective.scope === "builtin")
+          ) {
+            next.assignedAgentNames = project.assignedAgentNames.filter((item) => item !== name);
+          }
+          projects.upsert(next);
         }
       }
     } catch (error) {
@@ -1073,17 +1098,23 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         (agent) => agent.name === name && agent.scope !== "library" && !agent.shadowed,
       );
     for (const project of projects.list()) {
-      if (project.defaultAgentName !== name || libraryWasShadowed) continue;
-      if (scope === "project") {
-        // A project agent is visible only to its own project.
-        if (project.path === roots.projectPath) {
-          projects.upsert({ ...project, defaultAgentName: newName });
-        }
-      } else if (!hasProjectAgent(project.path)) {
-        // Global rename: skip projects whose own project-scoped agent of that
-        // name shadows the global (their default resolves to the project one).
-        projects.upsert({ ...project, defaultAgentName: newName });
+      if (libraryWasShadowed) continue;
+      const applies =
+        scope === "project" ? project.path === roots.projectPath : !hasProjectAgent(project.path);
+      if (!applies) continue;
+      const next = { ...project };
+      let changed = false;
+      if (project.defaultAgentName === name) {
+        next.defaultAgentName = newName;
+        changed = true;
       }
+      if (project.assignedAgentNames?.includes(name)) {
+        next.assignedAgentNames = [
+          ...new Set(project.assignedAgentNames.map((item) => (item === name ? newName : item))),
+        ];
+        changed = true;
+      }
+      if (changed) projects.upsert(next);
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };

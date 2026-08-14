@@ -24,11 +24,22 @@ async function api(method: string, url: string, body?: unknown): Promise<Respons
   });
 }
 
-async function defaultAgentOf(): Promise<string | undefined> {
+async function projectAssignments(): Promise<{
+  defaultAgentName?: string;
+  assignedAgentNames?: string[];
+}> {
   const { projects } = (await (await api("GET", "/projects")).json()) as {
-    projects: Array<{ id: string; defaultAgentName?: string }>;
+    projects: Array<{
+      id: string;
+      defaultAgentName?: string;
+      assignedAgentNames?: string[];
+    }>;
   };
-  return projects.find((p) => p.id === projectId)!.defaultAgentName;
+  return projects.find((project) => project.id === projectId)!;
+}
+
+async function defaultAgentOf(): Promise<string | undefined> {
+  return (await projectAssignments()).defaultAgentName;
 }
 
 async function globalAgentNames(): Promise<string[]> {
@@ -57,7 +68,10 @@ beforeAll(async () => {
     });
     if (!res.ok) throw new Error(await res.text());
   }
-  await api("PATCH", `/projects/${projectId}`, { defaultAgentName: "helper" });
+  await api("PATCH", `/projects/${projectId}`, {
+    assignedAgentNames: ["helper", "helper"],
+    defaultAgentName: "helper",
+  });
 });
 
 afterAll(async () => {
@@ -66,8 +80,11 @@ afterAll(async () => {
 });
 
 describe("POST /resources/agents/rename", () => {
-  it("renames a global agent and re-points the project default", async () => {
-    expect(await defaultAgentOf()).toBe("helper");
+  it("stably dedupes assignments, then re-points assignment and default on rename", async () => {
+    expect(await projectAssignments()).toMatchObject({
+      assignedAgentNames: ["helper"],
+      defaultAgentName: "helper",
+    });
 
     const res = await api("POST", "/resources/agents/rename", {
       scope: "global",
@@ -76,8 +93,11 @@ describe("POST /resources/agents/rename", () => {
     });
     expect(res.status).toBe(200);
 
-    expect(await globalAgentNames()).toEqual(["helper2", "other"]);
-    expect(await defaultAgentOf()).toBe("helper2");
+    expect(await globalAgentNames()).toEqual(["helper2"]);
+    expect(await projectAssignments()).toMatchObject({
+      assignedAgentNames: ["helper2"],
+      defaultAgentName: "helper2",
+    });
   });
 
   it("returns 409 on a global name clash, leaving the default untouched", async () => {
@@ -122,7 +142,10 @@ describe("POST /resources/agents/rename", () => {
       name: "lonely",
       edit: { body: "g" },
     });
-    await api("PATCH", `/projects/${projectId}`, { defaultAgentName: "lonely" });
+    await api("PATCH", `/projects/${projectId}`, {
+      assignedAgentNames: ["helper2", "lonely"],
+      defaultAgentName: "lonely",
+    });
 
     const res = await api("POST", "/resources/agents/rename", {
       scope: "global",
@@ -130,6 +153,9 @@ describe("POST /resources/agents/rename", () => {
       newName: "lonely2",
     });
     expect(res.status).toBe(200);
-    expect(await defaultAgentOf()).toBe("lonely2");
+    expect(await projectAssignments()).toMatchObject({
+      assignedAgentNames: ["helper2", "lonely2"],
+      defaultAgentName: "lonely2",
+    });
   });
 });

@@ -331,5 +331,5 @@ test("the project default agent is auto-selected on switch", async ({ page }) =>
   // And the Agents screen shows the star on the default (in the detail pane).
   await page.getByTestId("nav-agents").click();
   await page.locator('[data-agent-name="syrup-bot"]').click();
-  await expect(page.getByTestId("default-agent-syrup-bot")).toContainText("project default");
+  await expect(page.getByTestId("default-agent-syrup-bot")).toContainText("active-session default");
 });

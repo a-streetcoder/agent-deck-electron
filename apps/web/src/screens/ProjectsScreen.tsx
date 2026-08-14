@@ -1,6 +1,16 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useState } from "react";
-import { EyeOff, Github, Plus, RefreshCw, Search, Send, WandSparkles, X } from "lucide-react";
+import {
+  EyeOff,
+  Github,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  Users,
+  WandSparkles,
+  X,
+} from "lucide-react";
 import type { DiscoveredProject, ProjectMeta } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { chooseDirectory, isElectron } from "@/lib/native";
@@ -462,8 +472,17 @@ export function ProjectsScreen() {
                 </div>
                 <RecapButton
                   icon={Send}
-                  title="Default agent"
+                  title="Active-session default agent"
                   count={project.defaultAgentName ? 1 : 0}
+                />
+                <RecapButton
+                  icon={Users}
+                  title={
+                    project.assignedAgentNames === undefined
+                      ? "Assigned agents (legacy open catalog)"
+                      : "Assigned custom agents"
+                  }
+                  count={project.assignedAgentNames?.length ?? 0}
                 />
                 <RecapButton
                   icon={WandSparkles}

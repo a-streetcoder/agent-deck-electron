@@ -9,8 +9,12 @@ export interface AgentsCatalogState {
   projectId: string | null;
 }
 
-/** Agents plus the identity of the project-scoped fetch that has settled. */
-export function useAgentsCatalog(): AgentsCatalogState {
+/** Agents plus the identity of the project-scoped fetch that has settled.
+ * Management surfaces may request unassigned rows so they can edit curation;
+ * picker consumers receive the server-curated catalog by default. */
+export function useAgentsCatalog(
+  options: { includeUnassigned?: boolean } = {},
+): AgentsCatalogState {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [catalog, setCatalog] = useState<AgentsCatalogState>({
@@ -22,7 +26,10 @@ export function useAgentsCatalog(): AgentsCatalogState {
   useEffect(() => {
     // Never retain the prior project's choices while the scoped catalog reloads.
     setCatalog({ agents: [], loaded: false, projectId: currentProjectId });
-    const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+    const params = new URLSearchParams();
+    if (currentProjectId) params.set("projectId", currentProjectId);
+    if (options.includeUnassigned) params.set("includeUnassigned", "true");
+    const query = params.size > 0 ? `?${params.toString()}` : "";
     let cancelled = false;
     void fetch(`/resources/agents${query}`)
       .then((response) => response.json())
@@ -33,7 +40,7 @@ export function useAgentsCatalog(): AgentsCatalogState {
     return () => {
       cancelled = true;
     };
-  }, [currentProjectId, resourcesVersion]);
+  }, [currentProjectId, options.includeUnassigned, resourcesVersion]);
 
   return catalog;
 }

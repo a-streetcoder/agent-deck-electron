@@ -151,16 +151,36 @@ export function AgentDetail({
   canCreateReplacement,
   onCreateReplacement,
   onEdit,
+  availableCustomAgentNames = [],
 }: {
   agent: AgentInfo;
   canCreateReplacement: boolean;
   onCreateReplacement: () => void;
   onEdit: () => void;
+  /** Effective custom names used when a legacy-open project is curated for the first time. */
+  availableCustomAgentNames?: string[];
 }) {
   const projects = useAppStore((state) => state.projects);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const currentProject = projects.find((p) => p.id === currentProjectId);
   const isDefault = currentProject?.defaultAgentName === agent.name;
+  const customAgent = agent.scope !== "builtin";
+  const isAssigned =
+    currentProject !== undefined &&
+    (!customAgent ||
+      currentProject.assignedAgentNames === undefined ||
+      currentProject.assignedAgentNames.includes(agent.name));
+  const toggleAssignment = (): void => {
+    if (!currentProject || !customAgent || agent.shadowed) return;
+    const current =
+      currentProject.assignedAgentNames === undefined
+        ? availableCustomAgentNames
+        : currentProject.assignedAgentNames;
+    const assignedAgentNames = isAssigned
+      ? current.filter((name) => name !== agent.name)
+      : [...current, agent.name];
+    void updateProject(currentProject.id, { assignedAgentNames: [...new Set(assignedAgentNames)] });
+  };
   // Inline rename (native RenameResourceSheet); value === null when not renaming.
   const [renameValue, setRenameValue] = useState<string | null>(null);
 
@@ -230,23 +250,51 @@ export function AgentDetail({
         </div>
         <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-[900px]:w-full">
           {currentProject && !agent.shadowed ? (
-            <ControlButton
-              data-testid={`default-agent-${agent.name}`}
-              className={cn(
-                "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
-                isDefault
-                  ? "border-accent text-accent"
-                  : "border-border-strong text-text-muted hover:text-text-primary",
+            <>
+              {customAgent ? (
+                <ControlButton
+                  data-testid={`assigned-agent-${agent.name}`}
+                  aria-pressed={isAssigned}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
+                    isAssigned
+                      ? "border-accent text-accent"
+                      : "border-border-strong text-text-muted hover:text-text-primary",
+                  )}
+                  onClick={toggleAssignment}
+                >
+                  <Check size={12} aria-hidden="true" />
+                  {isAssigned ? "assigned to project" : "assign to project"}
+                </ControlButton>
+              ) : (
+                <span className="text-xs text-text-muted" data-testid="builtin-project-access">
+                  available to every project
+                </span>
               )}
-              onClick={() =>
-                void updateProject(currentProject.id, {
-                  defaultAgentName: isDefault ? null : agent.name,
-                })
-              }
-            >
-              <Star size={12} fill={isDefault ? "currentColor" : "none"} />
-              {isDefault ? "project default" : "make default"}
-            </ControlButton>
+              <ControlButton
+                data-testid={`default-agent-${agent.name}`}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
+                  isDefault
+                    ? "border-accent text-accent"
+                    : "border-border-strong text-text-muted hover:text-text-primary",
+                )}
+                disabled={!isAssigned || agent.disabled}
+                title={
+                  !isAssigned
+                    ? "Assign this agent to the project before making it the active-session default"
+                    : undefined
+                }
+                onClick={() =>
+                  void updateProject(currentProject.id, {
+                    defaultAgentName: isDefault ? null : agent.name,
+                  })
+                }
+              >
+                <Star size={12} fill={isDefault ? "currentColor" : "none"} />
+                {isDefault ? "active-session default" : "make session default"}
+              </ControlButton>
+            </>
           ) : null}
           <>
             {canCreateReplacement ? (
@@ -500,7 +548,13 @@ export function AgentDetail({
 }
 
 export function AgentsScreen() {
-  const { agents, loaded, projectId: loadedProjectId } = useAgentsCatalog();
+  const {
+    agents,
+    loaded,
+    projectId: loadedProjectId,
+  } = useAgentsCatalog({
+    includeUnassigned: true,
+  });
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const resourceRequest = useAppStore((state) => state.resourceCommandRequest);
   const selectedAgentFilePath = useAppStore((state) => state.selectedAgentFilePath);
@@ -689,6 +743,13 @@ export function AgentsScreen() {
           }
           onCreateReplacement={() => setEditing({ replacement: selected })}
           onEdit={() => setEditing(selected)}
+          availableCustomAgentNames={[
+            ...new Set(
+              agents
+                .filter((agent) => agent.scope !== "builtin" && !agent.shadowed && !agent.disabled)
+                .map((agent) => agent.name),
+            ),
+          ]}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">

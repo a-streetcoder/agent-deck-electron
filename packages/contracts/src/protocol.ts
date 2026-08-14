@@ -282,7 +282,13 @@ export const ProjectMeta = Schema.mutable(
     assignedPrompts: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
     /** MCP server ids explicitly enabled for ordinary sessions in this project. */
     assignedMcpServers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
-    /** Agent preselected when switching to this project. */
+    /**
+     * Custom agents exposed to this project. Absence preserves the legacy open
+     * catalog; once present (including []), builtins remain available and custom
+     * agents require inclusion by name.
+     */
+    assignedAgentNames: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+    /** Agent preselected when switching to this project (separate from curation). */
     defaultAgentName: Schema.optional(Schema.String),
     /** Disabled projects are hidden from the sidebar and session creation. */
     enabled: Schema.optional(Schema.Boolean),

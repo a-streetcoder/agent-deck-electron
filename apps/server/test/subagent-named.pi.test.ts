@@ -257,4 +257,38 @@ describe("managed_subagent{agent}: named delegation", () => {
     const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
     expect(toolText).toContain("unknown agent: ghost-bot");
   });
+
+  it("fails unassigned custom launch and delegation like an unknown name", async () => {
+    const patch = await fetch(`http://127.0.0.1:${server.port}/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assignedAgentNames: [] }),
+    });
+    expect(patch.status).toBe(200);
+
+    const catalog = (await (
+      await fetch(
+        `http://127.0.0.1:${server.port}/resources/agents?projectId=${encodeURIComponent(projectId)}`,
+      )
+    ).json()) as { agents: Array<{ name: string; scope: string }> };
+    expect(catalog.agents.some((agent) => agent.name === "reviewer-bot")).toBe(false);
+    expect(catalog.agents.some((agent) => agent.scope === "builtin")).toBe(true);
+
+    const launch = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId, agentName: "reviewer-bot" }),
+    });
+    expect(launch.status).toBe(404);
+    expect(await launch.text()).toContain("unknown agent: reviewer-bot");
+
+    const id = await startSession();
+    expect(server.sessions.get(id)!.meta.projectId).toBe(projectId);
+    await server.sessions.get(id)!.prompt("delegate a code review");
+    await server.receipts.waitFor("idle", id);
+    const followUp = mock.requests[mock.requests.length - 1]!;
+    expect(
+      JSON.stringify(followUp.messages.filter((message) => message.role === "tool")),
+    ).toContain("unknown agent: reviewer-bot");
+  });
 });

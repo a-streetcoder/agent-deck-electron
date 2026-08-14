@@ -1063,6 +1063,7 @@ export async function setAgentDisabled(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectId, scope, name, disabled }),
   });
+  await refreshProjects();
 }
 
 export async function deleteAgent(scope: string, name: string): Promise<void> {
@@ -1072,6 +1073,7 @@ export async function deleteAgent(scope: string, name: string): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectId, scope, name }),
   });
+  await refreshProjects();
 }
 
 /** Rename a global/project agent; returns true on success (the caller closes
@@ -1088,6 +1090,7 @@ export async function renameAgent(scope: string, name: string, newName: string):
       const { error } = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(error ?? "Couldn't rename the agent.");
     }
+    await refreshProjects();
     return true;
   } catch (error) {
     useAppStore.getState().setError(String(error));
@@ -1197,6 +1200,7 @@ export async function switchToProject(projectId: string | null): Promise<void> {
 export async function updateProject(
   projectId: string,
   patch: {
+    assignedAgentNames?: string[];
     assignedSkills?: string[];
     assignedPrompts?: string[];
     assignedMcpServers?: string[];
@@ -1212,6 +1216,9 @@ export async function updateProject(
       project.id === projectId
         ? {
             ...project,
+            ...(patch.assignedAgentNames !== undefined
+              ? { assignedAgentNames: patch.assignedAgentNames }
+              : {}),
             ...(patch.assignedSkills !== undefined ? { assignedSkills: patch.assignedSkills } : {}),
             ...(patch.assignedPrompts !== undefined
               ? { assignedPrompts: patch.assignedPrompts }
