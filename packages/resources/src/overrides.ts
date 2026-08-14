@@ -160,6 +160,7 @@ export function computeBuiltinOverride(
     | "thinking"
     | "systemPromptMode"
     | "tools"
+    | "toolsExplicit"
     | "mcpDirectTools"
     | "skills"
     | "mcpServers"
@@ -191,7 +192,10 @@ export function computeBuiltinOverride(
     ...(base.tools ?? []),
     ...(base.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
   ];
-  if (edit.tools !== undefined && !listsEqual(edit.tools, baseTools)) {
+  if (
+    edit.tools !== undefined &&
+    (!listsEqual(edit.tools, baseTools) || (edit.tools.length === 0 && !base.toolsExplicit))
+  ) {
     values.tools = edit.tools.length > 0 ? edit.tools : false;
   }
   if (edit.skills !== undefined && !listsEqual(edit.skills, base.skills)) {
@@ -266,13 +270,13 @@ export function applyAgentOverride(
         break;
       case "tools": {
         const combined = overrideList(value) ?? [];
+        next.toolsExplicit = true;
         next.tools = combined.filter((item) => !item.startsWith("mcp:"));
         next.mcpDirectTools = combined.flatMap((item) => {
           if (!item.startsWith("mcp:")) return [];
           const name = item.slice(4).trim();
           return name ? [name] : [];
         });
-        if (next.tools.length === 0) next.tools = undefined;
         if (next.mcpDirectTools.length === 0) next.mcpDirectTools = undefined;
         break;
       }

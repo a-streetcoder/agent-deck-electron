@@ -11,6 +11,7 @@ import {
   SUBAGENT_EXPECTED_OUTCOME_LABELS,
   type AgentInfo,
   type ResourceScope,
+  type SkillInfo,
   type SubagentExpectedOutcome,
 } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
@@ -80,7 +81,12 @@ export function AgentEditSheet({
       ", ",
     ),
   );
+  const [toolsExplicit, setToolsExplicit] = useState(seed?.toolsExplicit === true);
   const [skills, setSkills] = useState((seed?.skills ?? []).join(", "));
+  const [skillCatalog, setSkillCatalog] = useState<SkillInfo[]>([]);
+  const [skillCatalogRequested, setSkillCatalogRequested] = useState(false);
+  const [skillCatalogLoading, setSkillCatalogLoading] = useState(false);
+  const [skillCatalogError, setSkillCatalogError] = useState<string | null>(null);
   const [useDefaultExtensions, setUseDefaultExtensions] = useState(seed?.extensions === undefined);
   const [extensions, setExtensions] = useState<string[]>(seed?.extensions ?? []);
   const [extensionCatalog, setExtensionCatalog] = useState<ExtensionCatalogEntry[]>([]);
@@ -107,6 +113,7 @@ export function AgentEditSheet({
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const extensionCatalogSeq = useRef(0);
+  const skillCatalogSeq = useRef(0);
 
   // Snapshot of the managed fields at open time — used both for dirty
   // detection (backdrop/Escape only dismiss when clean) and for the
@@ -124,6 +131,7 @@ export function AgentEditSheet({
       ...(seed?.tools ?? []),
       ...(seed?.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
     ].join(", "),
+    toolsExplicit: seed?.toolsExplicit === true,
     skills: (seed?.skills ?? []).join(", "),
     useDefaultExtensions: seed?.extensions === undefined,
     extensions: seed?.extensions ?? [],
@@ -146,6 +154,7 @@ export function AgentEditSheet({
     thinking !== initial.thinking ||
     mode !== initial.mode ||
     tools !== initial.tools ||
+    toolsExplicit !== initial.toolsExplicit ||
     skills !== initial.skills ||
     useDefaultExtensions !== initial.useDefaultExtensions ||
     extensions.join("\0") !== initial.extensions.join("\0") ||
@@ -194,6 +203,36 @@ export function AgentEditSheet({
     dialog.addEventListener("keydown", onKeyDown);
     return () => dialog.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!skillCatalogRequested) return;
+    const seq = ++skillCatalogSeq.current;
+    const controller = new AbortController();
+    setSkillCatalog([]);
+    setSkillCatalogError(null);
+    setSkillCatalogLoading(true);
+    void (async () => {
+      try {
+        const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
+        const response = await fetch(`/resources/skills/visibility${query}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const data = (await response.json()) as { skills: SkillInfo[] };
+        if (seq === skillCatalogSeq.current) setSkillCatalog(data.skills);
+      } catch (error) {
+        if (!controller.signal.aborted && seq === skillCatalogSeq.current) {
+          setSkillCatalogError(String(error));
+        }
+      } finally {
+        if (seq === skillCatalogSeq.current) setSkillCatalogLoading(false);
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (skillCatalogSeq.current === seq) skillCatalogSeq.current += 1;
+    };
+  }, [currentProjectId, resourcesVersion, skillCatalogRequested]);
 
   useEffect(() => {
     if (isBuiltin || !extensionCatalogRequested) return;
@@ -252,6 +291,7 @@ export function AgentEditSheet({
     }
     return [...byPath.values()];
   })();
+  const assignedSkillNames = [...new Set(parseList(skills))];
   const extensionNameCounts = new Map<string, number>();
   for (const entry of extensionCatalog) {
     if (!entry.disabled) {
@@ -267,7 +307,7 @@ export function AgentEditSheet({
   };
 
   const save = async (): Promise<void> => {
-    if (extensionCatalogLoading) return;
+    if (extensionCatalogLoading || skillCatalogLoading) return;
     setSaving(true);
     setError(null);
     try {
@@ -292,6 +332,7 @@ export function AgentEditSheet({
                 ...(live.tools ?? []),
                 ...(live.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
               ].join(", ") !== initial.tools ||
+              (live.toolsExplicit === true) !== initial.toolsExplicit ||
               (live.skills ?? []).join(", ") !== initial.skills ||
               (live.extensions === undefined) !== initial.useDefaultExtensions ||
               (live.extensions ?? []).join("\0") !== initial.extensions.join("\0") ||
@@ -326,7 +367,7 @@ export function AgentEditSheet({
             fallbackModels: parseList(fallbackModels),
             thinking,
             systemPromptMode: mode,
-            tools: parseList(tools),
+            tools: toolsExplicit ? parseList(tools) : undefined,
             skills: parseList(skills),
             // Builtin override support intentionally remains absent. For custom
             // agents null removes the field (defaults); [] is explicit none.
@@ -442,6 +483,7 @@ export function AgentEditSheet({
               onClick={() => {
                 setTab(t.id);
                 if (t.id === "extensions") setExtensionCatalogRequested(true);
+                if (t.id === "skills") setSkillCatalogRequested(true);
               }}
             >
               {t.label}
@@ -692,14 +734,17 @@ export function AgentEditSheet({
           {tab === "tools" ? (
             <div className="space-y-2">
               <label className="block text-xs text-text-muted">
-                Tools (comma-separated; empty = Pi defaults)
+                Tools (comma-separated; empty = no tools when explicitly edited)
                 <ControlInput
                   data-testid="editor-tools"
                   className={inputClass}
                   aria-describedby="editor-tools-help"
                   placeholder="read, grep, mcp:search…"
                   value={tools}
-                  onChange={(e) => setTools(e.target.value)}
+                  onChange={(e) => {
+                    setTools(e.target.value);
+                    setToolsExplicit(true);
+                  }}
                 />
               </label>
               <p id="editor-tools-help" className="text-xs text-text-muted">
@@ -710,14 +755,67 @@ export function AgentEditSheet({
           ) : null}
 
           {tab === "skills" ? (
-            <label className="block text-xs text-text-muted">
-              Skills (comma-separated names from the catalog)
-              <ControlInput
-                className={inputClass}
-                value={skills}
-                onChange={(e) => setSkills(e.target.value)}
-              />
-            </label>
+            <div className="space-y-3" data-testid="editor-skills" aria-busy={skillCatalogLoading}>
+              <label className="block text-xs text-text-muted">
+                Skills (comma-separated bare names)
+                <ControlInput
+                  data-testid="editor-skills-input"
+                  className={inputClass}
+                  aria-describedby="editor-skills-help"
+                  value={skills}
+                  onChange={(e) => setSkills(e.target.value)}
+                />
+              </label>
+              <p id="editor-skills-help" className="text-xs text-text-muted">
+                Names resolve against global skills and the currently selected project. A project
+                skill from another project is not visible here; duplicate visible names are
+                ambiguous and block named launch.
+              </p>
+              {skillCatalogLoading ? (
+                <div className="text-xs text-text-muted" role="status">
+                  Loading skill catalog…
+                </div>
+              ) : skillCatalogError ? (
+                <div className="text-xs text-danger" role="alert">
+                  Skill catalog unavailable: {skillCatalogError}
+                </div>
+              ) : (
+                <div className="space-y-1.5" aria-label="Assigned skill diagnostics">
+                  {assignedSkillNames.map((skillName) => {
+                    const candidates = skillCatalog.filter((item) => item.name === skillName);
+                    const diagnostic =
+                      candidates.length === 0
+                        ? "Missing for the current project. The stale name is preserved until you remove or replace it."
+                        : candidates.length > 1
+                          ? `Ambiguous: ${candidates.length} visible catalog entries use this bare name. Rename a duplicate.`
+                          : candidates[0]!.disabled
+                            ? "Disabled in Skills. Named-agent launch refuses this assignment; ambient default/project assignments skip it. Enable it or remove it."
+                            : `${candidates[0]!.scope === "project" ? "Project" : "Global"} skill visible to the current project.`;
+                    return (
+                      <div
+                        key={skillName}
+                        className="rounded-lg border border-border-subtle bg-surface px-3 py-2"
+                      >
+                        <div className="font-mono text-xs text-text-primary">{skillName}</div>
+                        <div
+                          className={cn(
+                            "text-micro",
+                            candidates.length === 1 && !candidates[0]!.disabled
+                              ? "text-text-muted"
+                              : "text-warning",
+                          )}
+                        >
+                          {diagnostic}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {assignedSkillNames.length === 0 ? (
+                    <div className="text-xs text-text-muted">No explicit skills assigned.</div>
+                  ) : null}
+                </div>
+              )}
+            </div>
           ) : null}
 
           {tab === "extensions" && !isBuiltin ? (
@@ -854,7 +952,9 @@ export function AgentEditSheet({
                 "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
               color: "var(--color-accent-foreground)",
             }}
-            disabled={saving || extensionCatalogLoading || (!agent && !name.trim())}
+            disabled={
+              saving || extensionCatalogLoading || skillCatalogLoading || (!agent && !name.trim())
+            }
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}

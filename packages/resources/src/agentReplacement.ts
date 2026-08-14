@@ -21,8 +21,12 @@ export function materializeBuiltinAgentOverrideContent(
       if (typeof value === "string") body = value;
       continue;
     }
-    if (value === false) delete frontmatter[key];
-    else {
+    if (value === false) {
+      // `tools: false` is the builtin override representation of an explicit
+      // empty allowlist; a custom replacement must preserve it as `tools: []`.
+      if (key === "tools") frontmatter.tools = [];
+      else delete frontmatter[key];
+    } else {
       // Avoid invoking Object.prototype setters for hostile/unknown settings keys.
       Object.defineProperty(frontmatter, key, {
         value,

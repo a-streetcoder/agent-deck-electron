@@ -24,7 +24,7 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 process.env.AGENT_DECK_TEST = "1";
 
 const PERSONA_SENTINEL = "PERSONA_SENTINEL: You are Reviewer Bot, a meticulous code reviewer.";
-const SKILL_SENTINEL = "SKILL_SENTINEL_REVIEW_CHECKLIST";
+const SKILL_SENTINEL = "PROJECT_MODERN_SKILL_SENTINEL_REVIEW_CHECKLIST";
 const EXTENSION_SENTINEL = "NAMED_AGENT_EXTENSION_SENTINEL";
 
 let mock: MockProviderServer;
@@ -72,7 +72,11 @@ beforeAll(async () => {
         ? "ghost-bot"
         : lastUser.includes("use-fallback")
           ? "fallback-bot"
-          : "reviewer-bot";
+          : lastUser.includes("use-missing-skill")
+            ? "missing-skill-bot"
+            : lastUser.includes("use-no-read")
+              ? "no-read-bot"
+              : "reviewer-bot";
       return { name: "managed_subagent", arguments: { task: "Review the diff.", agent } };
     },
     reply: (_lastUser, body) =>
@@ -80,15 +84,20 @@ beforeAll(async () => {
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
 
-  // A global skill the agent will carry into its delegated child. Its
-  // description is injected into the base system prompt (pi buildSystemPrompt
-  // gets loadedSkills), so a distinctive sentinel proves it reached the child.
-  const skillDir = path.join(tmpHome, ".pi", "agent", "skills", "review-checklist");
-  mkdirSync(skillDir, { recursive: true });
-  writeFileSync(
-    path.join(skillDir, "SKILL.md"),
-    `---\nname: review-checklist\ndescription: ${SKILL_SENTINEL} — run each review step in order\n---\n\nWork through the checklist strictly.\n`,
-  );
+  // All ordered standard catalogs contain this name. The selected project's
+  // canonical .agents entry must be the sole launch winner (not ambiguity).
+  for (const [skillDir, sentinel] of [
+    [path.join(tmpHome, ".pi", "agent", "skills", "review-checklist"), "GLOBAL_MODERN"],
+    [path.join(tmpHome, ".agents", "skills", "review-checklist"), "GLOBAL_LEGACY"],
+    [path.join(project, ".pi", "skills", "review-checklist"), "PROJECT_PI"],
+    [path.join(project, ".agents", "skills", "review-checklist"), SKILL_SENTINEL],
+  ] as const) {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      `---\nname: review-checklist\ndescription: ${sentinel} — run each review step in order\n---\n\nWork through the checklist strictly.\n`,
+    );
+  }
 
   mkdirSync(path.dirname(namedExtensionPath), { recursive: true });
   writeFileSync(
@@ -112,6 +121,22 @@ beforeAll(async () => {
   writeFileSync(
     path.join(agentsDir, "fallback-bot.md"),
     "---\nname: fallback-bot\ntools: read, write\n---\n\nUse the safe default.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "no-tools-bot.md"),
+    "---\nname: no-tools-bot\ntools: []\n---\n\nNo tools.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "default-tools-bot.md"),
+    "---\nname: default-tools-bot\n---\n\nPi defaults.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "missing-skill-bot.md"),
+    "---\nname: missing-skill-bot\ntools: read\nskills: absent-private-skill\n---\n\nMissing skill test.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "no-read-bot.md"),
+    "---\nname: no-read-bot\ntools: grep\nskills: review-checklist\n---\n\nNo read test.\n",
   );
 
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: tmpHome });
@@ -280,6 +305,105 @@ describe("managed_subagent{agent}: named delegation", () => {
     const childRequest = mock.requests.slice(before).findLast(isChildRequest);
     expect(childRequest).toBeDefined();
     expect(systemText(childRequest!)).not.toContain(EXTENSION_SENTINEL);
+  });
+
+  it.each([
+    ["no-tools-bot", false],
+    ["default-tools-bot", true],
+  ])(
+    "preserves explicit-empty versus absent tools for named parent Pi (%s)",
+    async (agentName, hasDefaults) => {
+      const start = mock.requests.length;
+      const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          agentName,
+          provider: MOCK_PROVIDER_ID,
+          model: MOCK_MODEL_ID,
+          extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+          env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
+        }),
+      });
+      expect(response.status).toBe(201);
+      const { session } = (await response.json()) as { session: { id: string } };
+      await server.sessions.get(session.id)!.prompt("respond briefly");
+      await server.receipts.waitFor("idle", session.id);
+      const expectedPersona = agentName === "no-tools-bot" ? "No tools." : "Pi defaults.";
+      const request = mock.requests
+        .slice(start)
+        .find((item) => !isChildRequest(item) && systemText(item).includes(expectedPersona))!;
+      expect(request).toBeDefined();
+      const names = (Array.isArray(request.tools) ? request.tools : []).flatMap((tool) => {
+        const name =
+          tool && typeof tool === "object"
+            ? (tool as { function?: { name?: unknown } }).function?.name
+            : undefined;
+        return typeof name === "string" ? [name] : [];
+      });
+      expect(names.includes("read")).toBe(hasDefaults);
+    },
+  );
+
+  it.each([
+    ["missing-skill-bot", "absent-private-skill"],
+    ["no-read-bot", "does not include `read`"],
+  ])("fails named parent preflight before Pi spawn (%s)", async (agentName, expected) => {
+    const requestsBefore = mock.requests.length;
+    const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId, agentName }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(expected);
+    expect(mock.requests).toHaveLength(requestsBefore);
+  });
+
+  it("fails disabled named skills before parent or child Pi spawn", async () => {
+    const disabled = await fetch(`http://127.0.0.1:${server.port}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ setDisabledSkill: { name: "review-checklist", disabled: true } }),
+    });
+    expect(disabled.status).toBe(200);
+    try {
+      const parentRequestsBefore = mock.requests.length;
+      const parent = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ projectId, agentName: "reviewer-bot" }),
+      });
+      expect(parent.status).toBe(409);
+      expect(await parent.text()).toContain("review-checklist");
+      expect(mock.requests).toHaveLength(parentRequestsBefore);
+
+      const id = await startSession();
+      const childRequestsBefore = mock.requests.filter(isChildRequest).length;
+      await expect(
+        server.sessions.get(id)!.runChildAgent("Review the diff.", "reviewer-bot"),
+      ).rejects.toThrow(/review-checklist.*disabled/i);
+      expect(mock.requests.filter(isChildRequest)).toHaveLength(childRequestsBefore);
+    } finally {
+      await fetch(`http://127.0.0.1:${server.port}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setDisabledSkill: { name: "review-checklist", disabled: false } }),
+      });
+    }
+  });
+
+  it.each([
+    ["missing-skill-bot", /absent-private-skill.*missing/i],
+    ["no-read-bot", /does not include `read`/i],
+  ])("fails named skill preflight before child Pi spawn (%s)", async (agentName, expected) => {
+    const id = await startSession();
+    const childRequestsBefore = mock.requests.filter(isChildRequest).length;
+    await expect(
+      server.sessions.get(id)!.runChildAgent("Review the diff.", agentName),
+    ).rejects.toThrow(expected);
+    expect(mock.requests.filter(isChildRequest)).toHaveLength(childRequestsBefore);
   });
 
   it("surfaces a clean error when the named agent does not exist", async () => {

@@ -58,7 +58,7 @@ test.beforeAll(async () => {
   // detail's Prompt Mode + Extensions indicators are testable.
   writeFileSync(
     path.join(agentsDir, "append-bot.md"),
-    `---\nname: append-bot\ndescription: Adds to pi's base prompt\nsystemPromptMode: append\nextensions:\n  - note-taker\n  - web-search\n---\n\nExtra instructions appended on top of pi's base prompt.\n`,
+    `---\nname: append-bot\ndescription: Adds to pi's base prompt\nsystemPromptMode: append\nskills: project-private-missing\nextensions:\n  - note-taker\n  - web-search\n---\n\nExtra instructions appended on top of pi's base prompt.\n`,
   );
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
@@ -70,6 +70,33 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await harness.close();
+});
+
+test("agent warnings and skill visibility are actionable for the current project", async ({
+  page,
+}) => {
+  await page.goto(harness.baseUrl);
+  await selectProject(page, path.basename(project));
+  await page.getByTestId("nav-agents").click();
+  const row = page.locator('[data-agent-name="append-bot"]');
+  await expect(row.getByTestId("agent-warning-indicator")).toHaveAttribute(
+    "aria-label",
+    "2 configuration warnings",
+  );
+  await row.click();
+  const panel = page.getByTestId("agent-warning-panel");
+  await expect(panel.getByRole("heading", { name: "Configuration warnings" })).toBeVisible();
+  await expect(panel).toContainText(path.basename(project));
+  await expect(panel).toContainText("project-private-missing");
+  await expect(panel).toContainText("no explicit ordinary or direct tools");
+
+  await page.getByTestId("agent-edit").click();
+  await page.getByTestId("editor-tab-skills").click();
+  await expect(page.getByTestId("editor-skills-input")).toHaveValue("project-private-missing");
+  await expect(page.getByText(/stale name is preserved/i)).toBeVisible();
+  await expect(page.getByText(/project skill from another project is not visible/i)).toBeVisible();
+  await page.getByTestId("agent-editor").getByRole("button", { name: "Close" }).click();
+  await page.locator('[data-agent-name="pancake-bot"]').click();
 });
 
 test("picking an agent injects its body as the system prompt", async ({ page }) => {
@@ -267,11 +294,11 @@ test("the agent detail surfaces the system-prompt mode and extensions (native pa
   await page.getByTestId("nav-agents").click();
 
   // pancake-bot declares no mode → the default "replace"; like native, the badge
-  // is hidden for the implicit default. It also declares no extensions.
+  // is hidden for the implicit default. Its absent extension field uses the default catalog.
   await page.locator('[data-agent-name="pancake-bot"]').click();
   await expect(page.getByTestId("agent-detail")).toBeVisible();
   await expect(page.getByTestId("agent-prompt-mode")).toHaveCount(0);
-  await expect(page.getByTestId("agent-extensions")).toHaveCount(0);
+  await expect(page.getByTestId("agent-extensions")).toContainText("Default catalog policy");
 
   // append-bot declares systemPromptMode: append and an extension allowlist.
   await page.locator('[data-agent-name="append-bot"]').click();

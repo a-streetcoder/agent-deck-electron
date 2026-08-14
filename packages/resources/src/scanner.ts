@@ -90,6 +90,7 @@ export function parseAgentFile(
 ): Omit<AgentInfo, "shadowed" | "replacesBuiltin"> {
   const { frontmatter, body } = parseFrontmatter(content);
   const mode = asString(frontmatter.systemPromptMode);
+  const toolsExplicit = Object.prototype.hasOwnProperty.call(frontmatter, "tools");
   const parsedTools = splitAgentTools(frontmatter.tools);
   return {
     name: asString(frontmatter.name) ?? path.basename(filePath, ".md"),
@@ -99,7 +100,8 @@ export function parseAgentFile(
     fallbackModels: asList(frontmatter.fallbackModels),
     thinking: asString(frontmatter.thinking),
     systemPromptMode: mode === "append" ? "append" : "replace",
-    tools: parsedTools.tools,
+    tools: toolsExplicit ? (parsedTools.tools ?? []) : undefined,
+    toolsExplicit,
     mcpDirectTools: parsedTools.mcpDirectTools,
     skills: asList(frontmatter.skills),
     extensions: normalizeAgentExtensions(asList(frontmatter.extensions)),
@@ -254,33 +256,52 @@ function isPrivateResourceSkill(catalog: string, baseDir: string): boolean {
   return relative !== "" && parts.length >= 1 && isRecoveryWrapperName(parts[0]!);
 }
 
-/** Standard catalogs followed by selected in-place collection roots. The first
- * name wins, so a standard catalog deterministically shadows a collection. */
-export function scanSkills(
+/** Effective Pi-shaped candidates after ordinary catalog precedence. For each
+ * bare name, only candidates from the highest-priority standard catalog are
+ * retained. Collection roots participate only when no standard catalog wins;
+ * multiple collection roots with the same name remain a true same-priority tie.
+ * Storage remains owned by EngineSkillStore. */
+export function scanSkillCandidates(
   roots: ResourceRoots,
   collectionRoots: readonly string[] = [],
 ): SkillInfo[] {
-  const skills: SkillInfo[] = [];
-  const names = new Set<string>();
-  for (const { dir, scope } of skillCatalogDirs(roots)) {
+  const standardByName = new Map<string, { priority: number; skills: SkillInfo[] }>();
+  for (const [priority, { dir, scope }] of skillCatalogDirs(roots).entries()) {
     const result = loadSkillsFromDir({ dir, source: scope });
     for (const skill of result.skills) {
-      if (isPrivateResourceSkill(dir, skill.baseDir) || names.has(skill.name)) continue;
-      names.add(skill.name);
-      skills.push(toSkillInfo(skill, scope));
+      if (isPrivateResourceSkill(dir, skill.baseDir)) continue;
+      const candidate = toSkillInfo(skill, scope);
+      const winner = standardByName.get(candidate.name);
+      if (!winner) standardByName.set(candidate.name, { priority, skills: [candidate] });
+      else if (winner.priority === priority) winner.skills.push(candidate);
     }
   }
+
+  const skills = [...standardByName.values()].flatMap((winner) => winner.skills);
   for (const root of collectionRoots) {
     const resolvedRoot = path.resolve(root);
     const result = loadSkillsFromDir({ dir: path.dirname(resolvedRoot), source: "library" });
     const skill = result.skills.find(
       (candidate) => path.resolve(candidate.baseDir) === resolvedRoot,
     );
-    if (!skill || names.has(skill.name)) continue;
-    names.add(skill.name);
-    skills.push(toSkillInfo(skill, "library"));
+    if (skill && !standardByName.has(skill.name)) skills.push(toSkillInfo(skill, "library"));
   }
   return skills;
+}
+
+/** Standard catalogs followed by selected in-place collection roots. The first
+ * name wins for ambient/catalog display compatibility. Explicit agent launches
+ * use scanSkillCandidates and fail closed on ambiguity. */
+export function scanSkills(
+  roots: ResourceRoots,
+  collectionRoots: readonly string[] = [],
+): SkillInfo[] {
+  const names = new Set<string>();
+  return scanSkillCandidates(roots, collectionRoots).filter((skill) => {
+    if (names.has(skill.name)) return false;
+    names.add(skill.name);
+    return true;
+  });
 }
 
 /** A pi extension file discovered in a catalog dir (native PiExtensionCandidate). */

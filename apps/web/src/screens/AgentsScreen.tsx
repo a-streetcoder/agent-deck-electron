@@ -1,6 +1,7 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Check,
   ImagePlus,
   Pencil,
@@ -86,6 +87,16 @@ function AgentRow({
             {agent.name}
           </span>
           <ScopeChip scope={agent.scope} />
+          {(agent.warnings?.length ?? 0) > 0 ? (
+            <span
+              className="inline-flex items-center gap-1 text-micro text-warning"
+              data-testid="agent-warning-indicator"
+              aria-label={`${agent.warnings!.length} configuration warning${agent.warnings!.length === 1 ? "" : "s"}`}
+            >
+              <AlertTriangle size={12} aria-hidden="true" />
+              {agent.warnings!.length}
+            </span>
+          ) : null}
           {agent.disabled ? (
             <span
               className="rounded-capsule border px-1.5 text-micro"
@@ -481,6 +492,32 @@ export function AgentDetail({
       ) : null}
 
       <div className="mt-5 space-y-4">
+        {(agent.warnings?.length ?? 0) > 0 ? (
+          <section
+            className="rounded-xl border border-warning bg-surface-elevated px-4 py-3"
+            data-testid="agent-warning-panel"
+            aria-labelledby="agent-warning-heading"
+          >
+            <div className="flex items-center gap-2 text-sm font-semibold text-warning">
+              <AlertTriangle size={15} aria-hidden="true" />
+              <h3 id="agent-warning-heading">Configuration warnings</h3>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              Evaluated against{" "}
+              {currentProject
+                ? `the current project “${currentProject.name}”`
+                : "the global catalog (no project selected)"}{" "}
+              and current runtime settings.
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-text-secondary">
+              {agent.warnings!.map((warning) => (
+                <li key={warning.id} data-warning-id={warning.id}>
+                  {warning.message}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         {canCreateReplacement ? (
           <div
             className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"

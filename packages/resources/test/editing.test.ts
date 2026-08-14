@@ -464,6 +464,19 @@ describe("agent/skill file writer", () => {
     expect(updated).toContain("customField: keep-me");
   });
 
+  it("preserves custom explicit-empty tools as Pi --no-tools policy", () => {
+    const home = makeHome();
+    const filePath = writeAgentFile({ home }, "global", "no-tools", {
+      tools: [],
+      body: "No tools.",
+    });
+    expect(readFileSync(filePath, "utf8")).toMatch(/tools:\s*\[\]/);
+    expect(scanAgents({ home }).find((agent) => agent.name === "no-tools")).toMatchObject({
+      tools: [],
+      toolsExplicit: true,
+    });
+  });
+
   it("keeps builtin direct tools in the combined tools override and tools:false clears both", () => {
     const home = makeHome();
     const base = scanAgents({ home }).find(
@@ -481,7 +494,8 @@ describe("agent/skill file writer", () => {
 
     writeBuiltinAgentOverride({ home }, "coder", { tools: false });
     const cleared = scanAgents({ home }).find((agent) => agent.name === "coder")!;
-    expect(cleared.tools).toBeUndefined();
+    expect(cleared.tools).toEqual([]);
+    expect(cleared.toolsExplicit).toBe(true);
     expect(cleared.mcpDirectTools).toBeUndefined();
   });
 

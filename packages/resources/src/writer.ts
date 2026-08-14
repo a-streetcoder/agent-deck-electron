@@ -413,8 +413,7 @@ export function writeAgentFile(
     else delete frontmatter.fallbackModels;
   }
   if (edit.tools !== undefined) {
-    if (edit.tools.length > 0) frontmatter.tools = edit.tools.join(", ");
-    else delete frontmatter.tools;
+    frontmatter.tools = edit.tools.length > 0 ? edit.tools.join(", ") : [];
   }
   if (edit.skills !== undefined) {
     if (edit.skills.length > 0) frontmatter.skills = edit.skills.join(", ");

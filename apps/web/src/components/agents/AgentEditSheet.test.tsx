@@ -13,6 +13,7 @@ const builtin: AgentInfo = {
   thinking: "high",
   systemPromptMode: "replace",
   tools: ["read", "grep"],
+  toolsExplicit: true,
   mcpDirectTools: ["search", "stale-tool"],
   skills: ["reviewing"],
   mcpServers: ["github"],
@@ -528,6 +529,60 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     });
     expect(screen.queryByText("old.ts")).toBeNull();
     expect(screen.getByText("new.ts")).toBeTruthy();
+  });
+
+  it("loads project-aware skill diagnostics, preserves stale names, and ignores stale projects", async () => {
+    const custom: AgentInfo = {
+      ...builtin,
+      scope: "global",
+      filePath: "/home/.pi/agent/agents/reviewer.md",
+      skills: ["missing", "disabled", "duplicate"],
+    };
+    useAppStore.setState({ currentProjectId: "project-a" });
+    let resolveA!: (response: Response) => void;
+    const responseA = new Promise<Response>((resolve) => {
+      resolveA = resolve;
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/resources/skills/visibility?projectId=project-a") return responseA;
+      if (url === "/resources/skills/visibility?projectId=project-b") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "disabled", scope: "global", disabled: true },
+                { name: "duplicate", scope: "global" },
+                { name: "duplicate", scope: "project" },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ agents: [custom] }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentEditSheet agent={custom} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("editor-tab-skills"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    act(() => useAppStore.setState({ currentProjectId: "project-b" }));
+
+    expect(await screen.findByText(/stale name is preserved/i)).toBeTruthy();
+    expect(screen.getByText(/Disabled in Skills/i)).toBeTruthy();
+    expect(screen.getByText(/Ambiguous: 2 visible catalog entries/i)).toBeTruthy();
+    expect((screen.getByTestId("editor-skills-input") as HTMLInputElement).value).toBe(
+      "missing, disabled, duplicate",
+    );
+
+    await act(async () => {
+      resolveA(
+        new Response(JSON.stringify({ skills: [{ name: "missing", scope: "project" }] }), {
+          status: 200,
+        }),
+      );
+      await responseA;
+    });
+    expect(screen.getByText(/stale name is preserved/i)).toBeTruthy();
   });
 
   it("keeps the seeded name editable like native custom-agent drafts", async () => {

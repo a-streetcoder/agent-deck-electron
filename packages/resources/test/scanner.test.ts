@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { agentMatchesFilter } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
-import { scanAgents, scanPrompts, scanSkills } from "../src/scanner.ts";
+import { scanAgents, scanPrompts, scanSkillCandidates, scanSkills } from "../src/scanner.ts";
 
 function makeHome(): string {
   return mkdtempSync(path.join(tmpdir(), "res-home-"));
@@ -104,6 +104,21 @@ describe("scanAgents", () => {
     });
   });
 
+  it("preserves absent versus explicit-empty Pi tool policy", () => {
+    const home = makeHome();
+    writeAgent(path.join(home, ".agents"), "defaults");
+    writeAgent(path.join(home, ".agents"), "none", "tools: []\n");
+    const agents = scanAgents({ home });
+    expect(agents.find((item) => item.name === "defaults")).toMatchObject({
+      tools: undefined,
+      toolsExplicit: false,
+    });
+    expect(agents.find((item) => item.name === "none")).toMatchObject({
+      tools: [],
+      toolsExplicit: true,
+    });
+  });
+
   it("semantically separates ordered mcp: entries from ordinary Pi tools", () => {
     const home = makeHome();
     writeAgent(
@@ -132,6 +147,50 @@ describe("scanAgents", () => {
 });
 
 describe("scanSkills", () => {
+  it("resolves ordered project-over-global and modern-over-legacy precedence", () => {
+    const home = makeHome();
+    const project = makeProject();
+    const writeNamedSkill = (dir: string, body: string): string => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---\nname: shared\ndescription: ${body}\n---\n\n${body}\n`,
+      );
+      return dir;
+    };
+    const projectModern = writeNamedSkill(
+      path.join(project, ".agents", "skills", "shared"),
+      "project modern",
+    );
+    writeNamedSkill(path.join(project, ".pi", "skills", "shared"), "project pi");
+    writeNamedSkill(path.join(home, ".pi", "agent", "skills", "shared"), "global modern");
+    writeNamedSkill(path.join(home, ".agents", "skills", "shared"), "global legacy");
+
+    expect(
+      scanSkillCandidates({ home, projectPath: project }).filter((s) => s.name === "shared"),
+    ).toEqual([expect.objectContaining({ baseDir: projectModern, body: "project modern" })]);
+
+    const globalModern = path.join(home, ".pi", "agent", "skills", "shared");
+    expect(scanSkillCandidates({ home }).filter((s) => s.name === "shared")).toEqual([
+      expect.objectContaining({ baseDir: globalModern, body: "global modern" }),
+    ]);
+  });
+
+  it("retains true same-priority collection ties only when no standard winner exists", () => {
+    const home = makeHome();
+    const collections = [makeProject(), makeProject()].map((root, index) => {
+      const dir = path.join(root, `shared-${index}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---\nname: shared\ndescription: collection ${index}\n---\n\nBody.\n`,
+      );
+      return dir;
+    });
+    expect(
+      scanSkillCandidates({ home }, collections).filter((s) => s.name === "shared"),
+    ).toHaveLength(2);
+  });
   it("discovers modern and legacy global skills plus a selected project's skills", () => {
     const home = makeHome();
     const project = makeProject();

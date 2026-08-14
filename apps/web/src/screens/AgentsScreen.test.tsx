@@ -40,6 +40,41 @@ afterEach(() => {
 });
 
 describe("AgentDetail delegation metadata", () => {
+  it("presents current-project warnings in a labelled accessible panel", () => {
+    useAppStore.setState({
+      projects: [
+        {
+          id: "project",
+          path: "/tmp/project",
+          name: "Current Project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      currentProjectId: "project",
+    });
+    render(
+      <AgentDetail
+        agent={{
+          ...agent,
+          warnings: [
+            {
+              id: "skill-missing",
+              category: "skill",
+              message:
+                "References missing skill “private-review”. Add it or remove the assignment.",
+            },
+          ],
+        }}
+        canCreateReplacement={false}
+        onCreateReplacement={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    const panel = screen.getByTestId("agent-warning-panel");
+    expect(panel.getAttribute("aria-labelledby")).toBe("agent-warning-heading");
+    expect(panel.textContent).toContain("Current Project");
+    expect(panel.textContent).toContain("private-review");
+  });
   it("displays the native outcome and progress labels", () => {
     useAppStore.setState({ projects: [], currentProjectId: null });
     render(

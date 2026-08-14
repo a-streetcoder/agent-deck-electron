@@ -1,6 +1,6 @@
 import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
-import type { SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
+import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
 import type { MemorySearchHit, MemoryStore } from "@agent-deck/memory";
 import type {
   ProviderLoginManager,
@@ -146,12 +146,18 @@ export interface ServerContext {
   resolveNamedAgent(
     name: string,
     projectId?: string,
-  ): { status: "ok"; agent: NamedAgentLaunch } | { status: "not_found" } | { status: "disabled" };
+  ):
+    | { status: "ok"; agent: NamedAgentLaunch }
+    | { status: "not_found" }
+    | { status: "disabled" }
+    | { status: "invalid"; error: string };
   extensionBridgeConflictAt(filePath: string): string | null;
   enabledExtensionPaths(projectId?: string, allowlist?: readonly string[]): string[];
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
   scanSkillsFor(projectId?: string): SkillInfo[];
+  scanSkillCandidatesFor(projectId?: string): SkillInfo[];
+  createAgentWarningContext(projectId?: string): AgentWarningContext;
   /** The skill catalog/authoring/version seam (ADR-0002 P1b). Consumers should
    *  prefer this over the raw scan/writer functions so the shared engine can later
    *  replace it behind the same interface. */

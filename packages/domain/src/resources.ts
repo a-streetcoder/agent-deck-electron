@@ -161,6 +161,114 @@ const SCOPE_PRIORITY: Record<ResourceScope, number> = {
   library: 0,
 };
 
+export type AgentWarningCategory = "skill" | "environment" | "tools";
+export type AgentWarningId =
+  | "skill-missing"
+  | "skill-disabled"
+  | "skill-ambiguous"
+  | "exa-key-missing"
+  | "web-fetch-with-exa"
+  | "extensions-without-tools";
+
+/** Generated, current-runtime diagnostics. These are returned with the catalog
+ * and are never authored back into agent markdown or settings. */
+export interface AgentWarning {
+  id: AgentWarningId;
+  category: AgentWarningCategory;
+  message: string;
+}
+
+export const AGENT_WARNING_MAX_ITEMS = 16;
+export const AGENT_WARNING_MESSAGE_MAX_LENGTH = 500;
+
+export interface AgentWarningContext {
+  /** Number of current-project catalog candidates for each bare skill name. */
+  skillCandidateCounts: ReadonlyMap<string, number>;
+  disabledSkills: ReadonlySet<string>;
+  exaConfigured: boolean;
+  projectSelected: boolean;
+}
+
+const EXA_WEB_TOOLS = new Set(["web_search", "fetch_content", "get_search_content"]);
+
+function boundedSkillNames(names: readonly string[]): string {
+  const shown = names.slice(0, 5).map((name) => `“${name.slice(0, 100)}”`);
+  return `${shown.join(", ")}${names.length > shown.length ? `, and ${names.length - shown.length} more` : ""}`;
+}
+
+/** Native-compatible warning set plus Electron's separate disabled-skill state.
+ * Messages and count remain bounded even for malformed hand-authored lists. */
+export function agentConfigurationWarnings(
+  agent: Pick<AgentInfo, "skills" | "tools" | "mcpDirectTools" | "extensions">,
+  context: AgentWarningContext,
+): AgentWarning[] {
+  const warnings: AgentWarning[] = [];
+  const names = [...new Set((agent.skills ?? []).slice(0, 64))];
+  const missing = names.filter((name) => (context.skillCandidateCounts.get(name) ?? 0) === 0);
+  const ambiguous = names.filter((name) => (context.skillCandidateCounts.get(name) ?? 0) > 1);
+  const disabled = names.filter(
+    (name) =>
+      (context.skillCandidateCounts.get(name) ?? 0) === 1 && context.disabledSkills.has(name),
+  );
+  const visibility = context.projectSelected
+    ? "Bare skill names resolve only against global skills and this selected project's skills; project skills from other projects are not visible."
+    : "Bare skill names resolve against the global skill catalog until a project is selected.";
+  if (missing.length) {
+    warnings.push({
+      id: "skill-missing",
+      category: "skill",
+      message: `References missing skill${missing.length === 1 ? "" : "s"} ${boundedSkillNames(missing)}. ${visibility}`,
+    });
+  }
+  if (disabled.length) {
+    warnings.push({
+      id: "skill-disabled",
+      category: "skill",
+      message: `References disabled skill${disabled.length === 1 ? "" : "s"} ${boundedSkillNames(disabled)}. Named-agent launch refuses disabled assignments; ambient default/project assignments skip them. Enable ${disabled.length === 1 ? "it" : "them"} in Skills or remove the assignment.`,
+    });
+  }
+  if (ambiguous.length) {
+    warnings.push({
+      id: "skill-ambiguous",
+      category: "skill",
+      message: `Skill name${ambiguous.length === 1 ? " is" : "s are"} ambiguous: ${boundedSkillNames(ambiguous)}. Rename or remove duplicate current-project catalog entries before launch. ${visibility}`,
+    });
+  }
+  const tools = agent.tools ?? [];
+  if (tools.some((tool) => EXA_WEB_TOOLS.has(tool)) && !context.exaConfigured) {
+    warnings.push({
+      id: "exa-key-missing",
+      category: "environment",
+      message:
+        "Uses bundled Exa web tools but EXA_API_KEY was not found. Add the key in Environment or remove those tools.",
+    });
+  }
+  if (tools.some((tool) => tool === "web_fetch") && context.exaConfigured) {
+    warnings.push({
+      id: "web-fetch-with-exa",
+      category: "environment",
+      message:
+        "Uses web_fetch while Exa is configured. Agent Deck exposes Exa tools instead; replace web_fetch with web_search, fetch_content, or get_search_content.",
+    });
+  }
+  if (
+    (agent.extensions?.length ?? 0) > 0 &&
+    tools.length === 0 &&
+    (agent.mcpDirectTools?.length ?? 0) === 0
+  ) {
+    warnings.push({
+      id: "extensions-without-tools",
+      category: "tools",
+      message:
+        "Declares extensions but no explicit ordinary or direct tools, so capabilities may not match expectations. Add the intended tools or remove the extensions.",
+    });
+  }
+  return warnings.slice(0, AGENT_WARNING_MAX_ITEMS).map((warning) => ({
+    ...warning,
+    message: warning.message.slice(0, AGENT_WARNING_MESSAGE_MAX_LENGTH),
+  }));
+}
+
 export interface AgentInfo {
   name: string;
   description?: string;
@@ -173,6 +281,9 @@ export interface AgentInfo {
   systemPromptMode: "replace" | "append";
   /** Ordinary Pi tool names passed through `--tools`. */
   tools?: string[];
+  /** The authored frontmatter contained a tools field, including `tools: []`.
+   * Needed to distinguish Pi defaults from an explicit empty allowlist. */
+  toolsExplicit?: boolean;
   /** Ordered external pi-mcp-adapter tool names declared as `mcp:<tool>` in
    * `tools:` frontmatter. These names do not grant or connect MCP servers. */
   mcpDirectTools?: string[];
@@ -212,6 +323,8 @@ export interface AgentInfo {
   overridden?: boolean;
   /** Disabled agents are excluded from the picker and won't launch. */
   disabled?: boolean;
+  /** Current-project/runtime diagnostics generated by the server catalog. */
+  warnings?: AgentWarning[];
 }
 
 export interface SkillInfo {

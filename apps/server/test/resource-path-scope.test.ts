@@ -16,6 +16,7 @@ const projectDir = mkdtempSync(path.join(tmpdir(), "resource-scope-project-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "resource-scope-data-"));
 let server: AgentDeckServer;
 let projectId: string;
+const originalExaKey = process.env.EXA_API_KEY;
 
 async function put(url: string, body: unknown): Promise<Response> {
   return fetch(`http://127.0.0.1:${server.port}${url}`, {
@@ -26,6 +27,7 @@ async function put(url: string, body: unknown): Promise<Response> {
 }
 
 beforeAll(async () => {
+  delete process.env.EXA_API_KEY;
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: resourceHome });
   server = await startServer({ dataDir });
   const response = await fetch(`http://127.0.0.1:${server.port}/projects`, {
@@ -38,6 +40,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.AGENT_DECK_PI_ENV;
+  if (originalExaKey === undefined) delete process.env.EXA_API_KEY;
+  else process.env.EXA_API_KEY = originalExaKey;
   await server.close();
 });
 
@@ -124,6 +128,49 @@ describe("resource write scope compatibility", () => {
   // Project SKILL writes are supported now that the shared engine owns storage (P3):
   // the engine materializes them in the canonical `<project>/.agents/skills` catalog, and
   // agent-deck's scanner reads that catalog so the skill is immediately visible in-app.
+  it("returns current-project warnings with ordered skill precedence", async () => {
+    const agentsDir = path.join(resourceHome, ".pi", "agent", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      path.join(agentsDir, "diagnostic-agent.md"),
+      "---\nname: diagnostic-agent\ntools: web_search\nskills: missing-skill, duplicate-skill\n---\n\nDiagnose.\n",
+    );
+    for (const dir of [
+      path.join(resourceHome, ".pi", "agent", "skills", "duplicate-skill"),
+      path.join(projectDir, ".pi", "skills", "duplicate-skill"),
+    ]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "SKILL.md"),
+        "---\nname: duplicate-skill\ndescription: Duplicate\n---\n\nBody.\n",
+      );
+    }
+    const agents = (await (
+      await fetch(
+        `http://127.0.0.1:${server.port}/resources/agents?projectId=${projectId}&includeUnassigned=true`,
+      )
+    ).json()) as { agents: Array<{ name: string; warnings: Array<{ id: string }> }> };
+    const warnings = agents.agents.find((agent) => agent.name === "diagnostic-agent")?.warnings;
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill-missing" }),
+        expect.objectContaining({ id: "exa-key-missing" }),
+      ]),
+    );
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "skill-ambiguous" })]),
+    );
+
+    const visibility = (await (
+      await fetch(
+        `http://127.0.0.1:${server.port}/resources/skills/visibility?projectId=${projectId}`,
+      )
+    ).json()) as { skills: Array<{ name: string; scope: string }> };
+    expect(visibility.skills.filter((skill) => skill.name === "duplicate-skill")).toEqual([
+      expect.objectContaining({ scope: "project" }),
+    ]);
+  });
+
   it("creates a project skill through the engine AND reads it back (round-trip)", async () => {
     const response = await put("/resources/skills", {
       projectId,

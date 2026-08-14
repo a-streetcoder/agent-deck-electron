@@ -149,6 +149,7 @@ export type AgentResolver = (
   name: string,
   projectId?: string,
 ) =>
+  | { error: string }
   | {
       body: string;
       model?: string;
@@ -537,7 +538,11 @@ export function resolveChildTools(
   configured: readonly string[] | undefined,
   toolPolicy: ChildToolPolicy | undefined,
   includeSupervisorBridge: boolean,
-): string[] {
+): string[] | undefined {
+  // No authored allowlist means Pi defaults. Extension tools, including the
+  // supervisor bridge, remain available under those defaults without turning
+  // them into an accidental restrictive `--tools` allowlist.
+  if (configured === undefined && toolPolicy === undefined) return undefined;
   const allowed = configured?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
   const tools =
     toolPolicy === "none"
@@ -1627,10 +1632,14 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     runOptions,
   } = args;
   return Effect.gen(function* () {
-    const resolved = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
-    if (agentName && !resolved) {
+    const resolution = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
+    if (agentName && !resolution) {
       return yield* Effect.fail(new Error(`unknown agent: ${agentName}`));
     }
+    if (resolution && "error" in resolution) {
+      return yield* Effect.fail(new Error(resolution.error));
+    }
+    const resolved = resolution;
     const persona = resolved ? `\n\n# Agent: ${agentName}\n${resolved.body}` : "";
     const isContinuation = runOptions?.resumeSessionPath !== undefined;
     const boundaryPrompt = isContinuation

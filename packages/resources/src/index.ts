@@ -35,6 +35,7 @@ export {
   scanAgents,
   scanExtensions,
   scanPrompts,
+  scanSkillCandidates,
   scanSkills,
   type DiscoveredExtension,
 } from "./scanner.ts";

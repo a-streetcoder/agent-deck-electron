@@ -38,6 +38,7 @@ import {
   SubagentTranscriptEvidenceError,
   type LaunchPlan,
 } from "../SessionManager.ts";
+import { resolveExplicitSkills } from "../agentSkillResolution.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { SessionMutationClaims } from "../sessionMutationClaims.ts";
@@ -76,7 +77,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     sessionWorktreeStore,
     broadcast,
     rootsFor,
-    skillStore,
+    scanSkillCandidatesFor,
     resolveNamedAgent,
     enabledExtensionPaths,
     dropDiffCache,
@@ -1433,23 +1434,23 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // CONTRACT GAP: bridge/audit/web extensions and APPEND_SYSTEM.md
     // preservation are still missing here (M2).
     let assignedSkillPaths: string[] | undefined;
-    {
+    if (!body.agentName && body.skills === undefined) {
       const disabledSkills = new Set(settings.get().disabledSkills);
-      const names = [...settings.get().defaultSkills, ...(project?.assignedSkills ?? [])].filter(
-        (name) => !disabledSkills.has(name), // disabled skills are never injected
-      );
+      const names = [...settings.get().defaultSkills, ...(project?.assignedSkills ?? [])];
       if (names.length > 0) {
-        // Combined discovery is already deterministic: standard catalogs win
-        // same-name collisions over read-only in-place collections.
-        const skillsByName = new Map(skillStore.listSkills(body.projectId).map((s) => [s.name, s]));
-        const missing = [...new Set(names)].filter((name) => !skillsByName.has(name));
-        if (missing.length > 0) {
-          fastify.log.warn({ missing }, "assigned skills not found in catalog");
+        const resolved = resolveExplicitSkills({
+          skillNames: names,
+          candidates: scanSkillCandidatesFor(body.projectId),
+          disabledSkills,
+          strict: false,
+        });
+        if (resolved.status === "error") {
+          return reply.status(409).send({ error: resolved.message });
         }
-        const paths = [...new Set(names)]
-          .map((name) => skillsByName.get(name)?.baseDir)
-          .filter((p): p is string => Boolean(p));
-        if (paths.length > 0) assignedSkillPaths = paths;
+        if (resolved.skipped.length > 0) {
+          fastify.log.warn({ missingOrDisabled: resolved.skipped }, "assigned skills skipped");
+        }
+        if (resolved.skillDirs.length > 0) assignedSkillPaths = resolved.skillDirs;
       }
     }
 
@@ -1502,6 +1503,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       if (resolved.status === "disabled") {
         return reply.status(409).send({ error: `agent is disabled: ${body.agentName}` });
+      }
+      if (resolved.status === "invalid") {
+        return reply.status(409).send({ error: resolved.error });
       }
       const { agent } = resolved;
       const projectAssignments = new Set(project?.assignedMcpServers ?? []);

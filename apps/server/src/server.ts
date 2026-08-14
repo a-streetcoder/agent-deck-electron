@@ -10,14 +10,16 @@ import {
   projectWatchDirs,
   readMcpServerCatalog,
   scanAgents,
+  scanEnv,
   scanExtensions,
+  scanSkillCandidates,
   scanSkills,
   watchResources,
   ProviderLoginManager,
   SessionWorktreeStore,
   type ResourceRoots,
 } from "@agent-deck/resources";
-import { writeBridgeExtension } from "@agent-deck/pi-host";
+import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
@@ -33,6 +35,7 @@ import {
 } from "@agent-deck/memory";
 import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
+import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
 import { FileAgentAvatarStore } from "./agentAvatars.ts";
 import { registerAskUserBridgeTool } from "./askUserBridgeTool.ts";
@@ -422,6 +425,7 @@ async function initServer(
     // resolved by then. A disabled or missing agent isn't delegatable → undefined.
     (name, projectId) => {
       const resolved = resolveNamedAgent(name, projectId);
+      if (resolved.status === "invalid") return { error: resolved.error };
       if (resolved.status !== "ok") return undefined;
       const { agent } = resolved;
       return {
@@ -551,7 +555,11 @@ async function initServer(
   function resolveNamedAgent(
     name: string,
     projectId?: string,
-  ): { status: "ok"; agent: NamedAgentLaunch } | { status: "not_found" } | { status: "disabled" } {
+  ):
+    | { status: "ok"; agent: NamedAgentLaunch }
+    | { status: "not_found" }
+    | { status: "disabled" }
+    | { status: "invalid"; error: string } {
     const roots = rootsFor(projectId);
     const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
     const agent = scanAgents(roots).find((a) => a.name === name && !a.shadowed);
@@ -560,12 +568,16 @@ async function initServer(
     // curated agent so stale assignments never widen access.
     if (!agent || !projectAllowsAgent(project, agent)) return { status: "not_found" };
     if (agent.disabled) return { status: "disabled" };
-    const skillsByName = new Map(scanSkillsFor(projectId).map((s) => [s.name, s]));
-    const disabledSkills = new Set(settings.get().disabledSkills);
-    const skillDirs = (agent.skills ?? [])
-      .filter((skillName) => !disabledSkills.has(skillName)) // disabled skills never inject
-      .map((skillName) => skillsByName.get(skillName)?.baseDir)
-      .filter((p): p is string => Boolean(p));
+    const skills = resolveExplicitSkills({
+      agentName: agent.name,
+      skillNames: agent.skills ?? [],
+      candidates: scanSkillCandidates(roots),
+      disabledSkills: new Set(settings.get().disabledSkills),
+      strict: true,
+      tools: agent.tools,
+      toolsExplicit: agent.toolsExplicit,
+    });
+    if (skills.status === "error") return { status: "invalid", error: skills.message };
     return {
       status: "ok",
       agent: {
@@ -575,7 +587,7 @@ async function initServer(
         thinking: agent.thinking,
         tools: agent.tools?.filter((tool) => !BRIDGE_ONLY_TOOLS.has(tool)),
         mcpDirectTools: agent.mcpDirectTools,
-        skillDirs,
+        skillDirs: skills.skillDirs,
         extensions: enabledExtensionPaths(projectId, agent.extensions),
         mcpServers: agent.mcpServers ?? [],
         defaultReads: agent.defaultReads,
@@ -672,6 +684,24 @@ async function initServer(
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
   const scanSkillsFor = (projectId?: string) => scanSkills(rootsFor(projectId));
+  const scanSkillCandidatesFor = (projectId?: string) => scanSkillCandidates(rootsFor(projectId));
+
+  const createAgentWarningContext = (projectId?: string) => {
+    const roots = rootsFor(projectId);
+    const skillCandidateCounts = new Map<string, number>();
+    for (const skill of scanSkillCandidates(roots)) {
+      skillCandidateCounts.set(skill.name, (skillCandidateCounts.get(skill.name) ?? 0) + 1);
+    }
+    const inheritedExa = envDefaults().env?.EXA_API_KEY ?? process.env.EXA_API_KEY;
+    return {
+      skillCandidateCounts,
+      disabledSkills: new Set(settings.get().disabledSkills),
+      exaConfigured:
+        (typeof inheritedExa === "string" && inheritedExa.trim().length > 0) ||
+        hasEffectiveEnvValue(scanEnv(roots), "EXA_API_KEY"),
+      projectSelected: Boolean(roots.projectPath),
+    };
+  };
 
   // Catalog definitions are inert until a project or named agent explicitly
   // assigns their id. Per-project catalogs merge global < project < environment.
@@ -1049,6 +1079,8 @@ async function initServer(
     resourceHome,
     rootsFor,
     scanSkillsFor,
+    scanSkillCandidatesFor,
+    createAgentWarningContext,
     skillStore,
     broadcast,
     watchProject,

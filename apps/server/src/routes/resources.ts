@@ -5,6 +5,7 @@ import {
   AGENT_EXTENSION_MAX_ITEMS,
   AGENT_EXTENSION_MAX_LENGTH,
   AGENT_OUTPUT_MAX_LENGTH,
+  agentConfigurationWarnings,
   normalizeAgentOutput,
   validateAgentDefaultReadsForAuthoring,
   validateAgentExtensionsForAuthoring,
@@ -128,6 +129,8 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     skillStore,
     agentAvatars,
     extensionBridgeConflictAt,
+    scanSkillCandidatesFor,
+    createAgentWarningContext,
   } = ctx;
 
   const resourceMutationFailure = (error: unknown): { status: number; error: string } => {
@@ -214,7 +217,11 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       projectId?: string;
       includeUnassigned?: string;
     };
-    const agents = enrichAgentAvatars(scanAgents(rootsFor(projectId)), projectId);
+    const warningContext = createAgentWarningContext(projectId);
+    const agents = enrichAgentAvatars(scanAgents(rootsFor(projectId)), projectId).map((agent) => ({
+      ...agent,
+      warnings: agentConfigurationWarnings(agent, warningContext),
+    }));
     const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
     return {
       agents: includeUnassigned === "true" ? agents : curateProjectAgents(project, agents),
@@ -325,6 +332,13 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   fastify.get("/resources/skills", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     return { skills: enrichSkills(skillStore.listSkills(projectId)) };
+  });
+
+  // Diagnostic candidate view: preserve true same-priority duplicate names
+  // after normal project/global catalog precedence, so editor and launch agree.
+  fastify.get("/resources/skills/visibility", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
+    return { skills: enrichSkills(scanSkillCandidatesFor(projectId)) };
   });
 
   // Delete a global/project skill (its SKILL.md dir) and forget it everywhere.

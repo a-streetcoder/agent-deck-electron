@@ -96,6 +96,8 @@ function makeRoute(
     isolated?: boolean;
     keepWorktreeAfterMerge?: boolean;
     resolveAgent?: ServerContext["resolveNamedAgent"];
+    defaultSkills?: string[];
+    scanSkillCandidatesFor?: ServerContext["scanSkillCandidatesFor"];
     create?: (options: Record<string, unknown>, state: ReturnType<typeof makeState>) => Meta;
     announce?: (session: { meta: Meta }, state: ReturnType<typeof makeState>) => void;
     artifactReveal?: (runId: string) => string | undefined;
@@ -158,7 +160,7 @@ function makeRoute(
     defaultModel: null,
     defaultThinking: null,
     disabledSkills: [],
-    defaultSkills: [],
+    defaultSkills: overrides.defaultSkills ?? [],
     defaultPromptTemplates: [],
     disabledModels: [],
   };
@@ -182,6 +184,7 @@ function makeRoute(
     broadcast: (message: unknown) => state.broadcasts.push(message),
     rootsFor: () => ({}),
     scanSkillsFor: () => [],
+    scanSkillCandidatesFor: overrides.scanSkillCandidatesFor ?? (() => []),
     resolveNamedAgent:
       overrides.resolveAgent ??
       (() => ({
@@ -546,6 +549,39 @@ describe("POST /sessions worktree transaction", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
+    await fastify.close();
+  });
+
+  it("does not let ambient skill resolution block or replace a named-agent plan", async () => {
+    const scanSkillCandidatesFor = vi.fn(() => {
+      throw new Error("ambient resolution must not run");
+    });
+    const { fastify, sessions } = makeRoute({
+      defaultSkills: ["ambient-duplicate"],
+      scanSkillCandidatesFor,
+      resolveAgent: () => ({
+        status: "ok",
+        agent: {
+          body: "agent",
+          systemPromptMode: "replace",
+          tools: [],
+          skillDirs: ["/named/skill"],
+          extensions: [],
+        },
+      }),
+    });
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { projectId: "project-1", agentName: "named" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(scanSkillCandidatesFor).not.toHaveBeenCalled();
+    expect(sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: expect.objectContaining({ tools: [], skills: ["/named/skill"] }),
+      }),
+    );
     await fastify.close();
   });
 
