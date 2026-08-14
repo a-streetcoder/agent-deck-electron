@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -305,5 +305,118 @@ describe("DELETE /resources/prompts with a builtin fallback (PRM-02)", () => {
     } finally {
       rmSync(path.join(resourceHome, ".pi", "agent", "settings.json"), { force: true });
     }
+  });
+});
+
+describe("external prompt references (PRM-05)", () => {
+  it("adds a reference in place, lists it as external, launches it, and removes ONLY the reference", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "external-prompts-"));
+    const refPath = path.join(outside, "kept-outside.md");
+    writeFileSync(refPath, "---\ndescription: stays put\n---\n\nexternal body\n");
+
+    // add: the file is referenced, never copied
+    expect((await api("POST", "/resources/prompts/external-refs", { path: refPath })).status).toBe(
+      200,
+    );
+    const { prompts } = (await (await api("GET", "/resources/prompts")).json()) as {
+      prompts: Array<{ name: string; external?: boolean; filePath: string; scope: string }>;
+    };
+    const ref = prompts.find((p) => p.name === "kept-outside")!;
+    expect(ref.external).toBe(true);
+    expect(ref.scope).toBe("library");
+    expect(ref.filePath).toBe(refPath);
+
+    // idempotent add
+    expect((await api("POST", "/resources/prompts/external-refs", { path: refPath })).status).toBe(
+      200,
+    );
+
+    // it resolves as a launchable default (the sibling-call-site check: launch resolution
+    // must see the same catalog the route shows)
+    await api("PATCH", "/settings", {
+      setDefaultPromptTemplate: { name: "kept-outside", enabled: true },
+    });
+    // rejects: a directory, a non-md file, a missing file
+    expect((await api("POST", "/resources/prompts/external-refs", { path: outside })).status).toBe(
+      400,
+    );
+    expect(
+      (await api("POST", "/resources/prompts/external-refs", { path: `${refPath}.txt` })).status,
+    ).toBe(400);
+
+    // remove the REFERENCE: the file survives; the stale default is dropped (nothing
+    // else resolves the name)
+    expect(
+      (await api("DELETE", "/resources/prompts/external-refs", { path: refPath })).status,
+    ).toBe(200);
+    const after = (await (await api("GET", "/resources/prompts")).json()) as {
+      prompts: Array<{ name: string }>;
+    };
+    expect(after.prompts.find((p) => p.name === "kept-outside")).toBeUndefined();
+    const { settings } = (await (await api("GET", "/settings")).json()) as {
+      settings: { defaultPromptTemplates: string[]; externalPromptPaths?: string[] };
+    };
+    expect(settings.defaultPromptTemplates).not.toContain("kept-outside");
+    expect(readFileSync(refPath, "utf8")).toContain("external body");
+  });
+
+  it("adds/removes are case-insensitive on Windows (one visible ref, fully removable)", async () => {
+    if (process.platform !== "win32") return;
+    const outside = mkdtempSync(path.join(tmpdir(), "external-case-"));
+    const refPath = path.join(outside, "cased.md");
+    writeFileSync(refPath, "body\n");
+    expect((await api("POST", "/resources/prompts/external-refs", { path: refPath })).status).toBe(
+      200,
+    );
+    // the same file through a different casing must NOT mint a second reference
+    expect(
+      (
+        await api("POST", "/resources/prompts/external-refs", {
+          path: refPath.toUpperCase(),
+        })
+      ).status,
+    ).toBe(200);
+    const { prompts } = (await (await api("GET", "/resources/prompts")).json()) as {
+      prompts: Array<{ name: string }>;
+    };
+    expect(prompts.filter((p) => p.name.toLowerCase() === "cased")).toHaveLength(1);
+    // removing through the OTHER casing removes the reference entirely
+    expect(
+      (
+        await api("DELETE", "/resources/prompts/external-refs", {
+          path: refPath.toUpperCase(),
+        })
+      ).status,
+    ).toBe(200);
+    const after = (await (await api("GET", "/resources/prompts")).json()) as {
+      prompts: Array<{ name: string }>;
+    };
+    expect(after.prompts.find((p) => p.name.toLowerCase() === "cased")).toBeUndefined();
+  });
+
+  it("removing a reference drops a project's stale assignment too (native Remove Reference)", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "external-assign-"));
+    const refPath = path.join(outside, "assigned-ref.md");
+    writeFileSync(refPath, "body\n");
+    const projectDir = mkdtempSync(path.join(tmpdir(), "external-assign-project-"));
+    const { project } = (await (await api("POST", "/projects", { path: projectDir })).json()) as {
+      project: { id: string };
+    };
+    expect((await api("POST", "/resources/prompts/external-refs", { path: refPath })).status).toBe(
+      200,
+    );
+    expect(
+      (await api("PATCH", `/projects/${project.id}`, { assignedPrompts: ["assigned-ref"] })).status,
+    ).toBe(200);
+
+    expect(
+      (await api("DELETE", "/resources/prompts/external-refs", { path: refPath })).status,
+    ).toBe(200);
+    const { projects } = (await (await api("GET", "/projects")).json()) as {
+      projects: Array<{ id: string; assignedPrompts?: string[] }>;
+    };
+    expect(projects.find((p) => p.id === project.id)!.assignedPrompts ?? []).not.toContain(
+      "assigned-ref",
+    );
   });
 });

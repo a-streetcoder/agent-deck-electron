@@ -358,6 +358,12 @@ export interface PromptInfo {
   invocation: string;
   /** pi's `argument-hint` frontmatter — a usage hint shown next to the command. */
   argumentHint?: string;
+  /**
+   * An EXTERNAL REFERENCE (PRM-05, native discoveryKind externalReference): the
+   * file stays where the user keeps it — never copied into a catalog. Removing
+   * it removes the reference, not the file.
+   */
+  external?: boolean;
 }
 
 export type AgentFilter =

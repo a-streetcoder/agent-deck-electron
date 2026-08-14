@@ -213,6 +213,95 @@ describe("package prompt source (PRM-03)", () => {
   });
 });
 
+describe("external prompt references (PRM-05)", () => {
+  it("external rows badge + Remove Reference (no rename/delete); a path can be referenced", async () => {
+    const externalPrompt: PromptInfo[] = [
+      {
+        name: "kept-outside",
+        invocation: "/kept-outside",
+        description: "referenced in place",
+        scope: "library",
+        filePath: "C:/notes/kept-outside.md",
+        body: "external body",
+        external: true,
+      },
+    ];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/prompts") {
+        return Promise.resolve(jsonResponse({ prompts: externalPrompt }));
+      }
+      if (url === "/settings") return Promise.resolve(jsonResponse({ settings: {} }));
+      if (url === "/resources/prompts/external-refs" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url === "/resources/prompts/external-refs" && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<PromptsScreen />);
+    await screen.findByText("/kept-outside");
+
+    // the reference is visibly external and offers no rename/delete of the file
+    expect(screen.getByTestId("prompt-external-kept-outside")).toBeTruthy();
+    expect(screen.queryByTestId("prompt-rename-kept-outside")).toBeNull();
+    expect(screen.queryByTestId("prompt-delete-kept-outside")).toBeNull();
+    // an external prompt IS launchable, so its All Projects default toggle shows
+    expect(screen.getByTestId("prompt-default-kept-outside")).toBeTruthy();
+
+    // opening an external drafts a GLOBAL copy — never a library overwrite, even
+    // though the reference itself carries library scope (review, Codex)
+    fireEvent.click(screen.getByText("/kept-outside"));
+    await screen.findByTestId("prompt-editor");
+    fireEvent.click(screen.getByTestId("prompt-save"));
+    await waitFor(() => {
+      const put = vi
+        .mocked(fetch)
+        .mock.calls.find(([, init2]) => (init2 as RequestInit | undefined)?.method === "PUT");
+      expect(put).toBeTruthy();
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toMatchObject({
+        scope: "global",
+        name: "kept-outside",
+      });
+    });
+
+    // removing removes the REFERENCE via its own endpoint
+    fireEvent.click(screen.getByTestId("prompt-remove-external-kept-outside"));
+    await waitFor(() => {
+      const del = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init2]) =>
+            String(url) === "/resources/prompts/external-refs" &&
+            (init2 as RequestInit | undefined)?.method === "DELETE",
+        );
+      expect(JSON.parse(String((del![1] as RequestInit).body))).toEqual({
+        path: "C:/notes/kept-outside.md",
+      });
+    });
+
+    // adding: the reference-path input posts to the same endpoint
+    fireEvent.click(screen.getByTestId("prompt-add-external"));
+    fireEvent.change(screen.getByTestId("prompt-external-path"), {
+      target: { value: "C:/notes/another.md" },
+    });
+    fireEvent.click(screen.getByTestId("prompt-external-confirm"));
+    await waitFor(() => {
+      const post = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init2]) =>
+            String(url) === "/resources/prompts/external-refs" &&
+            (init2 as RequestInit | undefined)?.method === "POST",
+        );
+      expect(JSON.parse(String((post![1] as RequestInit).body))).toEqual({
+        path: "C:/notes/another.md",
+      });
+    });
+  });
+});
+
 describe("prompt catalog search", () => {
   it("does not show the catalog-empty state while the initial prompt request is pending", () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {

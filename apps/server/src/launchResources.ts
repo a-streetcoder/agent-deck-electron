@@ -231,7 +231,13 @@ export function resolveLaunchResources(
       skills = resolved.skillDirs.length ? resolved.skillDirs : undefined;
     }
     const promptsByName = new Map<string, PromptInfo>();
-    for (const prompt of scanPrompts(ctx.rootsFor(request.projectId))) {
+    // The same catalog the prompts route shows: external references (PRM-05) are
+    // launchable too — omitting them here would be the classic sibling-call-site miss.
+    for (const prompt of scanPrompts(
+      ctx.rootsFor(request.projectId),
+      undefined,
+      ctx.settings.get().externalPromptPaths ?? [],
+    )) {
       if (!promptsByName.has(prompt.name)) promptsByName.set(prompt.name, prompt);
     }
     const promptTemplates = [

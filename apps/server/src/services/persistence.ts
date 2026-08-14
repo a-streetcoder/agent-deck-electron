@@ -223,6 +223,12 @@ export interface AppSettings {
    */
   codexPluginSkillRefs: CodexPluginSkillRef[];
   /**
+   * External prompt REFERENCES (PRM-05, native externalPromptPaths): absolute
+   * paths of single `.md` files that stay where the user keeps them — scanned
+   * in place, never copied into a catalog.
+   */
+  externalPromptPaths: string[];
+  /**
    * The remembered open-in-editor choice (Slice 11): the editor id last picked
    * from the diff panel's picker, so the next open is one click. An id, never
    * a command — the server only launches editors from its own detected list.
@@ -265,6 +271,10 @@ function coerceCodexPluginRefs(value: unknown): CodexPluginSkillRef[] {
       typeof (item as CodexPluginSkillRef).relPath === "string",
   );
 }
+
+/** Windows filesystems are case-insensitive: one file, one reference. */
+const externalPathKey = (p: string): string =>
+  process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p);
 
 const refKey = (ref: CodexPluginSkillRef): string =>
   `${ref.marketplace} ${ref.plugin} ${ref.relPath}`;
@@ -318,6 +328,8 @@ export interface SettingsStoreHandle {
     refs: readonly CodexPluginSkillRef[],
   ) => Effect.Effect<AppSettings>;
   readonly removeCodexPluginSkillRef: (ref: CodexPluginSkillRef) => Effect.Effect<AppSettings>;
+  readonly addExternalPromptPath: (promptPath: string) => Effect.Effect<AppSettings>;
+  readonly removeExternalPromptPath: (promptPath: string) => Effect.Effect<AppSettings>;
   readonly setModelDisabled: (key: string, disabled: boolean) => Effect.Effect<AppSettings>;
   readonly enabledExtensions: Effect.Effect<string[]>;
   readonly forgetSkill: (name: string) => Effect.Effect<AppSettings>;
@@ -492,6 +504,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       importedSkillRepositories: [],
       skillCollections: [],
       codexPluginSkillRefs: [],
+      externalPromptPaths: [],
       preferredEditor: null,
       piAgentTranscriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY },
       keybindings: [],
@@ -578,6 +591,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             ? (record.skillCollections as SkillCollection[])
             : [],
           codexPluginSkillRefs: coerceCodexPluginRefs(record.codexPluginSkillRefs),
+          externalPromptPaths: Array.isArray(record.externalPromptPaths)
+            ? record.externalPromptPaths.filter((p): p is string => typeof p === "string")
+            : [],
           preferredEditor:
             typeof record.preferredEditor === "string" ? record.preferredEditor : null,
           piAgentTranscriptVisibility: coerceTranscriptVisibility(
@@ -607,6 +623,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       const persisted: Partial<AppSettings> = { ...value };
       if (value.skillCollections.length === 0) delete persisted.skillCollections;
       if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
+      if (value.externalPromptPaths.length === 0) delete persisted.externalPromptPaths;
       if (value.disabledInjectedCommandIDs.length === 0)
         delete persisted.disabledInjectedCommandIDs;
       if (value.enabledLibraryCommandIDs.length === 0) delete persisted.enabledLibraryCommandIDs;
@@ -811,6 +828,33 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             ...settings,
             codexPluginSkillRefs: settings.codexPluginSkillRefs.filter(
               (item) => refKey(item) !== refKey(ref),
+            ),
+          };
+          flush();
+          return settings;
+        }),
+      addExternalPromptPath: (promptPath) =>
+        Effect.sync(() => {
+          // membership is by FILESYSTEM identity: Windows paths are case-insensitive,
+          // so two casings of one file must never mint two references (review, Codex)
+          const key = externalPathKey(promptPath);
+          if (settings.externalPromptPaths.some((p) => externalPathKey(p) === key)) {
+            return settings;
+          }
+          settings = {
+            ...settings,
+            externalPromptPaths: [...settings.externalPromptPaths, promptPath],
+          };
+          flush();
+          return settings;
+        }),
+      removeExternalPromptPath: (promptPath) =>
+        Effect.sync(() => {
+          const key = externalPathKey(promptPath);
+          settings = {
+            ...settings,
+            externalPromptPaths: settings.externalPromptPaths.filter(
+              (p) => externalPathKey(p) !== key,
             ),
           };
           flush();

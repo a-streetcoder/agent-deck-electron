@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, type Dirent } from "node:fs";
+import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import path from "node:path";
 import {
   applyShadowing,
@@ -181,9 +181,10 @@ export function scanAgents(roots: ResourceRoots): AgentInfo[] {
 export function scanPrompts(
   roots: ResourceRoots,
   onWarning?: (warning: string) => void,
+  externalPaths: readonly string[] = [],
 ): PromptInfo[] {
   const prompts: PromptInfo[] = [];
-  const readPromptFile = (filePath: string, scope: ResourceScope): void => {
+  const readPromptFile = (filePath: string, scope: ResourceScope, external?: boolean): void => {
     try {
       const { frontmatter, body } = parseFrontmatter(readFileSync(filePath, "utf8"));
       // A prompt's identity IS its file basename: pi registers the command
@@ -200,6 +201,7 @@ export function scanPrompts(
         body: body.trim(),
         invocation: `/${basename}`,
         argumentHint: asString(frontmatter["argument-hint"]),
+        ...(external ? { external: true } : {}),
       });
     } catch {
       // Unreadable/malformed — skip.
@@ -245,6 +247,30 @@ export function scanPrompts(
     } else {
       readPromptFile(location.target, "package");
     }
+  }
+  // External prompt references (PRM-05, native discoveryKind externalReference):
+  // each registered path is a single `.md` file that stays where the user keeps
+  // it — never copied into the library. Missing files warn, not vanish. A ref
+  // pointing INTO a catalog must not duplicate the catalog's own record.
+  const pathIdentity = (p: string): string => {
+    const resolved = path.resolve(p);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const seenExternal = new Set<string>(prompts.map((p) => pathIdentity(p.filePath)));
+  for (const raw of externalPaths) {
+    const resolved = path.resolve(raw);
+    const identity = pathIdentity(resolved);
+    if (seenExternal.has(identity)) continue;
+    seenExternal.add(identity);
+    let isFile: boolean;
+    try {
+      isFile = statSync(resolved).isFile();
+    } catch {
+      onWarning?.(`External prompt reference ${raw} does not exist.`);
+      continue;
+    }
+    if (!isFile || !resolved.toLowerCase().endsWith(".md")) continue; // single .md files only
+    readPromptFile(resolved, "library", true);
   }
   // Rank within a name for first-wins consumers (launch resolution's promptsByName):
   // the user's catalogs keep their existing order (global-first is this repo's

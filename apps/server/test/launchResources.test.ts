@@ -105,6 +105,33 @@ describe("injected command launch matrix", () => {
       ),
     ).toBe(true);
   });
+
+  it("resolves an EXTERNAL prompt reference as a launchable default (PRM-05)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-external-prompt-"));
+    const refPath = path.join(root, "kept-outside.md");
+    writeFileSync(refPath, "---\ndescription: referenced\n---\n\nbody\n");
+    const settings = {
+      defaultSkills: [],
+      defaultPromptTemplates: ["kept-outside"],
+      disabledSkills: [],
+      defaultThinking: null,
+      externalPromptPaths: [refPath],
+    };
+    const context = {
+      projects: { find: () => undefined },
+      settings: { get: () => settings },
+      enabledExtensionPaths: () => [],
+      scanSkillCandidatesFor: () => [],
+      rootsFor: () => ({ home: root }),
+      resourceHome: () => root,
+      memoryEnabled: false,
+      memoryBaseDir: path.join(root, "memory"),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const { plan } = resolveLaunchResources(context, {}, {});
+    if (plan.kind !== "parent") throw new Error(`expected a parent plan, got ${plan.kind}`);
+    expect(plan.promptTemplates).toEqual([refPath]);
+  });
 });
 
 describe("launch resource fingerprint", () => {

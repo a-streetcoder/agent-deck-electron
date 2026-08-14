@@ -933,15 +933,74 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   });
 
   // Prompt templates: single .md files pi exposes as /prompt:<name>. Package-prompt
-  // resolution problems ride along (PRM-03) — a configured package that silently
-  // contributes nothing is exactly what the user needs to hear about.
+  // and external-reference resolution problems ride along (PRM-03/05) — a configured
+  // source that silently contributes nothing is exactly what the user needs to hear about.
   fastify.get("/resources/prompts", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     const packagePromptWarnings: string[] = [];
     return {
-      prompts: scanPrompts(rootsFor(projectId), (warning) => packagePromptWarnings.push(warning)),
+      prompts: scanPrompts(
+        rootsFor(projectId),
+        (warning) => packagePromptWarnings.push(warning),
+        settings.get().externalPromptPaths,
+      ),
       packagePromptWarnings,
     };
+  });
+
+  // External prompt REFERENCES (PRM-05, native externalPromptPaths): a single `.md`
+  // file that stays where the user keeps it — referenced in place, never copied.
+  // Removing the reference never touches the file.
+  fastify.post("/resources/prompts/external-refs", async (request, reply) => {
+    const parsed = z.object({ path: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const resolved = nodePath.resolve(parsed.data.path);
+    let isFile = false;
+    try {
+      isFile = statSync(resolved).isFile();
+    } catch {
+      isFile = false;
+    }
+    if (!isFile || !resolved.toLowerCase().endsWith(".md")) {
+      return reply
+        .status(400)
+        .send({ error: "An external prompt reference must be an existing .md file." });
+    }
+    settings.addExternalPromptPath(resolved);
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
+  });
+
+  fastify.delete("/resources/prompts/external-refs", async (request, reply) => {
+    const parsed = z.object({ path: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const resolved = nodePath.resolve(parsed.data.path);
+    const name = nodePath.basename(resolved, ".md");
+    settings.removeExternalPromptPath(resolved);
+    // The reference is gone: drop the default and each project's assignment only if
+    // the NAME no longer resolves for them (a catalog/builtin/package prompt may
+    // still provide it) — the same convention every prompt-removal path follows;
+    // native's Remove Reference clears both kinds of reference (review, Codex).
+    const remainingRefs = settings.get().externalPromptPaths;
+    const stillResolves = scanPrompts(rootsFor(undefined), undefined, remainingRefs).some(
+      (p) => p.name === name,
+    );
+    if (!stillResolves) settings.renameDefaultPromptTemplate(name, null);
+    for (const project of projects.list()) {
+      if (!project.assignedPrompts?.includes(name)) continue;
+      const resolvesForProject = scanPrompts(
+        { home: resourceHome(), projectPath: project.path },
+        undefined,
+        remainingRefs,
+      ).some((p) => p.name === name);
+      if (resolvesForProject) continue;
+      projects.upsert({
+        ...project,
+        assignedPrompts: project.assignedPrompts.filter((p) => p !== name),
+      });
+    }
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
   });
 
   const promptWriteBody = z.object({

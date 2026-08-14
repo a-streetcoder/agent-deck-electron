@@ -454,6 +454,46 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     expect(warnings.some((w) => w.includes("missing-dir"))).toBe(true);
   });
 
+  it("merges EXTERNAL prompt references in place: library scope, external flag, never copied (PRM-05)", () => {
+    const home = makeHome();
+    const outside = path.join(home, "my-notes");
+    mkdirSync(outside, { recursive: true });
+    const refPath = path.join(outside, "kept-outside.md");
+    writeFileSync(refPath, "---\ndescription: lives outside the catalogs\n---\n\nexternal body\n");
+    const warnings: string[] = [];
+    const prompts = scanPrompts({ home }, (w) => warnings.push(w), [
+      refPath,
+      path.join(outside, "vanished.md"), // missing → warned, not silent
+      outside, // a directory is NOT a valid single-file reference
+      path.join(outside, "not-markdown.txt"),
+      refPath, // duplicate reference → one record
+    ]);
+    const external = prompts.filter((p) => p.external);
+    expect(external).toHaveLength(1);
+    expect(external[0]).toMatchObject({
+      name: "kept-outside",
+      scope: "library",
+      filePath: refPath,
+      invocation: "/kept-outside",
+    });
+    expect(warnings.some((w) => w.includes("vanished.md"))).toBe(true);
+    // catalog prompts don't carry the flag
+    expect(prompts.filter((p) => !p.external && p.name === "kept-outside")).toHaveLength(0);
+  });
+
+  it("a reference pointing INTO a catalog never duplicates the catalog record (PRM-05)", () => {
+    const home = makeHome();
+    const globalDir = path.join(home, ".pi", "agent", "prompts");
+    writePrompt(globalDir, "already-cataloged.md", "---\ndescription: mine\n---\n\nbody\n");
+    const prompts = scanPrompts({ home }, undefined, [
+      path.join(globalDir, "already-cataloged.md"),
+    ]);
+    const matches = prompts.filter((p) => p.name === "already-cataloged");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.scope).toBe("global");
+    expect(matches[0]!.external).toBeUndefined();
+  });
+
   it("honors AGENT_DECK_BUILTIN_PROMPTS_DIR per call (hermetic override)", () => {
     const home = makeHome();
     const override = path.join(home, "custom-builtins");

@@ -249,6 +249,15 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.removeCodexPluginSkillRef(ref));
   }
 
+  /** Reference an external prompt file in place (PRM-05), idempotent. */
+  addExternalPromptPath(promptPath: string): AppSettings {
+    return runSyncUnwrapped(this.handle.addExternalPromptPath(promptPath));
+  }
+
+  removeExternalPromptPath(promptPath: string): AppSettings {
+    return runSyncUnwrapped(this.handle.removeExternalPromptPath(promptPath));
+  }
+
   /** Hide/show a model in the picker, by its "<provider>:<id>" key. */
   setModelDisabled(key: string, disabled: boolean): AppSettings {
     return runSyncUnwrapped(this.handle.setModelDisabled(key, disabled));

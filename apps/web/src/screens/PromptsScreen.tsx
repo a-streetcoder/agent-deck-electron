@@ -90,10 +90,55 @@ export function PromptsScreen() {
   const [draft, setDraft] = useState<Draft | null>(null);
   // PRM-03: package-prompt resolution warnings from the catalog scan.
   const [packageWarnings, setPackageWarnings] = useState<string[]>([]);
-  // Builtin and package prompts are bundled/installed files, never the user's —
-  // no rename/delete; opening one drafts a global copy to customize (PRM-02/03).
+  // PRM-05: the external-reference path input (null = closed).
+  const [externalPath, setExternalPath] = useState<string | null>(null);
+
+  const addExternalRef = async (): Promise<void> => {
+    const refPath = (externalPath ?? "").trim();
+    if (!refPath) return;
+    try {
+      const response = await fetch("/resources/prompts/external-refs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: refPath }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Couldn't reference that prompt file."),
+        );
+      }
+      setExternalPath(null);
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // Remove the REFERENCE — the file itself stays where the user keeps it (PRM-05).
+  const removeExternalRef = async (prompt: PromptInfo): Promise<void> => {
+    try {
+      const response = await fetch("/resources/prompts/external-refs", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: prompt.filePath }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Couldn't remove the prompt reference."),
+        );
+      }
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+  // Builtin/package prompts are bundled/installed files, and external references
+  // (PRM-05) are the user's files OUTSIDE the catalogs — none are catalog-editable:
+  // no rename/delete; opening one drafts a global copy to customize (PRM-02/03/05).
   const isReadOnlyPromptScope = (scope: PromptInfo["scope"]): boolean =>
     scope === "builtin" || scope === "package";
+  const isReadOnlyPrompt = (prompt: PromptInfo): boolean =>
+    isReadOnlyPromptScope(prompt.scope) || prompt.external === true;
   // "All Projects" default prompt templates (native defaultPromptTemplateNames):
   // enabled ones are injected into every project's parent sessions as
   // --prompt-template flags. Tracked by name, read from app settings.
@@ -207,13 +252,13 @@ export function PromptsScreen() {
   }, [newDraftOpen]);
 
   const startEdit = (prompt: PromptInfo): void => {
-    // A builtin/package prompt is not the user's file (PRM-02/03): opening it drafts
-    // a COPY that saves into the global prompts dir — native's "copy one into your
-    // prompts directory to customize it". The copy then shadows the original by name.
-    // When a same-named global copy ALREADY exists, edit THAT — an original-less
-    // draft would silently overwrite the user's customization (review, Codex).
+    // A builtin/package/external prompt is not a catalog file (PRM-02/03/05): opening
+    // it drafts a COPY that saves into the global prompts dir — native's "copy one
+    // into your prompts directory to customize it". The copy then shadows the
+    // original by name. When a same-named global copy ALREADY exists, edit THAT — an
+    // original-less draft would silently overwrite the user's customization (review, Codex).
     let target = prompt;
-    let isReadOnly = isReadOnlyPromptScope(prompt.scope);
+    let isReadOnly = isReadOnlyPrompt(prompt);
     if (isReadOnly) {
       const existingCopy = prompts.find((p) => p.name === prompt.name && p.scope === "global");
       if (existingCopy) {
@@ -226,7 +271,10 @@ export function PromptsScreen() {
       name: target.name,
       description: target.description ?? "",
       body: target.body,
-      scope: target.scope === "library" ? "library" : "global",
+      // a read-only COPY draft always lands in the user's global prompts — an
+      // external ref carries library scope, but saving there would overwrite an
+      // unrelated library prompt (review, Codex)
+      scope: isReadOnly ? "global" : target.scope === "library" ? "library" : "global",
       projectId: currentProjectId,
       original: isReadOnly ? undefined : target.name,
       filePath: isReadOnly ? undefined : target.filePath,
@@ -364,19 +412,53 @@ export function PromptsScreen() {
               Prompt templates
             </h2>
           </div>
-          <ControlButton
-            data-testid="prompt-new"
-            className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
-            onClick={startNew}
-          >
-            <Plus size={13} /> New prompt
-          </ControlButton>
+          <div className="flex items-center gap-2">
+            <ControlButton
+              data-testid="prompt-add-external"
+              className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              title="Reference an existing .md file in place — it stays where you keep it (never copied)"
+              onClick={() => setExternalPath((v) => (v === null ? "" : null))}
+            >
+              Reference file…
+            </ControlButton>
+            <ControlButton
+              data-testid="prompt-new"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
+              }}
+              onClick={startNew}
+            >
+              <Plus size={13} /> New prompt
+            </ControlButton>
+          </div>
         </div>
+        {externalPath !== null ? (
+          <div className="mb-3 flex gap-2">
+            <ControlInput
+              autoFocus
+              data-testid="prompt-external-path"
+              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+              placeholder="absolute path to an existing .md prompt file"
+              value={externalPath}
+              onChange={(event) => setExternalPath(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void addExternalRef();
+                if (event.key === "Escape") setExternalPath(null);
+              }}
+            />
+            <ControlButton
+              data-testid="prompt-external-confirm"
+              className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+              disabled={!externalPath.trim()}
+              onClick={() => void addExternalRef()}
+            >
+              Reference
+            </ControlButton>
+          </div>
+        ) : null}
         <p className="pb-3 text-xs text-text-muted">
           Reusable prompts pi exposes as <code className="font-mono">/&lt;name&gt;</code> slash
           commands. Project prompts override global ones of the same name.
@@ -621,9 +703,10 @@ export function PromptsScreen() {
                     ) : null}
                   </ControlButton>
                   {/* "All Projects" default is a GLOBAL concept — the backend
-                      resolves a default name global-first, so the toggle is only
-                      meaningful (and only shown) for global-scope prompts. */}
-                  {prompt.scope === "global" &&
+                      resolves a default name global-first, so the toggle shows for
+                      global-scope prompts, plus EXTERNAL references (PRM-05): they
+                      resolve as launchable defaults too. */}
+                  {(prompt.scope === "global" || prompt.external) &&
                     (() => {
                       const on = defaultPrompts.includes(prompt.name);
                       return (
@@ -647,9 +730,29 @@ export function PromptsScreen() {
                         </ControlButton>
                       );
                     })()}
-                  {/* Builtin/package prompts are bundled/installed and immutable — no
-                      rename/delete; opening one drafts a global copy instead (PRM-02/03). */}
-                  {!isReadOnlyPromptScope(prompt.scope) ? (
+                  {prompt.external ? (
+                    <>
+                      <span
+                        data-testid={`prompt-external-${prompt.name}`}
+                        className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                        title={`Referenced in place: ${prompt.filePath}`}
+                      >
+                        external
+                      </span>
+                      <ControlButton
+                        data-testid={`prompt-remove-external-${prompt.name}`}
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                        title="Remove the reference — the file itself is not deleted"
+                        onClick={() => void removeExternalRef(prompt)}
+                      >
+                        Remove reference
+                      </ControlButton>
+                    </>
+                  ) : null}
+                  {/* Builtin/package prompts are bundled/installed and immutable, and an
+                      external reference's file is not a catalog file — no rename/delete;
+                      opening one drafts a global copy instead (PRM-02/03/05). */}
+                  {!isReadOnlyPrompt(prompt) ? (
                     <>
                       <ControlButton
                         data-testid={`prompt-rename-${prompt.name}`}
