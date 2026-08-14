@@ -19,6 +19,7 @@ import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
+import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -153,6 +154,7 @@ export interface ServerContext {
     | { status: "invalid"; error: string };
   extensionBridgeConflictAt(filePath: string): string | null;
   enabledExtensionPaths(projectId?: string, allowlist?: readonly string[]): string[];
+  injectedCommands: InjectedCommandStore;
   resourceHome(): string;
   rootsFor(projectId?: string): ResourceRoots;
   scanSkillsFor(projectId?: string): SkillInfo[];

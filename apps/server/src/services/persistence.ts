@@ -175,6 +175,10 @@ export interface AppSettings {
   extensions: string[];
   /** Extensions turned off: kept in the list but excluded from --extension. */
   disabledExtensions: string[];
+  /** App-bundled injected commands are enabled unless their stable id is here. */
+  disabledInjectedCommandIDs: string[];
+  /** Imported command-library entries are disabled unless their stable id is here. */
+  enabledLibraryCommandIDs: string[];
   /** Models the user hid from the picker, by "<provider>:<id>" key. */
   disabledModels: string[];
   /**
@@ -230,6 +234,17 @@ export interface AppSettings {
   keybindings: KeybindingBinding[];
 }
 
+const MAX_INJECTED_COMMAND_IDS = 256;
+const BUILT_IN_COMMAND_ID = /^built-in:[a-z0-9][a-z0-9-]{0,63}$/;
+const LIBRARY_COMMAND_ID = /^library:[0-9a-f]{32}$/;
+
+function coerceCommandIds(value: unknown, pattern: RegExp): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(value.filter((id): id is string => typeof id === "string" && pattern.test(id))),
+  ].slice(0, MAX_INJECTED_COMMAND_IDS);
+}
+
 /** Keep only well-formed overrides (known command + a valid, modifier-bearing chord). */
 function coerceKeybindings(value: unknown): KeybindingBinding[] {
   if (!Array.isArray(value)) return [];
@@ -258,6 +273,11 @@ export interface SettingsStoreHandle {
   readonly addExtension: (extPath: string) => Effect.Effect<AppSettings>;
   readonly removeExtension: (extPath: string) => Effect.Effect<AppSettings>;
   readonly setExtensionDisabled: (extPath: string, disabled: boolean) => Effect.Effect<AppSettings>;
+  readonly setInjectedCommandDisabled: (
+    id: string,
+    disabled: boolean,
+  ) => Effect.Effect<AppSettings>;
+  readonly setLibraryCommandEnabled: (id: string, enabled: boolean) => Effect.Effect<AppSettings>;
   readonly upsertImportedSkillRepository: (
     repo: ImportedSkillRepository,
   ) => Effect.Effect<AppSettings>;
@@ -421,6 +441,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       projectRoots: [],
       extensions: [],
       disabledExtensions: [],
+      disabledInjectedCommandIDs: [],
+      enabledLibraryCommandIDs: [],
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
       piAgentIdleParkingEnabled: true,
@@ -457,6 +479,14 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           disabledExtensions: Array.isArray(record.disabledExtensions)
             ? record.disabledExtensions.map(String)
             : [],
+          disabledInjectedCommandIDs: coerceCommandIds(
+            record.disabledInjectedCommandIDs,
+            BUILT_IN_COMMAND_ID,
+          ),
+          enabledLibraryCommandIDs: coerceCommandIds(
+            record.enabledLibraryCommandIDs,
+            LIBRARY_COMMAND_ID,
+          ),
           disabledModels: Array.isArray(record.disabledModels)
             ? record.disabledModels.map(String)
             : [],
@@ -514,6 +544,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // exist before collection-v1 and an empty list has identical semantics.
       const persisted: Partial<AppSettings> = { ...value };
       if (value.skillCollections.length === 0) delete persisted.skillCollections;
+      if (value.disabledInjectedCommandIDs.length === 0)
+        delete persisted.disabledInjectedCommandIDs;
+      if (value.enabledLibraryCommandIDs.length === 0) delete persisted.enabledLibraryCommandIDs;
       // Keep legacy files byte-stable until the user departs from the shipped
       // parking defaults; absence means enabled/10 minutes on load.
       if (value.piAgentIdleParkingEnabled === true) delete persisted.piAgentIdleParkingEnabled;
@@ -599,6 +632,32 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           if (disabled) next.add(extPath);
           else next.delete(extPath);
           settings = { ...settings, disabledExtensions: [...next] };
+          flush();
+          return settings;
+        }),
+      setInjectedCommandDisabled: (id, disabled) =>
+        Effect.sync(() => {
+          const next = new Set(
+            coerceCommandIds(settings.disabledInjectedCommandIDs, BUILT_IN_COMMAND_ID),
+          );
+          if (BUILT_IN_COMMAND_ID.test(id)) {
+            if (disabled && next.size < MAX_INJECTED_COMMAND_IDS) next.add(id);
+            else if (!disabled) next.delete(id);
+          }
+          settings = { ...settings, disabledInjectedCommandIDs: [...next] };
+          flush();
+          return settings;
+        }),
+      setLibraryCommandEnabled: (id, enabled) =>
+        Effect.sync(() => {
+          const next = new Set(
+            coerceCommandIds(settings.enabledLibraryCommandIDs, LIBRARY_COMMAND_ID),
+          );
+          if (LIBRARY_COMMAND_ID.test(id)) {
+            if (enabled && next.size < MAX_INJECTED_COMMAND_IDS) next.add(id);
+            else if (!enabled) next.delete(id);
+          }
+          settings = { ...settings, enabledLibraryCommandIDs: [...next] };
           flush();
           return settings;
         }),

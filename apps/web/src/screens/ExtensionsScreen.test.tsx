@@ -30,6 +30,7 @@ function installFetch(
   const mock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/resources/extensions")) return Promise.resolve(loadExtensions());
+    if (url === "/resources/commands") return Promise.resolve(jsonResponse({ commands: [] }));
     if (url === "/settings") {
       return Promise.resolve(
         jsonResponse({ settings: { extensionLoadingMode: "useMyExtensions" } }),
@@ -49,6 +50,170 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("injected command catalog", () => {
+  it("shows loading and reports a command-catalog error without inventing rows", async () => {
+    let rejectCommands!: (error: Error) => void;
+    const mock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/commands") {
+        return new Promise<Response>((_resolve, reject) => {
+          rejectCommands = reject;
+        });
+      }
+      if (url.startsWith("/resources/extensions"))
+        return Promise.resolve(jsonResponse({ extensions: [] }));
+      if (url === "/settings")
+        return Promise.resolve(
+          jsonResponse({ settings: { extensionLoadingMode: "useMyExtensions" } }),
+        );
+      if (url === "/runtime/bridges") return Promise.resolve(jsonResponse({ bridges: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", mock);
+
+    render(<ExtensionsScreen />);
+    expect(screen.getByRole("status").textContent).toContain("Loading commands");
+    rejectCommands(new Error("command catalog unavailable"));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toContain("command catalog unavailable"),
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("Commands are unavailable");
+    expect(screen.queryByText("No imported commands.")).toBeNull();
+  });
+
+  it("ignores an older resourcesVersion response and aborts its catalog request", async () => {
+    let resolveInitial!: (response: Response) => void;
+    let commandLoads = 0;
+    const signals: AbortSignal[] = [];
+    const fresh = {
+      id: "built-in:create-agent-deck-command",
+      slashName: "/create-agent-deck-command",
+      title: "Create command",
+      description: "Fresh",
+      source: "built-in",
+      status: "enabled",
+    };
+    const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/commands") {
+        commandLoads += 1;
+        if (init?.signal) signals.push(init.signal);
+        if (commandLoads === 1)
+          return new Promise<Response>((resolve) => {
+            resolveInitial = resolve;
+          });
+        return Promise.resolve(jsonResponse({ commands: [fresh] }));
+      }
+      if (url.startsWith("/resources/extensions"))
+        return Promise.resolve(jsonResponse({ extensions: [] }));
+      if (url === "/settings")
+        return Promise.resolve(
+          jsonResponse({ settings: { extensionLoadingMode: "useMyExtensions" } }),
+        );
+      if (url === "/runtime/bridges") return Promise.resolve(jsonResponse({ bridges: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", mock);
+
+    render(<ExtensionsScreen />);
+    useAppStore.setState({ resourcesVersion: 1 });
+    expect(await screen.findByText("/create-agent-deck-command")).toBeTruthy();
+    expect(signals[0]?.aborted).toBe(true);
+    resolveInitial(jsonResponse({ commands: [] }));
+    await waitFor(() => expect(screen.getByText("/create-agent-deck-command")).toBeTruthy());
+  });
+
+  it("groups bundled and imported commands without exposing imported paths", async () => {
+    const commands = [
+      {
+        id: "built-in:optimize-agents-md",
+        slashName: "/optimize-agents-md",
+        title: "Optimize AGENTS.md",
+        description: "Optimize the guide",
+        source: "built-in",
+        fileName: "optimize-agents-md.ts",
+        path: "/private/app/data/bundled/optimize-agents-md.ts",
+        status: "enabled",
+      },
+      {
+        id: "library:0123456789abcdef0123456789abcdef",
+        slashName: "/review-work",
+        title: "review-work",
+        description: "Review work",
+        source: "library",
+        fileName: "0123456789abcdef0123456789abcdef.ts",
+        path: "/private/app/data/library/secret.ts",
+        status: "disabled",
+      },
+    ];
+    const mock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/commands") return Promise.resolve(jsonResponse({ commands }));
+      if (url.startsWith("/resources/extensions"))
+        return Promise.resolve(jsonResponse({ extensions: [] }));
+      if (url === "/settings")
+        return Promise.resolve(
+          jsonResponse({ settings: { extensionLoadingMode: "useMyExtensions" } }),
+        );
+      if (url === "/runtime/bridges") return Promise.resolve(jsonResponse({ bridges: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", mock);
+
+    render(<ExtensionsScreen />);
+    expect(await screen.findByText("/optimize-agents-md")).toBeTruthy();
+    expect(screen.getByRole("note").textContent).toContain(
+      "execute as Pi extensions with extension-runtime capabilities",
+    );
+    expect(screen.getByText("/review-work")).toBeTruthy();
+    expect(screen.getByTestId("command-group-built-in")).toBeTruthy();
+    expect(screen.getByTestId("command-group-library")).toBeTruthy();
+    expect(screen.queryByText(/private\/app\/data/)).toBeNull();
+    expect(
+      screen.getByTestId("command-library:0123456789abcdef0123456789abcdef").className,
+    ).toContain("sm:flex-row");
+  });
+
+  it("imports browser file bytes and starts from an accessible empty library", async () => {
+    let commands: unknown[] = [];
+    let importedBody: { fileName: string; content: string } | undefined;
+    const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/commands" && !init?.method) return jsonResponse({ commands });
+      if (url === "/resources/commands/import") {
+        importedBody = JSON.parse(String(init?.body));
+        commands = [
+          {
+            id: "library:0123456789abcdef0123456789abcdef",
+            slashName: "/hello",
+            title: "hello",
+            description: "Hello",
+            source: "library",
+            fileName: "0123456789abcdef0123456789abcdef.ts",
+            status: "disabled",
+          },
+        ];
+        return jsonResponse({ command: commands[0] }, 201);
+      }
+      if (url.startsWith("/resources/extensions")) return jsonResponse({ extensions: [] });
+      if (url === "/settings")
+        return jsonResponse({ settings: { extensionLoadingMode: "useMyExtensions" } });
+      if (url === "/runtime/bridges") return jsonResponse({ bridges: [] });
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", mock);
+
+    render(<ExtensionsScreen />);
+    expect(await screen.findByText("No imported commands.")).toBeTruthy();
+    const file = new File(["source bytes"], "hello.ts", { type: "text/javascript" });
+    Object.defineProperty(file, "text", { value: async () => "source bytes" });
+    fireEvent.change(screen.getByTestId("command-file-input"), { target: { files: [file] } });
+    expect(await screen.findByText("/hello")).toBeTruthy();
+    expect(importedBody).toEqual({ fileName: "hello.ts", content: "source bytes" });
+  });
 });
 
 describe("extension catalog refresh", () => {

@@ -35,10 +35,12 @@ import {
   writePromptFile,
   type ResourceRecovery,
 } from "@agent-deck/resources";
+import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { curateProjectAgents } from "../agentCuration.ts";
 import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import type { ServerContext } from "../context.ts";
+import { InjectedCommandError } from "../injectedCommands.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
 const agentEditFields = z.object({
@@ -130,6 +132,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     skillStore,
     agentAvatars,
     extensionBridgeConflictAt,
+    injectedCommands,
     scanSkillCandidatesFor,
     createAgentWarningContext,
   } = ctx;
@@ -941,6 +944,64 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     broadcast({ type: "resources_changed" });
     return { ok: true };
+  });
+
+  const commandFailure = (reply: FastifyReply, error: unknown) => {
+    if (!(error instanceof InjectedCommandError))
+      return reply.status(500).send({ error: "The command library operation failed." });
+    const status = error.code === "not_found" ? 404 : error.code === "collision" ? 409 : 400;
+    return reply.status(status).send({ error: error.message });
+  };
+
+  // App-owned injected slash commands. Imported source bytes arrive through a
+  // browser/Electron-compatible file input and are copied into app data; no
+  // client source path is accepted, retained, or returned as provenance.
+  fastify.get("/resources/commands", async () => ({ commands: injectedCommands.list() }));
+
+  fastify.post("/resources/commands/import", async (request, reply) => {
+    const parsed = z
+      .object({ fileName: z.string().min(1).max(128), content: z.string().max(256_000) })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success)
+      return reply.status(400).send({ error: "Choose a .ts or .js command file up to 256 KB." });
+    try {
+      const command = injectedCommands.import(parsed.data.fileName, parsed.data.content);
+      broadcast({ type: "resources_changed" });
+      return reply.status(201).send({ command });
+    } catch (error) {
+      return commandFailure(reply, error);
+    }
+  });
+
+  fastify.post("/resources/commands/toggle", async (request, reply) => {
+    const parsed = z
+      .object({ id: z.string().min(1).max(96), enabled: z.boolean() })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid command toggle." });
+    try {
+      injectedCommands.setEnabled(parsed.data.id, parsed.data.enabled);
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    } catch (error) {
+      return commandFailure(reply, error);
+    }
+  });
+
+  fastify.delete("/resources/commands", async (request, reply) => {
+    const parsed = z
+      .object({ id: z.string().min(1).max(96) })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid command deletion." });
+    try {
+      injectedCommands.delete(parsed.data.id);
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    } catch (error) {
+      return commandFailure(reply, error);
+    }
   });
 
   // Extensions: user-added pi extension files (.ts/.js) merged into every

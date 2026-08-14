@@ -208,6 +208,14 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.setExtensionDisabled(extPath, disabled));
   }
 
+  setInjectedCommandDisabled(id: string, disabled: boolean): AppSettings {
+    return runSyncUnwrapped(this.handle.setInjectedCommandDisabled(id, disabled));
+  }
+
+  setLibraryCommandEnabled(id: string, enabled: boolean): AppSettings {
+    return runSyncUnwrapped(this.handle.setLibraryCommandEnabled(id, enabled));
+  }
+
   /** Record (or replace-by-id) an imported skill repository's provenance. */
   upsertImportedSkillRepository(
     repo: AppSettings["importedSkillRepositories"][number],

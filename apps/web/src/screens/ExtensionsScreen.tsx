@@ -1,7 +1,8 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Plug, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, FileCode2, Plug, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
+import type { InjectedCommandRecord } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
@@ -34,6 +35,216 @@ interface AppBridge {
 }
 
 type CatalogLoadResult = "applied" | "failed" | "superseded";
+
+function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
+  const setError = useAppStore((state) => state.setError);
+  const [commands, setCommands] = useState<InjectedCommandRecord[]>([]);
+  const [catalogState, setCatalogState] = useState<"loading" | "ready" | "error">("loading");
+  const [busy, setBusy] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const loadSequence = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+
+  const load = useCallback(async (): Promise<void> => {
+    const sequence = ++loadSequence.current;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    setCatalogState("loading");
+    try {
+      const response = await fetch("/resources/commands", { signal: controller.signal });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const data = (await response.json()) as { commands: InjectedCommandRecord[] };
+      if (sequence !== loadSequence.current) return;
+      setCommands(data.commands);
+      setCatalogState("ready");
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== loadSequence.current) return;
+      setCatalogState("error");
+      setError(String(error));
+    } finally {
+      if (loadController.current === controller) loadController.current = null;
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void load();
+    return () => loadController.current?.abort();
+  }, [load, resourcesVersion]);
+
+  const importFile = async (file: File): Promise<void> => {
+    setBusy("import");
+    try {
+      const response = await fetch("/resources/commands/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, content: await file.text() }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      await load();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      if (inputRef.current) inputRef.current.value = "";
+      setBusy(null);
+    }
+  };
+
+  const mutate = async (command: InjectedCommandRecord, action: "toggle" | "delete") => {
+    if (busy) return;
+    setBusy(command.id);
+    try {
+      const response = await fetch(
+        action === "delete" ? "/resources/commands" : "/resources/commands/toggle",
+        {
+          method: action === "delete" ? "DELETE" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            action === "delete"
+              ? { id: command.id }
+              : { id: command.id, enabled: command.status !== "enabled" },
+          ),
+        },
+      );
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      await load();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const group = (source: InjectedCommandRecord["source"], label: string) => {
+    const entries = commands.filter((command) => command.source === source);
+    return (
+      <div data-testid={`command-group-${source}`}>
+        <div className="pb-1.5 text-detail font-medium uppercase tracking-wide text-text-muted">
+          {label}
+        </div>
+        {entries.length === 0 ? (
+          <div className="rounded-xl border border-border-subtle px-3.5 py-4 text-sm text-text-muted">
+            {source === "library" ? "No imported commands." : "No bundled commands available."}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {entries.map((command) => {
+              const enabled = command.status === "enabled";
+              return (
+                <div
+                  key={command.id}
+                  data-testid={`command-${command.id}`}
+                  className={cn(
+                    "flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 sm:flex-row sm:items-center",
+                    !enabled && "opacity-55",
+                  )}
+                  aria-busy={busy === command.id}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm font-medium text-text-primary">
+                        {command.slashName}
+                      </span>
+                      <span className="text-xs text-text-secondary">{command.title}</span>
+                      <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                        {source === "built-in" ? "bundled with Agent Deck" : "Agent Deck library"}
+                      </span>
+                    </div>
+                    <p className="pt-0.5 text-detail text-text-muted">{command.description}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
+                    <ControlButton
+                      data-testid={`command-toggle-${command.id}`}
+                      aria-label={`${enabled ? "Disable" : "Enable"} ${command.slashName}`}
+                      disabled={busy !== null}
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary disabled:opacity-40"
+                      onClick={() => void mutate(command, "toggle")}
+                    >
+                      {busy === command.id ? "Saving…" : enabled ? "Disable" : "Enable"}
+                    </ControlButton>
+                    {source === "library" ? (
+                      <ControlButton
+                        data-testid={`command-delete-${command.id}`}
+                        aria-label={`Delete ${command.slashName} from Agent Deck's library`}
+                        title="Delete imported command"
+                        disabled={busy !== null}
+                        className="rounded p-1 text-text-muted hover:text-danger disabled:opacity-40"
+                        onClick={() => void mutate(command, "delete")}
+                      >
+                        <Trash2 size={13} />
+                      </ControlButton>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <section className="mb-5" aria-labelledby="commands-heading" data-testid="command-catalog">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+        <div className="flex items-center gap-2">
+          <FileCode2 size={15} className="text-text-secondary" aria-hidden />
+          <h3 id="commands-heading" className="text-sm font-semibold text-text-primary">
+            Commands
+          </h3>
+        </div>
+        <ControlButton
+          data-testid="command-import"
+          disabled={busy !== null}
+          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary disabled:opacity-40"
+          onClick={() => inputRef.current?.click()}
+        >
+          <Upload size={12} aria-hidden /> {busy === "import" ? "Importing…" : "Import command"}
+        </ControlButton>
+        <ControlInput
+          ref={inputRef}
+          data-testid="command-file-input"
+          className="sr-only"
+          type="file"
+          accept=".ts,.js,text/javascript,application/javascript"
+          aria-label="Choose a TypeScript or JavaScript command file"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void importFile(file);
+          }}
+        />
+      </div>
+      <p className="pb-2 text-xs text-text-muted">
+        App-managed slash commands for ordinary project sessions. Imported files are copied into
+        Agent Deck and start disabled; their original path is never retained.
+      </p>
+      <p
+        role="note"
+        className="mb-3 rounded-lg border border-warning bg-surface-subtle px-3 py-2 text-xs font-medium text-text-primary"
+      >
+        Trust enabled imports: they execute as Pi extensions with extension-runtime capabilities.
+        Use ordinary Extensions for privileged code that does more than register one command.
+      </p>
+      {catalogState === "loading" ? (
+        <div role="status" className="py-5 text-center text-sm text-text-muted">
+          Loading commands…
+        </div>
+      ) : catalogState === "error" ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-danger px-3.5 py-4 text-sm text-danger"
+        >
+          Commands are unavailable. Retry when Agent Deck reports the catalog is ready.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {group("built-in", "Bundled")}
+          {group("library", "Imported")}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function ExtensionsScreen() {
   const setError = useAppStore((state) => state.setError);
@@ -293,6 +504,8 @@ export function ExtensionsScreen() {
           pi extension files loaded into every new session. Disabled ones stay listed but don&apos;t
           load.
         </p>
+
+        <CommandCatalog resourcesVersion={resourcesVersion} />
 
         {bridges.length > 0 ? (
           <div className="mb-4" data-testid="app-bridges">

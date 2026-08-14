@@ -55,6 +55,7 @@ type ResolverContext = Pick<
   | "settings"
   | "resolveNamedAgent"
   | "enabledExtensionPaths"
+  | "injectedCommands"
   | "scanSkillCandidatesFor"
   | "rootsFor"
   | "resourceHome"
@@ -176,9 +177,18 @@ export function resolveLaunchResources(
   }
   model ??= defaults.model;
   const baseExtensions = config.extensionsOverride ?? defaults.extensions ?? [];
+  // Injected slash commands are an app-owned parent-session capability, not a
+  // user extension or model-facing tool grant. They bypass user loading mode and
+  // named-agent extension allowlists, but only for sessions attached to a real
+  // project. Helpers, managed children, Loops, and no-project launches never use
+  // this resolver/project gate.
+  // Narrow legacy route embedders may provide a pre-CMD context; production
+  // always binds the store, while their absent optional capability means none.
+  const injectedCommands = project ? (ctx.injectedCommands?.enabledExtensionPaths() ?? []) : [];
   const base = finalizeExtensions([
     ...baseExtensions,
     ...(request.agentName ? [] : ctx.enabledExtensionPaths(request.projectId)),
+    ...injectedCommands,
   ]);
 
   let plan: LaunchPlan;

@@ -2,7 +2,73 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { fingerprintLaunchResources } from "../src/launchResources.ts";
+import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
+
+describe("injected command launch matrix", () => {
+  it("injects plain and named project parents, but not no-project or absent-store launches", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-command-launch-"));
+    const projectPath = path.join(root, "project");
+    mkdirSync(projectPath);
+    const commandPath = path.join(root, "command.ts");
+    writeFileSync(commandPath, "export default function () {};");
+    const project = { id: "project-1", path: projectPath };
+    const settings = {
+      defaultSkills: [],
+      defaultPromptTemplates: [],
+      disabledSkills: [],
+      defaultThinking: null,
+    };
+    const context = {
+      projects: {
+        find: (predicate: (candidate: typeof project) => boolean) =>
+          predicate(project) ? project : undefined,
+      },
+      settings: { get: () => settings },
+      resolveNamedAgent: () => ({
+        status: "ok" as const,
+        agent: {
+          body: "Named parent",
+          systemPromptMode: "replace" as const,
+          skillDirs: [],
+          extensions: [],
+          mcpServers: [],
+        },
+      }),
+      enabledExtensionPaths: () => [],
+      injectedCommands: { enabledExtensionPaths: () => [commandPath] },
+      scanSkillCandidatesFor: () => [],
+      rootsFor: (projectId?: string) => ({
+        home: root,
+        projectPath: projectId ? projectPath : undefined,
+      }),
+      resourceHome: () => root,
+      memoryEnabled: false,
+      memoryBaseDir: path.join(root, "memory"),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const plain = resolveLaunchResources(context, { projectId: project.id }, {});
+    expect(plain.plan.kind).toBe("parent");
+    expect(plain.plan.extensions).toEqual([commandPath]);
+
+    const named = resolveLaunchResources(
+      context,
+      { projectId: project.id, agentName: "named" },
+      {},
+    );
+    expect(named.plan.kind).toBe("agent");
+    expect(named.plan.extensions).toEqual([commandPath]);
+
+    const noProject = resolveLaunchResources(context, {}, {});
+    expect(noProject.plan.extensions).toBeUndefined();
+
+    const absentStore = resolveLaunchResources(
+      { ...context, injectedCommands: undefined as never },
+      { projectId: project.id },
+      {},
+    );
+    expect(absentStore.plan.extensions).toBeUndefined();
+  });
+});
 
 describe("launch resource fingerprint", () => {
   it("tracks selected resource bytes but ignores resume identity and unrelated UI files", () => {

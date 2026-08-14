@@ -72,6 +72,35 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
   await expect.poll(() => commandNames(id2), { timeout: 20_000 }).not.toContain("ask-test");
 });
 
+test("imports, enables, and deletes one app-owned slash command", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-extensions").click();
+  await expect(page.getByTestId("command-catalog")).toBeVisible();
+  await page.getByTestId("command-file-input").setInputFiles({
+    name: "e2e-command.ts",
+    mimeType: "text/javascript",
+    buffer: Buffer.from(`export default function (pi) {
+  pi.registerCommand("e2e-command", {
+    description: "E2E imported command",
+    handler: async (args, ctx) => {
+      await ctx.waitForIdle();
+      pi.sendUserMessage(args?.trim() || "E2E command");
+    },
+  });
+}\n`),
+  });
+
+  const row = page.locator('[data-testid^="command-library:"]').filter({
+    hasText: "/e2e-command",
+  });
+  await expect(row).toBeVisible();
+  await expect(row.getByRole("button", { name: "Enable /e2e-command" })).toBeVisible();
+  await row.getByRole("button", { name: "Enable /e2e-command" }).click();
+  await expect(row.getByRole("button", { name: "Disable /e2e-command" })).toBeVisible();
+  await row.getByRole("button", { name: /Delete \/e2e-command/ }).click();
+  await expect(row).toHaveCount(0);
+});
+
 test("flags two enabled extensions that share a filename (§16.2)", async ({ page }) => {
   // Same basename, different directories → pi would load a duplicate.
   const dupName = "dup-ext.ts";

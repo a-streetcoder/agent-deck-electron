@@ -71,6 +71,7 @@ import {
 import { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
 import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
+import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
@@ -534,6 +535,10 @@ async function initServer(
   const providerLogin = new ProviderLoginManager();
   const projects = new ProjectIndex(dataDir);
   const settings = new SettingsStore(dataDir);
+  // App-owned command files are materialized under trusted app data at startup.
+  // The store remains the sole scanner/mutator and supplies explicit extension
+  // paths only to ordinary project parent sessions through launchResources.
+  const injectedCommands = new InjectedCommandStore(dataDir, settings);
   const parkingSettings = settings.get();
   sessions.configureIdleParking(
     parkingSettings.piAgentIdleParkingEnabled
@@ -1080,6 +1085,7 @@ async function initServer(
     resolveNamedAgent,
     extensionBridgeConflictAt,
     enabledExtensionPaths,
+    injectedCommands,
     resourceHome,
     rootsFor,
     scanSkillsFor,
