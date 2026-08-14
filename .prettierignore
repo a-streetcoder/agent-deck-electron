@@ -10,3 +10,5 @@ apps/web/public/fonts/
 # JSON.stringify(x, null, 2) (no trailing newline), so the persistence
 # round-trip test can assert format identity. Prettier must not reflow them.
 apps/server/test/fixtures/persistence/
+# Bundled prompt assets stay byte-identical to native's bundled-prompts (PRM-02).
+packages/resources/builtin-prompts/
