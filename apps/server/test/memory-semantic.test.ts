@@ -10,8 +10,8 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
  * StartServerOptions routes /memory/search (and the bridge tool + recall hook)
  * through semantic ranking; without one, recall stays lexical+fuzzy. Hermetic: a
  * concept-keyword stub embedder stands in for the real on-device model (no
- * download), proving a lexically-DISJOINT query recalls the right memory only
- * when the embedder is present.
+ * download), pinning the native-calibrated lexical corroboration and abstention
+ * gates through the complete HTTP call path.
  */
 
 process.env.AGENT_DECK_TEST = "1";
@@ -95,23 +95,35 @@ async function search(projectId: string, q: string): Promise<string[]> {
 }
 
 describe("semantic memory opt-in via /memory/search", () => {
-  it("recalls a concept-matched memory for a lexically-disjoint query WHEN an embedder is injected", async () => {
+  it.each([
+    {
+      name: "recalls a strong concept match corroborated by one curated term",
+      query: "oauth whereabouts",
+      expected: ["Login credentials"],
+    },
+    {
+      name: "abstains from a strong concept match with no lexical corroboration",
+      query: "authenticate signin",
+      expected: [],
+    },
+    {
+      name: "recalls a database match with two curated terms",
+      query: "postgres schema",
+      expected: ["Schema migrations"],
+    },
+  ])("$name", async ({ query, expected }) => {
     const { projectId } = await setup(conceptEmbedder);
-    // "authenticate a signin" shares no informative term with the credentials
-    // memory, so lexical recall abstains — but the auth concept matches.
-    const titles = await search(projectId, "how do I authenticate a signin");
-    expect(titles[0]).toBe("Login credentials");
+    expect(await search(projectId, query)).toEqual(expected);
   });
 
-  it("abstains on the same disjoint query with NO embedder (lexical default)", async () => {
-    const { projectId } = await setup(undefined);
-    const titles = await search(projectId, "how do I authenticate a signin");
-    expect(titles).toHaveLength(0);
-  });
-
-  it("still finds an exact-term match under the lexical default", async () => {
-    const { projectId } = await setup(undefined);
-    const titles = await search(projectId, "oauth token");
-    expect(titles).toContain("Login credentials");
-  });
+  it.each([
+    { query: "authenticate signin", expected: [] },
+    { query: "oauth token", expected: ["Login credentials"] },
+  ])(
+    "keeps lexical fallback calibration for '$query' without an embedder",
+    async ({ query, expected }) => {
+      const { projectId } = await setup(undefined);
+      expect(await search(projectId, query)).toEqual(expected);
+    },
+  );
 });

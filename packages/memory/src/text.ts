@@ -98,6 +98,152 @@ const STOPWORDS = new Set([
   "got",
 ]);
 
+/**
+ * Native semantic recall's deliberately stricter overlap stopwords. Keep this
+ * separate from lexical recall: changing the older lexical tokenizer would
+ * alter fallback/search behavior outside MEM-01/02.
+ */
+const SEMANTIC_OVERLAP_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "are",
+  "was",
+  "were",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "having",
+  "can",
+  "could",
+  "should",
+  "would",
+  "will",
+  "shall",
+  "may",
+  "might",
+  "must",
+  "not",
+  "nor",
+  "but",
+  "with",
+  "without",
+  "from",
+  "into",
+  "over",
+  "under",
+  "again",
+  "further",
+  "once",
+  "here",
+  "there",
+  "all",
+  "any",
+  "both",
+  "each",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "only",
+  "own",
+  "same",
+  "than",
+  "too",
+  "very",
+  "just",
+  "also",
+  "already",
+  "you",
+  "your",
+  "yours",
+  "our",
+  "ours",
+  "his",
+  "her",
+  "hers",
+  "its",
+  "their",
+  "theirs",
+  "this",
+  "that",
+  "these",
+  "those",
+  "what",
+  "which",
+  "who",
+  "whom",
+  "why",
+  "how",
+  "when",
+  "where",
+  "does",
+  "did",
+  "done",
+  "doing",
+  "please",
+  "want",
+  "wants",
+  "need",
+  "needs",
+  "like",
+  "make",
+  "makes",
+  "use",
+  "uses",
+  "using",
+  "get",
+  "gets",
+  "got",
+  "yes",
+  "okay",
+  "still",
+  "even",
+  "ever",
+  "never",
+  "always",
+  "guess",
+  "case",
+  "thing",
+  "things",
+  "way",
+  "isn",
+  "don",
+  "didn",
+  "doesn",
+  "wasn",
+  "weren",
+  "aren",
+  "couldn",
+  "shouldn",
+  "wouldn",
+  "hasn",
+  "haven",
+  "ain",
+  "let",
+  "lets",
+  "app",
+  "apps",
+  "view",
+  "views",
+  "window",
+  "windows",
+  "screen",
+  "screens",
+  "button",
+  "buttons",
+  "menu",
+  "menus",
+  "coding",
+  "code",
+  "agent",
+  "agents",
+]);
+
 /** Collapse a doubled trailing consonant (runn→run, stopp→stop) after -ing/-ed. */
 function collapseDouble(word: string): string {
   return word.length > 2 && /([bcdfghjklmnpqrstvwxz])\1$/.test(word) ? word.slice(0, -1) : word;
@@ -135,6 +281,27 @@ export function informativeTerms(text: string): Set<string> {
   return terms;
 }
 
+/**
+ * Terms used only by semantic qualification, matching AgentMemoryStore's
+ * overlap tokenizer: Unicode alphanumeric runs, minimum three characters,
+ * whole numbers and native overlap stopwords removed, then plural `s` followed
+ * by trailing `ing` stemming. In particular, this intentionally differs from
+ * the lexical/fuzzy tokenizer above.
+ */
+export function semanticInformativeTerms(text: string): Set<string> {
+  const terms = new Set<string>();
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    let term = raw;
+    if ([...term].length < 3 || /^\d+$/u.test(term) || SEMANTIC_OVERLAP_STOPWORDS.has(term)) {
+      continue;
+    }
+    if ([...term].length > 3 && term.endsWith("s")) term = term.slice(0, -1);
+    if ([...term].length >= 6 && term.endsWith("ing")) term = term.slice(0, -3);
+    terms.add(term);
+  }
+  return terms;
+}
+
 /** Informative terms carried by a memory's retrieval fields (never the body). */
 export function memoryTerms(fields: {
   title: string;
@@ -142,6 +309,15 @@ export function memoryTerms(fields: {
   tags: string[];
 }): Set<string> {
   return informativeTerms([fields.title, fields.summary, fields.tags.join(" ")].join(" "));
+}
+
+/** Native semantic-overlap terms carried by the same curated memory fields. */
+export function semanticMemoryTerms(fields: {
+  title: string;
+  summary: string;
+  tags: string[];
+}): Set<string> {
+  return semanticInformativeTerms([fields.title, fields.summary, fields.tags.join(" ")].join(" "));
 }
 
 /** Terms present in both sets. */

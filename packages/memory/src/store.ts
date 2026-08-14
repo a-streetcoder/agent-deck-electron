@@ -10,6 +10,8 @@ import {
   informativeTerms,
   memoryTerms,
   overlapCoefficient,
+  semanticInformativeTerms,
+  semanticMemoryTerms,
   sharedTerms,
 } from "./text.ts";
 import type {
@@ -41,6 +43,17 @@ const MIN_FUZZY_ONLY = 2;
 /** A one-edit (typo/near-miss) term match counts for less than an exact one. */
 const FUZZY_WEIGHT = 0.5;
 const DEFAULT_SEARCH_LIMIT = 8;
+/** Native-calibrated semantic qualification and relative-keep thresholds. */
+const STRONG_SEMANTIC_SCORE = 0.5;
+const STRONG_MIN_OVERLAP = 1;
+const MIN_QUERY_OVERLAP = 2;
+const MIN_BEST_SCORE = 0.1;
+const KEEP_SCORE_RATIO = 0.6;
+const OVERLAP_BONUS = 0.12;
+const OVERLAP_BONUS_CAP = 4;
+const DISCRIMINATIVE_MIN_DOC_COUNT = 5;
+const DISCRIMINATIVE_MAX_DOC_FRACTION = 0.2;
+const SEMANTIC_SCORE_BUCKET = 0.02;
 /** Cap on the injected project memory index (memory.md: 40 for parents). */
 const DEFAULT_INDEX_CAP = 40;
 
@@ -274,17 +287,61 @@ export function searchMemories(
   return hits.slice(0, limit);
 }
 
-/** Text embedded for a memory's semantic vector — title + summary + body. */
+/** Text embedded for a memory's semantic vector — title + summary + bounded body. */
 function memoryEmbedText(record: MemoryRecord): string {
-  return [record.title, record.summary, record.body].filter(Boolean).join("\n");
+  const bodyPrefix = record.body.slice(0, 600).trim();
+  return bodyPrefix
+    ? `${record.title}\n${record.summary}\n${bodyPrefix}`
+    : `${record.title}\n${record.summary}`;
+}
+
+function validEmbeddingBatch(vectors: number[][], expectedCount: number): boolean {
+  if (vectors.length !== expectedCount) return false;
+  const dimension = vectors[0]?.length ?? 0;
+  return (
+    dimension > 0 &&
+    vectors.every(
+      (vector) => vector.length === dimension && vector.every((value) => Number.isFinite(value)),
+    )
+  );
+}
+
+function discriminativeOverlaps(
+  records: MemoryRecord[],
+  queryTerms: Set<string>,
+): Array<{ count: number; shared: string[] }> {
+  const termsByRecord = records.map(semanticMemoryTerms);
+  const documentFrequency = new Map<string, number>();
+  for (const terms of termsByRecord) {
+    for (const term of terms) {
+      documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+    }
+  }
+
+  return termsByRecord.map((terms) => {
+    const shared = sharedTerms(queryTerms, terms);
+    const count = shared.filter((term) => {
+      const documentCount = documentFrequency.get(term) ?? 0;
+      return !(
+        documentCount >= DISCRIMINATIVE_MIN_DOC_COUNT &&
+        documentCount / records.length > DISCRIMINATIVE_MAX_DOC_FRACTION
+      );
+    }).length;
+    // Preserve the public hit contract: sharedTerms reports every exact shared
+    // term even though only the discriminative subset qualifies and scores.
+    return { count, shared };
+  });
 }
 
 /**
- * Semantic recall (native AgentMemoryEmbedder): rank memories by mean-centered
- * cosine of an embedding, BLENDED with the lexical signal so exact-term hits
- * still win when they exist while a semantically-related query with no shared
- * words is still recalled. The Embedder is injected (a real on-device model in
- * production; a stub in tests). Falls back to pure lexical if embedding fails.
+ * Semantic recall with native-calibrated qualification and abstention. Embedding
+ * similarity ranks only memories corroborated by discriminative title, summary,
+ * or tag vocabulary; incidental body terms never qualify a hit. The injected
+ * embedder remains optional at the server boundary, and failures or malformed
+ * vectors safely fall back to the existing lexical search.
+ *
+ * `semanticWeight` remains accepted for source compatibility with earlier
+ * callers, but native-calibrated hybrid scoring intentionally does not vary it.
  */
 export async function semanticSearchMemories(
   store: MemoryStore,
@@ -293,40 +350,69 @@ export async function semanticSearchMemories(
   options: { limit?: number; semanticWeight?: number } = {},
 ): Promise<MemorySearchHit[]> {
   const limit = Math.max(0, options.limit ?? DEFAULT_SEARCH_LIMIT);
-  const semanticWeight = Math.min(1, Math.max(0, options.semanticWeight ?? 0.7));
   const records = injectable(listMemories(store));
-  if (records.length === 0 || !query.trim()) return [];
+  if (limit === 0 || records.length === 0 || !query.trim()) return [];
 
-  let semanticScores: number[];
+  let rawScores: number[];
   try {
     const vectors = await embedder.embed([query, ...records.map(memoryEmbedText)]);
-    const [queryVec, ...docVecs] = vectors;
-    if (!queryVec || docVecs.length !== records.length) throw new Error("embedding shape mismatch");
-    // Centered cosine is ~[-1,1]; normalize to [0,1] to blend with the lexical score.
-    semanticScores = centeredCosineScores(queryVec, docVecs).map((s) => (s + 1) / 2);
+    if (!validEmbeddingBatch(vectors, records.length + 1)) {
+      throw new Error("invalid embedding batch");
+    }
+    const [queryVec, ...docVecs] = vectors as [number[], ...number[][]];
+    rawScores = centeredCosineScores(queryVec, docVecs);
   } catch {
-    // Embedding unavailable/failed — fall back to the lexical ranking.
     return searchMemories(store, query, limit);
   }
 
-  // Normalize the lexical scores into [0,1] so the blend weight is meaningful.
-  const lexicalById = new Map(
-    searchMemories(store, query, records.length).map((hit) => [hit.record.id, hit.score]),
-  );
-  const maxLexical = Math.max(1, ...lexicalById.values());
+  // An exactly-centroid query has no semantic direction and must abstain rather
+  // than turning lexical overlap into a result on ambiguous geometry.
+  if (rawScores.length !== records.length) return [];
 
-  const hits: MemorySearchHit[] = records.map((record, index) => {
-    const semantic = semanticScores[index] ?? 0;
-    const lexical = (lexicalById.get(record.id) ?? 0) / maxLexical;
-    const pin = record.status === "pinned" ? 0.05 : 0;
+  const overlaps = discriminativeOverlaps(records, semanticInformativeTerms(query));
+  const centered = records.length >= 2;
+  const ranked = records.map((record, index) => {
+    const raw = rawScores[index]!;
+    const overlap = overlaps[index]!;
     return {
       record,
-      score: semanticWeight * semantic + (1 - semanticWeight) * lexical + pin,
-      sharedTerms: sharedTerms(informativeTerms(query), memoryTerms(record)),
+      raw,
+      overlap: overlap.count,
+      hit: {
+        record,
+        score: raw + OVERLAP_BONUS * Math.min(overlap.count, OVERLAP_BONUS_CAP),
+        sharedTerms: overlap.shared,
+      } satisfies MemorySearchHit,
     };
   });
-  hits.sort((a, b) => b.score - a.score || b.record.updatedAt.localeCompare(a.record.updatedAt));
-  return hits.slice(0, limit);
+  ranked.sort((a, b) => {
+    // Native deliberately quantizes score before metadata ordering: pin and
+    // recency may settle a near-tie but never add relevance points. Native also
+    // checks useCount here; Electron does not persist it yet (tracked as MEM-08).
+    const scoreBucketDifference =
+      Math.floor(b.hit.score / SEMANTIC_SCORE_BUCKET) -
+      Math.floor(a.hit.score / SEMANTIC_SCORE_BUCKET);
+    return (
+      scoreBucketDifference ||
+      Number(b.record.status === "pinned") - Number(a.record.status === "pinned") ||
+      b.record.updatedAt.localeCompare(a.record.updatedAt)
+    );
+  });
+
+  const qualified = ranked.filter(({ raw, overlap }) =>
+    centered
+      ? (raw >= STRONG_SEMANTIC_SCORE && overlap >= STRONG_MIN_OVERLAP) ||
+        overlap >= MIN_QUERY_OVERLAP
+      : overlap >= MIN_QUERY_OVERLAP,
+  );
+  const best = qualified[0]?.hit.score;
+  if (best === undefined || best < MIN_BEST_SCORE) return [];
+
+  const keepCutoff = best * KEEP_SCORE_RATIO;
+  return qualified
+    .filter(({ hit }) => hit.score >= keepCutoff)
+    .slice(0, limit)
+    .map(({ hit }) => hit);
 }
 
 /**

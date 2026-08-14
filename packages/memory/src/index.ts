@@ -32,6 +32,8 @@ export {
   informativeTerms,
   memoryTerms,
   overlapCoefficient,
+  semanticInformativeTerms,
+  semanticMemoryTerms,
   sharedTerms,
   withinOneEdit,
 } from "./text.ts";

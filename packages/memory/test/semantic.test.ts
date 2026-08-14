@@ -6,50 +6,15 @@ import {
   centeredCosineScores,
   cosineSimilarity,
   meanCenter,
+  informativeTerms,
   searchMemories,
+  semanticInformativeTerms,
   semanticSearchMemories,
+  setMemoryStatus,
   writeMemory,
   type Embedder,
   type MemoryStore,
 } from "../src/index.ts";
-
-/**
- * A hermetic stub for the on-device embedder: it maps text to an L2-normalized
- * vector over a handful of CONCEPTS by counting trigger words. Normalizing keeps
- * it faithful to real sentence embeddings (which are ~unit norm), so a query
- * that weakly triggers a concept still lands near a doc that strongly triggers
- * the same concept. This exercises the blended search's key property — recalling
- * a memory whose CONCEPT matches the query even when the two share no literal
- * words — without downloading a real model.
- *
- * Each concept splits its triggers: DOC words appear in the memories, PROBE
- * words only in the queries, so the concept match is never a lexical one.
- */
-const CONCEPTS: Array<{ dim: number; triggers: string[] }> = [
-  {
-    dim: 0,
-    triggers: ["login", "oauth", "credentials", "token", "authenticate", "signin", "password"],
-  },
-  { dim: 1, triggers: ["schema", "sql", "migration", "database", "postgres", "query", "reindex"] },
-  { dim: 2, triggers: ["release", "pipeline", "ci", "build", "ship", "deploy", "rollout"] },
-];
-
-const conceptEmbedder: Embedder = {
-  async embed(texts) {
-    return texts.map((text) => {
-      const words = text
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter(Boolean);
-      const vec = new Array<number>(CONCEPTS.length).fill(0.01);
-      for (const { dim, triggers } of CONCEPTS) {
-        for (const word of words) if (triggers.includes(word)) vec[dim]! += 1;
-      }
-      const norm = Math.sqrt(vec.reduce((s, x) => s + x * x, 0));
-      return vec.map((x) => x / norm);
-    });
-  },
-};
 
 let store: MemoryStore;
 
@@ -60,99 +25,401 @@ beforeEach(() => {
   };
 });
 
+function addMemory(
+  title: string,
+  summary: string,
+  body = `${title} body`,
+  options: { tags?: string[]; confirmNew?: boolean } = {},
+): void {
+  const result = writeMemory(store, {
+    type: "context",
+    title,
+    summary,
+    body,
+    tags: options.tags,
+    confirmNew: options.confirmNew,
+  });
+  if (!result.ok) throw new Error(`memory setup failed: ${result.reason}`);
+}
+
+function mappedEmbedder(
+  queries: Record<string, number[]>,
+  documents: Record<string, number[]>,
+  onTexts?: (texts: string[]) => void,
+): Embedder {
+  return {
+    async embed(texts) {
+      onTexts?.(texts);
+      return texts.map((text, index) => {
+        if (index === 0) return queries[text] ?? [0, 0, 0];
+        const title = text.split("\n", 1)[0]!;
+        return documents[title] ?? [0, 0, 0];
+      });
+    },
+  };
+}
+
+const DOCUMENT_VECTORS: Record<string, number[]> = {
+  "Login credentials": [1, 0, 0],
+  "Schema migrations": [0, 1, 0],
+  "Release pipeline": [0, 0, 1],
+};
+
+function seedCalibratedCorpus(): void {
+  addMemory("Login credentials", "Where the oauth token lives");
+  addMemory("Schema migrations", "Applying schema changes to postgres");
+  addMemory("Release pipeline", "How code ships through CI");
+}
+
 describe("semantic scoring math", () => {
+  it("keeps native semantic overlap tokenization separate from lexical search", () => {
+    const text = "agent please UI running parties cache 123";
+    expect([...semanticInformativeTerms(text)].sort()).toEqual(["cache", "partie", "runn"]);
+    expect([...informativeTerms(text)].sort()).toEqual(
+      ["123", "agent", "cache", "party", "please", "run", "ui"].sort(),
+    );
+  });
+
   it("mean-centers vectors around their centroid", () => {
-    const centered = meanCenter([
-      [1, 0],
-      [3, 0],
-    ]);
-    expect(centered).toEqual([
+    expect(
+      meanCenter([
+        [1, 0],
+        [3, 0],
+      ]),
+    ).toEqual([
       [-1, 0],
       [1, 0],
     ]);
   });
 
-  it("cosine of a vector with itself is 1, orthogonal is 0", () => {
+  it("computes cosine and uses raw cosine for a one-document corpus", () => {
     expect(cosineSimilarity([1, 2, 3], [1, 2, 3])).toBeCloseTo(1);
     expect(cosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0);
     expect(cosineSimilarity([0, 0], [1, 1])).toBe(0);
+    expect(centeredCosineScores([1, 0], [[1, 0]])).toEqual([1]);
   });
 
-  it("centered cosine separates a related doc from an unrelated one", () => {
-    const scores = centeredCosineScores(
+  it("centers on documents only and abstains when the query is their centroid", () => {
+    const docs = [
       [1, 0],
-      [
-        [1, 0],
-        [0, 1],
-      ],
+      [0, 1],
+    ];
+    expect(centeredCosineScores([1, 0], docs)[0]).toBeGreaterThan(
+      centeredCosineScores([1, 0], docs)[1]!,
     );
-    expect(scores[0]!).toBeGreaterThan(scores[1]!);
+    expect(centeredCosineScores([0.5, 0.5], docs)).toEqual([]);
   });
 });
 
-describe("semanticSearchMemories", () => {
-  beforeEach(() => {
-    writeMemory(store, {
+describe("semanticSearchMemories native qualification", () => {
+  beforeEach(seedCalibratedCorpus);
+
+  it.each([
+    {
+      name: "keeps a strong semantic match corroborated by one curated term",
+      query: "oauth whereabouts",
+      vector: [1, 0, 0],
+      expected: ["Login credentials"],
+    },
+    {
+      name: "keeps a weak semantic match only with two curated terms",
+      query: "login token",
+      vector: [1 / 3, 4 / 3, -2 / 3],
+      expected: ["Login credentials"],
+    },
+    {
+      name: "abstains from a strong but lexically uncorroborated match",
+      query: "authenticate signin",
+      vector: [1, 0, 0],
+      expected: [],
+    },
+    {
+      name: "abstains when lexical qualification has a hybrid score below the floor",
+      query: "login token",
+      vector: [-1, 0, 0],
+      expected: [],
+    },
+  ])("$name", async ({ query, vector, expected }) => {
+    const hits = await semanticSearchMemories(
+      store,
+      query,
+      mappedEmbedder({ [query]: vector }, DOCUMENT_VECTORS),
+    );
+    expect(hits.map((hit) => hit.record.title)).toEqual(expected);
+  });
+
+  it("takes the weak path when raw cosine is strictly between 0 and 0.5", async () => {
+    const isolated: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    for (const [title, summary] of [
+      ["Login token", "credential location"],
+      ["Release notes", "deployment history"],
+    ] as const) {
+      const result = writeMemory(isolated, {
+        type: "context",
+        title,
+        summary,
+        body: "body",
+        confirmNew: true,
+      });
+      if (!result.ok) throw new Error("setup failed");
+    }
+    const query = "login token";
+    const hits = await semanticSearchMemories(
+      isolated,
+      query,
+      mappedEmbedder(
+        { [query]: [0.3, Math.sqrt(1 - 0.3 ** 2)] },
+        { "Login token": [1, 0], "Release notes": [-1, 0] },
+      ),
+    );
+    expect(hits.map((hit) => hit.record.title)).toEqual(["Login token"]);
+  });
+
+  it("retains two positive qualified hits within 60% of the best", async () => {
+    const isolated: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    for (const [title, summary] of [
+      ["Primary cache", "artifact location"],
+      ["Secondary cache", "artifact mirror"],
+      ["Release notes", "deployment history"],
+    ] as const) {
+      const result = writeMemory(isolated, {
+        type: "context",
+        title,
+        summary,
+        body: "body",
+        confirmNew: true,
+      });
+      if (!result.ok) throw new Error("setup failed");
+    }
+    const query = "cache artifact";
+    const hits = await semanticSearchMemories(
+      isolated,
+      query,
+      mappedEmbedder(
+        { [query]: [1, 0] },
+        {
+          "Primary cache": [1, 0],
+          "Secondary cache": [0.8, 0.6],
+          "Release notes": [-1.8, -0.6],
+        },
+      ),
+    );
+    expect(hits.map((hit) => hit.record.title)).toEqual(["Primary cache", "Secondary cache"]);
+  });
+
+  it("uses title/summary/tags for qualification but not incidental body vocabulary", async () => {
+    const bodyOnly = await semanticSearchMemories(
+      store,
+      "body whereabouts",
+      mappedEmbedder({ "body whereabouts": [1, 0, 0] }, DOCUMENT_VECTORS),
+    );
+    expect(bodyOnly).toEqual([]);
+
+    // Tags are curated retrieval fields and do count.
+    addMemory("Build cache", "Remote artifacts", "body", { tags: ["cache", "artifact"] });
+    const docs = Object.fromEntries(
+      Object.entries(DOCUMENT_VECTORS).map(([title, vector]) => [title, [...vector, 0]]),
+    );
+    docs["Build cache"] = [0, 0, 0, 1];
+    const query = "cache artifact";
+    const hits = await semanticSearchMemories(
+      store,
+      query,
+      mappedEmbedder({ [query]: [0, 0, 0, 1] }, docs),
+    );
+    expect(hits[0]?.record.title).toBe("Build cache");
+  });
+
+  it("embeds title + summary + the trimmed first 600 body characters", async () => {
+    const isolated: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    const body = `${"a".repeat(598)}  TAIL`;
+    const result = writeMemory(isolated, {
+      type: "context",
+      title: "Bounded document",
+      summary: "alpha beta",
+      body,
+    });
+    if (!result.ok) throw new Error("setup failed");
+
+    let embedded: string[] = [];
+    await semanticSearchMemories(
+      isolated,
+      "alpha beta",
+      mappedEmbedder({ "alpha beta": [1, 0] }, { "Bounded document": [1, 0] }, (texts) => {
+        embedded = texts;
+      }),
+    );
+    expect(embedded[1]).toBe(`Bounded document\nalpha beta\n${"a".repeat(598)}`);
+    expect(embedded[1]).not.toContain("TAIL");
+  });
+
+  it("requires two lexical terms for a single-document corpus despite saturated raw cosine", async () => {
+    const isolated: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    const result = writeMemory(isolated, {
       type: "context",
       title: "Login credentials",
-      summary: "Where the oauth token lives",
-      body: "Keep the oauth credentials and login token in auth.json.",
-      tags: [],
+      summary: "oauth token location",
+      body: "body",
     });
-    writeMemory(store, {
-      type: "context",
-      title: "Schema migrations",
-      summary: "Applying schema changes",
-      body: "Apply the sql schema migration to the database.",
-      tags: [],
-    });
-    writeMemory(store, {
-      type: "context",
-      title: "Release pipeline",
-      summary: "How code ships",
-      body: "The ci pipeline runs the build and ships the release.",
-      tags: [],
-    });
+    if (!result.ok) throw new Error("setup failed");
+    const embedder = mappedEmbedder(
+      { oauth: [1, 0], "oauth token": [1, 0] },
+      { "Login credentials": [1, 0] },
+    );
+
+    expect(await semanticSearchMemories(isolated, "oauth", embedder)).toEqual([]);
+    expect(
+      (await semanticSearchMemories(isolated, "oauth token", embedder)).map(
+        (hit) => hit.record.title,
+      ),
+    ).toEqual(["Login credentials"]);
   });
 
-  it("recalls a concept-matched memory that shares NO words with the query", async () => {
-    // "authenticate a signin" is lexically disjoint from the credentials memory
-    // (no shared/fuzzy terms) yet maps to the same auth concept.
-    const query = "how do I authenticate a signin";
-
-    // Lexical search alone cannot find it — nothing shares a term.
-    expect(searchMemories(store, query)).toHaveLength(0);
-
-    const hits = await semanticSearchMemories(store, query, conceptEmbedder);
-    expect(hits[0]?.record.title).toBe("Login credentials");
+  it.each([
+    {
+      name: "count 4 remains discriminative despite exceeding 20%",
+      corpusSize: 10,
+      count: 4,
+      hit: true,
+    },
+    {
+      name: "count 5/25 remains discriminative at exactly 20%",
+      corpusSize: 25,
+      count: 5,
+      hit: true,
+    },
+    { name: "count 6/25 is excluded above 20%", corpusSize: 25, count: 6, hit: false },
+  ])("keeps the native DF boundary: $name", async ({ corpusSize, count, hit }) => {
+    const crowded: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    const documents: Record<string, number[]> = {};
+    let targetTitle = "";
+    for (let index = 0; index < corpusSize; index += 1) {
+      const title = `${index < count ? "Calibration " : ""}Topic variant${index}`;
+      const result = writeMemory(crowded, {
+        type: "context",
+        title,
+        summary: `Distinct subject variant${index}`,
+        body: "body",
+        confirmNew: true,
+      });
+      if (!result.ok) throw new Error("setup failed");
+      if (index === 0) targetTitle = title;
+      documents[title] = index === 0 ? [1, 0] : [0, 1];
+    }
+    const hits = await semanticSearchMemories(
+      crowded,
+      "calibration",
+      mappedEmbedder({ calibration: [1, 0] }, documents),
+    );
+    expect(hits.map((entry) => entry.record.title)).toEqual(hit ? [targetTitle] : []);
   });
 
-  it("surfaces the concept-matched memory for a lexically-disjoint database query", async () => {
-    const query = "postgres reindex";
-    expect(searchMemories(store, query)).toHaveLength(0);
-
-    const hits = await semanticSearchMemories(store, query, conceptEmbedder);
-    expect(hits[0]?.record.title).toBe("Schema migrations");
-  });
-
-  it("blends in the lexical signal so an exact-term query still wins", async () => {
-    // "pipeline" is an exact term in the release memory AND a deploy concept.
-    const hits = await semanticSearchMemories(store, "pipeline", conceptEmbedder);
-    expect(hits[0]?.record.title).toBe("Release pipeline");
-  });
-
-  it("falls back to lexical ranking when the embedder throws", async () => {
-    const brokenEmbedder: Embedder = {
+  it.each([
+    { name: "throws", vectors: null },
+    { name: "returns too few vectors", vectors: [[1, 0]] },
+    { name: "returns ragged vectors", vectors: [[1, 0], [1], [0, 1], [1, 1]] },
+    {
+      name: "returns non-finite vectors",
+      vectors: [
+        [1, 0],
+        [NaN, 0],
+        [0, 1],
+        [1, 1],
+      ],
+    },
+  ])("falls back to lexical search when the embedder $name", async ({ vectors }) => {
+    const broken: Embedder = {
       async embed() {
-        throw new Error("model unavailable");
+        if (vectors === null) throw new Error("model unavailable");
+        return vectors;
       },
     };
-    const hits = await semanticSearchMemories(store, "oauth token", brokenEmbedder);
-    // Lexical still finds the credentials memory via the shared "oauth"/"token" terms.
+    const hits = await semanticSearchMemories(store, "oauth token", broken);
     expect(hits[0]?.record.title).toBe("Login credentials");
+    expect(await semanticSearchMemories(store, "quantum helicopter", broken)).toEqual([]);
   });
 
-  it("returns nothing for an empty query", async () => {
-    expect(await semanticSearchMemories(store, "   ", conceptEmbedder)).toHaveLength(0);
+  it("uses pinned metadata only to break equal scores", async () => {
+    const isolated: MemoryStore = {
+      baseDir: mkdtempSync(path.join(tmpdir(), "agent-deck-mem-")),
+      projectPath: mkdtempSync(path.join(tmpdir(), "proj-")),
+    };
+    const alpha = writeMemory(isolated, {
+      type: "context",
+      title: "Alpha cache",
+      summary: "shared artifact",
+      body: "body",
+    });
+    const beta = writeMemory(isolated, {
+      type: "context",
+      title: "Beta cache",
+      summary: "shared artifact",
+      body: "body",
+      confirmNew: true,
+    });
+    const gamma = writeMemory(isolated, {
+      type: "context",
+      title: "Release notes",
+      summary: "deployment history",
+      body: "body",
+      confirmNew: true,
+    });
+    if (!alpha.ok || !beta.ok || !gamma.ok) throw new Error("setup failed");
+    setMemoryStatus(isolated, beta.record.id, "pinned");
+    const betaVector = [Math.cos(-0.01), Math.sin(-0.01)];
+    const documents = {
+      "Alpha cache": [1, 0],
+      "Beta cache": betaVector,
+      "Release notes": [-1 - betaVector[0]!, -betaVector[1]!],
+    };
+
+    // Alpha's score is slightly higher, but both land in the same 0.02 bucket.
+    // Native therefore lets pinned metadata settle this near-tie in Beta's favor.
+    const tied = await semanticSearchMemories(
+      isolated,
+      "cache artifact",
+      mappedEmbedder({ "cache artifact": [Math.cos(0.48), Math.sin(0.48)] }, documents),
+    );
+    expect(tied[0]?.record.title).toBe("Beta cache");
+
+    const semanticallyBetter = await semanticSearchMemories(
+      isolated,
+      "cache artifact",
+      mappedEmbedder({ "cache artifact": [1, 0] }, documents),
+    );
+    expect(semanticallyBetter[0]?.record.title).toBe("Alpha cache");
+  });
+
+  it("keeps only qualified hits within 60% of the best score before applying limit", async () => {
+    const query = "login token schema changes";
+    const hits = await semanticSearchMemories(
+      store,
+      query,
+      mappedEmbedder({ [query]: [1, 0, 0] }, DOCUMENT_VECTORS),
+      { limit: 8 },
+    );
+    expect(hits.map((hit) => hit.record.title)).toEqual(["Login credentials"]);
+    expect(searchMemories(store, query).length).toBeGreaterThan(1);
+  });
+
+  it("returns nothing for an empty query or zero limit", async () => {
+    const embedder = mappedEmbedder({}, DOCUMENT_VECTORS);
+    expect(await semanticSearchMemories(store, "   ", embedder)).toEqual([]);
+    expect(await semanticSearchMemories(store, "oauth token", embedder, { limit: 0 })).toEqual([]);
   });
 });
