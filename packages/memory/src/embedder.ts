@@ -7,9 +7,11 @@ import type { Embedder } from "./semantic.ts";
  *
  * The model library is NOT a declared dependency: it's loaded by a LAZY dynamic
  * import via a runtime specifier, so the base install and CI stay lightweight
- * (no ONNX native binary, no first-run model download) and only someone who opts
- * in installs it. If it's missing, a clear "install it" error is thrown and the
- * caller falls back to lexical recall.
+ * (no ONNX native binary, no first-run model download) and only someone who requests
+ * semantic ranking installs it. The persisted preference in Agent Deck's Memory UI is
+ * the current control; AGENT_DECK_SEMANTIC_MEMORY=1 is only a legacy one-time seed.
+ * If the package is missing, a clear "install it" error is thrown and the caller
+ * falls back to lexical recall.
  */
 
 /** The slice of @huggingface/transformers this adapter uses (kept minimal so an
@@ -54,7 +56,7 @@ export async function createOnDeviceEmbedder(options: { model?: string } = {}): 
     mod = (await import(specifier)) as unknown as TransformersModule;
   } catch {
     throw new EmbedderUnavailableError(
-      `Semantic memory needs the optional '${PACKAGE}' package. Install it (e.g. \`pnpm add ${PACKAGE}\`) and set AGENT_DECK_SEMANTIC_MEMORY=1; recall stays lexical until then.`,
+      `Semantic memory needs the optional '${PACKAGE}' package. Install it (e.g. \`pnpm add ${PACKAGE}\`) and request semantic ranking in Agent Deck's Memory settings; recall stays lexical until then.`,
     );
   }
   const extractor = await mod.pipeline("feature-extraction", options.model ?? DEFAULT_MODEL);

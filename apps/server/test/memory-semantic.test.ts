@@ -2,13 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Embedder } from "@agent-deck/memory";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
- * The semantic-recall OPT-IN wired through the server. An embedder injected via
- * StartServerOptions routes /memory/search (and the bridge tool + recall hook)
- * through semantic ranking; without one, recall stays lexical+fuzzy. Hermetic: a
+ * The semantic-recall preference wired through the server. StartServerOptions
+ * supplies an implementation only; the persisted live setting enables ranking.
+ * Hermetic: a
  * concept-keyword stub embedder stands in for the real on-device model (no
  * download), pinning the native-calibrated lexical corroboration and abstention
  * gates through the complete HTTP call path.
@@ -39,13 +39,20 @@ const conceptEmbedder: Embedder = {
 };
 
 let server: AgentDeckServer | undefined;
+const originalSemanticEnv = process.env.AGENT_DECK_SEMANTIC_MEMORY;
+
+beforeEach(() => {
+  delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+});
 
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  if (originalSemanticEnv === undefined) delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+  else process.env.AGENT_DECK_SEMANTIC_MEMORY = originalSemanticEnv;
 });
 
-async function setup(embedder?: Embedder): Promise<{ projectId: string }> {
+async function setup(embedder?: Embedder): Promise<{ projectId: string; projectPath: string }> {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
   const project = mkdtempSync(path.join(tmpdir(), "proj-"));
   server = await startServer({ dataDir, memoryEmbedder: embedder });
@@ -82,7 +89,16 @@ async function setup(embedder?: Embedder): Promise<{ projectId: string }> {
     });
     expect(res.status).toBe(201);
   }
-  return { projectId };
+  return { projectId, projectPath: project };
+}
+
+async function setSemantic(enabled: boolean): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${server!.port}/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ semanticMemoryEnabled: enabled }),
+  });
+  expect(response.status).toBe(200);
 }
 
 async function search(projectId: string, q: string): Promise<string[]> {
@@ -95,6 +111,35 @@ async function search(projectId: string, q: string): Promise<string[]> {
 }
 
 describe("semantic memory opt-in via /memory/search", () => {
+  it("exposes a typed GET/PATCH settings contract", async () => {
+    await setup(undefined);
+    const url = `http://127.0.0.1:${server!.port}/settings`;
+    const initial = (await (await fetch(url)).json()) as {
+      settings: { semanticMemoryEnabled: boolean };
+    };
+    expect(initial.settings.semanticMemoryEnabled).toBe(false);
+
+    expect(
+      (
+        await fetch(url, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ semanticMemoryEnabled: "yes" }),
+        })
+      ).status,
+    ).toBe(400);
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ semanticMemoryEnabled: true }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()) as unknown).toMatchObject({
+      settings: { semanticMemoryEnabled: true },
+    });
+  });
+
   it.each([
     {
       name: "recalls a strong concept match corroborated by one curated term",
@@ -113,7 +158,82 @@ describe("semantic memory opt-in via /memory/search", () => {
     },
   ])("$name", async ({ query, expected }) => {
     const { projectId } = await setup(conceptEmbedder);
+    await setSemantic(true);
     expect(await search(projectId, query)).toEqual(expected);
+  });
+
+  it("toggles semantic ranking on the same server while an injected embedder only supplies implementation", async () => {
+    let embedCalls = 0;
+    const countingEmbedder: Embedder = {
+      async embed(texts) {
+        embedCalls += 1;
+        return conceptEmbedder.embed(texts);
+      },
+    };
+    const { projectId } = await setup(countingEmbedder);
+
+    await search(projectId, "oauth whereabouts");
+    expect(embedCalls).toBe(0);
+
+    await setSemantic(true);
+    expect(await search(projectId, "oauth whereabouts")).toEqual(["Login credentials"]);
+    expect(embedCalls).toBeGreaterThan(0);
+    const enabledCalls = embedCalls;
+
+    await setSemantic(false);
+    await search(projectId, "oauth whereabouts");
+    expect(embedCalls).toBe(enabledCalls);
+
+    await setSemantic(true);
+    await search(projectId, "oauth whereabouts");
+    expect(embedCalls).toBeGreaterThan(enabledCalls);
+  });
+
+  it("gates bridge-tool recall with the same live preference without launching Pi", async () => {
+    let embedCalls = 0;
+    const countingEmbedder: Embedder = {
+      async embed(texts) {
+        embedCalls += 1;
+        return conceptEmbedder.embed(texts);
+      },
+    };
+    const { projectPath } = await setup(countingEmbedder);
+    const sessionId = "semantic-bridge-test-session";
+    // The bridge's project resolver intentionally accepts only a live SessionManager
+    // owner. Install a minimal test owner directly, then remove it before shutdown;
+    // this exercises the real registered tool and shared recall closure without a
+    // Pi subprocess or a test-only production option.
+    const liveSessions = (
+      server!.sessions as unknown as { sessions: Map<string, { meta: { cwd: string } }> }
+    ).sessions;
+    liveSessions.set(sessionId, { meta: { cwd: projectPath } });
+    const dispatchSearch = () =>
+      server!.bridge.dispatch(
+        {
+          tool: "agent_deck_memory_search",
+          sessionId,
+          toolCallId: `call-${embedCalls}`,
+          token: "test-token",
+          params: { query: "oauth whereabouts" },
+        },
+        { token: "test-token" },
+      );
+
+    try {
+      expect((await dispatchSearch()).isError).not.toBe(true);
+      expect(embedCalls).toBe(0);
+
+      await setSemantic(true);
+      expect((await dispatchSearch()).isError).not.toBe(true);
+      expect(embedCalls).toBeGreaterThan(0);
+      const enabledCalls = embedCalls;
+
+      await setSemantic(false);
+      expect((await dispatchSearch()).isError).not.toBe(true);
+      expect(embedCalls).toBe(enabledCalls);
+    } finally {
+      liveSessions.delete(sessionId);
+    }
   });
 
   it.each([

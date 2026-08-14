@@ -5,7 +5,7 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Archive, Brain, Pin, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Brain, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
@@ -48,6 +48,149 @@ const STATUS_STYLE: Record<MemoryStatus, string> = {
   archived: "border-border-subtle text-text-muted opacity-70",
 };
 
+type SemanticPreferenceState = "loading" | "ready" | "error";
+
+function SemanticMemoryPreference({ onChanged }: { onChanged: () => void }) {
+  const [enabled, setEnabled] = useState(false);
+  const [state, setState] = useState<SemanticPreferenceState>("loading");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const loadSeq = useRef(0);
+
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const seq = ++loadSeq.current;
+    setState("loading");
+    setMessage(null);
+    try {
+      const response = await fetch("/settings", { signal });
+      if (!response.ok) throw new Error("We couldn’t load the semantic memory preference.");
+      const data = (await response.json()) as {
+        settings: { semanticMemoryEnabled: boolean };
+      };
+      if (seq !== loadSeq.current || signal?.aborted) return;
+      setEnabled(data.settings.semanticMemoryEnabled);
+      setState("ready");
+    } catch (cause) {
+      if (seq !== loadSeq.current || signal?.aborted) return;
+      setState("error");
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => {
+      loadSeq.current += 1;
+      controller.abort();
+    };
+  }, [load]);
+
+  const toggle = async (): Promise<void> => {
+    if (state !== "ready" || saving) return;
+    const previous = enabled;
+    const next = !previous;
+    setEnabled(next);
+    setSaving(true);
+    setMessage("Saving…");
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ semanticMemoryEnabled: next }),
+      });
+      if (!response.ok) throw new Error("We couldn’t save the semantic memory preference.");
+      const data = (await response.json()) as {
+        settings: { semanticMemoryEnabled: boolean };
+      };
+      setEnabled(data.settings.semanticMemoryEnabled);
+      setMessage("Saved");
+      onChanged();
+    } catch (cause) {
+      setEnabled(previous);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="mb-4 rounded-xl border border-border-subtle bg-surface-elevated p-3"
+      data-testid="semantic-memory-preference"
+    >
+      {state === "loading" ? (
+        <p className="text-sm text-text-muted" role="status" data-testid="semantic-memory-loading">
+          Loading semantic memory preference…
+        </p>
+      ) : state === "error" ? (
+        <div data-testid="semantic-memory-load-error">
+          <p className="text-sm text-danger" role="alert">
+            {message}
+          </p>
+          <ControlButton
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary"
+            onClick={() => void load()}
+          >
+            <RefreshCw size={13} aria-hidden="true" /> Try again
+          </ControlButton>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                Semantic ranking
+                <span
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro uppercase tracking-wider text-text-muted"
+                  data-testid="semantic-memory-mode"
+                >
+                  {enabled ? "Requested" : "Not requested"}
+                </span>
+              </div>
+              <p id="semantic-memory-description" className="mt-1 text-xs text-text-muted">
+                Request semantic ranking for memory search and agent recall when it is available.
+              </p>
+            </div>
+            <ControlButton
+              role="switch"
+              aria-label="Semantic ranking"
+              aria-describedby="semantic-memory-description"
+              aria-checked={enabled}
+              data-testid="semantic-memory-toggle"
+              disabled={saving}
+              onClick={() => void toggle()}
+              className={cn(
+                "relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+                enabled ? "border-accent bg-accent" : "border-border-strong bg-surface-muted",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+                  enabled ? "translate-x-5" : "translate-x-0.5",
+                )}
+              />
+            </ControlButton>
+          </div>
+          {message ? (
+            <p
+              className={cn(
+                "mt-2 text-xs",
+                message === "Saving…" || message === "Saved" ? "text-text-muted" : "text-danger",
+              )}
+              role={message === "Saving…" || message === "Saved" ? "status" : "alert"}
+              data-testid="semantic-memory-save-status"
+            >
+              {message}
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function MemoryScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
@@ -61,6 +204,14 @@ export function MemoryScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MemoryItem[] | null>(null);
   const searchSeq = useRef(0);
+  const [semanticPreferenceVersion, setSemanticPreferenceVersion] = useState(0);
+  const semanticPreferenceChanged = useCallback((): void => {
+    // Invalidate the old ranking immediately, then rerun a non-empty current
+    // search under the newly persisted preference without a global resource
+    // broadcast (which would incorrectly request Pi process replacement).
+    searchSeq.current += 1;
+    setSemanticPreferenceVersion((version) => version + 1);
+  }, []);
 
   // Clearing the search or switching projects must invalidate any in-flight
   // request synchronously (bump the token) so a late response from the previous
@@ -84,7 +235,7 @@ export function MemoryScreen() {
       .catch(() => {
         if (seq === searchSeq.current) setSearchResults([]);
       });
-  }, [searchQuery, currentProjectId, resourcesVersion]);
+  }, [searchQuery, currentProjectId, resourcesVersion, semanticPreferenceVersion]);
 
   const load = useCallback(async (): Promise<void> => {
     if (!currentProjectId) {
@@ -179,11 +330,21 @@ export function MemoryScreen() {
   if (!currentProjectId) {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="memory-screen">
-        <div
-          className="mx-auto max-w-3xl py-10 text-center text-sm text-text-muted"
-          data-testid="memory-no-project"
-        >
-          Memory is project-scoped. Open a project to see and manage its memories.
+        <div className="mx-auto max-w-3xl">
+          <div className="flex items-center gap-2 pb-1">
+            <Brain size={16} className="text-text-secondary" aria-hidden />
+            <h2 className="text-base font-semibold text-text-primary">Memory</h2>
+          </div>
+          <p className="pb-2 text-xs text-text-muted">
+            Durable project knowledge agents recall across sessions.
+          </p>
+          <SemanticMemoryPreference onChanged={semanticPreferenceChanged} />
+          <div
+            className="py-10 text-center text-sm text-text-muted"
+            data-testid="memory-no-project"
+          >
+            Memory is project-scoped. Open a project to see and manage its memories.
+          </div>
         </div>
       </div>
     );
@@ -232,6 +393,7 @@ export function MemoryScreen() {
           Durable project knowledge agents recall across sessions. Active and pinned memories are
           injected; stale and archived are kept but not injected.
         </p>
+        <SemanticMemoryPreference onChanged={semanticPreferenceChanged} />
         <ControlInput
           data-testid="memory-search"
           className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"

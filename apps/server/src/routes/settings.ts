@@ -201,6 +201,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // Onboarding preferences (native OnboardingPreferencesView). null clears
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
+        semanticMemoryEnabled: z.boolean().optional(),
         piAgentIdleParkingEnabled: z.boolean().optional(),
         piAgentIdleParkingTimeoutMinutes: z.number().int().min(1).max(120).optional(),
         worktreeIsolation: z.boolean().optional(),
@@ -270,6 +271,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (d.defaultPromptTemplates !== undefined)
       patch.defaultPromptTemplates = d.defaultPromptTemplates;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
+    if (d.semanticMemoryEnabled !== undefined)
+      patch.semanticMemoryEnabled = d.semanticMemoryEnabled;
     if (d.piAgentIdleParkingEnabled !== undefined)
       patch.piAgentIdleParkingEnabled = d.piAgentIdleParkingEnabled;
     if (d.piAgentIdleParkingTimeoutMinutes !== undefined)

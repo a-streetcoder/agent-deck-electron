@@ -165,9 +165,8 @@ export interface StartServerOptions {
   /** Serve a built web app (apps/web/dist) at /. */
   staticDir?: string;
   /**
-   * Inject a semantic-recall embedder (tests). In production, semantic recall is
-   * opt-in via AGENT_DECK_SEMANTIC_MEMORY=1, which lazily loads the real
-   * on-device embedder; absent both, recall stays lexical+fuzzy (the default).
+   * Supply a semantic-recall implementation (tests/alternate hosts). This does
+   * not enable semantic recall; the live persisted preference owns enablement.
    */
   memoryEmbedder?: Embedder;
 }
@@ -206,6 +205,7 @@ async function initServer(
   const dataDir = resolveTrustedDataDir(requestedDataDir);
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  const settings = new SettingsStore(dataDir);
   const sessionImages = new SessionImageStore(dataDir);
   const agentAvatars = new FileAgentAvatarStore(dataDir);
   const sessionPastes = new SessionPasteStore(dataDir);
@@ -247,19 +247,16 @@ async function initServer(
   const sessionWorktreeStore = new SessionWorktreeStore(dataDir);
   const worktreesRoot = sessionWorktreeStore.rootPath;
 
-  // Recall engine. Lexical+fuzzy is the always-on default; SEMANTIC recall is
-  // opt-in — an injected embedder (tests) or AGENT_DECK_SEMANTIC_MEMORY=1 (which
-  // lazily loads the real on-device embedder, kept out of the base install). The
-  // embedder is loaded once and reused; if it fails to load, recall silently
-  // stays lexical. Every search path (bridge tool, /memory/search, recall hook)
-  // routes through recallMemories so semantic applies everywhere when enabled.
-  const semanticMemoryEnabled =
-    options.memoryEmbedder !== undefined || process.env.AGENT_DECK_SEMANTIC_MEMORY === "1";
+  // Recall engine. The persisted global preference owns enablement; an injected
+  // embedder supplies only the implementation. Every recall reads the live
+  // setting, so Memory search, bridge-tool recall, and the next turn all switch
+  // immediately without replacing Pi. A successfully loaded embedder remains
+  // cached across disable/re-enable. Availability/fallback visibility is MEM-04/05.
   let embedderPromise: Promise<Embedder> | undefined;
   let embedderFailed = false;
   async function resolveEmbedder(): Promise<Embedder | undefined> {
     if (options.memoryEmbedder) return options.memoryEmbedder;
-    if (process.env.AGENT_DECK_SEMANTIC_MEMORY !== "1" || embedderFailed) return undefined;
+    if (embedderFailed) return undefined;
     if (!embedderPromise) embedderPromise = createOnDeviceEmbedder();
     try {
       return await embedderPromise;
@@ -284,7 +281,7 @@ async function initServer(
     query: string,
     limit?: number,
   ): Promise<MemorySearchHit[]> {
-    if (!semanticMemoryEnabled) return searchMemories(store, query, limit);
+    if (!settings.get().semanticMemoryEnabled) return searchMemories(store, query, limit);
     const embedder = await resolveEmbedder();
     // semanticSearchMemories itself falls back to lexical if an embed call throws.
     return embedder
@@ -534,7 +531,6 @@ async function initServer(
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager();
   const projects = new ProjectIndex(dataDir);
-  const settings = new SettingsStore(dataDir);
   // App-owned command files are materialized under trusted app data at startup.
   // The store remains the sole scanner/mutator and supplies explicit extension
   // paths only to ordinary project parent sessions through launchResources.

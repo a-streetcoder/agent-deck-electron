@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { SettingsStore } from "../src/persistence.ts";
 
 /**
@@ -10,6 +10,15 @@ import { SettingsStore } from "../src/persistence.ts";
  * native, round-trip through app-settings.json, and a corrupt/mistyped file falls
  * back to the defaults per field (never throws).
  */
+
+const originalSemanticEnv = process.env.AGENT_DECK_SEMANTIC_MEMORY;
+beforeEach(() => {
+  delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+});
+afterAll(() => {
+  if (originalSemanticEnv === undefined) delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+  else process.env.AGENT_DECK_SEMANTIC_MEMORY = originalSemanticEnv;
+});
 
 function freshDir(): string {
   return mkdtempSync(path.join(tmpdir(), "settings-prefs-"));

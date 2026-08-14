@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProjectMeta, SessionMeta } from "@agent-deck/domain";
 import { Effect, Option } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { ProjectIndex, SessionIndex, SettingsStore } from "../src/persistence.ts";
 import {
   makeJsonArrayStoreHandle,
@@ -21,6 +21,15 @@ import {
  * are the canonical `JSON.stringify(x, null, 2)` the legacy class wrote. This test
  * pins that the service reads it identically and never rewrites the format.
  */
+
+const originalSemanticEnv = process.env.AGENT_DECK_SEMANTIC_MEMORY;
+beforeEach(() => {
+  delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+});
+afterAll(() => {
+  if (originalSemanticEnv === undefined) delete process.env.AGENT_DECK_SEMANTIC_MEMORY;
+  else process.env.AGENT_DECK_SEMANTIC_MEMORY = originalSemanticEnv;
+});
 
 const FIXTURE_DIR = fileURLToPath(new URL("./fixtures/persistence", import.meta.url));
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import envPaths from "env-paths";
 import type {
@@ -192,6 +192,8 @@ export interface AppSettings {
    * Commit/Push/Merge actions.
    */
   autoTitle: boolean;
+  /** Request semantic ranking for every memory recall path when an embedder is available. */
+  semanticMemoryEnabled: boolean;
   /** Stop resumable parent Pi processes after an authoritative idle boundary. */
   piAgentIdleParkingEnabled: boolean;
   /** Warm-idle delay. Runtime and HTTP validation constrain this to 1–120. */
@@ -424,16 +426,23 @@ export const makeKeyedJsonStoreHandle = <T>(
   });
 
 /**
- * Build the app-settings store handle. The per-field load validation, the
- * default seed, the atomic membership ops, and the tmp + rename flush are all
- * byte-identical to the legacy `SettingsStore` — only the surface is now
- * effectful.
+ * Build the app-settings store handle. The per-field load validation, defaults,
+ * atomic membership ops, and tmp + rename format remain compatible with the
+ * legacy `SettingsStore`. The one intentional migration is the eager durable
+ * semantic-preference seed described below.
  */
 export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<SettingsStoreHandle> =>
   Effect.sync(() => {
     const file = path.join(dataDir, "app-settings.json");
     mkdirSync(dataDir, { recursive: true });
 
+    const legacySemanticSeedRequested = process.env.AGENT_DECK_SEMANTIC_MEMORY === "1";
+    const settingsFileExists = existsSync(file);
+    let semanticMemoryPreferenceWasPersisted = false;
+    // Seed a missing file eagerly. Existing bytes are eligible only after they
+    // parse as an object lacking the field; corrupt/non-object evidence must be
+    // left untouched and fail closed.
+    let persistLegacySemanticSeed = legacySemanticSeedRequested && !settingsFileExists;
     let settings: AppSettings = {
       defaultSkills: [],
       defaultPromptTemplates: [],
@@ -445,6 +454,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       enabledLibraryCommandIDs: [],
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
+      semanticMemoryEnabled: persistLegacySemanticSeed,
       piAgentIdleParkingEnabled: true,
       piAgentIdleParkingTimeoutMinutes: 10,
       worktreeIsolation: false,
@@ -462,8 +472,14 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
 
     try {
       const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-      if (typeof parsed === "object" && parsed !== null) {
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
         const record = parsed as Partial<AppSettings>;
+        semanticMemoryPreferenceWasPersisted = Object.prototype.hasOwnProperty.call(
+          record,
+          "semanticMemoryEnabled",
+        );
+        persistLegacySemanticSeed =
+          !semanticMemoryPreferenceWasPersisted && legacySemanticSeedRequested;
         settings = {
           defaultSkills: Array.isArray(record.defaultSkills)
             ? record.defaultSkills.map(String)
@@ -490,8 +506,16 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           disabledModels: Array.isArray(record.disabledModels)
             ? record.disabledModels.map(String)
             : [],
-          // Booleans default to the native defaults when absent/mistyped.
+          // Booleans default to the native defaults when absent/mistyped. The legacy
+          // semantic env flag seeds only an absent field; malformed persisted values
+          // fail closed instead of being re-enabled by the environment.
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
+          semanticMemoryEnabled:
+            typeof record.semanticMemoryEnabled === "boolean"
+              ? record.semanticMemoryEnabled
+              : semanticMemoryPreferenceWasPersisted
+                ? false
+                : legacySemanticSeedRequested,
           piAgentIdleParkingEnabled:
             typeof record.piAgentIdleParkingEnabled === "boolean"
               ? record.piAgentIdleParkingEnabled
@@ -533,9 +557,19 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           ),
           keybindings: coerceKeybindings(record.keybindings),
         };
+      } else {
+        // A successfully parsed primitive/null is still invalid settings evidence.
+        // Do not replace it with a legacy environment seed.
+        persistLegacySemanticSeed = false;
+        settings.semanticMemoryEnabled = false;
       }
     } catch {
-      // Missing or corrupt — defaults apply.
+      // A genuinely missing file may be seeded. Existing corrupt bytes are
+      // preserved exactly and the preference fails closed.
+      if (existsSync(file)) {
+        persistLegacySemanticSeed = false;
+        settings.semanticMemoryEnabled = false;
+      }
     }
 
     const flush = (value: AppSettings = settings): void => {
@@ -552,14 +586,31 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       if (value.piAgentIdleParkingEnabled === true) delete persisted.piAgentIdleParkingEnabled;
       if (value.piAgentIdleParkingTimeoutMinutes === 10)
         delete persisted.piAgentIdleParkingTimeoutMinutes;
+      // Omit only the untouched shipped false default. Once the user explicitly
+      // chooses a value, retain false too: it must continue to override a legacy
+      // AGENT_DECK_SEMANTIC_MEMORY=1 environment after restart.
+      if (!semanticMemoryPreferenceWasPersisted && value.semanticMemoryEnabled === false) {
+        delete persisted.semanticMemoryEnabled;
+      }
       writeFileSync(tmp, JSON.stringify(persisted, null, 2));
       renameSync(tmp, file);
     };
+
+    if (persistLegacySemanticSeed) {
+      // Complete the migration during construction, before callers can observe
+      // an environment-only value. Future launches read this persisted true even
+      // after the legacy environment variable is removed.
+      semanticMemoryPreferenceWasPersisted = true;
+      flush();
+    }
 
     return {
       get: Effect.sync(() => settings),
       update: (patch) =>
         Effect.sync(() => {
+          if (patch.semanticMemoryEnabled !== undefined) {
+            semanticMemoryPreferenceWasPersisted = true;
+          }
           settings = { ...settings, ...patch };
           flush();
           return settings;
