@@ -103,6 +103,11 @@ export {
 export { scanEnv, writeEnvVar, type EnvEntry, type EnvScope } from "./env.ts";
 export { resolveSkillSource, type RemoteSkillSource } from "./skillSource.ts";
 export {
+  scanPackageSkillLocations,
+  type PackageSkillLocation,
+  type PackageSkillScanResult,
+} from "./packageSkills.ts";
+export {
   detectProjectType,
   discoverProjects,
   discoverProjectsInRoot,

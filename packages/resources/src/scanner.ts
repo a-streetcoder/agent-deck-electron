@@ -14,6 +14,7 @@ import {
 } from "@agent-deck/domain";
 import { loadSkillsFromDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { applyAgentOverride, readAgentOverrides } from "./overrides.ts";
+import { loadPackageSkillEntries } from "./packageSkills.ts";
 import {
   agentCatalogDirs,
   extensionCatalogDirs,
@@ -264,6 +265,7 @@ function isPrivateResourceSkill(catalog: string, baseDir: string): boolean {
 export function scanSkillCandidates(
   roots: ResourceRoots,
   collectionRoots: readonly string[] = [],
+  onWarning?: (warning: string) => void,
 ): SkillInfo[] {
   const standardByName = new Map<string, { priority: number; skills: SkillInfo[] }>();
   for (const [priority, { dir, scope }] of skillCatalogDirs(roots).entries()) {
@@ -286,6 +288,13 @@ export function scanSkillCandidates(
     );
     if (skill && !standardByName.has(skill.name)) skills.push(toSkillInfo(skill, "library"));
   }
+  // Package-provided skills (SKL-08): read-only provenance-bearing entries; a standard-catalog
+  // name always wins, mirroring the library rule above.
+  const packageScan = loadPackageSkillEntries(roots);
+  for (const warning of packageScan.warnings) onWarning?.(warning);
+  for (const entry of packageScan.entries) {
+    if (!standardByName.has(entry.name)) skills.push(toSkillInfo(entry, "package"));
+  }
   return skills;
 }
 
@@ -295,9 +304,10 @@ export function scanSkillCandidates(
 export function scanSkills(
   roots: ResourceRoots,
   collectionRoots: readonly string[] = [],
+  onWarning?: (warning: string) => void,
 ): SkillInfo[] {
   const names = new Set<string>();
-  return scanSkillCandidates(roots, collectionRoots).filter((skill) => {
+  return scanSkillCandidates(roots, collectionRoots, onWarning).filter((skill) => {
     if (names.has(skill.name)) return false;
     names.add(skill.name);
     return true;

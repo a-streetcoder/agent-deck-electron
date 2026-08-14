@@ -27,6 +27,7 @@ import {
   renamePromptFile,
   resolveSkillSource,
   scanAgents,
+  scanPackageSkillLocations,
   scanExtensions,
   scanPrompts,
   setAgentDisabledFile,
@@ -366,7 +367,14 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   fastify.get("/resources/skills", async (request) => {
     const { projectId } = request.query as { projectId?: string };
-    return { skills: enrichSkills(skillStore.listSkills(projectId)) };
+    // SKL-08: surface package-resolution warnings (a configured package that silently
+    // contributes nothing is exactly what the user needs to hear about). The locations pass
+    // is metadata-only — no skill files are loaded twice.
+    const { warnings } = scanPackageSkillLocations(rootsFor(projectId));
+    return {
+      skills: enrichSkills(skillStore.listSkills(projectId)),
+      packageWarnings: warnings,
+    };
   });
 
   // Diagnostic candidate view: preserve true same-priority duplicate names

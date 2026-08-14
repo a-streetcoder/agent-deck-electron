@@ -11,6 +11,7 @@ import { tintedSurfaceStyle } from "@/design-system/styles";
 const SOURCE_TINT: Record<ResourceScope, string> = {
   builtin: "var(--color-source-builtin)",
   library: "var(--color-source-library)",
+  package: "var(--color-source-library)",
   project: "var(--color-source-project)",
   global: "var(--color-brand-accent)",
 };

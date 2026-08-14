@@ -77,8 +77,15 @@ export function normalizeAgentAvatarName(name: string): string {
 }
 
 export function agentAvatarIdentityKey(identity: AgentAvatarIdentity): string {
-  if (!(["builtin", "global", "library", "project"] as const).includes(identity.scope))
-    throw new Error("invalid avatar identity");
+  // deliberate allowlist: agents are never package-scoped (SKL-08 added that scope for
+  // SKILLS only) — an unexpected scope fails closed rather than minting an avatar identity
+  const avatarScopes: readonly AgentAvatarIdentity["scope"][] = [
+    "builtin",
+    "global",
+    "library",
+    "project",
+  ];
+  if (!avatarScopes.includes(identity.scope)) throw new Error("invalid avatar identity");
   const projectId = identity.scope === "project" ? identity.projectId?.trim() : undefined;
   if (identity.scope === "project" && (!projectId || projectId.length > 256))
     throw new Error("project identity required for project avatar");

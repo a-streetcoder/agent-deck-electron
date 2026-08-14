@@ -6,7 +6,7 @@
  * Library agents remain catalog entries but never replace active agents.
  */
 
-export type ResourceScope = "builtin" | "global" | "library" | "project";
+export type ResourceScope = "builtin" | "global" | "library" | "project" | "package";
 
 /** Native-compatible authored default for a managed named delegation. */
 export type SubagentExpectedOutcome =
@@ -159,6 +159,9 @@ const SCOPE_PRIORITY: Record<ResourceScope, number> = {
   // Native keeps the library outside effective-agent resolution. Electron still
   // exposes unique library entries, but an active builtin/global always wins.
   library: 0,
+  // Package skills follow native: visible with provenance, injected only when assigned —
+  // never part of effective-name resolution (SKL-08).
+  package: 0,
 };
 
 export type AgentWarningCategory = "skill" | "environment" | "tools";

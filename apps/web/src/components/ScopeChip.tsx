@@ -3,6 +3,7 @@ import type { ResourceScope } from "@agent-deck/domain";
 const SCOPE_COLOR: Record<ResourceScope, string> = {
   builtin: "var(--color-source-builtin)",
   library: "var(--color-source-library)",
+  package: "var(--color-source-library)",
   project: "var(--color-source-project)",
   global: "var(--color-brand-accent)",
 };

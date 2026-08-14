@@ -466,9 +466,16 @@ export function SkillsScreen() {
   const recoveryTombstones = useRef(new Set<string>());
   const recoveryRequestGeneration = useRef(0);
 
+  // Package/library skills are reference sources: visible with provenance, never editable
+  // in-app (SKL-08/11 — native's "Package Skill" read-only posture).
+  const isReadOnlyScope = (scope: SkillInfo["scope"]): boolean =>
+    scope === "library" || scope === "package";
+  const [packageWarnings, setPackageWarnings] = useState<string[]>([]);
+
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     setSkills([]);
+    setPackageWarnings([]);
     let cancelled = false;
     void (async () => {
       try {
@@ -481,8 +488,14 @@ export function SkillsScreen() {
             ),
           );
         }
-        const data = (await response.json()) as { skills: SkillInfo[] };
-        if (!cancelled) setSkills(data.skills);
+        const data = (await response.json()) as {
+          skills: SkillInfo[];
+          packageWarnings?: string[];
+        };
+        if (!cancelled) {
+          setSkills(data.skills);
+          setPackageWarnings(data.packageWarnings ?? []);
+        }
       } catch (error) {
         if (!cancelled) setGlobalError(String(error));
       }
@@ -1448,6 +1461,19 @@ export function SkillsScreen() {
             onCancel={() => setKnownPreview(null)}
           />
         ) : null}
+        {packageWarnings.length > 0 ? (
+          <div
+            data-testid="skill-package-warnings"
+            className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+            role="status"
+          >
+            {packageWarnings.map((warning) => (
+              <div key={warning} className="truncate" title={warning}>
+                {warning}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div
           data-testid="skill-repo-record-removal-status"
           className="sr-only"
@@ -1787,7 +1813,7 @@ export function SkillsScreen() {
                   }
                 }}
               >
-                {skill.scope !== "library" ? (
+                {!isReadOnlyScope(skill.scope) ? (
                   <ControlInput
                     type="checkbox"
                     data-testid={`skill-check-${skill.name}`}
@@ -1828,8 +1854,17 @@ export function SkillsScreen() {
                     ) : null}
                   </div>
                   <div className="truncate text-xs text-text-secondary">{skill.description}</div>
+                  {isReadOnlyScope(skill.scope) ? (
+                    <div
+                      className="truncate font-mono text-micro text-text-muted"
+                      title={skill.filePath}
+                      data-testid={`skill-source-${skill.name}`}
+                    >
+                      {skill.filePath}
+                    </div>
+                  ) : null}
                 </div>
-                {skill.scope !== "library" ? (
+                {!isReadOnlyScope(skill.scope) ? (
                   <ControlButton
                     className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
                     onClick={(event) => {
@@ -1928,7 +1963,7 @@ export function SkillsScreen() {
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {selected.scope !== "library" ? (
+              {!isReadOnlyScope(selected.scope) ? (
                 <ControlButton
                   data-testid="skill-rename"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
@@ -1946,7 +1981,7 @@ export function SkillsScreen() {
                 {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 {selected.disabled ? "Enable" : "Disable"}
               </ControlButton>
-              {selected.scope !== "library" ? (
+              {!isReadOnlyScope(selected.scope) ? (
                 <>
                   <ControlButton
                     data-testid="skill-edit"

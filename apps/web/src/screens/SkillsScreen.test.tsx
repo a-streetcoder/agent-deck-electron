@@ -361,6 +361,44 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
   });
 
+  it("package skills render read-only with provenance, and package warnings surface (SKL-08/11)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "packaged-tip",
+                description: "From an installed package",
+                scope: "package",
+                filePath: "C:/npm/node_modules/pack/skills/packaged-tip/SKILL.md",
+                disabled: false,
+              },
+            ],
+            packageWarnings: ["Package ghost-pack was not found in any global node_modules root."],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    await screen.findAllByText(/packaged-tip/);
+    // read-only reference source: no selection checkbox, provenance line shown
+    expect(screen.queryByTestId("skill-check-packaged-tip")).toBeNull();
+    expect(screen.getByTestId("skill-source-packaged-tip").textContent).toContain(
+      "node_modules/pack",
+    );
+    // a configured-but-broken package is surfaced, not silent
+    expect(screen.getByTestId("skill-package-warnings").textContent).toContain("ghost-pack");
+  });
+
   it("known-source scan merges labeled roots and imports grouped by folder (SKL-07/10)", async () => {
     const fetchMock = stubPreviewFetch();
     fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {

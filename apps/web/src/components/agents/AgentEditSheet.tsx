@@ -790,7 +790,9 @@ export function AgentEditSheet({
                           ? `Ambiguous: ${candidates.length} visible catalog entries use this bare name. Rename a duplicate.`
                           : candidates[0]!.disabled
                             ? "Disabled in Skills. Named-agent launch refuses this assignment; ambient default/project assignments skip it. Enable it or remove it."
-                            : `${candidates[0]!.scope === "project" ? "Project" : "Global"} skill visible to the current project.`;
+                            : candidates[0]!.scope === "package"
+                              ? "Package-provided skill (read-only) visible to the current project."
+                              : `${candidates[0]!.scope === "project" ? "Project" : "Global"} skill visible to the current project.`;
                     return (
                       <div
                         key={skillName}
