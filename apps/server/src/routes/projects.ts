@@ -455,6 +455,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         blockedBy: [],
         blocking: [],
       };
+      let issueType: string | null = null;
       if (repoMatch) {
         const base = `repos/${repoMatch[1]}/${repoMatch[2]}/issues/${number}`;
         const fetchRefs = async (path: string): Promise<RawIssueRelationship[]> => {
@@ -470,18 +471,21 @@ export function registerProjectRoutes(ctx: ServerContext): void {
             return [];
           }
         };
-        const [parents, subIssues, blockedBy, blocking] = await Promise.all([
+        const [selves, parents, subIssues, blockedBy, blocking] = await Promise.all([
+          // the issue's own REST payload — the only place its TYPE lives (ISS-05)
+          fetchRefs(base),
           fetchRefs(`${base}/parent`),
           fetchRefs(`${base}/sub_issues`),
           fetchRefs(`${base}/dependencies/blocked_by`),
           fetchRefs(`${base}/dependencies/blocking`),
         ]);
+        issueType = selves[0]?.type?.name ?? null;
         relationships.parent = parents[0] ? normalizeIssueReference(parents[0]) : null;
         relationships.subIssues = subIssues.map(normalizeIssueReference);
         relationships.blockedBy = blockedBy.map(normalizeIssueReference);
         relationships.blocking = blocking.map(normalizeIssueReference);
       }
-      return { issue: { ...normalizeGitHubIssueDetail(raw), relationships } };
+      return { issue: { ...normalizeGitHubIssueDetail(raw), type: issueType, relationships } };
     } catch {
       return reply.status(502).send({
         error: "Couldn't load the issue — needs the gh CLI installed, authenticated, and a remote.",

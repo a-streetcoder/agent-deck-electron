@@ -19,6 +19,7 @@ describe("buildIssueContext (ISS-03)", () => {
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-02T00:00:00Z",
         closedAt: "2026-01-03T00:00:00Z",
+        type: "Bug",
         labels: ["bug", "p1"],
         assignees: ["marty"],
         author: "doc",
@@ -45,6 +46,7 @@ describe("buildIssueContext (ISS-03)", () => {
     expect(block).toContain("issue-number: 7");
     expect(block).toContain("state: CLOSED");
     expect(block).toContain("state-reason: COMPLETED");
+    expect(block).toContain("type: Bug"); // ISS-05: native's issue type line
     expect(block).toContain("author: doc");
     expect(block).toContain("assignees: marty");
     expect(block).toContain("labels: bug, p1");

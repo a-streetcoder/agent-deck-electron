@@ -40,6 +40,8 @@ export interface IssueContextDetail {
   createdAt: string | null;
   updatedAt: string | null;
   closedAt: string | null;
+  /** ISS-05: the issue's TYPE (native issue.type?.name), null when unavailable. */
+  type?: string | null;
   labels: string[];
   assignees: string[];
   author: string | null;
@@ -68,6 +70,7 @@ export function buildIssueContext(
   lines.push(`issue-number: ${issue.number}`, `title: ${issue.title}`, `url: ${issue.url}`);
   lines.push(`state: ${issue.state}`);
   if (issue.stateReason?.trim()) lines.push(`state-reason: ${issue.stateReason.trim()}`);
+  if (issue.type?.trim()) lines.push(`type: ${issue.type.trim()}`);
   if (issue.author?.trim()) lines.push(`author: ${issue.author.trim()}`);
   if (issue.assignees.length > 0) lines.push(`assignees: ${issue.assignees.join(", ")}`);
   if (issue.labels.length > 0) lines.push(`labels: ${issue.labels.join(", ")}`);

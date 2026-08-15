@@ -52,6 +52,7 @@ interface IssueComment {
 interface IssueDetail extends Issue {
   body: string;
   stateReason?: string | null;
+  type?: string | null;
   createdAt?: string | null;
   closedAt?: string | null;
   comments: IssueComment[];
@@ -225,6 +226,7 @@ export function IssuesScreen() {
         createdAt: issue.createdAt ?? null,
         updatedAt: issue.updatedAt ?? null,
         closedAt: issue.closedAt ?? null,
+        type: issue.type ?? null,
         labels: issue.labels,
         assignees: issue.assignees,
         author: issue.author,
@@ -511,6 +513,22 @@ export function IssuesScreen() {
                   >
                     {detail.state.toLowerCase()}
                   </span>
+                  {detail.stateReason ? (
+                    <span
+                      data-testid="issue-detail-state-reason"
+                      className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail lowercase text-text-muted"
+                    >
+                      {detail.stateReason.toLowerCase().replaceAll("_", " ")}
+                    </span>
+                  ) : null}
+                  {detail.type ? (
+                    <span
+                      data-testid="issue-detail-type"
+                      className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail text-text-secondary"
+                    >
+                      {detail.type}
+                    </span>
+                  ) : null}
                   <span className="font-mono text-xs text-text-muted">#{detail.number}</span>
                 </div>
                 <h2

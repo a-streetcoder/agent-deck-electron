@@ -28,6 +28,7 @@ if [ "$1" = "api" ]; then
   case "$2" in
     */parent) echo '{"number":1,"title":"Epic","state":"open","html_url":"https://github.com/acme/w/issues/1","type":{"name":"Epic"}}' ;;
     */sub_issues) echo '[{"number":8,"title":"Child","state":"open","html_url":"https://github.com/acme/w/issues/8"}]' ;;
+    */issues/42) echo '{"number":42,"title":"Flux capacitor","state":"open","html_url":"https://github.com/acme/w/issues/42","type":{"name":"Bug"}}' ;;
     *) echo '[]' ;;
   esac
   exit 0
@@ -98,6 +99,8 @@ describe.skipIf(isWindows)("GET /projects/:id/issues/:number", () => {
         updatedAt: "2026-01-15T10:00:00Z",
       },
     ]);
+    // ISS-05: the issue's TYPE comes from its own REST payload
+    expect((issue as unknown as { type: string | null }).type).toBe("Bug");
     // ISS-04: relationships ride along via the REST endpoints (stubbed `gh api`);
     // absent groups stay empty rather than failing the detail
     const rel = (issue as unknown as { relationships: Record<string, unknown> }).relationships;

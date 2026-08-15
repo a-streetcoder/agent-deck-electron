@@ -179,6 +179,8 @@ describe("issue reopen (ISS-02)", () => {
               title: "Issue 9",
               body: "Closed body",
               state: "CLOSED",
+              stateReason: "NOT_PLANNED",
+              type: "Bug",
               url: "https://example.test/issues/9",
               labels: [],
               assignees: [],
@@ -205,6 +207,9 @@ describe("issue reopen (ISS-02)", () => {
     // a closed issue offers Reopen, not the close split-buttons
     const reopen = await screen.findByTestId("issue-reopen");
     expect(screen.queryByTestId("issue-close-completed")).toBeNull();
+    // ISS-05: native-equivalent triage metadata is visible
+    expect(screen.getByTestId("issue-detail-state-reason").textContent).toBe("not planned");
+    expect(screen.getByTestId("issue-detail-type").textContent).toBe("Bug");
     fireEvent.click(reopen);
     await waitFor(() => {
       expect(reopened).toBe(true);
