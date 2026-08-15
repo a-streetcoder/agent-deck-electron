@@ -1760,6 +1760,22 @@ export function SkillsScreen() {
                       >
                         {repoLabel(repo)}
                       </span>
+                      {repo.ref ? (
+                        <span
+                          className="max-w-24 shrink-0 truncate font-mono text-micro text-text-muted"
+                          title={repo.ref}
+                        >
+                          @{repo.ref}
+                        </span>
+                      ) : null}
+                      {repo.subdir ? (
+                        <span
+                          className="max-w-32 shrink-0 truncate font-mono text-micro text-text-muted"
+                          title={repo.subdir}
+                        >
+                          /{repo.subdir}
+                        </span>
+                      ) : null}
                       {repo.available === false ? (
                         <span
                           data-testid={`skill-repo-unavailable-${repo.id}`}
@@ -2278,10 +2294,20 @@ export function SkillsScreen() {
                         <span className="text-text-muted">Ref</span> · {repo.ref}
                       </div>
                     ) : null}
-                    <div>
+                    {repo.subdir ? (
+                      <div className="truncate" title={repo.subdir}>
+                        <span className="text-text-muted">Subdir</span> · {repo.subdir}
+                      </div>
+                    ) : null}
+                    <div className="truncate" title={repo.skillNames.join(", ")}>
                       <span className="text-text-muted">Selection</span> · {repo.skillNames.length}{" "}
-                      skill{repo.skillNames.length === 1 ? "" : "s"}
+                      skill{repo.skillNames.length === 1 ? "" : "s"} · {repo.skillNames.join(", ")}
                     </div>
+                    {repo.storageMode === "collection-v1" ? (
+                      <div>
+                        <span className="text-text-muted">Storage</span> · Managed collection
+                      </div>
+                    ) : null}
                   </div>
                   {repo.available !== false && updatable.has(repo.id) ? (
                     <div className="mt-2 flex items-center gap-2">

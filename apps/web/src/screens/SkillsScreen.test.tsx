@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { SkillsScreen } from "./SkillsScreen.tsx";
@@ -840,6 +840,71 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
       subdir: "packages/skills",
       selected: ["beta"],
     });
+  });
+
+  it("repository rows and the collection card surface recorded provenance (SKL-14)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "synced",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(
+          jsonResponse({
+            repos: [
+              {
+                id: "c1",
+                remoteUrl: "https://github.com/owner/repo.git",
+                ref: "dev",
+                subdir: "packages/skills",
+                skillNames: ["alpha", "beta"],
+                storageMode: "collection-v1",
+                available: true,
+                lastSyncedCommit: "abc",
+                importedAt: "2026-08-14",
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-repos/c1/check" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ updateAvailable: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    // the panel row carries the recorded source coordinates, not just the remote label
+    const row = await screen.findByTestId("skill-repo-c1");
+    expect(row.textContent).toContain("@dev");
+    expect(row.textContent).toContain("/packages/skills");
+    // truncated chips must reveal the full value on hover
+    expect(within(row).getByTitle("dev").textContent).toBe("@dev");
+    expect(within(row).getByTitle("packages/skills").textContent).toBe("/packages/skills");
+
+    // the detail card shows the FULL recorded provenance: labeled subdir, the selected
+    // skill names themselves (full list on hover), and the storage mode
+    const card = await screen.findByTestId("skill-detail-collection");
+    expect(card.textContent).toContain("Subdir · packages/skills");
+    expect(card.textContent).toContain("alpha, beta");
+    expect(within(card).getByTitle("alpha, beta")).toBeTruthy();
+    expect(card.textContent).toContain("Storage · Managed collection");
   });
 
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
