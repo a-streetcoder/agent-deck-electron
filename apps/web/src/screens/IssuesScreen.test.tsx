@@ -25,6 +25,19 @@ function issue(number: number) {
   };
 }
 
+/** The ISS-12 connection probe fires on every mount; dispatching it here keeps
+ *  choreographed board mocks (order- or count-based) undisturbed. */
+function connectionBranch(url: string): Response | null {
+  return url.includes("/issues/connection")
+    ? jsonResponse({ connected: true, login: "ale", profileUrl: null })
+    : null;
+}
+
+function boardCalls(fetchMock: { mock: { calls: unknown[][] } }): number {
+  return fetchMock.mock.calls.filter(([input]) => !String(input).includes("/issues/connection"))
+    .length;
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -39,6 +52,48 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("gh connection surface (ISS-12)", () => {
+  it("shows the signed-in account, and guidance when disconnected", async () => {
+    let connected = true;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/issues/connection")) {
+        return Promise.resolve(
+          jsonResponse(
+            connected
+              ? { connected: true, login: "ale", profileUrl: "https://github.com/ale" }
+              : {
+                  connected: false,
+                  login: null,
+                  profileUrl: null,
+                  error:
+                    "GitHub CLI is not authenticated. Run `gh auth login` in a terminal, then reload.",
+                },
+          ),
+        );
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(jsonResponse({ issues: [issue(1)], incompleteResults: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const first = render(<IssuesScreen />);
+    expect((await screen.findByTestId("issues-connection")).textContent).toContain("ale");
+    // the probe fires exactly once per mount
+    expect(
+      fetchMock.mock.calls.filter(([u]) => String(u).includes("/issues/connection")),
+    ).toHaveLength(1);
+    first.unmount();
+
+    connected = false;
+    render(<IssuesScreen />);
+    await waitFor(() => {
+      expect(screen.getByTestId("issues-connection").textContent).toContain("gh auth login");
+    });
+  });
 });
 
 describe("close-reason facet (ISS-09)", () => {
@@ -331,11 +386,14 @@ describe("issues incomplete-results notice", () => {
   it("shows an accessible notice only for an incomplete successful result", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse({
-          issues: Array.from({ length: 50 }, (_, index) => issue(index + 1)),
-          incompleteResults: true,
-        }),
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          connectionBranch(String(input)) ??
+            jsonResponse({
+              issues: Array.from({ length: 50 }, (_, index) => issue(index + 1)),
+              incompleteResults: true,
+            }),
+        ),
       ),
     );
 
@@ -357,7 +415,11 @@ describe("issues incomplete-results notice", () => {
   ])("does not show the notice for a complete %s result", async (_name, issues) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ issues, incompleteResults: false })),
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          connectionBranch(String(input)) ?? jsonResponse({ issues, incompleteResults: false }),
+        ),
+      ),
     );
 
     render(<IssuesScreen />);
@@ -368,15 +430,18 @@ describe("issues incomplete-results notice", () => {
 
   it("clears the old notice immediately during refresh and keeps it clear on failure", async () => {
     let rejectRefresh!: (reason: Error) => void;
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ issues: [issue(1)], incompleteResults: true }))
-      .mockImplementationOnce(
-        () =>
-          new Promise<Response>((_resolve, reject) => {
-            rejectRefresh = reject;
-          }),
-      );
+    let boardCallCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const branch = connectionBranch(String(input));
+      if (branch) return Promise.resolve(branch);
+      boardCallCount += 1;
+      if (boardCallCount === 1) {
+        return Promise.resolve(jsonResponse({ issues: [issue(1)], incompleteResults: true }));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        rejectRefresh = reject;
+      });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<IssuesScreen />);
@@ -394,6 +459,8 @@ describe("issues incomplete-results notice", () => {
     let resolveClosed!: (response: Response) => void;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
+      const branch = connectionBranch(url);
+      if (branch) return Promise.resolve(branch);
       if (url.endsWith("state=open")) {
         return Promise.resolve(jsonResponse({ issues: [issue(1)], incompleteResults: true }));
       }
@@ -426,6 +493,8 @@ describe("issues incomplete-results notice", () => {
     let resolveClosed!: (response: Response) => void;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
+      const branch = connectionBranch(url);
+      if (branch) return Promise.resolve(branch);
       if (url.endsWith("state=open")) {
         return new Promise<Response>((resolve) => {
           resolveOpen = resolve;
@@ -441,19 +510,19 @@ describe("issues incomplete-results notice", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<IssuesScreen />);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(boardCalls(fetchMock)).toBe(1));
     await act(async () => {
       screen
         .getByTestId("issues-state-closed")
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      expect(fetchMock).toHaveBeenCalledTimes(1); // the closed-state effect has not started
+      expect(boardCalls(fetchMock)).toBe(1); // the closed-state effect has not started
       resolveOpen(jsonResponse({ issues: [issue(1)], incompleteResults: true }));
       await Promise.resolve();
     });
 
     expect(screen.queryByTestId("issue-1")).toBeNull();
     expect(screen.queryByTestId("issues-incomplete-results")).toBeNull();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(boardCalls(fetchMock)).toBe(2));
     resolveClosed(jsonResponse({ issues: [], incompleteResults: false }));
     await screen.findByTestId("issues-empty");
   });
@@ -465,6 +534,8 @@ describe("issues incomplete-results notice", () => {
     let resolveNext!: (response: Response) => void;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
+      const branch = connectionBranch(url);
+      if (branch) return Promise.resolve(branch);
       if (url.includes(`/projects/${project.id}/`)) {
         return new Promise<Response>((resolve) => {
           resolveOld = resolve;
@@ -480,17 +551,17 @@ describe("issues incomplete-results notice", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<IssuesScreen />);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(boardCalls(fetchMock)).toBe(1));
     await act(async () => {
       useAppStore.getState().setCurrentProject(nextProject.id);
-      expect(fetchMock).toHaveBeenCalledTimes(1); // the next-project effect has not started
+      expect(boardCalls(fetchMock)).toBe(1); // the next-project effect has not started
       resolveOld(jsonResponse({ issues: [issue(1)], incompleteResults: true }));
       await Promise.resolve();
     });
 
     expect(screen.queryByTestId("issue-1")).toBeNull();
     expect(screen.queryByTestId("issues-incomplete-results")).toBeNull();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(boardCalls(fetchMock)).toBe(2));
     resolveNext(jsonResponse({ issues: [], incompleteResults: false }));
     await screen.findByTestId("issues-empty");
   });
@@ -498,7 +569,12 @@ describe("issues incomplete-results notice", () => {
   it("keeps search keyboard input usable while the notice is visible", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ issues: [issue(1)], incompleteResults: true })),
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          connectionBranch(String(input)) ??
+            jsonResponse({ issues: [issue(1)], incompleteResults: true }),
+        ),
+      ),
     );
 
     render(<IssuesScreen />);

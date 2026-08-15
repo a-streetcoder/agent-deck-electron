@@ -514,6 +514,36 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
   });
 
+  // Connection status for the gh transport (ISS-12, native
+  // GitHubCLIAuthService.loadStatus): who the CLI is signed in as, or a guided
+  // disconnected state. gh IS this app's GitHub transport — richer in-app OAuth
+  // is out of scope by design; this surfaces the account the way native's CLI
+  // path does.
+  fastify.get("/issues/connection", async () => {
+    const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
+    try {
+      // ONE spawn: a successful authenticated call IS the auth check — `gh auth
+      // status` can fail on an unrelated stale host while this account works (Codex)
+      const { stdout } = await execFileAsync(ghBin, ["api", "user"], {
+        timeout: 10_000,
+        maxBuffer: 1_000_000,
+      });
+      const user = JSON.parse(stdout) as { login?: string; html_url?: string };
+      return {
+        connected: true,
+        login: user.login ?? null,
+        profileUrl: user.html_url ?? null,
+      };
+    } catch {
+      return {
+        connected: false,
+        login: null,
+        profileUrl: null,
+        error: "GitHub CLI is not authenticated. Run `gh auth login` in a terminal, then reload.",
+      };
+    }
+  });
+
   // Aggregate cross-repository search (ISS-10, native
   // GitHubSearchService.fetchAggregateIssues): one `gh search issues` across
   // every registered project's GitHub origin, each row tagged with the project

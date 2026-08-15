@@ -119,6 +119,40 @@ export function IssuesScreen() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   // ISS-08: native's single-select issue-type facet (githubTypeFilter).
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  // ISS-12 (native GitHubCLIAuthService): the gh transport's account surface.
+  const [connection, setConnection] = useState<{
+    connected: boolean;
+    login: string | null;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/issues/connection");
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          connected: boolean;
+          login: string | null;
+          error?: string;
+        };
+        if (!cancelled) setConnection(data);
+      } catch {
+        // informational, but never a permanent "checking…" label (Codex)
+        if (!cancelled) {
+          setConnection({
+            connected: false,
+            login: null,
+            error: "Couldn't check the GitHub connection.",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // ISS-09: native's close-reason filter. Native narrows the SEARCH QUERY by
   // reason; we filter the loaded board client-side, which also works for the
   // aggregate view (deviation noted in the slice commit).
@@ -828,6 +862,28 @@ export function IssuesScreen() {
                     </ControlButton>
                   ))}
                 </div>
+                <span
+                  data-testid="issues-connection"
+                  role="status"
+                  aria-live="polite"
+                  className={cn(
+                    "rounded-capsule border px-2 py-0.5 text-detail",
+                    connection && !connection.connected
+                      ? "border-warning/55 bg-warning/10 text-warning"
+                      : "border-border-subtle text-text-muted",
+                  )}
+                  title={
+                    connection?.connected
+                      ? "The gh CLI is signed in — issues use its authentication"
+                      : (connection?.error ?? "Checking GitHub connection…")
+                  }
+                >
+                  {connection === null
+                    ? "GitHub …"
+                    : connection.connected
+                      ? `GitHub · ${connection.login ?? "signed in"}`
+                      : (connection.error ?? "GitHub disconnected")}
+                </span>
                 <ControlButton
                   data-testid="issues-scope-all"
                   aria-pressed={allProjects}
