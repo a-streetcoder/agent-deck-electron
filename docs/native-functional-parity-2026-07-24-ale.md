@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 41 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 40 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -48,7 +48,6 @@ These are recommended checks for future implementation and regression coverage. 
 | ID     | Priority | Status  | Difference                        | Plain English                                                               | Why it matters                                                 | Evidence                                                                               |
 | ------ | -------- | ------- | --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | PRM-09 | **P3**   | Partial | Argument-hint editing             | Electron preserves some frontmatter but does not fully edit argument hints. | Slash-command usage help cannot be maintained in-app.          | **E:** prompt schema/editor. **N:** prompt views.                                      |
-| EXT-03 | **P2**   | Partial | Extension provenance              | Electron shows files/conflicts but less source ownership detail.            | Trust and troubleshooting are harder.                          | Same as EXT-01.                                                                        |
 
 ## GitHub issues
 

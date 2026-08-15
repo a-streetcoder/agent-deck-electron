@@ -1413,6 +1413,12 @@ ${content}
         entry.packageRef ? [[nodePath.resolve(entry.path), entry.packageRef] as const] : [],
       ),
     );
+    // EXT-03: the exact owning location (discovery dir / settings file)
+    const originByPath = new Map(
+      discovered.flatMap((entry) =>
+        entry.origin ? [[nodePath.resolve(entry.path), entry.origin] as const] : [],
+      ),
+    );
     const paths = [
       ...new Set([...registry, ...discovered.map((entry) => nodePath.resolve(entry.path))]),
     ];
@@ -1440,6 +1446,9 @@ ${content}
               ? "package"
               : "discovered",
         packageRef: packageRefByPath.get(filePath),
+        // an "added" row's provenance IS the manual registry — attaching the
+        // discovered origin would contradict the badge (Codex)
+        origin: registry.has(filePath) ? undefined : originByPath.get(filePath),
         // The app-bridge tool this extension re-registers (else null). A
         // conflicting extension is NOT injected (it would crash pi) — the UI
         // warns that the bridge shadows it (native conflict flag).

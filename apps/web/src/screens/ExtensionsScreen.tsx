@@ -20,6 +20,8 @@ interface ExtensionEntry {
   /** Where it was found — a standard pi dir (discovered) or the manual registry. */
   source?: "discovered" | "added" | "settings" | "package";
   packageRef?: string;
+  /** EXT-03: the exact owning location (discovery dir / settings file). */
+  origin?: string;
   scope?: "global" | "project" | string;
   /** The app-bridge tool this extension re-registers, if any (kept out of launch). */
   bridgeConflict?: string | null;
@@ -685,6 +687,13 @@ export function ExtensionsScreen() {
                     <span
                       data-testid={`extension-source-${ext.name}`}
                       className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                      title={
+                        ext.source === "package"
+                          ? `Provided by package ${ext.packageRef ?? ""}`.trim()
+                          : ext.origin
+                            ? `Declared by ${ext.origin}`
+                            : undefined
+                      }
                     >
                       {ext.source === "added"
                         ? "added"

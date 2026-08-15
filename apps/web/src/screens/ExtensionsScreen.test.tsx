@@ -64,6 +64,7 @@ describe("settings-defined extension candidates (EXT-01)", () => {
             disabled: false,
             scope: "global",
             source: "settings",
+            origin: "C:/home/.pi/agent/settings.json",
             bridgeConflict: null,
           },
         ],
@@ -72,6 +73,8 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     render(<ExtensionsScreen />);
     const label = await screen.findByTestId("extension-source-listed.ts");
     expect(label.textContent).toContain("settings.json");
+    // EXT-03: the badge names the exact owning file on hover
+    expect(label.getAttribute("title")).toBe("Declared by C:/home/.pi/agent/settings.json");
     // removing goes through the app registry, which cannot touch settings.json —
     // offering Remove here would silently no-op (review-derived gating)
     expect(screen.queryByTestId("extension-remove-listed.ts")).toBeNull();
@@ -99,6 +102,8 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     render(<ExtensionsScreen />);
     const label = await screen.findByTestId("extension-source-packed.ts");
     expect(label.textContent).toContain("package · ext-pack");
+    // EXT-03: package rows name the providing package ref on hover
+    expect(label.getAttribute("title")).toBe("Provided by package C:/node_modules/ext-pack");
     expect(screen.queryByTestId("extension-remove-packed.ts")).toBeNull();
   });
 });

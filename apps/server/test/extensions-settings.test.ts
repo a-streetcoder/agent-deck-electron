@@ -57,6 +57,10 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     expect(listed.scope).toBe("global");
     expect(listed.exists).toBe(true);
     expect(listed.path).toBe(path.resolve(resourceHome, "tools", "listed.ts"));
+    // EXT-03: source OWNERSHIP — the exact settings file that declared the entry
+    expect((listed as { origin?: string }).origin).toBe(
+      path.join(resourceHome, ".pi", "agent", "settings.json"),
+    );
     // a declared-but-missing entry stays visible with exists:false — the user
     // configured it and should see it isn't there
     const ghost = extensions.find((e) => e.name === "ghost.ts")!;

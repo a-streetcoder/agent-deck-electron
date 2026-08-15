@@ -487,6 +487,12 @@ export interface DiscoveredExtension {
   source?: "auto" | "settings" | "package";
   /** For package candidates (EXT-02): the settings.json ref that supplied it. */
   packageRef?: string;
+  /**
+   * Source OWNERSHIP (EXT-03, native ScopeID.path): the exact location that put
+   * this candidate in the catalog — the discovery directory for auto entries,
+   * the settings FILE for settings entries.
+   */
+  origin?: string;
 }
 
 /** pi loads extensions written in TS or JS (any module flavor). */
@@ -581,13 +587,14 @@ export function scanExtensions(
       const full = path.join(dir, entry.name);
       if (seen.has(pathKey(full))) continue;
       seen.add(pathKey(full));
-      found.push({ name: entry.name, path: full, scope, source: "auto" });
+      found.push({ name: entry.name, path: full, scope, source: "auto", origin: dir });
     }
   }
   // settings.json `extensions` entries are candidates too (EXT-01, native
   // discoveryKind settingsExtension): each path resolves against the settings
-  // FILE's directory. Auto-discovered files win the dedupe so their entry keeps
-  // the richer auto provenance.
+  // FILE's directory. Dedupe order IS the ownership order (EXT-03): auto
+  // discovery wins over settings, global settings over project settings, and
+  // settings over packages — the first finder's origin is the one reported.
   const settingsFiles: Array<{ file: string; scope: ResourceScope }> = [
     { file: path.join(piAgentHome(roots), "settings.json"), scope: "global" },
     ...(roots.projectPath
@@ -612,7 +619,13 @@ export function scanExtensions(
       const resolved = path.resolve(path.dirname(file), entry);
       if (seen.has(pathKey(resolved))) continue;
       seen.add(pathKey(resolved));
-      found.push({ name: path.basename(resolved), path: resolved, scope, source: "settings" });
+      found.push({
+        name: path.basename(resolved),
+        path: resolved,
+        scope,
+        source: "settings",
+        origin: file,
+      });
     }
   }
   // Package-provided extensions (EXT-02): candidates from settings.packages,
