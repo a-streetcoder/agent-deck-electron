@@ -66,6 +66,12 @@ export type DiffFileEntry = typeof DiffFileEntry.Type;
 // Client → server diff requests (ride RpcClientFrame alongside ClientMessage)
 // ---------------------------------------------------------------------------
 
+/** Native GitDiffKind parity (DIF-01): which relation a file's patch shows.
+ * `all` = working tree vs the session base (the default, today's behavior);
+ * `staged` = index vs HEAD; `unstaged` = working tree vs index. */
+export const DiffScope = Schema.Literal("all", "staged", "unstaged");
+export type DiffScope = typeof DiffScope.Type;
+
 export const DiffClientRequest = Schema.Union(
   Schema.Struct({
     /** List the session's changed files (served from the per-session cache). */
@@ -78,6 +84,8 @@ export const DiffClientRequest = Schema.Union(
     sessionId: Schema.String,
     /** Must be a path from the session's changed-file set (verbatim). */
     path: DiffPath,
+    /** Omitted = "all" (working tree vs the session base). */
+    scope: Schema.optional(DiffScope),
   }),
 );
 export type DiffClientRequest = typeof DiffClientRequest.Type;

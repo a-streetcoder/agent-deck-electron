@@ -530,14 +530,19 @@ export async function gitDiffFilePatch(
   base: string,
   paths: readonly string[],
   maxChars: number,
+  scope: "all" | "staged" | "unstaged" = "all",
 ): Promise<GitBoundedOutput> {
   // --literal-pathspecs: these paths come back FROM git status output, but a
   // name like `app/[id]/page.tsx` would otherwise be glob-expanded as a
   // pathspec and match SIBLING files' diffs (donor: GitVcsDriverCore
   // prepareCommitContext uses the same flag when feeding paths back).
+  // Scope mirrors native GitDiffKind (DIF-01): staged = index vs HEAD
+  // (`--cached`; the base is definitionally HEAD), unstaged = working tree vs
+  // index (no revision), all = tree vs `base` (the existing behavior).
+  const revision = scope === "staged" ? ["--cached"] : scope === "unstaged" ? [] : [base];
   return runGitBounded(
     cwd,
-    ["--literal-pathspecs", "diff", "--no-ext-diff", "--patch", "-M", base, "--", ...paths],
+    ["--literal-pathspecs", "diff", "--no-ext-diff", "--patch", "-M", ...revision, "--", ...paths],
     maxChars,
   );
 }

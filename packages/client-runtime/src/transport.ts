@@ -561,8 +561,17 @@ export class RpcTransport {
    * Fetch one changed file's bounded unified diff (Slice 10). A path outside
    * the session's changed set (or a binary file) resolves with an empty diff.
    */
-  async diffFile(sessionId: string, path: string): Promise<DiffFileResult> {
-    const settled = await this.sendRequest({ type: "diff_file", sessionId, path });
+  async diffFile(
+    sessionId: string,
+    path: string,
+    scope?: "all" | "staged" | "unstaged",
+  ): Promise<DiffFileResult> {
+    const settled = await this.sendRequest({
+      type: "diff_file",
+      sessionId,
+      path,
+      ...(scope !== undefined ? { scope } : {}),
+    });
     if (settled.kind !== "diff_file") {
       throw new Error("diff_file settled without a diff_file_ok reply");
     }

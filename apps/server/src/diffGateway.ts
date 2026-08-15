@@ -1,4 +1,4 @@
-import type { SessionMeta } from "@agent-deck/contracts";
+import type { DiffScope, SessionMeta } from "@agent-deck/contracts";
 import { Effect } from "effect";
 import { runPromiseUnwrapped } from "./effectRun.ts";
 import { gitFullyQualifiedBranchRef } from "./git.ts";
@@ -29,6 +29,7 @@ export interface DiffGateway {
     cwd: string,
     path: string,
     base?: string,
+    scope?: DiffScope,
   ) => Promise<FileDiffResult>;
   /** Drop the session's cache entry (session ended/destroyed). */
   readonly drop: (sessionId: string) => void;
@@ -63,10 +64,10 @@ export function createDiffGateway(runtime: ServerRuntime): DiffGateway {
         runtime,
         Effect.flatMap(SessionDiff, (diff) => diff.refresh(sessionId, cwd, base)),
       ),
-    fileDiff: (sessionId, cwd, path, base) =>
+    fileDiff: (sessionId, cwd, path, base, scope) =>
       runPromiseUnwrapped(
         runtime,
-        Effect.flatMap(SessionDiff, (diff) => diff.fileDiff(sessionId, cwd, path, base)),
+        Effect.flatMap(SessionDiff, (diff) => diff.fileDiff(sessionId, cwd, path, base, scope)),
       ),
     drop: (sessionId) =>
       runtime.runSync(Effect.flatMap(SessionDiff, (diff) => diff.drop(sessionId))),

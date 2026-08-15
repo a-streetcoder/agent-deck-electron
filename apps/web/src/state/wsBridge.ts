@@ -591,10 +591,11 @@ export async function openFileInEditor(
 /** Fetch one changed file's unified diff for the CURRENT session. */
 export async function fetchFileDiff(
   path: string,
+  scope?: "all" | "staged" | "unstaged",
 ): Promise<{ diff: string; truncated: boolean; binary: boolean } | null> {
   const sessionId = currentSessionId;
   if (!sessionId) return null;
-  const result = await transport.diffFile(sessionId, path);
+  const result = await transport.diffFile(sessionId, path, scope);
   return { diff: result.diff, truncated: result.truncated, binary: result.binary };
 }
 

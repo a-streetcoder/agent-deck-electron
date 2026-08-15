@@ -495,6 +495,7 @@ export function createRpcConnection(deps: {
             session.meta.cwd,
             request.path,
             base,
+            request.scope,
           );
           send({
             kind: "diff_file_ok",

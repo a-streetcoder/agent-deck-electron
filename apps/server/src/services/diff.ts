@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import nodePath from "node:path";
 import {
+  type DiffScope,
   DIFF_MAX_FILES,
   DIFF_MAX_PATCH_CHARS,
   type DiffFileEntry,
@@ -108,6 +109,7 @@ export interface SessionDiffShape {
     cwd: string,
     path: string,
     base?: string,
+    scope?: DiffScope,
   ) => Effect.Effect<FileDiffResult>;
   /** Drop a session's cache entry (session ended/destroyed). */
   readonly drop: (sessionId: string) => Effect.Effect<void>;
@@ -387,7 +389,7 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
 
     refresh: (sessionId, cwd, base) => Effect.promise(() => compute(sessionId, cwd, base)),
 
-    fileDiff: (sessionId, cwd, path, base) =>
+    fileDiff: (sessionId, cwd, path, base, scope = "all") =>
       Effect.promise(async () => {
         const key = cacheKey(sessionId, base);
         let cached = cache.get(key);
@@ -398,16 +400,23 @@ export const makeSessionDiff = (options: SessionDiffOptions = {}): SessionDiffSh
         // doubles as the path-traversal guard — only paths git itself listed
         // are ever passed back to git as pathspecs.
         if (!entry || !set.repo) return { path, diff: "", truncated: false, binary: false };
+        // Untracked + STAGED (DIF-01) answers clean-empty BEFORE the binary
+        // short-circuit: `binary` is classified against the base-relative set,
+        // and an untracked binary file has no index content either way.
+        if (entry.status === "?" && scope === "staged") {
+          return { path, diff: "", truncated: false, binary: false };
+        }
         if (entry.binary) return { path, diff: "", truncated: false, binary: true };
         try {
           if (entry.status === "?") {
+            // Untracked (DIF-01): unstaged/all synthesize against /dev/null.
             const out = await gitDiffUntrackedPatch(cwd, path, maxPatchChars);
             return { path, diff: out.text, truncated: out.truncated, binary: false };
           }
           const patchBase = cached?.base ?? base ?? (await gitDiffBase(cwd));
           // A rename needs BOTH paths in the pathspec (see git.ts).
           const paths = entry.oldPath !== undefined ? [entry.oldPath, entry.path] : [entry.path];
-          const out = await gitDiffFilePatch(cwd, patchBase, paths, maxPatchChars);
+          const out = await gitDiffFilePatch(cwd, patchBase, paths, maxPatchChars, scope);
           return { path, diff: out.text, truncated: out.truncated, binary: false };
         } catch {
           return { path, diff: "", truncated: false, binary: false };

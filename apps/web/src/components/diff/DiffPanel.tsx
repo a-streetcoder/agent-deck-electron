@@ -1,4 +1,8 @@
-import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
+import {
+  ControlButton,
+  ControlSelect,
+  ControlTextArea,
+} from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -401,6 +405,8 @@ export function DiffPanel() {
 
   const [allDirectoriesExpanded, setAllDirectoriesExpanded] = useState(true);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // DIF-01 (native GitDiffKind): which relation the file patch shows.
+  const [diffScope, setDiffScope] = useState<"all" | "staged" | "unstaged">("all");
   const [fileDiff, setFileDiff] = useState<FileDiffState | null>(null);
 
   // Slice 11: the server-detected editors + the remembered default. The
@@ -470,6 +476,11 @@ export function DiffPanel() {
     setCommentBox(null);
   }, [selectedPath, sessionId, fileDiff]);
 
+  // A different file (or session) starts back at the combined view.
+  useEffect(() => {
+    setDiffScope("all");
+  }, [selectedPath, sessionId]);
+
   const summaryStat = useMemo(() => summarizeDiffStats(files), [files]);
   const selectedEntry = selectedPath
     ? (files.find((file) => file.path === selectedPath) ?? null)
@@ -505,7 +516,7 @@ export function DiffPanel() {
             empty: false,
           },
     );
-    void fetchFileDiff(selectedPath)
+    void fetchFileDiff(selectedPath, diffScope)
       .then((result) => {
         if (stale || result === null) return;
         setFileDiff({
@@ -534,7 +545,7 @@ export function DiffPanel() {
     return () => {
       stale = true;
     };
-  }, [selectedPath, sessionId, files]);
+  }, [selectedPath, sessionId, files, diffScope]);
 
   if (sessionId === null) return null;
   // The tab only opens for a git repo (the diffRepo gate lives on the header /
@@ -720,14 +731,39 @@ export function DiffPanel() {
               {selectedEntry?.oldPath !== undefined ? `${selectedEntry.oldPath} → ` : ""}
               {selectedPath}
             </span>
-            {selectedEntry && !selectedEntry.binary && selectedEntry.insertions !== null && (
-              <span className="ml-auto shrink-0 font-mono text-micro tabular-nums">
-                <DiffStatLabel
-                  additions={selectedEntry.insertions}
-                  deletions={selectedEntry.deletions ?? 0}
-                />
-              </span>
+            {/* Scoped patches contradict a loop review's source-branch base —
+                the selector only exists for ordinary sessions (Codex). */}
+            {loopReviewRunId === null && (
+              <ControlSelect
+                className="ml-auto shrink-0 rounded-md border border-border-subtle bg-surface px-1.5 py-0.5 text-micro text-text-muted focus:border-accent focus:outline-none"
+                aria-label="Diff scope"
+                data-testid="diff-scope"
+                value={diffScope}
+                onChange={(event) =>
+                  setDiffScope(event.target.value as "all" | "staged" | "unstaged")
+                }
+              >
+                <option value="all">All changes</option>
+                <option value="staged">Staged</option>
+                <option value="unstaged">Unstaged</option>
+              </ControlSelect>
             )}
+            {selectedEntry &&
+              !selectedEntry.binary &&
+              selectedEntry.insertions !== null &&
+              diffScope === "all" && (
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-micro tabular-nums",
+                    loopReviewRunId !== null && "ml-auto",
+                  )}
+                >
+                  <DiffStatLabel
+                    additions={selectedEntry.insertions}
+                    deletions={selectedEntry.deletions ?? 0}
+                  />
+                </span>
+              )}
             <OpenInPicker
               available={editorPicker.available}
               preferred={editorPicker.preferred}

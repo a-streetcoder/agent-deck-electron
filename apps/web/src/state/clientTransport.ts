@@ -84,7 +84,11 @@ export interface ClientTransport {
   /** Fetch the session's changed-file set (Slice 10); rejects offline. */
   diffFiles(sessionId: string): Promise<DiffFilesResult>;
   /** Fetch one changed file's bounded unified diff; rejects offline. */
-  diffFile(sessionId: string, path: string): Promise<DiffFileResult>;
+  diffFile(
+    sessionId: string,
+    path: string,
+    scope?: "all" | "staged" | "unstaged",
+  ): Promise<DiffFileResult>;
   /** List the editors detected server-side (Slice 11); rejects offline. */
   listEditors(): Promise<readonly EditorId[]>;
   /** Open one changed file in a detected editor (Slice 11); rejects offline. */
@@ -274,12 +278,16 @@ export class RpcClientTransport implements ClientTransport {
     return transport.diffFiles(sessionId);
   }
 
-  diffFile(sessionId: string, path: string): Promise<DiffFileResult> {
+  diffFile(
+    sessionId: string,
+    path: string,
+    scope?: "all" | "staged" | "unstaged",
+  ): Promise<DiffFileResult> {
     const transport = this.transport;
     if (!transport || transport.getState() !== "connected") {
       return Promise.reject(new Error("transport not connected"));
     }
-    return transport.diffFile(sessionId, path);
+    return transport.diffFile(sessionId, path, scope);
   }
 
   listEditors(): Promise<readonly EditorId[]> {

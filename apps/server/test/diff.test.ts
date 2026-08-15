@@ -209,6 +209,62 @@ describe("SessionDiff service (services/diff.ts)", () => {
     expect(unknown).toEqual({ path: "../outside.txt", diff: "", truncated: false, binary: false });
   });
 
+  it("scopes one file's diff like native GitDiffKind: staged, unstaged, all (DIF-01)", async () => {
+    const repo = makeRepo();
+    // ONE file with BOTH a staged edit and a later unstaged edit on top.
+    writeFileSync(path.join(repo, "a.txt"), "line1\nSTAGED\nline3\n");
+    git(repo, ["add", "a.txt"]);
+    writeFileSync(path.join(repo, "a.txt"), "line1\nSTAGED\nline3\nUNSTAGED\n");
+    writeFileSync(path.join(repo, "fresh.txt"), "hello\n");
+
+    const diff = makeSessionDiff();
+
+    // staged: index vs HEAD — sees STAGED, never the later working-tree edit.
+    const staged = await run(diff.fileDiff("s1", repo, "a.txt", undefined, "staged"));
+    expect(staged.diff).toContain("+STAGED");
+    expect(staged.diff).not.toContain("UNSTAGED");
+
+    // unstaged: working tree vs index — ONLY the edit on top of the index.
+    const unstaged = await run(diff.fileDiff("s1", repo, "a.txt", undefined, "unstaged"));
+    expect(unstaged.diff).toContain("+UNSTAGED");
+    expect(unstaged.diff).not.toContain("+STAGED");
+
+    // all (the default): tree vs HEAD — both edits combined (today's behavior).
+    const all = await run(diff.fileDiff("s1", repo, "a.txt"));
+    expect(all.diff).toContain("+STAGED");
+    expect(all.diff).toContain("+UNSTAGED");
+
+    // An untracked file has no index content: staged scope answers empty,
+    // unstaged (like all) synthesizes against /dev/null.
+    const freshStaged = await run(diff.fileDiff("s1", repo, "fresh.txt", undefined, "staged"));
+    expect(freshStaged).toEqual({ path: "fresh.txt", diff: "", truncated: false, binary: false });
+    const freshUnstaged = await run(diff.fileDiff("s1", repo, "fresh.txt", undefined, "unstaged"));
+    expect(freshUnstaged.diff).toContain("+hello");
+
+    // An untracked BINARY file under the staged scope is the same clean empty —
+    // the set-level binary flag must not short-circuit it to binary:true (Codex).
+    writeFileSync(path.join(repo, "blob.dat"), Buffer.from([0, 1, 2, 3]));
+    await run(diff.refresh("s1", repo));
+    const blobStaged = await run(diff.fileDiff("s1", repo, "blob.dat", undefined, "staged"));
+    expect(blobStaged).toEqual({ path: "blob.dat", diff: "", truncated: false, binary: false });
+  });
+
+  it("splits a staged rename from an unstaged edit on the renamed file (DIF-01)", async () => {
+    const repo = makeRepo();
+    git(repo, ["mv", "c.txt", "renamed.txt"]); // staged rename
+    // The unstaged edit keeps the content SIMILAR (append-only) so the
+    // changed-file set still classifies the rename (-M similarity).
+    writeFileSync(path.join(repo, "renamed.txt"), "alpha\nbeta\ngamma\ndelta\nEDIT\n");
+
+    const diff = makeSessionDiff();
+    const staged = await run(diff.fileDiff("s1", repo, "renamed.txt", undefined, "staged"));
+    expect(staged.diff).toContain("rename from c.txt");
+    expect(staged.diff).not.toContain("+EDIT");
+    const unstaged = await run(diff.fileDiff("s1", repo, "renamed.txt", undefined, "unstaged"));
+    expect(unstaged.diff).toContain("+EDIT");
+    expect(unstaged.diff).not.toContain("rename from");
+  });
+
   it("caps a huge file's diff and flags truncation", async () => {
     const repo = makeRepo();
     const huge = Array.from({ length: 5_000 }, (_, i) => `added line ${i}`).join("\n");
