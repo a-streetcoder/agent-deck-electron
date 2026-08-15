@@ -19,7 +19,12 @@ import { detectProjectType, discoverProjects, scanAgents } from "@agent-deck/res
 import { projectAllowsAgent } from "../agentCuration.ts";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
-import { normalizeGitHubIssueList, type RawGitHubIssueListRow } from "../githubIssues.ts";
+import {
+  normalizeGitHubIssueDetail,
+  normalizeGitHubIssueList,
+  type RawGitHubIssueDetail,
+  type RawGitHubIssueListRow,
+} from "../githubIssues.ts";
 import {
   ancestorDirsOf,
   INSTRUCTIONS_MAX,
@@ -430,38 +435,13 @@ export function registerProjectRoutes(ctx: ServerContext): void {
           "view",
           number,
           "--json",
-          "number,title,body,state,url,labels,assignees,author,comments",
+          "number,title,body,state,stateReason,url,createdAt,updatedAt,closedAt," +
+            "labels,assignees,author,comments",
         ],
         { cwd: project.path, timeout: 15_000, maxBuffer: 8_000_000 },
       );
-      const raw = JSON.parse(stdout) as {
-        number: number;
-        title: string;
-        body?: string;
-        state: string;
-        url: string;
-        labels?: Array<{ name: string }>;
-        assignees?: Array<{ login: string }>;
-        author?: { login: string };
-        comments?: Array<{ author?: { login: string }; body?: string; createdAt?: string }>;
-      };
-      return {
-        issue: {
-          number: raw.number,
-          title: raw.title,
-          body: raw.body ?? "",
-          state: raw.state,
-          url: raw.url,
-          labels: (raw.labels ?? []).map((l) => l.name),
-          assignees: (raw.assignees ?? []).map((a) => a.login),
-          author: raw.author?.login ?? null,
-          comments: (raw.comments ?? []).map((c) => ({
-            author: c.author?.login ?? null,
-            body: c.body ?? "",
-            createdAt: c.createdAt ?? null,
-          })),
-        },
-      };
+      const raw = JSON.parse(stdout) as RawGitHubIssueDetail;
+      return { issue: normalizeGitHubIssueDetail(raw) };
     } catch {
       return reply.status(502).send({
         error: "Couldn't load the issue — needs the gh CLI installed, authenticated, and a remote.",

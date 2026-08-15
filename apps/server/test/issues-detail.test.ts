@@ -26,7 +26,7 @@ beforeAll(async () => {
     `#!/bin/sh
 num="$3"
 cat <<JSON
-{"number":$num,"title":"Flux capacitor","body":"# Steps\\nreproduce","state":"OPEN","url":"https://x/$num","labels":[{"name":"bug"},{"name":"p1"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"comments":[{"author":{"login":"marty"},"body":"I can repro.","createdAt":"2026-01-15T10:00:00Z"}]}
+{"number":$num,"title":"Flux capacitor","body":"# Steps\\nreproduce","state":"OPEN","stateReason":null,"url":"https://x/$num","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","closedAt":null,"labels":[{"name":"bug"},{"name":"p1"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"comments":[{"id":"IC_1","url":"https://x/$num#c1","author":{"login":"marty"},"body":"I can repro.","createdAt":"2026-01-15T10:00:00Z","updatedAt":"2026-01-15T10:00:00Z"}]}
 JSON
 `,
   );
@@ -62,7 +62,11 @@ describe.skipIf(isWindows)("GET /projects/:id/issues/:number", () => {
         labels: string[];
         assignees: string[];
         author: string | null;
-        comments: Array<{ author: string | null; body: string; createdAt: string | null }>;
+        createdAt: string | null;
+        updatedAt: string | null;
+        closedAt: string | null;
+        stateReason: string | null;
+        comments: Array<Record<string, unknown>>;
       };
     };
     expect(issue.number).toBe(42); // the number was forwarded to `gh issue view 42`
@@ -71,8 +75,20 @@ describe.skipIf(isWindows)("GET /projects/:id/issues/:number", () => {
     expect(issue.labels).toEqual(["bug", "p1"]);
     expect(issue.assignees).toEqual(["marty"]);
     expect(issue.author).toBe("doc");
+    // ISS-03: the full structured context fields ride along
+    expect(issue.createdAt).toBe("2026-01-01T00:00:00Z");
+    expect(issue.updatedAt).toBe("2026-01-02T00:00:00Z");
+    expect(issue.closedAt).toBeNull();
+    expect(issue.stateReason).toBeNull();
     expect(issue.comments).toEqual([
-      { author: "marty", body: "I can repro.", createdAt: "2026-01-15T10:00:00Z" },
+      {
+        id: "IC_1",
+        url: "https://x/42#c1",
+        author: "marty",
+        body: "I can repro.",
+        createdAt: "2026-01-15T10:00:00Z",
+        updatedAt: "2026-01-15T10:00:00Z",
+      },
     ]);
   });
 

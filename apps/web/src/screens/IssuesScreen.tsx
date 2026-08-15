@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
+import { buildIssueContext } from "./issueContext.ts";
 import { newChat } from "../state/wsBridge.ts";
 
 /**
@@ -37,13 +38,19 @@ interface Issue {
 }
 
 interface IssueComment {
+  id?: string | null;
+  url?: string | null;
   author: string | null;
   body: string;
   createdAt: string | null;
+  updatedAt?: string | null;
 }
 
 interface IssueDetail extends Issue {
   body: string;
+  stateReason?: string | null;
+  createdAt?: string | null;
+  closedAt?: string | null;
   comments: IssueComment[];
 }
 
@@ -187,17 +194,45 @@ export function IssuesScreen() {
     setSearchQuery("");
   }, [currentProjectId]);
 
-  const start = async (issue: Issue): Promise<void> => {
+  const start = async (issue: IssueDetail): Promise<void> => {
     setView("chat");
     // Wait for the new session to become active before seeding its composer,
     // so the prompt can't land in the previous session's draft.
     const session = await newChat();
     if (!session) return;
+    // ISS-03: the visible ask plus native PiIssuePromptBuilder's structured
+    // context block — full metadata, body, and comments, not a thin summary.
+    const context = buildIssueContext(
+      {
+        number: issue.number,
+        title: issue.title,
+        body: issue.body,
+        state: issue.state,
+        stateReason: issue.stateReason ?? null,
+        url: issue.url,
+        createdAt: issue.createdAt ?? null,
+        updatedAt: issue.updatedAt ?? null,
+        closedAt: issue.closedAt ?? null,
+        labels: issue.labels,
+        assignees: issue.assignees,
+        author: issue.author,
+        comments: issue.comments.map((comment) => ({
+          id: comment.id ?? null,
+          url: comment.url ?? null,
+          author: comment.author,
+          body: comment.body,
+          createdAt: comment.createdAt,
+          updatedAt: comment.updatedAt ?? null,
+        })),
+      },
+      project?.name ?? "",
+      project?.path ?? "",
+    );
     setPendingComposerText({
       sessionId: session.id,
       text:
         `Work on GitHub issue #${issue.number}: ${issue.title}\n${issue.url}\n\n` +
-        `Investigate the issue and propose a fix.`,
+        `Investigate the issue and propose a fix.\n\n${context}`,
     });
   };
 
