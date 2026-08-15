@@ -457,3 +457,192 @@ describe("project MCP assignment saving state", () => {
     expect(screen.getByTestId("mcp-status-global").textContent).toBe("disconnected");
   });
 });
+
+describe("MCP add form", () => {
+  function mockCatalog(servers: Array<Partial<Record<string, unknown>>> = []) {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true }, 201));
+      }
+      if (url === "/mcp") {
+        return Promise.resolve(
+          jsonResponse({
+            servers: servers.map((server) => ({
+              id: "existing",
+              transport: "stdio",
+              connected: false,
+              toolNames: [],
+              ...server,
+            })),
+          }),
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+  }
+
+  it("posts a stdio server as { name, command, args }", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "filesystem" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), {
+      target: { value: "npx -y @modelcontextprotocol/server-filesystem /tmp" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => {
+      const post = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp" && init?.method === "POST";
+      });
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post![1]?.body))).toEqual({
+        name: "filesystem",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      });
+    });
+  });
+
+  it("posts a remote HTTP server as { name, url }", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => {
+      const post = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp" && init?.method === "POST";
+      });
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post![1]?.body))).toEqual({
+        name: "remote",
+        url: "https://mcp.example.com/mcp",
+      });
+    });
+  });
+
+  it("does not POST an invalid HTTP URL", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByTestId("mcp-url"), { target: { value: "not-a-url" } });
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain("http:// or https://");
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+    fireEvent.submit(screen.getByTestId("mcp-add-form"));
+    expect(
+      vi.mocked(fetch).mock.calls.some(([input, init]) => {
+        return String(input) === "/mcp" && init?.method === "POST";
+      }),
+    ).toBe(false);
+  });
+
+  it("names add-form fields and submits from the name field", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    expect(screen.getByLabelText("Name")).toBe(screen.getByTestId("mcp-name"));
+    expect(screen.getByLabelText("Command")).toBe(screen.getByTestId("mcp-command"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    expect(screen.getByLabelText("URL")).toBe(screen.getByTestId("mcp-url"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByLabelText("URL"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-add-form"));
+    await waitFor(() => {
+      expect(
+        vi.mocked(fetch).mock.calls.some(([input, init]) => {
+          return String(input) === "/mcp" && init?.method === "POST";
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("swaps command and URL fields when the transport type changes", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "draft" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx echo" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    expect(screen.queryByTestId("mcp-command")).toBeNull();
+    expect(screen.getByTestId("mcp-url")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Local (stdio)" }));
+    expect(screen.queryByTestId("mcp-url")).toBeNull();
+    expect((screen.getByTestId("mcp-command") as HTMLInputElement).value).toBe("npx echo");
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/mcp",
+    );
+    expect((screen.getByTestId("mcp-name") as HTMLInputElement).value).toBe("draft");
+  });
+
+  it("disables Add when the name matches an existing server id", async () => {
+    mockCatalog([{ id: "filesystem" }]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-filesystem");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "filesystem" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx echo" } });
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain("already exists");
+    expect(
+      vi.mocked(fetch).mock.calls.some(([input, init]) => {
+        return String(input) === "/mcp" && init?.method === "POST";
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the form open and surfaces an actionable add error", async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ error: "invalid MCP server name: remote" }, 400));
+      }
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("invalid MCP server name: remote"),
+    );
+    expect(screen.getByTestId("mcp-add-form")).toBeTruthy();
+    expect((screen.getByTestId("mcp-name") as HTMLInputElement).value).toBe("remote");
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/mcp",
+    );
+  });
+});

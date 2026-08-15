@@ -190,7 +190,7 @@ export const AppSegmentedPicker = forwardRef(function AppSegmentedPicker<
               "disabled:cursor-not-allowed disabled:opacity-55",
               segmentSizeClasses[size],
               isSelected
-                ? "bg-primary text-white shadow-capsule"
+                ? "bg-primary text-text-inverse shadow-capsule"
                 : "bg-transparent text-text-muted hover:text-text-primary",
             )}
           >

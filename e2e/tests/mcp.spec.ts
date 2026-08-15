@@ -47,6 +47,31 @@ test("the empty state shows when no servers are configured", async ({ page }) =>
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 
+test("adds a remote HTTP server from the MCP form", async ({ page }) => {
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await expect(page.getByTestId("mcp-empty")).toBeVisible();
+
+  await page.getByTestId("mcp-add").click();
+  await expect(page.getByTestId("mcp-add-form")).toBeVisible();
+  await page.getByTestId("mcp-transport").getByRole("radio", { name: "Remote (HTTP)" }).click();
+  await page.getByTestId("mcp-name").fill("remote-http");
+  await page.getByTestId("mcp-url").fill("http://127.0.0.1:9/mcp");
+  await page.getByTestId("mcp-add-confirm").click();
+
+  const row = page.getByTestId("mcp-remote-http");
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("http");
+  await expect(row).toHaveAttribute("data-connected", "false");
+  await expect(page.getByTestId("mcp-status-remote-http")).toHaveText("disconnected");
+  await expect(page.getByTestId("mcp-assign-remote-http")).toHaveCount(0);
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByTestId("mcp-remove-remote-http").click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("mcp-empty")).toBeVisible();
+});
+
 test("lists a configured MCP server as connected and removes it", async ({ page }) => {
   // Add a stdio MCP server over REST (the mock echo server subprocess).
   const launch = mockMcpServerLaunch("mock");

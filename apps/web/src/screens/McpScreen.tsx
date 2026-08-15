@@ -1,3 +1,4 @@
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, LogOut, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
@@ -9,10 +10,18 @@ import { updateProject } from "../state/wsBridge.ts";
 /**
  * MCP screen (native Runtime → MCP): the configured MCP servers whose tools are
  * proxied into pi sessions over the bridge. Each row shows live connection
- * status + the tools that connected; add a stdio server, refresh, or remove it.
- * An http server behind OAuth also gets a Sign-in flow (native MCPOAuthService):
- * begin → open the authorization link → paste the redirect's code → connected.
+ * status + the tools that connected; add a stdio or HTTP server, refresh, or
+ * remove it. An http server behind OAuth also gets a Sign-in flow (native
+ * MCPOAuthService): begin → open the authorization link → paste the redirect's
+ * code → connected.
  */
+
+type McpTransport = "stdio" | "http";
+
+const MCP_TRANSPORT_OPTIONS = [
+  { id: "stdio", label: "Local (stdio)" },
+  { id: "http", label: "Remote (HTTP)" },
+] as const;
 
 interface McpAuth {
   status: "none" | "unauthenticated" | "authorizing" | "authorized" | "error";
@@ -22,13 +31,24 @@ interface McpAuth {
 
 interface McpServer {
   id: string;
-  transport: "stdio" | "http";
+  transport: McpTransport;
   connected: boolean;
   toolNames: string[];
   error?: string;
   auth?: McpAuth;
   source?: "global" | "project" | "environment";
   editable?: boolean;
+}
+
+/** Client-side check matching the backend `isValidHttpMcpUrl` contract without
+ *  importing `@agent-deck/resources` into the sandboxed renderer. */
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /** In-progress sign-in: the server + the authorization URL to open, and the
@@ -70,14 +90,18 @@ export function McpScreen() {
   const [savingAssignments, setSavingAssignments] = useState<Set<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [transport, setTransport] = useState<McpTransport>("stdio");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
+  const [url, setUrl] = useState("");
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
   const loadedProject = useRef<string | null | undefined>(undefined);
   const assignmentSaving = useRef(false);
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
+  const addToggleRef = useRef<HTMLButtonElement>(null);
   const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
   // server can't clobber a newer flow the user has since started for another.
@@ -130,24 +154,44 @@ export function McpScreen() {
     void load(preserveRows);
   }, [currentProjectId, load, resourcesVersion]);
 
+  const trimmedName = name.trim();
+  const trimmedUrl = url.trim();
+  const commandParts = command.trim().split(/\s+/).filter(Boolean);
+  const duplicateName = servers.some((server) => server.id === trimmedName);
+  const canAdd =
+    Boolean(trimmedName) &&
+    !saving &&
+    !duplicateName &&
+    (transport === "stdio" ? commandParts.length > 0 : isValidHttpUrl(trimmedUrl));
+
   const add = async (): Promise<void> => {
-    const trimmedName = name.trim();
-    const parts = command.trim().split(/\s+/).filter(Boolean);
-    if (!trimmedName || parts.length === 0) return;
-    const [cmd, ...args] = parts;
+    if (!canAdd) return;
+    const body =
+      transport === "http"
+        ? { name: trimmedName, url: trimmedUrl }
+        : {
+            name: trimmedName,
+            command: commandParts[0],
+            args: commandParts.slice(1),
+          };
+    setSaving(true);
     try {
       const response = await fetch("/mcp", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: trimmedName, command: cmd, args }),
+        body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       setName("");
       setCommand("");
+      setUrl("");
+      setTransport("stdio");
       setAdding(false);
       await load();
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -321,6 +365,7 @@ export function McpScreen() {
               {reloading ? "Reloading…" : "Reload config"}
             </ControlButton>
             <ControlButton
+              ref={addToggleRef}
               data-testid="mcp-add"
               className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               style={{
@@ -342,28 +387,72 @@ export function McpScreen() {
         </p>
 
         {adding ? (
-          <div className="mb-3 flex flex-col gap-2" data-testid="mcp-add-form">
-            <ControlInput
-              autoFocus
-              data-testid="mcp-name"
-              className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="name (e.g. filesystem)"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <ControlInput
-                data-testid="mcp-command"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                placeholder="command with args (e.g. npx -y @modelcontextprotocol/server-filesystem /tmp)"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void add();
-                  if (e.key === "Escape") setAdding(false);
-                }}
+          <form
+            className="mb-3 flex flex-col gap-2"
+            data-testid="mcp-add-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void add();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              setAdding(false);
+              requestAnimationFrame(() => addToggleRef.current?.focus());
+            }}
+          >
+            <div data-testid="mcp-transport">
+              <AppSegmentedPicker
+                aria-label="MCP server type"
+                size="sm"
+                value={transport}
+                onChange={(next) => setTransport(next)}
+                options={MCP_TRANSPORT_OPTIONS}
               />
+            </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-text-secondary">Name</span>
+              <ControlInput
+                autoFocus
+                data-testid="mcp-name"
+                className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="filesystem"
+                aria-invalid={duplicateName || undefined}
+                aria-describedby={duplicateName ? "mcp-add-hint" : undefined}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <div className="flex items-end gap-2">
+              {transport === "stdio" ? (
+                <label className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="text-xs font-medium text-text-secondary">Command</span>
+                  <ControlInput
+                    data-testid="mcp-command"
+                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                    placeholder="npx -y @modelcontextprotocol/server-filesystem /tmp"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                  />
+                </label>
+              ) : (
+                <label className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="text-xs font-medium text-text-secondary">URL</span>
+                  <ControlInput
+                    data-testid="mcp-url"
+                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                    placeholder="https://mcp.example.com/mcp"
+                    aria-invalid={(Boolean(trimmedUrl) && !isValidHttpUrl(trimmedUrl)) || undefined}
+                    aria-describedby={
+                      trimmedUrl && !isValidHttpUrl(trimmedUrl) ? "mcp-add-hint" : undefined
+                    }
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                  />
+                </label>
+              )}
               <ControlButton
+                type="submit"
                 data-testid="mcp-add-confirm"
                 className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                 style={{
@@ -371,13 +460,21 @@ export function McpScreen() {
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                   color: "var(--color-accent-foreground)",
                 }}
-                disabled={!name.trim() || !command.trim()}
-                onClick={() => void add()}
+                disabled={!canAdd}
               >
-                Add
+                {saving ? "Adding…" : "Add"}
               </ControlButton>
             </div>
-          </div>
+            {duplicateName ? (
+              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                A server named {trimmedName} already exists.
+              </p>
+            ) : transport === "http" && trimmedUrl && !isValidHttpUrl(trimmedUrl) ? (
+              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                Enter an http:// or https:// URL.
+              </p>
+            ) : null}
+          </form>
         ) : null}
 
         <div
