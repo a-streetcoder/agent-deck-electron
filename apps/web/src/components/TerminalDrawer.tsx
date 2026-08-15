@@ -1,4 +1,4 @@
-import { ControlButton } from "@/design-system/components/NativeControls";
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import {
   useCallback,
   useEffect,
@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ChevronDown, ExternalLink, MessageSquarePlus, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, MessageSquarePlus, Plus, Trash2 } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -14,6 +14,16 @@ import { THEME_CHANGE_EVENT } from "../design-system/theme.ts";
 import { createXtermTheme, getTerminalFontFamily } from "../design-system/themes/xterm.ts";
 import { useAppStore } from "../state/store.ts";
 import { buildTerminalSelectionContext } from "../lib/elementContext.ts";
+import {
+  activateTab,
+  addTab,
+  closeTab,
+  createTabsState,
+  getSessionTabs,
+  renameTab,
+  setSessionTabs,
+  type TerminalTabsState,
+} from "../lib/terminalTabs.ts";
 import {
   closeSessionTerminal,
   openSessionInExternalTerminal,
@@ -25,16 +35,21 @@ import {
 
 /**
  * The per-session terminal drawer (Slice 8b), ported from t3code's
- * `ThreadTerminalDrawer.tsx` (MIT) and condensed to our surface: ONE terminal
- * per session (no splits/groups/tabs), our zustand store instead of atoms, our
+ * `ThreadTerminalDrawer.tsx` (MIT): our zustand store instead of atoms, our
  * RPC transport instead of the donor's atom commands. What survives the port
  * is the drawer's shape and behavior: a resizable bottom drawer on the session
  * view, xterm + FitAddon rendering, focus-on-open, fit-on-resize, and the
  * "closing hides, the shell survives" contract — reopening reattaches by
  * terminal id and the server replays the scrollback.
  *
- * Lifecycle: the xterm instance exists only while the drawer is OPEN for a
- * given session. Opening lazily creates (or reattaches to) the server PTY;
+ * TER-02/04: a session has terminal TABS (lib/terminalTabs.ts), each mapping
+ * to its own server PTY; renaming a tab (double-click) covers grouping's
+ * core. Switching tabs reuses the reattach contract — dispose the renderer,
+ * reattach by the tab's remembered terminal id, scrollback replays. Splits
+ * (TER-03) are deliberately not built: one visible PTY at a time.
+ *
+ * Lifecycle: the xterm instance exists only while the drawer is OPEN on one
+ * (session, tab). Opening lazily creates (or reattaches to) the server PTY;
  * closing the drawer disposes only the renderer. The PTY itself dies with its
  * session, its connection, or the explicit kill button — a session that never
  * opens the drawer never spawns a shell.
@@ -69,11 +84,40 @@ export function TerminalDrawer() {
   // attach-to-composer affordance (the instance itself lives in the effect).
   const xtermRef = useRef<Terminal | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
-  // Belt for the session-switch window (Codex): the old terminal's selection
-  // must never look attachable once the session identity changes.
-  useEffect(() => {
+
+  // TER-02/04: per-session tab state, mirrored from the module registry so it
+  // survives drawer close/reopen and session switches.
+  const [tabs, setTabs] = useState<TerminalTabsState>(() =>
+    sessionId ? getSessionTabs(sessionId) : createTabsState(),
+  );
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const renameCancelRef = useRef(false);
+  const updateTabs = (next: TerminalTabsState): void => {
+    if (sessionId) setSessionTabs(sessionId, next);
+    setTabs(next);
+  };
+  const commitRename = (tabId: string, raw: string): void => {
+    setRenamingId(null);
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false;
+      return;
+    }
+    updateTabs(renameTab(tabs, tabId, raw));
+  };
+
+  // Session switches reset DURING RENDER, not in an effect (Codex): an
+  // effect-based reset leaves one committed render where the new session is
+  // paired with the OLD session's tab state (the xterm effect would open the
+  // new session under the old active tab id) and the old terminal's selection
+  // still looks attachable. Render-phase state adjustment re-renders before
+  // any effect or paint, so no such window exists.
+  const [tabsSession, setTabsSession] = useState(sessionId);
+  if (sessionId !== tabsSession) {
+    setTabsSession(sessionId);
+    setTabs(sessionId ? getSessionTabs(sessionId) : createTabsState());
+    setRenamingId(null);
     setHasSelection(false);
-  }, [sessionId]);
+  }
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(DEFAULT_DRAWER_HEIGHT);
@@ -88,6 +132,7 @@ export function TerminalDrawer() {
   // Reconnects re-run it (a drop killed the server PTY; reattach or respawn).
   // ---------------------------------------------------------------------
   const connected = connection === "open";
+  const activeTabId = tabs.activeId;
   useEffect(() => {
     const mount = containerRef.current;
     if (!open || !sessionId || !connected || !mount) return;
@@ -166,7 +211,7 @@ export function TerminalDrawer() {
     });
     observer.observe(mount);
 
-    void openSessionTerminal(terminal.cols, terminal.rows)
+    void openSessionTerminal(activeTabId, terminal.cols, terminal.rows)
       .then((result) => {
         if (disposed) return;
         terminalId = result.terminalId;
@@ -193,7 +238,7 @@ export function TerminalDrawer() {
       setHasSelection(false);
       terminal.dispose();
     };
-  }, [open, sessionId, connected]);
+  }, [open, sessionId, connected, activeTabId]);
 
   // ---------------------------------------------------------------------
   // Drag-to-resize (donor's pointer-capture handle, condensed).
@@ -241,9 +286,63 @@ export function TerminalDrawer() {
         onPointerCancel={onHandlePointerEnd}
       />
       <div className="flex items-center justify-between border-b border-border-subtle bg-surface-elevated px-3 py-1">
-        <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-          Terminal
-        </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+            Terminal
+          </span>
+          <div
+            className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
+            data-testid="terminal-tabs"
+          >
+            {tabs.tabs.map((tab) =>
+              renamingId === tab.id ? (
+                <ControlInput
+                  key={tab.id}
+                  autoFocus
+                  defaultValue={tab.title}
+                  data-testid="terminal-tab-rename-input"
+                  className="w-28 rounded border border-border-subtle bg-surface px-1.5 py-0.5 text-xs text-text-primary outline-none"
+                  onFocus={(event) => event.currentTarget.select()}
+                  onBlur={(event) => commitRename(tab.id, event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    } else if (event.key === "Escape") {
+                      renameCancelRef.current = true;
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              ) : (
+                <ControlButton
+                  key={tab.id}
+                  type="button"
+                  data-testid={`terminal-tab-${tab.id}`}
+                  title="Double-click to rename"
+                  className={`max-w-40 truncate rounded px-1.5 py-0.5 text-xs transition-colors ${
+                    tab.id === tabs.activeId
+                      ? "bg-hover text-text-primary"
+                      : "text-text-muted hover:bg-hover hover:text-text-primary"
+                  }`}
+                  onClick={() => updateTabs(activateTab(tabs, tab.id))}
+                  onDoubleClick={() => setRenamingId(tab.id)}
+                >
+                  {tab.title}
+                </ControlButton>
+              ),
+            )}
+          </div>
+          <ControlButton
+            type="button"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
+            title="New terminal tab"
+            aria-label="New terminal tab"
+            data-testid="terminal-tab-add"
+            onClick={() => updateTabs(addTab(tabs))}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </ControlButton>
+        </div>
         <div className="flex items-center gap-1">
           <ControlButton
             type="button"
@@ -295,12 +394,15 @@ export function TerminalDrawer() {
           <ControlButton
             type="button"
             className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
-            title="Kill terminal"
-            aria-label="Kill terminal"
+            title="Kill this terminal tab"
+            aria-label="Kill this terminal tab"
             data-testid="terminal-kill"
             onClick={() => {
-              closeSessionTerminal(sessionId);
-              setTerminalOpen(false);
+              closeSessionTerminal(sessionId, tabs.activeId);
+              updateTabs(closeTab(tabs, tabs.activeId));
+              // Killing the only tab keeps the old single-terminal contract:
+              // the drawer closes; reopening spawns a fresh shell (new tab id).
+              if (tabs.tabs.length === 1) setTerminalOpen(false);
             }}
           >
             <Trash2 className="h-3.5 w-3.5" />

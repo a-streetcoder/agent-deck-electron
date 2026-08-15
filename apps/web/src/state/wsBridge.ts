@@ -66,6 +66,10 @@ const transportHost: TransportHost = {
     // socket (a reopen respawns / re-lists).
     if (status !== "open") {
       sessionTerminals.clear();
+      // In-flight opens belong to the dead connection too: joining one after
+      // reconnect would resolve to (or reinsert) a connection-owned PTY id
+      // that died with the socket (Codex).
+      pendingOpens.clear();
       sessionRuns.clear();
     }
     useAppStore.getState().setConnection(status);
@@ -104,12 +108,19 @@ const transport: ClientTransport = new RpcClientTransport(transportHost);
 // and reopening the drawer reattaches by id to replay the scrollback.
 // ---------------------------------------------------------------------------
 
-/** Terminal ids the server allocated for this connection, per session. */
+/** Terminal ids the server allocated for this connection, per (session, tab).
+ * Tab ids are client-local `tab-N` (lib/terminalTabs.ts), so `tabId:sessionId`
+ * is an unambiguous composite key. */
 const sessionTerminals = new Map<string, string>();
-/** In-flight opens, per session: a drawer close+reopen before the first open
- * resolves must JOIN it, not race a second terminal_open (last-writer-wins
- * would leave the first PTY streaming to a filtered-out listener). */
+/** In-flight opens, per (session, tab): a drawer close+reopen before the first
+ * open resolves must JOIN it, not race a second terminal_open
+ * (last-writer-wins would leave the first PTY streaming to a filtered-out
+ * listener). */
 const pendingOpens = new Map<string, Promise<TerminalOpenResult & { sessionId: string }>>();
+
+function terminalKey(sessionId: string, tabId: string): string {
+  return `${tabId}:${sessionId}`;
+}
 const terminalPushListeners = new Set<(message: TerminalPush) => void>();
 
 /** Subscribe to terminal pushes (output/exit). Returns the unsubscriber. */
@@ -119,30 +130,45 @@ export function subscribeTerminalPush(listener: (message: TerminalPush) => void)
 }
 
 /**
- * Open the current session's terminal — reattaching to the one this connection
- * already opened (scrollback replays), or spawning a fresh PTY in the session's
- * cwd. A stale remembered id (e.g. the session exited and took its terminals
- * down) falls back to a fresh open.
+ * Open one of the current session's terminal tabs — reattaching to the PTY
+ * this connection already opened for that tab (scrollback replays), or
+ * spawning a fresh PTY in the session's cwd. A stale remembered id (e.g. the
+ * session exited and took its terminals down) falls back to a fresh open.
  */
 export async function openSessionTerminal(
+  tabId: string,
   cols?: number,
   rows?: number,
 ): Promise<TerminalOpenResult & { sessionId: string }> {
   const sessionId = currentSessionId;
   if (!sessionId) throw new Error("no active session");
-  const inFlight = pendingOpens.get(sessionId);
+  const key = terminalKey(sessionId, tabId);
+  const inFlight = pendingOpens.get(key);
   if (inFlight) return await inFlight;
-  const task = doOpenSessionTerminal(sessionId, cols, rows);
-  pendingOpens.set(sessionId, task);
+  const task = doOpenSessionTerminal(sessionId, key, cols, rows);
+  pendingOpens.set(key, task);
   try {
-    return await task;
+    const result = await task;
+    // ALL sessionTerminals writes for an open live HERE, gated on still
+    // owning the pending slot: a kill evicts the entry, so an evicted
+    // (doomed) open can never remember its PTY over — or instead of — a
+    // successor reopen's (Codex pass 3). The kill's chase closes the doomed
+    // PTY from the promise itself, not the map.
+    if (pendingOpens.get(key) === task) sessionTerminals.set(key, result.terminalId);
+    return result;
   } finally {
-    pendingOpens.delete(sessionId);
+    // Same ownership rule for the slot itself: deleting a successor's entry
+    // would let a third open race it (the exact clobber this map prevents).
+    if (pendingOpens.get(key) === task) pendingOpens.delete(key);
   }
 }
 
+/** Pure transport: try the remembered id (reattach), fall back to a fresh
+ * spawn on a stale id. NO map mutation here — an evicted open must have no
+ * side effects (see openSessionTerminal / closeSessionTerminal). */
 async function doOpenSessionTerminal(
   sessionId: string,
+  key: string,
   cols?: number,
   rows?: number,
 ): Promise<TerminalOpenResult & { sessionId: string }> {
@@ -150,20 +176,17 @@ async function doOpenSessionTerminal(
     ...(cols !== undefined ? { cols } : {}),
     ...(rows !== undefined ? { rows } : {}),
   };
-  const known = sessionTerminals.get(sessionId);
+  const known = sessionTerminals.get(key);
   try {
     const result = await transport.openTerminal({
       sessionId,
       ...(known !== undefined ? { terminalId: known } : {}),
       ...size,
     });
-    sessionTerminals.set(sessionId, result.terminalId);
     return { ...result, sessionId };
   } catch (error) {
     if (known === undefined) throw error;
-    sessionTerminals.delete(sessionId);
     const result = await transport.openTerminal({ sessionId, ...size });
-    sessionTerminals.set(sessionId, result.terminalId);
     return { ...result, sessionId };
   }
 }
@@ -183,11 +206,32 @@ export function openSessionInExternalTerminal(sessionId: string): Promise<void> 
   return transport.openExternalTerminal({ sessionId });
 }
 
-/** Kill the current session's terminal (the PTY dies; the next open is fresh). */
-export function closeSessionTerminal(sessionId: string): void {
-  const terminalId = sessionTerminals.get(sessionId);
+/** Kill one of the session's terminal tabs (the PTY dies; the next open of
+ * that tab is fresh). */
+export function closeSessionTerminal(sessionId: string, tabId: string): void {
+  const key = terminalKey(sessionId, tabId);
+  // A kill can race the tab's first open: no id is remembered yet, but the
+  // in-flight request will spawn (and re-remember) a PTY after we return.
+  // Chase it — whatever that open lands on gets closed and forgotten, so a
+  // killed tab can never leave a live shell behind for its reused id (Codex).
+  const pending = pendingOpens.get(key);
+  if (pending !== undefined) {
+    // Evict the doomed open NOW: a reopen of this tab must start a fresh
+    // open, never join a promise whose PTY this chase is about to kill
+    // (Codex pass 2).
+    pendingOpens.delete(key);
+    void pending
+      .then((result) => {
+        // A reopen may have re-remembered a FRESH id by the time the doomed
+        // open lands — only forget the mapping if it is still ours.
+        if (sessionTerminals.get(key) === result.terminalId) sessionTerminals.delete(key);
+        transport.sendTerminal({ type: "terminal_close", terminalId: result.terminalId });
+      })
+      .catch(() => {});
+  }
+  const terminalId = sessionTerminals.get(key);
   if (terminalId === undefined) return;
-  sessionTerminals.delete(sessionId);
+  sessionTerminals.delete(key);
   transport.sendTerminal({ type: "terminal_close", terminalId });
 }
 
@@ -300,9 +344,7 @@ export async function refreshCheckpoints(sessionId: string): Promise<void> {
  * reloads to the restored state); we then refresh the sideband (changed-file
  * set + the checkpoint timeline itself, now truncated + carrying the safety
  * checkpoint). Returns whether the workspace files were restored. */
-export async function rollbackToCheckpoint(
-  turnIndex: number,
-): Promise<{
+export async function rollbackToCheckpoint(turnIndex: number): Promise<{
   filesRestored: boolean;
   nextPrompt: string | null;
   nextPromptHadAttachments: boolean;
