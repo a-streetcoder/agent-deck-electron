@@ -6,13 +6,14 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ChevronDown, ExternalLink, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, MessageSquarePlus, Trash2 } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { THEME_CHANGE_EVENT } from "../design-system/theme.ts";
 import { createXtermTheme, getTerminalFontFamily } from "../design-system/themes/xterm.ts";
 import { useAppStore } from "../state/store.ts";
+import { buildTerminalSelectionContext } from "../lib/elementContext.ts";
 import {
   closeSessionTerminal,
   openSessionInExternalTerminal,
@@ -63,6 +64,16 @@ export function TerminalDrawer() {
   const sessionId = useAppStore((state) => state.session?.id ?? null);
   const connection = useAppStore((state) => state.connection);
   const pushToast = useAppStore((state) => state.pushToast);
+  const addElementContext = useAppStore((state) => state.addElementContext);
+  // COM-01: the live xterm instance + whether it has a selection, for the
+  // attach-to-composer affordance (the instance itself lives in the effect).
+  const xtermRef = useRef<Terminal | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  // Belt for the session-switch window (Codex): the old terminal's selection
+  // must never look attachable once the session identity changes.
+  useEffect(() => {
+    setHasSelection(false);
+  }, [sessionId]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(DEFAULT_DRAWER_HEIGHT);
@@ -121,6 +132,12 @@ export function TerminalDrawer() {
       if (terminalId !== null) sendTerminalInput(terminalId, data);
     });
 
+    // COM-01: expose the instance + selection presence for attach-to-composer.
+    xtermRef.current = terminal;
+    const selectionDisposable = terminal.onSelectionChange(() => {
+      setHasSelection(terminal.hasSelection());
+    });
+
     // The toggle shortcut (⌘`/Ctrl+`) must bubble to the app while the
     // terminal owns focus; everything else stays with the shell (donor's
     // attachCustomKeyEventHandler contract).
@@ -171,6 +188,9 @@ export function TerminalDrawer() {
       window.removeEventListener(THEME_CHANGE_EVENT, syncTheme);
       unsubscribePush();
       inputDisposable.dispose();
+      selectionDisposable.dispose();
+      xtermRef.current = null;
+      setHasSelection(false);
       terminal.dispose();
     };
   }, [open, sessionId, connected]);
@@ -225,6 +245,36 @@ export function TerminalDrawer() {
           Terminal
         </span>
         <div className="flex items-center gap-1">
+          <ControlButton
+            type="button"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            title="Attach the selected terminal output to the composer"
+            aria-label="Attach selection to composer"
+            data-testid="terminal-attach-selection"
+            disabled={!hasSelection}
+            onClick={() => {
+              const selection = xtermRef.current?.getSelection() ?? "";
+              const context = buildTerminalSelectionContext(selection);
+              if (context === null) {
+                pushToast({ kind: "info", message: "Select some terminal output first." });
+                return;
+              }
+              // Attach to the session that is current AT CLICK TIME — a
+              // render/cleanup race must not land A's output on B (Codex).
+              const liveSessionId = useAppStore.getState().session?.id;
+              if (!liveSessionId || liveSessionId !== sessionId) {
+                pushToast({ kind: "info", message: "Session changed — selection not attached." });
+                return;
+              }
+              addElementContext(liveSessionId, context);
+              pushToast({
+                kind: "success",
+                message: "Attached terminal selection to the composer.",
+              });
+            }}
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+          </ControlButton>
           <ControlButton
             type="button"
             className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"

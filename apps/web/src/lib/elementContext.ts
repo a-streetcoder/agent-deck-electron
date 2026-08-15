@@ -138,6 +138,36 @@ export function buildPendingElementContext(input: {
   };
 }
 
+/**
+ * COM-01 — wrap a TERMINAL SELECTION as a pending context (the donor's
+ * terminal-context chip; native has no embedded terminal at all). It rides
+ * the SAME chip UI, store, and <element_context> serialization as element
+ * captures, tagged `terminal`. Terminal output is UNTRUSTED: control
+ * characters (ANSI escapes, bells — everything except newline/tab) and `<`
+ * (block forgery) are stripped BEFORE the note clamp; newlines survive
+ * because multi-line output is the point (the serializer indents them).
+ */
+export function buildTerminalSelectionContext(selection: string): PendingElementContext | null {
+  let cleaned = "";
+  for (const ch of selection) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (ch === "\n" || ch === "\t") {
+      cleaned += ch;
+      continue;
+    }
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || ch === "<") continue;
+    cleaned += ch;
+  }
+  if (cleaned.trim().length === 0) return null;
+  return buildPendingElementContext({
+    id: newElementContextId(),
+    pageUrl: "",
+    selector: null,
+    note: cleaned.trim(),
+    tagName: "terminal",
+  });
+}
+
 let nextElementContextSequence = 0;
 
 /** Monotonic composer-side id for a captured element context (donor
