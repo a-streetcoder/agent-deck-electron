@@ -1208,10 +1208,17 @@ ${content}
     const builtinResolves =
       existsSync(nodePath.join(builtinPromptsDir(), `${name}.md`)) &&
       !settings.get().disabledBuiltinPromptNames.includes(name);
+    // PRM-04: a settings.json-declared prompt is a live fallback too — resolved
+    // through the scanner chokepoint, not a re-implementation of its rules
+    const settingsPromptResolvesFor = (targetName: string, pid?: string): boolean =>
+      scanPrompts(rootsFor(pid)).some(
+        (prompt) => prompt.name === targetName && prompt.source === "settings",
+      );
     const globalPromptExists =
       existsSync(nodePath.join(globalPromptDir, `${name}.md`)) ||
       builtinResolves ||
-      packagePromptResolves(name);
+      packagePromptResolves(name) ||
+      settingsPromptResolvesFor(name);
     const stillResolves =
       globalPromptExists ||
       projects
@@ -1225,7 +1232,8 @@ ${content}
       if (!project.assignedPrompts?.includes(name)) continue;
       const resolvesForProject =
         globalPromptExists ||
-        existsSync(nodePath.join(project.path, ".pi", "prompts", `${name}.md`));
+        existsSync(nodePath.join(project.path, ".pi", "prompts", `${name}.md`)) ||
+        settingsPromptResolvesFor(name, project.id);
       if (resolvesForProject) continue;
       projects.upsert({
         ...project,
@@ -1288,7 +1296,13 @@ ${content}
       // it. Re-point references only when this rename changed that resolution.
       const globalShadowsLibrary =
         scope === "library" && existsSync(nodePath.join(globalPromptDir, `${name}.md`));
-      if (!globalShadowsLibrary) {
+      // PRM-04: a settings-declared prompt of the OLD name outranks nothing at
+      // rename time, but it KEEPS providing the name after the catalog file moves
+      // — references still resolve, so re-pointing them would be wrong.
+      const settingsStillProvides = scanPrompts(rootsFor(projectId)).some(
+        (prompt) => prompt.name === name && prompt.source === "settings",
+      );
+      if (!globalShadowsLibrary && !settingsStillProvides) {
         settings.renameDefaultPromptTemplate(name, newName);
         for (const project of projects.list()) {
           if (project.assignedPrompts?.includes(name)) rewriteAssignment(project);

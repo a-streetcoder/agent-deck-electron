@@ -288,6 +288,64 @@ describe("scanPrompts (native prompt.invocation + argument-hint, §8.1)", () => 
     writeFileSync(path.join(dir, file), content);
   }
 
+  it("lists settings.json prompt entries with settings provenance (PRM-04)", () => {
+    const home = makeHome();
+    const piAgent = path.join(home, ".pi", "agent");
+    mkdirSync(piAgent, { recursive: true });
+    writePrompt(path.join(home, "prompt-lib"), "planner.md", "---\ndescription: plan\n---\nBody");
+    writePrompt(path.join(home, "solo"), "one-off.md", "One-off body");
+    writePrompt(path.join(home, "solo"), "notes.txt", "not a prompt");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({
+        prompts: ["../../prompt-lib", "../../solo/one-off.md", "../../ghost.md"],
+      }),
+    );
+
+    const warnings: string[] = [];
+    const prompts = scanPrompts({ home }, (w) => warnings.push(w));
+    // a directory entry scans all its .md files at the settings file's scope
+    const planner = prompts.find((p) => p.name === "planner")!;
+    expect(planner.scope).toBe("global");
+    expect(planner.source).toBe("settings");
+    expect(planner.invocation).toBe("/planner");
+    // a single .md entry becomes one candidate
+    const oneOff = prompts.find((p) => p.name === "one-off")!;
+    expect(oneOff.source).toBe("settings");
+    // a declared-but-missing path is heard about, not silent (native warning)
+    expect(warnings.some((w) => w.includes("ghost.md"))).toBe(true);
+  });
+
+  it("project settings prompts land at project scope; string form and catalog dedupe hold (PRM-04)", () => {
+    const home = makeHome();
+    const project = makeProject();
+    // a catalog prompt AND a settings entry pointing at that same catalog file
+    const catalogDir = path.join(home, ".pi", "agent", "prompts");
+    writePrompt(catalogDir, "review.md", "Catalog body");
+    const piAgent = path.join(home, ".pi", "agent");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({ prompts: ["./prompts/review.md"] }),
+    );
+    // project settings use the STRING form and resolve against the project file
+    writePrompt(path.join(project, "shared"), "proj-note.md", "Project note");
+    mkdirSync(path.join(project, ".pi"), { recursive: true });
+    writeFileSync(
+      path.join(project, ".pi", "settings.json"),
+      JSON.stringify({ prompts: "../shared/proj-note.md" }),
+    );
+
+    const prompts = scanPrompts({ home, projectPath: project });
+    // the catalog record wins the dedupe — exactly one review, no settings marker
+    const reviews = prompts.filter((p) => p.name === "review");
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.source).toBeUndefined();
+    // the project settings entry lands at project scope with settings provenance
+    const note = prompts.find((p) => p.name === "proj-note")!;
+    expect(note.scope).toBe("project");
+    expect(note.source).toBe("settings");
+  });
+
   it("derives the invocation from the FILE basename and reads argument-hint", () => {
     const home = makeHome();
     const dir = path.join(home, ".pi", "agent", "prompts");

@@ -194,7 +194,12 @@ export function scanPrompts(
   externalPaths: readonly string[] = [],
 ): PromptInfo[] {
   const prompts: PromptInfo[] = [];
-  const readPromptFile = (filePath: string, scope: ResourceScope, external?: boolean): void => {
+  const readPromptFile = (
+    filePath: string,
+    scope: ResourceScope,
+    external?: boolean,
+    fromSettings?: boolean,
+  ): void => {
     try {
       const { frontmatter, body } = parseFrontmatter(readFileSync(filePath, "utf8"));
       // A prompt's identity IS its file basename: pi registers the command
@@ -213,6 +218,7 @@ export function scanPrompts(
         invocation: `/${basename}`,
         argumentHint: asString(frontmatter["argument-hint"]),
         ...(external ? { external: true } : {}),
+        ...(fromSettings ? { source: "settings" as const } : {}),
       });
     } catch {
       // Unreadable/malformed — skip.
@@ -230,6 +236,67 @@ export function scanPrompts(
     }
   };
   for (const { dir, scope } of promptCatalogDirs(roots)) readPromptDir(dir, scope);
+  // Settings-declared prompt candidates (PRM-04, native discoveryKind settings):
+  // settings.json `prompts` (a string or string[]) resolves against the settings
+  // FILE's directory; a directory contributes its .md files, a .md file itself,
+  // and a missing path warns (native's missing-prompt-path diagnostic). Catalog
+  // files win the dedupe so their entries keep catalog provenance.
+  const promptIdentity = (p: string): string => {
+    const resolved = path.resolve(p);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const seenPromptFiles = new Set(prompts.map((p) => promptIdentity(p.filePath)));
+  const addSettingsPrompt = (filePath: string, scope: ResourceScope): void => {
+    const id = promptIdentity(filePath);
+    if (seenPromptFiles.has(id)) return;
+    seenPromptFiles.add(id);
+    readPromptFile(filePath, scope, false, true);
+  };
+  const promptSettingsFiles: Array<{ file: string; scope: ResourceScope }> = [
+    { file: path.join(piAgentHome(roots), "settings.json"), scope: "global" },
+    ...(roots.projectPath
+      ? [
+          {
+            file: path.join(roots.projectPath, ".pi", "settings.json"),
+            scope: "project" as ResourceScope,
+          },
+        ]
+      : []),
+  ];
+  for (const { file, scope } of promptSettingsFiles) {
+    let declared: unknown;
+    try {
+      declared = (JSON.parse(readFileSync(file, "utf8")) as { prompts?: unknown }).prompts;
+    } catch {
+      continue; // missing or malformed settings — nothing to add
+    }
+    const entries =
+      typeof declared === "string" ? [declared] : Array.isArray(declared) ? declared : [];
+    for (const entry of entries) {
+      if (typeof entry !== "string" || entry.trim() === "") continue;
+      const resolved = path.resolve(path.dirname(file), entry);
+      let isDir: boolean;
+      try {
+        isDir = statSync(resolved).isDirectory();
+      } catch {
+        onWarning?.(`Prompt path ${entry} from ${file} does not exist.`);
+        continue;
+      }
+      if (isDir) {
+        let names: string[];
+        try {
+          names = readdirSync(resolved);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          if (name.endsWith(".md")) addSettingsPrompt(path.join(resolved, name), scope);
+        }
+      } else if (resolved.endsWith(".md")) {
+        addSettingsPrompt(resolved, scope);
+      }
+    }
+  }
   // Package-provided prompts (PRM-03): read-only provenance-bearing entries, same
   // posture as package skills; resolution problems surface through onWarning.
   const packageScan = scanPackagePromptLocations(roots);
@@ -253,10 +320,16 @@ export function scanPrompts(
           );
           continue;
         }
+        // a settings entry may already list this exact file — one record wins
+        if (seenPromptFiles.has(promptIdentity(filePath))) continue;
+        seenPromptFiles.add(promptIdentity(filePath));
         readPromptFile(filePath, "package");
       }
     } else {
-      readPromptFile(location.target, "package");
+      if (!seenPromptFiles.has(promptIdentity(location.target))) {
+        seenPromptFiles.add(promptIdentity(location.target));
+        readPromptFile(location.target, "package");
+      }
     }
   }
   // External prompt references (PRM-05, native discoveryKind externalReference):

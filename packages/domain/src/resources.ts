@@ -370,6 +370,12 @@ export interface PromptInfo {
    * from launch resolution.
    */
   disabled?: boolean;
+  /**
+   * Declared by a settings.json `prompts` entry (PRM-04, native discoveryKind
+   * settings): the file lives wherever the settings entry points, outside the
+   * scope's catalog dir — read-only through the catalog writer.
+   */
+  source?: "settings";
 }
 
 export type AgentFilter =

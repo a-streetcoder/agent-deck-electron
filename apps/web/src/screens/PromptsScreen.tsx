@@ -189,7 +189,11 @@ export function PromptsScreen() {
   const isReadOnlyPromptScope = (scope: PromptInfo["scope"]): boolean =>
     scope === "builtin" || scope === "package";
   const isReadOnlyPrompt = (prompt: PromptInfo): boolean =>
-    isReadOnlyPromptScope(prompt.scope) || prompt.external === true;
+    isReadOnlyPromptScope(prompt.scope) ||
+    prompt.external === true ||
+    // PRM-04: settings-declared prompts live wherever settings.json points,
+    // outside the catalog dirs — not catalog-editable either
+    prompt.source === "settings";
   // "All Projects" default prompt templates (native defaultPromptTemplateNames):
   // enabled ones are injected into every project's parent sessions as
   // --prompt-template flags. Tracked by name, read from app settings.
@@ -803,6 +807,15 @@ export function PromptsScreen() {
                     >
                       {prompt.disabled ? "Enable" : "Disable"}
                     </ControlButton>
+                  ) : null}
+                  {prompt.source === "settings" ? (
+                    <span
+                      data-testid={`prompt-settings-${prompt.name}`}
+                      className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                      title={`Declared by settings.json: ${prompt.filePath}`}
+                    >
+                      settings
+                    </span>
                   ) : null}
                   {prompt.external ? (
                     <>
