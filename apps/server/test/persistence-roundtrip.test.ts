@@ -246,13 +246,9 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(s.extensionLoadingMode).toBe("agentDeckManaged");
     expect(s.piAgentTranscriptVisibility.showThinking).toBe(false);
     expect(s.piAgentTranscriptVisibility.showImages).toBe(true);
-    expect(s.importedSkillRepositories).toHaveLength(1);
-    expect(s.importedSkillRepositories[0]).toMatchObject({
-      id: "repo-1",
-      remoteUrl: "https://github.com/acme/skills.git",
-      skillNames: ["alpha", "beta"],
-      lastSyncedCommit: "0123456789abcdef",
-    });
+    // SKL-19: the legacy copy-based repo model is gone — settings expose no
+    // importedSkillRepositories at all (engine collections are the one model).
+    expect("importedSkillRepositories" in s).toBe(false);
     // enabledExtensions() honors the fixture's disabledExtensions.
     expect(new SettingsStore(FIXTURE_DIR).enabledExtensions()).toEqual(["/home/dev/.pi/ext/a.js"]);
   });
@@ -321,6 +317,33 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(reloaded.defaultSkills).toContain("newskill");
     // The pre-existing fields are untouched by the membership op.
     expect(reloaded.defaultModel).toBe("anthropic:claude-opus");
-    expect(reloaded.importedSkillRepositories).toHaveLength(1);
+  });
+
+  it("tolerates and drops legacy repo keys from an old settings file (SKL-19)", () => {
+    const dir = freshCopy();
+    const file = path.join(dir, "app-settings.json");
+    const legacy = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // A pre-engine dev machine's file: legacy copy-model records nothing reads anymore.
+    legacy.importedSkillRepositories = [
+      { id: "repo-1", remoteUrl: "https://github.com/acme/skills.git", skillNames: ["alpha"] },
+    ];
+    legacy.skillCollections = [
+      { id: "c1", name: "acme", repositoryId: "repo-1", skillRootPaths: ["/x/alpha"] },
+    ];
+    writeFileSync(file, JSON.stringify(legacy, null, 2));
+
+    // Loading tolerates the unknown keys and does not surface them…
+    const s = new SettingsStore(dir).get() as unknown as Record<string, unknown>;
+    expect("importedSkillRepositories" in s).toBe(false);
+    expect("skillCollections" in s).toBe(false);
+    expect(s.defaultModel).toBe("anthropic:claude-opus");
+
+    // …and the next save drops them while preserving everything live.
+    new SettingsStore(dir).update({});
+    const saved = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // Everything except the two retired keys survives byte-for-byte (Codex: pinning
+    // only one field would let a stripper that also drops live settings pass).
+    const { importedSkillRepositories: _r, skillCollections: _c, ...expected } = legacy;
+    expect(saved).toEqual(expected);
   });
 });

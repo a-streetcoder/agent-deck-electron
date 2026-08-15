@@ -91,75 +91,6 @@ export interface JsonArrayStoreHandle<T extends { id: string }> {
 export type SessionIndexHandle = JsonArrayStoreHandle<SessionMeta>;
 export type ProjectIndexHandle = JsonArrayStoreHandle<ProjectMeta>;
 
-/**
- * Provenance for a git-imported skill repository (native ImportedSkillRepository):
- * the persistent clone kept so the repo can be re-synced, plus which skills came
- * from it and the commit they're at. There is no on-disk lockfile — this record
- * (persisted in AppSettings) IS the manifest.
- */
-export interface SkillCollection {
-  id: string;
-  name: string;
-  repositoryId: string;
-  /** Exact absolute selected skill roots inside the managed clone. */
-  skillRootPaths: string[];
-}
-
-export interface LegacySkillPathConflict {
-  path: string;
-  local: "file" | "directory" | "missing";
-  remote: "file" | "directory" | "missing";
-}
-
-export interface LegacySkillMergeConflict {
-  name: string;
-  /** Generation-bound review identity; absent only on pre-SKL-02 persisted records. */
-  mergeId?: string;
-  /** Catalog state after non-overlapping changes were applied. */
-  localFingerprint: string;
-  /** Upstream payload state at lastSyncedCommit. */
-  sourceFingerprint: string;
-  paths: LegacySkillPathConflict[];
-}
-
-export interface ImportedSkillRepository {
-  id: string;
-  /** Absent on legacy copy-based Electron records. */
-  storageMode?: "collection-v1";
-  /** The clone URL (for ls-remote update checks). */
-  remoteUrl: string;
-  /** The tracked branch, when the import pinned one. */
-  ref?: string;
-  /** A repo subdirectory the import was scoped to (a deep link), if any. */
-  subdir?: string;
-  /** Where the imported skills landed. */
-  scope: "global" | "project";
-  /** For project scope: the project the skills were imported into. */
-  projectPath?: string;
-  /** The persistent clone dir, re-fetched on update. */
-  clonePath: string;
-  /** The catalog skill names imported from this repo. */
-  skillNames: string[];
-  /** Selected intent for collection-v1 records; retained when upstream removes a root. */
-  selectedSkillRelativePaths?: string[];
-  /** Selected roots currently present and synced at the recorded commit. */
-  syncedSkillRelativePaths?: string[];
-  /** Exact absolute selected roots, mirrored by the associated collection. */
-  skillRootPaths?: string[];
-  /** Associated collection id for collection-v1 records. */
-  collectionId?: string;
-  /**
-   * Legacy copy baseline per skill name. New values are versioned payload-tree
-   * fingerprints; bare SHA-256 SKILL.md values remain readable for lazy migration.
-   */
-  skillHashes?: Record<string, string>;
-  /** Durable, fail-closed per-path legacy merge preparation. */
-  pendingMerges?: LegacySkillMergeConflict[];
-  /** The clone's HEAD commit at the last successful sync. */
-  lastSyncedCommit: string;
-  importedAt: string;
-}
-
 export interface AppSettings {
   /** Skills injected into EVERY project's parent sessions ("All Projects"). */
   defaultSkills: string[];
@@ -213,10 +144,6 @@ export interface AppSettings {
    * stricter mode as an opt-in.
    */
   extensionLoadingMode: "useMyExtensions" | "agentDeckManaged";
-  /** Provenance for git-imported skill repos (native importedSkillRepositories). */
-  importedSkillRepositories: ImportedSkillRepository[];
-  /** In-place skill collections. Legacy copy-based records have no collection. */
-  skillCollections: SkillCollection[];
   /**
    * Codex plugin skill REFERENCES (SKL-09): resolved against the plugin cache's
    * active version on every scan so they version-follow — never copied.
@@ -318,18 +245,6 @@ export interface SettingsStoreHandle {
     disabled: boolean,
   ) => Effect.Effect<AppSettings>;
   readonly setLibraryCommandEnabled: (id: string, enabled: boolean) => Effect.Effect<AppSettings>;
-  readonly upsertImportedSkillRepository: (
-    repo: ImportedSkillRepository,
-  ) => Effect.Effect<AppSettings>;
-  readonly removeImportedSkillRepository: (id: string) => Effect.Effect<AppSettings>;
-  readonly upsertSkillRepositoryCollection: (
-    repo: ImportedSkillRepository,
-    collection: SkillCollection,
-  ) => Effect.Effect<AppSettings>;
-  readonly removeSkillRepositoryCollection: (
-    repoId: string,
-    collectionId: string,
-  ) => Effect.Effect<AppSettings>;
   readonly addCodexPluginSkillRefs: (
     refs: readonly CodexPluginSkillRef[],
   ) => Effect.Effect<AppSettings>;
@@ -511,8 +426,6 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       defaultModel: null,
       defaultThinking: null,
       extensionLoadingMode: "useMyExtensions", // port default: load discovered extensions
-      importedSkillRepositories: [],
-      skillCollections: [],
       codexPluginSkillRefs: [],
       externalPromptPaths: [],
       disabledBuiltinPromptNames: [],
@@ -595,12 +508,6 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             record.extensionLoadingMode === "agentDeckManaged"
               ? "agentDeckManaged"
               : "useMyExtensions",
-          importedSkillRepositories: Array.isArray(record.importedSkillRepositories)
-            ? (record.importedSkillRepositories as ImportedSkillRepository[])
-            : [],
-          skillCollections: Array.isArray(record.skillCollections)
-            ? (record.skillCollections as SkillCollection[])
-            : [],
           codexPluginSkillRefs: coerceCodexPluginRefs(record.codexPluginSkillRefs),
           externalPromptPaths: Array.isArray(record.externalPromptPaths)
             ? record.externalPromptPaths.filter((p): p is string => typeof p === "string")
@@ -632,10 +539,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
 
     const flush = (value: AppSettings = settings): void => {
       const tmp = `${file}.tmp`;
-      // Preserve byte-compatible legacy files: the collection field did not
-      // exist before collection-v1 and an empty list has identical semantics.
+      // Fields newer than the oldest settings files stay absent when empty, keeping
+      // untouched files byte-stable across load/save cycles.
       const persisted: Partial<AppSettings> = { ...value };
-      if (value.skillCollections.length === 0) delete persisted.skillCollections;
       if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
       if (value.externalPromptPaths.length === 0) delete persisted.externalPromptPaths;
       if (value.disabledBuiltinPromptNames.length === 0)
@@ -771,54 +677,6 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             else if (!enabled) next.delete(id);
           }
           settings = { ...settings, enabledLibraryCommandIDs: [...next] };
-          flush();
-          return settings;
-        }),
-      upsertImportedSkillRepository: (repo) =>
-        Effect.sync(() => {
-          const rest = settings.importedSkillRepositories.filter((r) => r.id !== repo.id);
-          const next = { ...settings, importedSkillRepositories: [...rest, repo] };
-          // Publish in memory only after the atomic disk replacement succeeds.
-          flush(next);
-          settings = next;
-          return settings;
-        }),
-      removeImportedSkillRepository: (id) =>
-        Effect.sync(() => {
-          settings = {
-            ...settings,
-            importedSkillRepositories: settings.importedSkillRepositories.filter(
-              (r) => r.id !== id,
-            ),
-          };
-          flush();
-          return settings;
-        }),
-      upsertSkillRepositoryCollection: (repo, collection) =>
-        Effect.sync(() => {
-          settings = {
-            ...settings,
-            importedSkillRepositories: [
-              ...settings.importedSkillRepositories.filter((item) => item.id !== repo.id),
-              repo,
-            ],
-            skillCollections: [
-              ...settings.skillCollections.filter((item) => item.id !== collection.id),
-              collection,
-            ],
-          };
-          flush();
-          return settings;
-        }),
-      removeSkillRepositoryCollection: (repoId, collectionId) =>
-        Effect.sync(() => {
-          settings = {
-            ...settings,
-            importedSkillRepositories: settings.importedSkillRepositories.filter(
-              (item) => item.id !== repoId,
-            ),
-            skillCollections: settings.skillCollections.filter((item) => item.id !== collectionId),
-          };
           flush();
           return settings;
         }),

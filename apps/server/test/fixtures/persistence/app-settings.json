@@ -31,26 +31,6 @@
   "defaultModel": "anthropic:claude-opus",
   "defaultThinking": "high",
   "extensionLoadingMode": "agentDeckManaged",
-  "importedSkillRepositories": [
-    {
-      "id": "repo-1",
-      "remoteUrl": "https://github.com/acme/skills.git",
-      "ref": "main",
-      "subdir": "packs/core",
-      "scope": "global",
-      "clonePath": "/home/dev/.agent-deck/skill-repos/repo-1",
-      "skillNames": [
-        "alpha",
-        "beta"
-      ],
-      "skillHashes": {
-        "alpha": "deadbeef",
-        "beta": "cafef00d"
-      },
-      "lastSyncedCommit": "0123456789abcdef",
-      "importedAt": "2026-06-29T12:00:00.000Z"
-    }
-  ],
   "preferredEditor": null,
   "piAgentTranscriptVisibility": {
     "showThinking": false,

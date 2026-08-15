@@ -36,7 +36,7 @@ describe("SettingsStore onboarding preferences", () => {
     expect(s.defaultModel).toBeNull();
     expect(s.defaultThinking).toBeNull();
     expect(s.extensionLoadingMode).toBe("useMyExtensions");
-    expect(s.importedSkillRepositories).toEqual([]);
+    expect("importedSkillRepositories" in s).toBe(false); // SKL-19: legacy model gone
     expect(s.piAgentTranscriptVisibility).toEqual({
       showThinking: true,
       showWebActivity: true,

@@ -31,11 +31,7 @@ import {
  */
 
 export { defaultDataDir };
-export type {
-  AppSettings,
-  ImportedSkillRepository,
-  SkillCollection,
-} from "./services/persistence.ts";
+export type { AppSettings } from "./services/persistence.ts";
 
 /** Thin synchronous facade over a {@link JsonArrayStoreHandle}. */
 class JsonArrayStore<T extends { id: string }> {
@@ -214,28 +210,6 @@ export class SettingsStore {
 
   setLibraryCommandEnabled(id: string, enabled: boolean): AppSettings {
     return runSyncUnwrapped(this.handle.setLibraryCommandEnabled(id, enabled));
-  }
-
-  /** Record (or replace-by-id) an imported skill repository's provenance. */
-  upsertImportedSkillRepository(
-    repo: AppSettings["importedSkillRepositories"][number],
-  ): AppSettings {
-    return runSyncUnwrapped(this.handle.upsertImportedSkillRepository(repo));
-  }
-
-  removeImportedSkillRepository(id: string): AppSettings {
-    return runSyncUnwrapped(this.handle.removeImportedSkillRepository(id));
-  }
-
-  upsertSkillRepositoryCollection(
-    repo: AppSettings["importedSkillRepositories"][number],
-    collection: AppSettings["skillCollections"][number],
-  ): AppSettings {
-    return runSyncUnwrapped(this.handle.upsertSkillRepositoryCollection(repo, collection));
-  }
-
-  removeSkillRepositoryCollection(repoId: string, collectionId: string): AppSettings {
-    return runSyncUnwrapped(this.handle.removeSkillRepositoryCollection(repoId, collectionId));
   }
 
   /** Record Codex plugin skill references (SKL-09), deduped by identity. */
