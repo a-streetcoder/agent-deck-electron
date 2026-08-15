@@ -74,7 +74,7 @@ describe("discoverProjectsInRoot", () => {
     expect(found.find((c) => c.name === "beta")?.type).toBe("vue");
   });
 
-  it("skips symlinked children (no traversal out of the root)", () => {
+  it("follows symlinked children like native discovery (PRJ-05)", () => {
     const root = makeRoot();
     const outside = makeRoot();
     makeProject(outside, "external-repo", { ".git/HEAD": "x" });
@@ -84,10 +84,24 @@ describe("discoverProjectsInRoot", () => {
       path.join(root, "linked"),
       process.platform === "win32" ? "junction" : "dir",
     );
+    // a link ALIASING a sibling dedupes by canonical path — one project, not two
+    symlinkSync(
+      path.join(root, "real"),
+      path.join(root, "real-alias"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    // a broken link is skipped, never a crash
+    symlinkSync(
+      path.join(outside, "gone"),
+      path.join(root, "dangling"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const names = discoverProjectsInRoot(root).map((c) => c.name);
     expect(names).toContain("real");
-    expect(names).not.toContain("linked"); // symlinked child skipped
+    expect(names).toContain("linked"); // native reaches projects through links
+    expect(names).not.toContain("real-alias"); // canonical dedupe
+    expect(names).not.toContain("dangling");
   });
 });
 

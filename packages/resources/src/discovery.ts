@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { ProjectType } from "@agent-deck/domain";
@@ -144,21 +144,29 @@ export function discoverProjectsInRoot(root: string): DiscoveryCandidate[] {
   }
   let entries: string[];
   try {
-    entries = readdirSync(resolved).slice(0, MAX_ENTRIES_PER_ROOT);
+    // sorted: the canonical-dedupe survivor is deterministic (readdir order is
+    // filesystem-dependent; "real" must beat "real-alias" everywhere — Codex)
+    entries = readdirSync(resolved).sort().slice(0, MAX_ENTRIES_PER_ROOT);
   } catch {
     return candidates;
   }
+  // PRJ-05 (native discovery): symlinked children ARE followed — FileManager's
+  // fileExists resolves links, so native reaches projects through them. Broken
+  // links are skipped by the stat try/catch, and one canonical-identity set
+  // keeps a link that merely aliases a sibling from producing a duplicate row.
+  // seeded with the root itself so a self-link inside it can't re-add it (Codex)
+  const seenCanonical = new Set<string>([canonical(resolved)]);
   for (const entry of entries) {
     if (entry.startsWith(".")) continue;
     const child = path.join(resolved, entry);
     try {
-      // lstat (not stat): a symlinked child is skipped so discovery can't
-      // follow a link out of the configured root into slow/mounted/private
-      // locations.
-      if (!lstatSync(child).isDirectory() || !isProjectDir(child)) continue;
+      if (!statSync(child).isDirectory() || !isProjectDir(child)) continue;
     } catch {
-      continue;
+      continue; // broken link or unreadable — never a crash
     }
+    const identity = canonical(child);
+    if (seenCanonical.has(identity)) continue;
+    seenCanonical.add(identity);
     candidates.push({ path: child, name: entry, type: detectProjectType(child) });
   }
   return candidates;
