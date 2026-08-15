@@ -19,6 +19,8 @@ import { cn } from "@/lib/cn";
 import { useAppStore } from "../../state/store.ts";
 import { parseLoopbackHttpUrl } from "../../lib/loopback.ts";
 import { isElectron } from "../../lib/native.ts";
+import type { ElectronWebviewElement } from "../browser/electron-webview";
+import { PICKER_CODE, PICKER_TEARDOWN_CODE, parsePickResult } from "../browser/picker.ts";
 import { buildPendingElementContext, newElementContextId } from "../../lib/elementContext.ts";
 import {
   attachSessionRun,
@@ -132,20 +134,24 @@ export function PreviewPanel() {
   const connected = connection === "open";
   const addElementContext = useAppStore((state) => state.addElementContext);
 
-  // Slice 16 — capture a "preview element" context from the embedded preview.
-  // Because our iframe is sandboxed + cross-origin we cannot run the donor's
-  // in-frame inspector (see lib/elementContext.ts), so the capture is manual:
-  // the user supplies a selector and/or a description, the current preview URL
-  // rides along automatically, and it becomes a pending composer card that
-  // serializes into the next pi turn as a donor `<element_context>` block.
+  // Slice 16 + PRE-02 — capture a "preview element" context from the embedded
+  // preview. In the Electron shell the capture is the donor's point-and-click
+  // inspector run against the <webview> guest (PICKER_CODE injection; tagName
+  // comes from the real clicked element); the web build's sandboxed
+  // cross-origin iframe still can't host it, so the manual selector/note form
+  // remains there. Either way it becomes a pending composer card serialized
+  // into the next pi turn as a donor `<element_context>` block, with every
+  // guest-derived string sanitized (parsePickResult) and clamped
+  // (buildPendingElementContext, loopback-only URL) on the way.
   const captureElement = useCallback(
-    (input: { pageUrl: string; selector: string; note: string }): boolean => {
+    (input: { pageUrl: string; selector: string; note: string; tagName?: string }): boolean => {
       if (sessionId === null) return false;
       const context = buildPendingElementContext({
         id: newElementContextId(),
         pageUrl: input.pageUrl,
         selector: input.selector,
         note: input.note,
+        tagName: input.tagName,
       });
       if (context === null) return false;
       addElementContext(sessionId, context);
@@ -556,7 +562,12 @@ export function PreviewBrowser(props: {
   url: string;
   onNavigate: (url: string) => void;
   onBack: () => void;
-  onCaptureElement: (input: { pageUrl: string; selector: string; note: string }) => boolean;
+  onCaptureElement: (input: {
+    pageUrl: string;
+    selector: string;
+    note: string;
+    tagName?: string;
+  }) => boolean;
 }) {
   const { url, onNavigate, onBack, onCaptureElement } = props;
   const [draft, setDraft] = useState(url);
@@ -564,11 +575,16 @@ export function PreviewBrowser(props: {
   const [showHint, setShowHint] = useState(false);
   // Bumped to force the iframe to remount (a hard reload of the same URL).
   const [reloadNonce, setReloadNonce] = useState(0);
-  // Slice 16: whether the manual element-capture form is open.
+  // Slice 16: whether the manual element-capture form is open (web build).
   const [selecting, setSelecting] = useState(false);
+  // PRE-02: whether the injected guest picker is armed (Electron shell).
+  const [picking, setPicking] = useState(false);
+  // Monotonic token — a bump invalidates any in-flight pick resolution so a
+  // late guest click after cancel / URL change is ignored (BrowserPanel L3).
+  const pickTokenRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // The live Electron <webview> guest (null in the web build / while blocked).
-  const guestRef = useRef<HTMLElement | null>(null);
+  const guestRef = useRef<ElectronWebviewElement | null>(null);
 
   // The embed-boundary guard: whatever the URL's provenance (typed, or a
   // discovered-server frame off the wire), it only ever becomes an iframe src
@@ -619,6 +635,79 @@ export function PreviewBrowser(props: {
     [draft, url, onNavigate],
   );
 
+  // PRE-02: the donor's point-and-click inspector against the webview guest.
+  // Injection-only (PICKER_CODE via executeJavaScript — no preload, the L2
+  // hardening stands); the resolved value is UNTRUSTED and goes through
+  // parsePickResult's sanitization before anything leaves this component.
+  const cancelPick = useCallback(() => {
+    pickTokenRef.current += 1; // invalidate the in-flight resolve
+    setPicking(false);
+    const guest = guestRef.current;
+    if (!guest?.executeJavaScript) return;
+    try {
+      void guest.executeJavaScript(PICKER_TEARDOWN_CODE, false).catch(() => {});
+    } catch {
+      // Guest gone — nothing to tear down.
+    }
+  }, []);
+
+  const startPick = useCallback(() => {
+    const guest = guestRef.current;
+    if (!guest?.executeJavaScript) return;
+    const token = (pickTokenRef.current += 1);
+    setPicking(true);
+    let promise: Promise<unknown>;
+    try {
+      promise = guest.executeJavaScript(PICKER_CODE, true);
+    } catch {
+      setPicking(false);
+      return;
+    }
+    void promise
+      .then((raw) => {
+        if (pickTokenRef.current !== token) return; // superseded — ignore
+        setPicking(false);
+        const result = parsePickResult(raw);
+        if (!result) return; // Escape / non-element / malformed
+        onCaptureElement({
+          pageUrl: url,
+          selector: result.selector,
+          tagName: result.tagName,
+          note: result.text,
+        });
+      })
+      .catch(() => {
+        // Guest navigated away mid-pick (executeJavaScript rejects).
+        if (pickTokenRef.current !== token) return;
+        setPicking(false);
+      });
+  }, [url, onCaptureElement]);
+
+  // A URL change / reload remounts the guest: the old document (and its picker
+  // overlay) is gone, so just invalidate any in-flight pick and disarm.
+  useEffect(
+    () => () => {
+      pickTokenRef.current += 1;
+      setPicking(false);
+    },
+    [url, reloadNonce],
+  );
+
+  const toggleInspector = useCallback(() => {
+    // One inspector mode at a time: an OPEN manual form always closes first,
+    // even if a guest has appeared since it opened (blocked URL → valid URL).
+    if (selecting) {
+      setSelecting(false);
+      return;
+    }
+    if (isElectron() && guestRef.current !== null) {
+      if (picking) cancelPick();
+      else startPick();
+      return;
+    }
+    setSelecting(true); // web build / no guest: the manual capture form
+  }, [selecting, picking, cancelPick, startPick]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Chrome row: back to scripts, URL bar, reload, open-external, close. */}
@@ -668,13 +757,13 @@ export function PreviewBrowser(props: {
           type="button"
           className={cn(
             "shrink-0 rounded p-1 transition-colors hover:bg-hover hover:text-text-primary",
-            selecting ? "text-accent" : "text-text-muted",
+            selecting || picking ? "text-accent" : "text-text-muted",
           )}
           title="Add element context"
           aria-label="Add element context"
-          aria-pressed={selecting}
+          aria-pressed={selecting || picking}
           data-testid="preview-select-element"
-          onClick={() => setSelecting((value) => !value)}
+          onClick={toggleInspector}
         >
           <MousePointerClick className="h-3.5 w-3.5" />
         </ControlButton>
@@ -690,12 +779,13 @@ export function PreviewBrowser(props: {
         </ControlButton>
       </form>
 
-      {/* Slice 16 — the manual element-capture form. Our preview iframe is
-          sandboxed + cross-origin, so the donor's in-frame point-and-click
-          inspector (Electron webview + react-grab) can't run here; instead the
-          user names the element (a CSS selector and/or a description) and the
-          current preview URL rides along. It becomes a pending composer card
-          that serializes into the next pi turn as an <element_context> block. */}
+      {/* Slice 16 — the manual element-capture form, now the WEB-BUILD path
+          only: there the preview is still a sandboxed cross-origin iframe, so
+          the donor's in-frame inspector can't run and the user names the
+          element (a CSS selector and/or a description) instead. The Electron
+          shell picks directly in the guest (PRE-02, toggleInspector above).
+          Either path becomes a pending composer card that serializes into the
+          next pi turn as an <element_context> block. */}
       {selecting ? (
         <ElementCaptureForm
           pageUrl={url}
@@ -733,7 +823,7 @@ export function PreviewBrowser(props: {
             className="h-full w-full border-0"
             style={{ display: "flex", width: "100%", height: "100%" }}
             ref={(node) => {
-              guestRef.current = node;
+              guestRef.current = node as ElectronWebviewElement | null;
             }}
           />
         ) : (
