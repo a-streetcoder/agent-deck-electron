@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 19 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 18 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -65,7 +65,6 @@ These are recommended checks for future implementation and regression coverage. 
 | TER-03 | **P3**   | Missing   | Terminal splits                           | Terminal panes cannot be split.                                                                            | Watching server and tests together is harder.                       | Same as TER-02.                                                                      |
 | TER-04 | **P3**   | Missing   | Terminal groups                           | Terminals cannot be grouped/renamed.                                                                       | Large workflows become cluttered.                                   | Same as TER-02.                                                                      |
 | COM-01 | **P3**   | Missing   | Terminal-context composer chip            | Terminal selection/output cannot be attached as a dedicated composer chip.                                 | Referring Pi to terminal evidence is manual.                        | **E:** Composer/terminal.                                                            |
-| CHK-01 | **P2**   | Divergent | Checkpoint restore versus rerun-from-here | Electron restores files/state but does not automatically rerun from that conversation point.               | Reproducing the intended branch requires extra steps.               | **E:** checkpoint routes/panel. **N:** runner/session store.                         |
 
 ## Doctor and onboarding
 

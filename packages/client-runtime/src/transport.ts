@@ -181,6 +181,11 @@ export interface ScriptRunResult {
  * ref (non-git session) — the conversation was restored but the files were not. */
 export interface CheckpointRollbackResult {
   readonly filesRestored: boolean;
+  /** CHK-01: the first user prompt the rollback dropped (resend to rerun from
+   * here), or null. Absent from older servers -> null. */
+  readonly nextPrompt: string | null;
+  /** True when the dropped turn carried attachments (text-only resend = partial). */
+  readonly nextPromptHadAttachments: boolean;
 }
 
 /** How one request settled: a plain ack, the hello session list, or a
@@ -455,7 +460,11 @@ export class RpcTransport {
         this.pending.delete(frame.id);
         entry.resolve({
           kind: "checkpoint_rollback",
-          result: { filesRestored: frame.filesRestored },
+          result: {
+            filesRestored: frame.filesRestored,
+            nextPrompt: frame.nextPrompt ?? null,
+            nextPromptHadAttachments: frame.nextPromptHadAttachments ?? false,
+          },
         });
         return;
       }

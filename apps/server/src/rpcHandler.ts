@@ -735,7 +735,13 @@ export function createRpcConnection(deps: {
         // the stale client lastSeq falls back to a snapshot, which resets it).
         const relaunched = sessions.get(sessionId);
         if (relaunched) subscribe(relaunched);
-        send({ kind: "checkpoint_rollback_ok", id, filesRestored: result.filesRestored });
+        send({
+          kind: "checkpoint_rollback_ok",
+          id,
+          filesRestored: result.filesRestored,
+          nextPrompt: result.nextPrompt,
+          nextPromptHadAttachments: result.nextPromptHadAttachments,
+        });
       } catch (error) {
         replyError(error instanceof Error ? error.message : String(error));
       }

@@ -67,6 +67,14 @@ export interface CheckpointRollbackResult {
    * target that HAS a ref but fails to restore does not return false; it ABORTS
    * the whole rollback (throws) rather than leaving a half-state. */
   readonly filesRestored: boolean;
+  /** CHK-01 (native rerun-from-here): the first user prompt the rollback
+   * dropped — the exact message to resend to reproduce the intended branch —
+   * or null when nothing was dropped, the transcript wasn't readable, or the
+   * restored transcript diverged from the live one (fail closed). */
+  readonly nextPrompt: string | null;
+  /** True when the dropped turn carried attachments — the text-only resend is
+   * then a PARTIAL rerun (native replays attachments; we do not, yet). */
+  readonly nextPromptHadAttachments: boolean;
 }
 
 export interface CheckpointRollbackGateway {
@@ -97,6 +105,52 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
       // checkpoint. Holding the lock across the restore forces any such capture
       // to run strictly after, against the fully-restored consistent state.
       let filesRestored = false;
+
+      // CHK-01: the LIVE transcript's user prompts, captured while the session
+      // still holds them — after reopen, the restored transcript must be a
+      // TEXT PREFIX of the live one, and then the first dropped prompt is the
+      // rerun candidate. A non-prefix (divergent reconstruction) FAILS CLOSED
+      // to null — never silently resend a wrong prompt (Codex). Best-effort:
+      // a session that can't snapshot (older fakes, torn state) reports none.
+      interface RerunUserCell {
+        readonly text: string;
+        readonly hasAttachments: boolean;
+      }
+      const userCells = (candidate: ManagedSession | undefined): RerunUserCell[] => {
+        try {
+          const cells = (
+            candidate as unknown as {
+              snapshot?: () => {
+                state?: {
+                  cells?: Array<{
+                    kind?: string;
+                    text?: string;
+                    images?: unknown[];
+                    files?: unknown[];
+                    folders?: unknown[];
+                    pastes?: unknown[];
+                  }>;
+                };
+              };
+            }
+          )?.snapshot?.()?.state?.cells;
+          if (!Array.isArray(cells)) return [];
+          return cells
+            .filter((cell) => cell?.kind === "user" && typeof cell.text === "string")
+            .map((cell) => ({
+              text: cell.text as string,
+              hasAttachments:
+                (cell.images?.length ?? 0) > 0 ||
+                (cell.files?.length ?? 0) > 0 ||
+                (cell.folders?.length ?? 0) > 0 ||
+                (cell.pastes?.length ?? 0) > 0,
+            }));
+        } catch {
+          return [];
+        }
+      };
+      const preRollbackCells = userCells(session);
+      let reopened: ManagedSession | null = null;
 
       // 1. Metadata: capture a safety checkpoint of the CURRENT state (undo
       // point) and truncate the future. Throws if turnIndex is unknown — before
@@ -152,13 +206,31 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
           // 5. Relaunch pi through resume() (resumeSessionPath = the restored
           // file → seedFromHistory rebuilds the transcript as of the target
           // turn).
-          await reopen({ ...meta, endedAt: undefined });
+          reopened = await reopen({ ...meta, endedAt: undefined });
 
           // 6. Synchronization point for the UI + e2e.
           receipts.emit("checkpoint_rolled_back", sessionId);
         },
       );
-      return { filesRestored };
+      const restoredCells = userCells(reopened ?? undefined);
+      // Prefix check: every restored user text must match the live transcript
+      // position-for-position, or the correlation is ambiguous → no rerun.
+      const isPrefix =
+        restoredCells.length <= preRollbackCells.length &&
+        restoredCells.every((cell, i) => cell.text === preRollbackCells[i]!.text);
+      const dropped =
+        isPrefix && preRollbackCells.length > restoredCells.length
+          ? preRollbackCells[restoredCells.length]!
+          : null;
+      const nextPrompt = dropped !== null && dropped.text.length > 0 ? dropped.text : null;
+      return {
+        filesRestored,
+        nextPrompt,
+        // True when the dropped turn carried attachments (images/files/pastes):
+        // the text-only resend is then a PARTIAL rerun and the UI says so —
+        // also set for an attachments-only turn whose text is empty.
+        nextPromptHadAttachments: dropped?.hasAttachments ?? false,
+      };
     },
   };
 }

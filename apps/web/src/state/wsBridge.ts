@@ -300,7 +300,13 @@ export async function refreshCheckpoints(sessionId: string): Promise<void> {
  * reloads to the restored state); we then refresh the sideband (changed-file
  * set + the checkpoint timeline itself, now truncated + carrying the safety
  * checkpoint). Returns whether the workspace files were restored. */
-export async function rollbackToCheckpoint(turnIndex: number): Promise<{ filesRestored: boolean }> {
+export async function rollbackToCheckpoint(
+  turnIndex: number,
+): Promise<{
+  filesRestored: boolean;
+  nextPrompt: string | null;
+  nextPromptHadAttachments: boolean;
+}> {
   const sessionId = currentSessionId;
   if (!sessionId) throw new Error("no active session");
   const result = await transport.checkpointRollback(sessionId, turnIndex);

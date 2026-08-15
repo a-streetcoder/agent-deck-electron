@@ -350,6 +350,12 @@ export const RpcCheckpointRollbackOkFrame = Schema.Struct({
   kind: Schema.Literal("checkpoint_rollback_ok"),
   id: RequestId,
   filesRestored: Schema.Boolean,
+  /** CHK-01: the first user prompt the rollback dropped (resend it to rerun
+   * from here, native parity), or null when nothing was dropped. Optional for
+   * older servers. */
+  nextPrompt: Schema.optional(Schema.NullOr(Schema.String)),
+  /** True when the dropped turn carried attachments (text-only resend = partial rerun). */
+  nextPromptHadAttachments: Schema.optional(Schema.Boolean),
 });
 export type RpcCheckpointRollbackOkFrame = typeof RpcCheckpointRollbackOkFrame.Type;
 

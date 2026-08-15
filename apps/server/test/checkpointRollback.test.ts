@@ -146,6 +146,138 @@ describe("makeCheckpointRollback", () => {
     await receipts.waitFor("checkpoint_rolled_back", sessionId, 1000);
   });
 
+  it("reports the rolled-back turn's user prompt as nextPrompt (CHK-01 rerun-from-here)", async () => {
+    const repo = makeRepo();
+    const sessionDir = makeTempDir("agent-deck-rb-sessR-");
+    const liveSessionFile = path.join(sessionDir, "session.jsonl");
+    const dataDir = makeTempDir("agent-deck-rb-dataR-");
+    const checkpoints = makeCheckpointService({ dataDir });
+    const receipts = new ReceiptBus(false);
+    const sessionId = "sess-rb-rerun";
+
+    writeFileSync(path.join(repo, "fileA.txt"), "A-turn1\n");
+    writeFileSync(liveSessionFile, "conv-turn1\n");
+    await checkpoints.capture({ sessionId, cwd: repo, sessionFile: liveSessionFile, label: "t1" });
+    writeFileSync(liveSessionFile, "conv-turn1\nconv-turn2\n");
+    await checkpoints.capture({ sessionId, cwd: repo, sessionFile: liveSessionFile, label: "t2" });
+
+    const meta: SessionMeta = {
+      id: sessionId,
+      cwd: repo,
+      createdAt: new Date().toISOString(),
+      piSessionFile: liveSessionFile,
+      title: "rerun test",
+    };
+    // The LIVE session's transcript has two user turns; the restored session
+    // (after reopen) has one — the rolled-back turn's prompt is the rerun.
+    const userCell = (id: string, text: string) => ({ kind: "user", id, text });
+    const liveState = { cells: [userCell("u1", "prompt one"), userCell("u2", "prompt two")] };
+    const restoredState = { cells: [userCell("u1", "prompt one")] };
+    const sessions = {
+      get: (id: string) =>
+        id === sessionId
+          ? ({ meta, snapshot: () => ({ seq: 2, state: liveState }) } as unknown as ManagedSession)
+          : undefined,
+      destroy: async () => {},
+    } as unknown as SessionManager;
+
+    const rollback = makeCheckpointRollback({
+      sessions,
+      checkpoints,
+      receipts,
+      reopen: async (m) =>
+        ({
+          meta: m,
+          snapshot: () => ({ seq: 1, state: restoredState }),
+        }) as unknown as ManagedSession,
+    });
+
+    const result = await rollback.rollback({ sessionId, turnIndex: 0 });
+    expect(result.nextPrompt).toBe("prompt two");
+    expect(result.nextPromptHadAttachments).toBe(false);
+
+    // A DIVERGENT restored transcript (not a text-prefix of the live one)
+    // fails closed: no prompt is ever guessed (Codex).
+    writeFileSync(liveSessionFile, "conv-turn1\nconv-turn2\n");
+    await checkpoints.capture({ sessionId, cwd: repo, sessionFile: liveSessionFile, label: "tD" });
+    const divergentRestored = { cells: [userCell("uX", "something else entirely")] };
+    const rollbackDivergent = makeCheckpointRollback({
+      sessions: {
+        get: () =>
+          ({ meta, snapshot: () => ({ seq: 2, state: liveState }) }) as unknown as ManagedSession,
+        destroy: async () => {},
+      } as unknown as SessionManager,
+      checkpoints,
+      receipts,
+      reopen: async (m) =>
+        ({
+          meta: m,
+          snapshot: () => ({ seq: 1, state: divergentRestored }),
+        }) as unknown as ManagedSession,
+    });
+    const divergentRecords = await checkpoints.records(sessionId);
+    const divergent = await rollbackDivergent.rollback({
+      sessionId,
+      turnIndex: divergentRecords[0]!.turnIndex,
+    });
+    expect(divergent.nextPrompt).toBeNull();
+
+    // An attachments-ONLY dropped turn yields no text but sets the flag, so
+    // the UI can say the turn wasn't rerunnable as text.
+    writeFileSync(liveSessionFile, "conv-turn1\nconv-turn2\n");
+    await checkpoints.capture({ sessionId, cwd: repo, sessionFile: liveSessionFile, label: "tA" });
+    const liveWithAttachment = {
+      cells: [
+        userCell("u1", "prompt one"),
+        { kind: "user", id: "u2", text: "", images: [{ ref: "img-1" }] },
+      ],
+    };
+    const rollbackAttach = makeCheckpointRollback({
+      sessions: {
+        get: () =>
+          ({
+            meta,
+            snapshot: () => ({ seq: 2, state: liveWithAttachment }),
+          }) as unknown as ManagedSession,
+        destroy: async () => {},
+      } as unknown as SessionManager,
+      checkpoints,
+      receipts,
+      reopen: async (m) =>
+        ({
+          meta: m,
+          snapshot: () => ({ seq: 1, state: restoredState }),
+        }) as unknown as ManagedSession,
+    });
+    const attachRecords = await checkpoints.records(sessionId);
+    const attach = await rollbackAttach.rollback({
+      sessionId,
+      turnIndex: attachRecords[0]!.turnIndex,
+    });
+    expect(attach.nextPrompt).toBeNull(); // attachments-only: no text to resend
+    expect(attach.nextPromptHadAttachments).toBe(true);
+
+    // Rolling back to the LATEST checkpoint drops nothing → no rerun prompt.
+    writeFileSync(liveSessionFile, "conv-turn1\nconv-turn2\n");
+    await checkpoints.capture({ sessionId, cwd: repo, sessionFile: liveSessionFile, label: "t2b" });
+    const sessionsSame = {
+      get: () =>
+        ({ meta, snapshot: () => ({ seq: 2, state: liveState }) }) as unknown as ManagedSession,
+      destroy: async () => {},
+    } as unknown as SessionManager;
+    const rollbackSame = makeCheckpointRollback({
+      sessions: sessionsSame,
+      checkpoints,
+      receipts,
+      reopen: async (m) =>
+        ({ meta: m, snapshot: () => ({ seq: 2, state: liveState }) }) as unknown as ManagedSession,
+    });
+    const records = await checkpoints.records(sessionId);
+    const latest = records[records.length - 1]!;
+    const same = await rollbackSame.rollback({ sessionId, turnIndex: latest.turnIndex });
+    expect(same.nextPrompt).toBeNull();
+  });
+
   it("aborts (conversation unchanged) when a checkpoint with a git ref fails to restore", async () => {
     const repo = makeRepo();
     const sessionDir = makeTempDir("agent-deck-rb-sessF-");

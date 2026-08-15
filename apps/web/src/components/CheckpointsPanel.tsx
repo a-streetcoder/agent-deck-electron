@@ -1,10 +1,10 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
-import { FileWarning, History, RefreshCw, RotateCcw } from "lucide-react";
+import { FileWarning, History, Play, RefreshCw, RotateCcw } from "lucide-react";
 import type { CheckpointInfo } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
-import { refreshCheckpoints, rollbackToCheckpoint } from "../state/wsBridge.ts";
+import { refreshCheckpoints, rollbackToCheckpoint, sendPrompt } from "../state/wsBridge.ts";
 
 /**
  * The checkpoints / rewind timeline panel (Slice 18b): a right-hand aside on the
@@ -33,8 +33,9 @@ export function CheckpointsPanel() {
   // Restore affordance is idle-gated — disabled while a turn is running.
   const running = useAppStore((state) => state.transcript.agentStatus === "running");
 
-  // The turnIndex awaiting confirmation, or null when no dialog is open.
-  const [confirming, setConfirming] = useState<number | null>(null);
+  // The rollback awaiting confirmation — CHK-01: `rerun` also resends the
+  // dropped prompt after the restore (native's rerun-from-here) — or null.
+  const [confirming, setConfirming] = useState<{ turnIndex: number; rerun: boolean } | null>(null);
   // True while a rollback is in flight (disables the controls, shows progress).
   const [rollingBack, setRollingBack] = useState(false);
 
@@ -61,12 +62,15 @@ export function CheckpointsPanel() {
   // Newest capture first (the list arrives oldest-first).
   const ordered = [...checkpoints].reverse();
   const confirmTarget =
-    confirming !== null ? (checkpoints.find((c) => c.turnIndex === confirming) ?? null) : null;
+    confirming !== null
+      ? (checkpoints.find((c) => c.turnIndex === confirming.turnIndex) ?? null)
+      : null;
 
-  const doRollback = async (turnIndex: number): Promise<void> => {
+  const doRollback = async (turnIndex: number, rerun: boolean): Promise<void> => {
     setRollingBack(true);
     try {
-      const { filesRestored } = await rollbackToCheckpoint(turnIndex);
+      const { filesRestored, nextPrompt, nextPromptHadAttachments } =
+        await rollbackToCheckpoint(turnIndex);
       setConfirming(null);
       if (!filesRestored) {
         useAppStore.getState().pushToast({
@@ -77,6 +81,37 @@ export function CheckpointsPanel() {
         useAppStore
           .getState()
           .pushToast({ kind: "success", message: "Rolled back to the checkpoint." });
+      }
+      // CHK-01 (native rerun-from-here): resend the dropped prompt's TEXT
+      // through the NORMAL send path, immediately — no retyping. Attachments
+      // are not replayed (native does) — a partial rerun says so honestly.
+      if (rerun) {
+        if (nextPrompt !== null && nextPrompt.length > 0) {
+          try {
+            await sendPrompt(sessionId, nextPrompt);
+            if (nextPromptHadAttachments) {
+              useAppStore.getState().pushToast({
+                kind: "info",
+                message: "Rerun sent the text only — the original attachments were not replayed.",
+              });
+            }
+          } catch {
+            // Expected race (e.g. the active session changed after the
+            // restore) — the rollback itself succeeded; just say the rerun
+            // was skipped rather than raising a global error.
+            useAppStore.getState().pushToast({
+              kind: "info",
+              message: "Rolled back, but the rerun was skipped (session changed).",
+            });
+          }
+        } else {
+          useAppStore.getState().pushToast({
+            kind: "info",
+            message: nextPromptHadAttachments
+              ? "Nothing rerunnable — the dropped turn was attachments-only."
+              : "Nothing to rerun — this checkpoint was already the latest turn.",
+          });
+        }
       }
     } catch (error) {
       useAppStore.getState().setError(error instanceof Error ? error.message : String(error));
@@ -125,7 +160,8 @@ export function CheckpointsPanel() {
                 key={checkpoint.turnIndex}
                 checkpoint={checkpoint}
                 disabled={running}
-                onRestore={() => setConfirming(checkpoint.turnIndex)}
+                onRestore={() => setConfirming({ turnIndex: checkpoint.turnIndex, rerun: false })}
+                onRerun={() => setConfirming({ turnIndex: checkpoint.turnIndex, rerun: true })}
               />
             ))}
           </ol>
@@ -136,8 +172,9 @@ export function CheckpointsPanel() {
         <RollbackConfirmDialog
           checkpoint={confirmTarget}
           busy={rollingBack}
+          rerun={confirming?.rerun ?? false}
           onCancel={() => setConfirming(null)}
-          onConfirm={() => void doRollback(confirmTarget.turnIndex)}
+          onConfirm={() => void doRollback(confirmTarget.turnIndex, confirming?.rerun ?? false)}
         />
       ) : null}
     </div>
@@ -148,10 +185,13 @@ function CheckpointRow({
   checkpoint,
   disabled,
   onRestore,
+  onRerun,
 }: {
   checkpoint: CheckpointInfo;
   disabled: boolean;
   onRestore: () => void;
+  /** CHK-01: restore AND resend the dropped prompt (native rerun-from-here). */
+  onRerun: () => void;
 }) {
   const label = checkpoint.label.trim().length > 0 ? checkpoint.label : "(no message)";
   return (
@@ -194,6 +234,25 @@ function CheckpointRow({
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </ControlButton>
+        <ControlButton
+          type="button"
+          className={cn(
+            "shrink-0 rounded p-1 text-text-muted transition-colors",
+            "hover:bg-hover hover:text-text-primary",
+            "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-muted",
+          )}
+          title={
+            disabled
+              ? "Wait for the current turn to finish"
+              : "Restore and rerun the next prompt from this point"
+          }
+          aria-label="Restore and rerun from this point"
+          data-testid="checkpoint-rerun"
+          disabled={disabled}
+          onClick={onRerun}
+        >
+          <Play className="h-3.5 w-3.5" />
+        </ControlButton>
       </div>
     </li>
   );
@@ -204,11 +263,16 @@ function CheckpointRow({
 function RollbackConfirmDialog({
   checkpoint,
   busy,
+  rerun,
   onCancel,
   onConfirm,
 }: {
   checkpoint: CheckpointInfo;
   busy: boolean;
+  /** CHK-01: the confirm also triggers an immediate resend of the dropped
+   * prompt's text. Communicated OUTSIDE the dialog box — e2e screenshots the
+   * box itself (`rollback-confirm-dialog`), which must stay byte-identical. */
+  rerun: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -283,6 +347,16 @@ function RollbackConfirmDialog({
           </ControlButton>
         </div>
       </div>
+      {/* CHK-01: the rerun disclosure lives OUTSIDE the screenshotted dialog
+          box (visual baseline), as a sibling note under it. */}
+      {rerun ? (
+        <p
+          className="absolute left-1/2 top-[calc(50%+106px)] w-full max-w-[280px] -translate-x-1/2 text-center text-xs text-text-muted"
+          data-testid="rollback-rerun-note"
+        >
+          After restoring, the dropped prompt's text is resent immediately.
+        </p>
+      ) : null}
     </div>
   );
 }

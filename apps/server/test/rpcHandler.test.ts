@@ -361,7 +361,17 @@ function makeCheckpointService(checkpoints: CheckpointInfo[] = []) {
 
 // --- Fake rollback gateway (Slice 18b): records calls, scripted result ---
 
-function makeRollbackGateway(result: { filesRestored: boolean } = { filesRestored: true }) {
+function makeRollbackGateway(
+  result: {
+    filesRestored: boolean;
+    nextPrompt: string | null;
+    nextPromptHadAttachments: boolean;
+  } = {
+    filesRestored: true,
+    nextPrompt: null,
+    nextPromptHadAttachments: false,
+  },
+) {
   const calls: Array<{ sessionId: string; turnIndex: number }> = [];
   const gateway: CheckpointRollbackGateway = {
     rollback: async ({ sessionId, turnIndex }) => {
@@ -1135,7 +1145,11 @@ describe("createRpcConnection checkpoint ops (Slice 18a)", () => {
 
   it("checkpoint_rollback restores, re-subscribes (fresh snapshot), and acks with filesRestored", async () => {
     const { session } = makeSession("s1", { snapshot: { seq: 2, state: { cells: ["restored"] } } });
-    const rollback = makeRollbackGateway({ filesRestored: true });
+    const rollback = makeRollbackGateway({
+      filesRestored: true,
+      nextPrompt: null,
+      nextPromptHadAttachments: false,
+    });
     const { conn, frames } = withRollback({ s1: session }, rollback.gateway);
     await conn.handleMessage(
       frame(4, { type: "checkpoint_rollback", sessionId: "s1", turnIndex: 0 }),
@@ -1148,18 +1162,34 @@ describe("createRpcConnection checkpoint ops (Slice 18a)", () => {
         kind: "push",
         message: { type: "snapshot", sessionId: "s1", seq: 2, state: { cells: ["restored"] } },
       },
-      { kind: "checkpoint_rollback_ok", id: 4, filesRestored: true },
+      {
+        kind: "checkpoint_rollback_ok",
+        id: 4,
+        filesRestored: true,
+        nextPrompt: null,
+        nextPromptHadAttachments: false,
+      },
     ]);
   });
 
   it("checkpoint_rollback carries filesRestored:false through (non-git session)", async () => {
     const { session } = makeSession("s1", { snapshot: { seq: 1, state: { cells: [] } } });
-    const rollback = makeRollbackGateway({ filesRestored: false });
+    const rollback = makeRollbackGateway({
+      filesRestored: false,
+      nextPrompt: null,
+      nextPromptHadAttachments: false,
+    });
     const { conn, frames } = withRollback({ s1: session }, rollback.gateway);
     await conn.handleMessage(
       frame(5, { type: "checkpoint_rollback", sessionId: "s1", turnIndex: 1 }),
     );
-    expect(frames.at(-1)).toEqual({ kind: "checkpoint_rollback_ok", id: 5, filesRestored: false });
+    expect(frames.at(-1)).toEqual({
+      kind: "checkpoint_rollback_ok",
+      id: 5,
+      filesRestored: false,
+      nextPrompt: null,
+      nextPromptHadAttachments: false,
+    });
   });
 
   it("checkpoint_rollback on an unknown session errors and never calls the gateway", async () => {
