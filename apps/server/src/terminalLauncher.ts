@@ -562,7 +562,11 @@ export function createExternalCommandLauncher(
  * would mislead (it stays copy-only). New runnable fixes are added here
  * consciously, next to the charset backstop below.
  */
-export const RUNNABLE_DOCTOR_FIXES: ReadonlySet<string> = new Set(["pi-binary", "github"]);
+export const RUNNABLE_DOCTOR_FIXES: ReadonlySet<string> = new Set([
+  "pi-binary",
+  "pi-version",
+  "github",
+]);
 
 /** The safe shape of a runnable fix: words, paths, flags — NO shell
  * metacharacters (`;`, `&`, `|`, `$`, backticks, quotes, redirects). A future

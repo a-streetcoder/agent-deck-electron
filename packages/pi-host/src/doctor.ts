@@ -362,6 +362,10 @@ export async function runDoctor(
       label: "Pi version",
       status: version ? "ok" : "warn",
       detail: version ?? "could not read --version",
+      // DOC-03: a RESOLVING pi whose probe fails is corrupt/incompatible — the
+      // guided repair is a reinstall (running `pi update pi` would invoke the
+      // broken binary itself). Healthy installs carry no fix.
+      fixCommand: version ? undefined : "npm install -g @earendil-works/pi-coding-agent",
     });
     void binSource;
   }
