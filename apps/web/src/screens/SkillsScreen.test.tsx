@@ -757,6 +757,91 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     });
   });
 
+  it("Add skills previews an IMPORTED repo and widens additively (SKL-13)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") return Promise.resolve(jsonResponse({ skills: [] }));
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(
+          jsonResponse({
+            repos: [
+              {
+                id: "c1",
+                remoteUrl: "https://github.com/owner/repo.git",
+                ref: "dev",
+                subdir: "packages/skills",
+                skillNames: ["alpha"],
+                storageMode: "collection-v1",
+                available: true,
+                lastSyncedCommit: "abc",
+                importedAt: "2026-08-15",
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-repos/c1/check" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ updateAvailable: false }));
+      }
+      if (url === "/resources/skills/inspect-git") {
+        // engine >=0.1.8: an imported collection ANSWERS with alreadyImported
+        return Promise.resolve(
+          jsonResponse({
+            repoId: "c1",
+            skills: [
+              { name: "alpha", displayName: "alpha", extraFileCount: 0 },
+              { name: "beta", displayName: "beta", extraFileCount: 0 },
+            ],
+            alreadyImported: ["alpha"],
+          }),
+        );
+      }
+      if (url === "/resources/skills/import-git") {
+        return Promise.resolve(jsonResponse({ imported: ["beta"], skipped: [], repoId: "c1" }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    fireEvent.click(await screen.findByTestId("skill-repo-add-c1"));
+    await screen.findByTestId("skill-import-preview-dialog");
+    const inspectCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/inspect-git",
+    );
+    // the row's ref/subdir travel with the bare cloneUrl — without them the engine
+    // would derive a DIFFERENT collection and answer for the wrong source
+    expect(JSON.parse(String(inspectCall?.[1]?.body))).toEqual({
+      url: "https://github.com/owner/repo.git",
+      ref: "dev",
+      subdir: "packages/skills",
+    });
+
+    // already-imported skills start unchecked; only genuinely new ones are preselected
+    const alphaCheck = screen.getByTestId("skill-import-preview-check-alpha") as HTMLInputElement;
+    const betaCheck = screen.getByTestId("skill-import-preview-check-beta") as HTMLInputElement;
+    expect(alphaCheck.checked).toBe(false);
+    expect(betaCheck.checked).toBe(true);
+
+    fireEvent.click(screen.getByTestId("skill-import-preview-import"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const importCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/import-git",
+    );
+    expect(JSON.parse(String(importCall?.[1]?.body))).toEqual({
+      scope: "global",
+      url: "https://github.com/owner/repo.git",
+      ref: "dev",
+      subdir: "packages/skills",
+      selected: ["beta"],
+    });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);

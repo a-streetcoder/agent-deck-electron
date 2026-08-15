@@ -649,6 +649,10 @@ export function registerResourceRoutes(ctx: ServerContext): void {
         projectId: z.string().optional(),
         // SKL-04: import only these skills (names from the preview). Omitted = full import.
         selected: z.array(z.string().trim().min(1).max(200)).min(1).max(500).optional(),
+        // SKL-13: explicit source coordinates from a listed collection row — a bare cloneUrl
+        // round-trips lossily for tree-URL imports, so the row's ref/subdir override the parse.
+        ref: z.string().trim().min(1).max(200).optional(),
+        subdir: z.string().trim().min(1).max(500).optional(),
       })
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
@@ -664,12 +668,17 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     try {
       const result = skillStore.importGitRepo(
         source.cloneUrl,
-        source.ref,
-        source.subdir,
+        parsed.data.ref ?? source.ref,
+        parsed.data.subdir ?? source.subdir,
         parsed.data.selected,
       );
       broadcast({ type: "resources_changed" });
-      return { imported: result.skills, skipped: [] as string[], repoId: result.collectionId };
+      return {
+        imported: result.skills,
+        // SKL-13: an additive widening reports selected-but-already-imported names
+        skipped: result.skipped ?? [],
+        repoId: result.collectionId,
+      };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }
@@ -679,15 +688,31 @@ export function registerResourceRoutes(ctx: ServerContext): void {
   // materializing anything, and the cached clone makes the following import show-what-you-saw.
   // No broadcast: nothing changed.
   fastify.post("/resources/skills/inspect-git", async (request, reply) => {
-    const parsed = z.object({ url: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    const parsed = z
+      .object({
+        url: z.string().trim().min(1).max(2000),
+        // SKL-13: see import-git — a listed row's ref/subdir override the URL parse
+        ref: z.string().trim().min(1).max(200).optional(),
+        subdir: z.string().trim().min(1).max(500).optional(),
+      })
+      .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const source = resolveSkillSource(parsed.data.url);
     if (!source) {
       return reply.status(400).send({ error: "Couldn't understand that repository reference." });
     }
     try {
-      const result = skillStore.inspectGitRepo(source.cloneUrl, source.ref, source.subdir);
-      return { repoId: result.collectionId, skills: toSkillPreviews(result.skills) };
+      const result = skillStore.inspectGitRepo(
+        source.cloneUrl,
+        parsed.data.ref ?? source.ref,
+        parsed.data.subdir ?? source.subdir,
+      );
+      return {
+        repoId: result.collectionId,
+        skills: toSkillPreviews(result.skills),
+        // SKL-13: which names an IMPORTED collection already holds (empty for a fresh preview)
+        alreadyImported: result.alreadyImported ?? [],
+      };
     } catch (error) {
       return sendResourceMutationFailure(reply, error);
     }

@@ -35,8 +35,10 @@ function git(cwd: string, args: string[]): string {
   }).trim();
 }
 
-/** A bare remote with skills `alpha` (frontmatter name/description + a reference file) and `beta`. */
-function makeRemote(tag: string): string {
+/** A bare remote with two skills (frontmatter name/description + a reference file on the
+ *  first; bare SKILL.md on the second). Custom `names` avoid catalog collisions across tests
+ *  sharing the one resource home. */
+function makeRemote(tag: string, names: [string, string] = ["alpha", "beta"]): string {
   const remote = path.join(root, `remote-${tag}.git`);
   const work = path.join(root, `upstream-${tag}`);
   git(root, ["init", "--bare", "--initial-branch=main", remote]);
@@ -46,14 +48,14 @@ function makeRemote(tag: string): string {
   git(work, ["config", "user.email", "acceptance@example.invalid"]);
   git(work, ["config", "core.autocrlf", "false"]);
   writeFileSync(path.join(work, ".gitattributes"), "* -text\n");
-  const alpha = path.join(work, "skills", "alpha");
+  const alpha = path.join(work, "skills", names[0]);
   mkdirSync(alpha, { recursive: true });
   writeFileSync(
     path.join(alpha, "SKILL.md"),
     "---\nname: Alpha Helper\ndescription: Helps with alpha things\n---\nAlpha body\n",
   );
   writeFileSync(path.join(alpha, "reference.md"), "extra material\n");
-  const beta = path.join(work, "skills", "beta");
+  const beta = path.join(work, "skills", names[1]);
   mkdirSync(beta, { recursive: true });
   writeFileSync(path.join(beta, "SKILL.md"), "no frontmatter here\n");
   git(work, ["add", "."]);
@@ -66,6 +68,28 @@ function makeRemote(tag: string): string {
 async function api(method: "GET" | "POST", url: string, body?: Record<string, unknown>) {
   return await fastify.inject({ method, url, payload: body });
 }
+
+// SKL-13 capability probe (0.1.8): a current engine ANSWERS an inspect on an imported
+// collection (alreadyImported); 0.1.6/0.1.7 throw RESOURCE_ALREADY_EXISTS. The addon has
+// no version API, so probe by doing the real thing in a throwaway home.
+const canAdditive = await (async () => {
+  if (!hasPreview) return false;
+  const probeHome = path.join(root, "probe-home");
+  mkdirSync(probeHome, { recursive: true });
+  const url = pathToFileURL(makeRemote("probe", ["probe-alpha", "probe-beta"])).href;
+  engine.importGitRepo(probeHome, undefined, "global", url, undefined, undefined, undefined);
+  try {
+    engine.inspectGitRepo(probeHome, url, undefined, undefined);
+    return true;
+  } catch (error) {
+    // ONLY the old-engine refusal classifies the capability as absent; anything else is a
+    // real failure the run must surface, not silently skip around.
+    if (error instanceof Error && error.message.startsWith("RESOURCE_ALREADY_EXISTS")) {
+      return false;
+    }
+    throw error;
+  }
+})();
 
 beforeAll(async () => {
   mkdirSync(resourceHome);
@@ -140,10 +164,21 @@ describe.skipIf(!hasPreview)("engine 0.1.6 preview + selected import routes (SKL
     expect(listed.repos).toHaveLength(1);
     expect(listed.repos[0]!.skillNames).toEqual(["alpha"]);
 
-    // an imported collection refuses a new preview (additive re-import is SKL-13's scope)…
+    // SKL-13 (0.1.8): an imported collection ANSWERS a new preview with its selection
+    // state; older engines refuse with 409.
     const again = await api("POST", "/resources/skills/inspect-git", { url });
-    expect(again.statusCode).toBe(409);
-    // …and refuses discard (forget/delete owns imported collections)
+    if (canAdditive) {
+      expect(again.statusCode).toBe(200);
+      const answered = (await again.json()) as {
+        skills: { name: string }[];
+        alreadyImported: string[];
+      };
+      expect(answered.skills.map((s) => s.name)).toEqual(["alpha", "beta"]);
+      expect(answered.alreadyImported).toEqual(["alpha"]);
+    } else {
+      expect(again.statusCode).toBe(409);
+    }
+    // an imported collection still refuses discard (forget/delete owns imported collections)
     const discard = await api("POST", "/resources/skills/discard-git-preview", {
       repoId: preview.repoId,
     });
@@ -174,5 +209,52 @@ describe.skipIf(!hasPreview)("engine 0.1.6 preview + selected import routes (SKL
     const repos = await api("GET", "/resources/skill-repos");
     const listed = (await repos.json()) as { repos: { remoteUrl: string }[] };
     expect(listed.repos.filter((r) => r.remoteUrl.includes("remote-cancel"))).toEqual([]);
+  }, 120_000);
+});
+
+// The pinned pre-0.1.8 addon refuses inspect-of-imported; skip (never fake) until the pin
+// reaches 0.1.8.
+describe.skipIf(!canAdditive)("engine 0.1.8 additive widening (SKL-13)", () => {
+  it("answers for an imported repo, widens additively, and skips what is already there", async () => {
+    const remote = makeRemote("additive", ["add-alpha", "add-beta"]);
+    const url = pathToFileURL(remote).href;
+
+    const first = await api("POST", "/resources/skills/import-git", {
+      scope: "global",
+      url,
+      selected: ["add-alpha"],
+    });
+    expect(first.statusCode).toBe(200);
+
+    // inspect the SAME url: answered from the collection's own clone, selection state included
+    const inspect = await api("POST", "/resources/skills/inspect-git", { url });
+    expect(inspect.statusCode).toBe(200);
+    const preview = (await inspect.json()) as {
+      skills: { name: string }[];
+      alreadyImported: string[];
+    };
+    expect(preview.skills.map((s) => s.name)).toEqual(["add-alpha", "add-beta"]);
+    expect(preview.alreadyImported).toEqual(["add-alpha"]);
+
+    // widening with the full selection imports only what is missing and reports the rest skipped
+    const widen = await api("POST", "/resources/skills/import-git", {
+      scope: "global",
+      url,
+      selected: ["add-alpha", "add-beta"],
+    });
+    expect(widen.statusCode).toBe(200);
+    const outcome = (await widen.json()) as { imported: string[]; skipped: string[] };
+    expect(outcome.imported).toEqual(["add-beta"]);
+    expect(outcome.skipped).toEqual(["add-alpha"]);
+
+    const repos = await api("GET", "/resources/skill-repos");
+    const listed = (await repos.json()) as { repos: { remoteUrl: string; skillNames: string[] }[] };
+    const mine = listed.repos.find((r) => r.remoteUrl.includes("remote-additive"))!;
+    expect(mine.skillNames).toEqual(["add-alpha", "add-beta"]);
+
+    // an UNSELECTED re-import of an imported collection still refuses — additive widening
+    // requires an explicit selection
+    const blind = await api("POST", "/resources/skills/import-git", { scope: "global", url });
+    expect(blind.statusCode).toBe(409);
   }, 120_000);
 });

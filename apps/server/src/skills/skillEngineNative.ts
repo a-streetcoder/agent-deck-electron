@@ -46,6 +46,9 @@ export interface GitDelta {
 export interface GitImportResult {
   collectionId: string;
   skills: string[];
+  /** Additive re-import only (SKL-13, engine >=0.1.8): selected names already in
+   * the collection, left untouched. Absent on older addons. */
+  skipped?: string[];
 }
 
 /** One discoverable skill in a repository preview (SKL-03). `skillMd` is the SKILL.md content
@@ -60,6 +63,9 @@ export interface GitSkillPreview {
 export interface GitInspectResult {
   collectionId: string;
   skills: GitSkillPreview[];
+  /** Names already imported into this collection (SKL-13, engine >=0.1.8) —
+   * empty for a fresh preview; absent on older addons. */
+  alreadyImported?: string[];
 }
 
 export interface GitSyncResult {

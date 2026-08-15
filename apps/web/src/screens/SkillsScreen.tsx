@@ -56,6 +56,7 @@ interface SkillRepo {
   id: string;
   remoteUrl: string;
   ref?: string;
+  subdir?: string;
   storageMode?: "collection-v1";
   skillNames: string[];
   lastSyncedCommit: string;
@@ -637,7 +638,11 @@ export function SkillsScreen() {
   const [gitPreview, setGitPreview] = useState<{
     repoId: string;
     url: string;
+    ref?: string;
+    subdir?: string;
     skills: SkillPreviewItem[];
+    /** SKL-13 additive widening: preselect only skills not already in the collection. */
+    defaultSelected?: string[];
   } | null>(null);
   // Synchronous locks + a request generation: React state commits too late to stop a
   // double-activation, and a response landing after the input row was dismissed must not
@@ -664,8 +669,16 @@ export function SkillsScreen() {
     [],
   );
 
-  const doGitInspect = async (): Promise<void> => {
-    const url = (gitUrl ?? "").trim();
+  // `source` bypasses the URL input (SKL-13's per-repo "Add skills"); the engine
+  // answers for an IMPORTED collection with `alreadyImported`, which drives the
+  // preview's default selection so only genuinely new skills start checked. The row's
+  // ref/subdir travel explicitly — its bare remoteUrl alone would name a different source.
+  const doGitInspect = async (source?: {
+    url: string;
+    ref?: string;
+    subdir?: string;
+  }): Promise<void> => {
+    const url = (source ? source.url : (gitUrl ?? "")).trim();
     if (!url || inspectLock.current || localPreview || knownPreview) return;
     inspectLock.current = true;
     const seq = ++inspectSeq.current;
@@ -674,11 +687,15 @@ export function SkillsScreen() {
       const res = await fetch("/resources/skills/inspect-git", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, ref: source?.ref, subdir: source?.subdir }),
       });
       if (!res.ok)
         throw new Error(await responseErrorMessage(res, "Couldn't read that repository."));
-      const data = (await res.json()) as { repoId: string; skills: SkillPreviewItem[] };
+      const data = (await res.json()) as {
+        repoId: string;
+        skills: SkillPreviewItem[];
+        alreadyImported?: string[];
+      };
       if (seq !== inspectSeq.current) {
         // the user dismissed or superseded this request while it was in flight
         discardPreview(data.repoId);
@@ -688,9 +705,20 @@ export function SkillsScreen() {
         // the engine already cleaned the empty preview up — nothing importable to show
         throw new Error("No skills with a SKILL.md were found in that repository.");
       }
+      const already = new Set(data.alreadyImported ?? []);
       setGitPreview((prev) => {
         if (prev && prev.repoId !== data.repoId) discardPreview(prev.repoId); // no leaked replacement
-        return { repoId: data.repoId, url, skills: data.skills };
+        return {
+          repoId: data.repoId,
+          url,
+          ref: source?.ref,
+          subdir: source?.subdir,
+          skills: data.skills,
+          defaultSelected:
+            already.size > 0
+              ? data.skills.filter((s) => !already.has(s.name)).map((s) => s.name)
+              : undefined,
+        };
       });
       setGitUrl(null);
     } catch (err) {
@@ -706,7 +734,13 @@ export function SkillsScreen() {
     const res = await fetch("/resources/skills/import-git", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scope: "global", url: gitPreview.url, selected }),
+      body: JSON.stringify({
+        scope: "global",
+        url: gitPreview.url,
+        ref: gitPreview.ref,
+        subdir: gitPreview.subdir,
+        selected,
+      }),
     });
     if (!res.ok) {
       // thrown back into the dialog, which stays open with the error visible
@@ -1567,6 +1601,7 @@ export function SkillsScreen() {
             sourceLabel={gitPreview.url}
             sourceKind="git"
             skills={gitPreview.skills}
+            defaultSelected={gitPreview.defaultSelected}
             onImport={confirmGitImport}
             onCancel={cancelGitPreview}
           />
@@ -1745,6 +1780,25 @@ export function SkillsScreen() {
                           Update available
                         </span>
                       ) : null}
+                      <ControlButton
+                        data-testid={`skill-repo-add-${repo.id}`}
+                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        title="Preview this repository and add more of its skills to the collection"
+                        disabled={
+                          !repo.remoteUrl ||
+                          repo.available === false ||
+                          repoBusy[repo.id] !== undefined
+                        }
+                        onClick={() =>
+                          void doGitInspect({
+                            url: repo.remoteUrl,
+                            ref: repo.ref,
+                            subdir: repo.subdir,
+                          })
+                        }
+                      >
+                        Add skills
+                      </ControlButton>
                       <ControlButton
                         ref={(element) => {
                           if (element) repoUpdateRefs.current.set(repo.id, element);
