@@ -221,6 +221,7 @@ export function LoopsScreen() {
   const currentSessionId = useAppStore((state) => state.session?.id);
   const sessions = useAppStore((state) => state.sessions);
   const setView = useAppStore((state) => state.setView);
+  const loopCommandRequest = useAppStore((state) => state.loopCommandRequest);
   const projects = useAppStore((state) => state.projects);
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -436,6 +437,19 @@ export function LoopsScreen() {
       currentCheckoutConfirmed: false,
     });
   };
+
+  useEffect(() => {
+    if (!loopCommandRequest || !loaded) return;
+    const store = useAppStore.getState();
+    if (loopCommandRequest.action === "loop.create") {
+      store.clearLoopCommandRequest(loopCommandRequest.token);
+      openEditor(null);
+      return;
+    }
+    const target = loops.find((loop) => loop.id === loopCommandRequest.loopId);
+    store.clearLoopCommandRequest(loopCommandRequest.token);
+    if (target) openLaunch(target);
+  }, [loaded, loopCommandRequest, loops]);
 
   const launchOpen = launchDraft !== null;
   useEffect(() => {

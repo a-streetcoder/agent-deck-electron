@@ -15,3 +15,4 @@ export * from "./resources.ts";
 export * from "./memory.ts";
 export * from "./extensions.ts";
 export * from "./loops.ts";
+export * from "./slashUniverse.ts";

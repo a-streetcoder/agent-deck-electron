@@ -773,7 +773,12 @@ export function createRpcConnection(deps: {
             stagedImages = request.images?.length
               ? sessionImages?.stage(session.meta.id, request.message, request.images)
               : undefined;
-            await session.prompt(request.message, request.images, request.streamingBehavior);
+            await session.prompt(
+              request.message,
+              request.images,
+              request.streamingBehavior,
+              request.titleSource,
+            );
           } catch (error) {
             try {
               stagedImages?.rollback();

@@ -24,7 +24,13 @@ import {
   shouldCollapsePaste,
   thinkingLevelsForModel,
 } from "@agent-deck/domain";
-import type { SessionModelInfo } from "@agent-deck/contracts";
+import type { SessionModelInfo, SlashUniverseItem } from "@agent-deck/contracts";
+import {
+  materialize,
+  selectionsAfterAdding,
+  SLASH_CATEGORY_LABELS,
+  titleGenerationSource,
+} from "@agent-deck/domain";
 import {
   EMPTY_COMPOSER_DRAFT,
   pendingComposerTextForSession,
@@ -51,8 +57,9 @@ import {
   type PiComposerState,
   type PiModelInfo,
 } from "./composer/pickers.tsx";
-import { SuggestionPanel } from "./composer/SuggestionPanel.tsx";
+import { SlashSuggestionPanel, SuggestionPanel } from "./composer/SuggestionPanel.tsx";
 import { useSuggestions } from "./composer/useSuggestions.ts";
+import { SlashSelectionChips } from "./composer/SlashSelectionChips.tsx";
 import { ComposerPendingReviewComments } from "./composer/ComposerPendingReviewComments.tsx";
 import { appendReviewCommentsToPrompt, type PendingReviewComment } from "../lib/reviewComments.ts";
 import { ComposerPendingElementContexts } from "./composer/ComposerPendingElementContexts.tsx";
@@ -94,6 +101,12 @@ const PROMPT_IMAGE_MIMES = new Set<ComposerDraftImage["mimeType"]>([
 ]);
 function isPromptImageMime(value: string): value is ComposerDraftImage["mimeType"] {
   return PROMPT_IMAGE_MIMES.has(value as ComposerDraftImage["mimeType"]);
+}
+
+function stripSlashTrigger(text: string): string {
+  if (!text.startsWith("/")) return text;
+  const token = text.match(/^\/\S*/)?.[0] ?? "/";
+  return text.slice(token.length).replace(/^\s+/, "");
 }
 async function fileToImage(file: File): Promise<ComposerDraftImage | null> {
   if (!isPromptImageMime(file.type) || file.size > 15_000_000) return null;
@@ -397,7 +410,13 @@ export function Composer() {
     }
   }, [contextRevision, sessionId, refreshStats]);
 
-  const suggestions = useSuggestions(sessionId);
+  const suggestions = useSuggestions(sessionId, session?.projectId ?? null);
+  const setView = useAppStore((state) => state.setView);
+  const requestLoopCommand = useAppStore((state) => state.requestLoopCommand);
+  const [slashSelections, setSlashSelections] = useState<SlashUniverseItem[]>([]);
+  useEffect(() => {
+    setSlashSelections([]);
+  }, [sessionId]);
   // The current model carries Pi's exact supported ladder. Missing metadata
   // keeps the legacy fallback so an older backend remains usable.
   const currentModel = models.find(
@@ -460,6 +479,43 @@ export function Composer() {
     setPendingComposerText(null);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [pendingComposerText, sessionId, setDraft, setPendingComposerText]);
+
+  const applySlashItem = (item: SlashUniverseItem): void => {
+    const remainder = stripSlashTrigger(draft);
+    if (item.kind === "loop") {
+      setSlashSelections([]);
+      setDraft(remainder);
+      setView("loops");
+      requestLoopCommand(
+        item.id === "loop:create-new"
+          ? { action: "loop.create", loopId: null }
+          : { action: "loop.launch", loopId: item.loopId ?? null },
+      );
+      return;
+    }
+    setSlashSelections((current) => selectionsAfterAdding(item, current));
+    if (item.kind === "prompt") {
+      const body = item.body ?? "";
+      const next = remainder ? `${body}${body.endsWith("\n") ? "" : "\n"}${remainder}` : body;
+      setDraft(next);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        const caret = next.length;
+        el.setSelectionRange(caret, caret);
+      });
+      return;
+    }
+    setDraft(remainder);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const caret = remainder.length;
+      el.setSelectionRange(caret, caret);
+    });
+  };
 
   const applyAccept = (accepted: { value: string; caret: number }): void => {
     setSubmitStatus(null);
@@ -583,7 +639,9 @@ export function Composer() {
   const submit = (): void => {
     if (sendLockRef.current) return;
     const submittedDraft = draft;
-    const message = submittedDraft.trim();
+    const submittedSelections = slashSelections;
+    const materialized = materialize(submittedSelections, submittedDraft);
+    const message = materialized.trim();
     if (
       (!message &&
         images.length === 0 &&
@@ -633,6 +691,7 @@ export function Composer() {
       kind: "info",
       message: running ? "Waiting for Pi to acknowledge queued input…" : "Sending…",
     });
+    const titleSource = titleGenerationSource(submittedSelections, submittedDraft);
     void sendPrompt(
       originatingSessionId,
       outgoing,
@@ -643,6 +702,7 @@ export function Composer() {
       submittedPastes.length > 0
         ? { transcriptText: transcriptOutgoing, pastes: submittedPastes }
         : undefined,
+      submittedSelections.length > 0 ? titleSource : undefined,
     )
       .then(() => {
         if (!isCurrentSubmission()) return;
@@ -681,6 +741,13 @@ export function Composer() {
             : null,
         );
         suggestions.close();
+        setSlashSelections((current) =>
+          current === submittedSelections ||
+          (current.length === submittedSelections.length &&
+            current.every((item, index) => item.id === submittedSelections[index]?.id))
+            ? []
+            : current,
+        );
       })
       .catch((error: unknown) => {
         if (!isCurrentSubmission()) return;
@@ -701,7 +768,24 @@ export function Composer() {
   return (
     <div className="px-6 pb-5 pt-2">
       <div className="relative rounded-3xl border border-border-subtle bg-surface-elevated shadow-card">
-        {suggestions.mode ? (
+        {suggestions.mode === "slash" ? (
+          <SlashSuggestionPanel
+            rows={suggestions.slashRows}
+            highlightedIndex={suggestions.highlightedSlashIndex}
+            loading={suggestions.slashLoading}
+            screenLabel={
+              suggestions.slashScreen.type === "category"
+                ? SLASH_CATEGORY_LABELS[suggestions.slashScreen.category]
+                : "Slash commands"
+            }
+            onHover={suggestions.setHighlightedSlashIndex}
+            onAccept={(row) => {
+              const accepted = suggestions.acceptSlashRow(row);
+              if (accepted?.type === "item") applySlashItem(accepted.item);
+              textareaRef.current?.focus();
+            }}
+          />
+        ) : suggestions.mode === "file" ? (
           <SuggestionPanel
             items={suggestions.items}
             selectedIndex={suggestions.selectedIndex}
@@ -711,7 +795,7 @@ export function Composer() {
               if (accepted) applyAccept(accepted);
               textareaRef.current?.focus();
             }}
-            testid={suggestions.mode === "slash" ? "slash-panel" : "file-panel"}
+            testid="file-panel"
           />
         ) : null}
 
@@ -786,6 +870,14 @@ export function Composer() {
             ) : null}
           </div>
         ) : null}
+
+        <SlashSelectionChips
+          selections={slashSelections}
+          onRemove={(id) => {
+            setSlashSelections((current) => current.filter((item) => item.id !== id));
+            requestAnimationFrame(() => textareaRef.current?.focus());
+          }}
+        />
 
         <FileTagChips
           mentions={fileMentions}
@@ -902,6 +994,21 @@ export function Composer() {
           minRows={2}
           maxRows={6}
           aria-label="Message Pi"
+          aria-expanded={suggestions.mode !== null}
+          aria-controls={
+            suggestions.mode === "slash"
+              ? "slash-panel"
+              : suggestions.mode === "file"
+                ? "file-panel"
+                : undefined
+          }
+          aria-activedescendant={
+            suggestions.mode === "slash" && suggestions.highlightedSlashIndex >= 0
+              ? `slash-option-${suggestions.highlightedSlashIndex}`
+              : suggestions.mode === "file"
+                ? `file-option-${suggestions.selectedIndex}`
+                : undefined
+          }
           value={draft}
           onChange={(event) => {
             setSubmitStatus(null);
@@ -973,7 +1080,16 @@ export function Composer() {
           }}
           onKeyDown={(event) => {
             if (suggestions.handleKeyDown(event)) return;
-            if ((event.key === "Enter" || event.key === "Tab") && suggestions.mode) {
+            if ((event.key === "Enter" || event.key === "Tab") && suggestions.mode === "slash") {
+              const row = suggestions.slashRows[suggestions.highlightedSlashIndex];
+              if (row && !suggestions.slashLoading) {
+                event.preventDefault();
+                const accepted = suggestions.acceptSlashRow(row);
+                if (accepted?.type === "item") applySlashItem(accepted.item);
+                return;
+              }
+            }
+            if ((event.key === "Enter" || event.key === "Tab") && suggestions.mode === "file") {
               const item = suggestions.items[suggestions.selectedIndex];
               if (item) {
                 event.preventDefault();
@@ -1174,7 +1290,7 @@ export function Composer() {
             running={running}
             disabled={
               submitting ||
-              (!draft.trim() &&
+              (!materialize(slashSelections, draft).trim() &&
                 images.length === 0 &&
                 files.length === 0 &&
                 folders.length === 0 &&

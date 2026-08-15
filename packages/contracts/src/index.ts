@@ -12,4 +12,5 @@ export * from "./protocol.ts";
 export * from "./rpc.ts";
 export * from "./scripts.ts";
 export * from "./settings.ts";
+export * from "./slashUniverse.ts";
 export * from "./terminal.ts";

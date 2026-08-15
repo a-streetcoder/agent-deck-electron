@@ -338,6 +338,7 @@ export interface ManagedSessionRuntime {
     message: string,
     images?: PromptImages,
     streamingBehavior?: "steer" | "followUp",
+    titleSource?: string,
   ) => Effect.Effect<void>;
   readonly steer: (message: string) => Effect.Effect<void>;
   readonly followUp: (message: string) => Effect.Effect<void>;
@@ -403,6 +404,19 @@ const TITLE_SYSTEM_PROMPT =
   "summarizing the user's message. No quotes, no punctuation at the end.";
 
 const TITLE_TIMEOUT_MS = 20_000;
+
+/** First accepted prompt owns the title source; later turns cannot retarget it. */
+export function lockTitleSource(
+  locked: boolean,
+  current: string | undefined,
+  titleSource: string | undefined,
+): { locked: true; source: string | undefined } {
+  if (locked) return { locked: true, source: current };
+  return {
+    locked: true,
+    source: typeof titleSource === "string" ? titleSource.trim() : undefined,
+  };
+}
 
 export function transcriptFromEntries(data: EntriesData): TranscriptState {
   const state = createIngestState();
@@ -729,6 +743,10 @@ export const makeManagedSessionRuntime = (
     let transcript: TranscriptState = emptyTranscript();
     let sawFirstDelta = false;
     let titleStarted = false;
+    /** Once the first accepted prompt settles, later turns cannot retarget the title. */
+    let titleSourceLocked = false;
+    /** `undefined` means use the first user cell; a string (possibly empty) is authoritative. */
+    let pendingTitleSource: string | undefined;
     const pendingUiRequests = new Map<string, string>();
     const exitListeners = new Set<(exit: PiProcessExit) => void>();
     let currentExit: PiProcessExit | null = null;
@@ -878,7 +896,13 @@ export const makeManagedSessionRuntime = (
     const generateTitle = Effect.gen(function* () {
       if (titleStarted || meta.title) return;
       const firstUser = transcript.cells.find((cell) => cell.kind === "user");
-      if (!firstUser || firstUser.kind !== "user" || !firstUser.text.trim()) return;
+      const source =
+        pendingTitleSource !== undefined
+          ? pendingTitleSource
+          : firstUser && firstUser.kind === "user"
+            ? firstUser.text
+            : "";
+      if (!source.trim()) return;
       titleStarted = true;
 
       const outcome = yield* Effect.scoped(
@@ -896,7 +920,7 @@ export const makeManagedSessionRuntime = (
             env: helperContext.env,
             requestTimeoutMs: TITLE_TIMEOUT_MS,
           });
-          yield* handleHelperPrompt(helper, firstUser.text.slice(0, 2000), TITLE_TIMEOUT_MS);
+          yield* handleHelperPrompt(helper, source.slice(0, 2000), TITLE_TIMEOUT_MS);
           const { text } = yield* helper.request({ type: "get_last_assistant_text" });
           return text ? normalizeTitle(text) : "";
         }),
@@ -1450,12 +1474,15 @@ export const makeManagedSessionRuntime = (
           emit({ type: "question_answered", cellId: `question-${id}` });
         }),
 
-      prompt: (message, images, streamingBehavior) =>
+      prompt: (message, images, streamingBehavior, titleSource) =>
         handle.prompt(message, images, streamingBehavior).pipe(
           // An accepted prompt is the authoritative recovery boundary. A later
           // provider error in the same turn will set failure again.
           Effect.tap(() =>
             Effect.sync(() => {
+              const locked = lockTitleSource(titleSourceLocked, pendingTitleSource, titleSource);
+              titleSourceLocked = locked.locked;
+              pendingTitleSource = locked.source;
               clearFailure();
               pendingUserTurn = true;
               currentTurnFailedOrCancelled = false;

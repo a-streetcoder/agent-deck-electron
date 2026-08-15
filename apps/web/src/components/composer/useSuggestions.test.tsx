@@ -18,7 +18,7 @@ describe("useSuggestions request scheduling", () => {
   it("debounces file searches by 120ms while fetching slash commands immediately", () => {
     const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = renderHook(() => useSuggestions("session-1"));
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
 
     act(() => result.current.update("look @read", 10));
     expect(fetchMock).not.toHaveBeenCalled();
@@ -30,7 +30,7 @@ describe("useSuggestions request scheduling", () => {
     });
 
     act(() => result.current.update("/help", 5));
-    expect(fetchMock).toHaveBeenLastCalledWith("/sessions/session-1/commands", {
+    expect(fetchMock).toHaveBeenLastCalledWith("/sessions/session-1/slash-universe", {
       signal: expect.any(AbortSignal),
     });
   });
@@ -42,9 +42,12 @@ describe("useSuggestions request scheduling", () => {
       return new Promise<Response>(() => {});
     });
     vi.stubGlobal("fetch", fetchMock);
-    const { result, rerender, unmount } = renderHook(({ sessionId }) => useSuggestions(sessionId), {
-      initialProps: { sessionId: "session-1" as string | null },
-    });
+    const { result, rerender, unmount } = renderHook(
+      ({ sessionId }) => useSuggestions(sessionId, "project-1"),
+      {
+        initialProps: { sessionId: "session-1" as string | null },
+      },
+    );
 
     act(() => {
       result.current.update("@first", 6);
@@ -77,7 +80,7 @@ describe("useSuggestions request scheduling", () => {
       json: async () => ({ files: ["old-result.ts"] }),
     } as Response);
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = renderHook(() => useSuggestions("session-1"));
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
 
     act(() => result.current.update("@old", 4));
     await act(async () => vi.advanceTimersByTimeAsync(120));
@@ -89,10 +92,181 @@ describe("useSuggestions request scheduling", () => {
     expect(result.current.items).toEqual([]);
   });
 
+  it("fetches the slash universe once and filters later keystrokes in memory", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commands: [
+          {
+            kind: "command",
+            id: "command:built-in:help",
+            displayName: "Help",
+            isActive: true,
+            slashName: "/help",
+          },
+        ],
+        prompts: [],
+        skills: [],
+        loops: [],
+      }),
+    } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
+
+    await act(async () => {
+      result.current.update("/", 1);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/sessions/session-1/slash-universe", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(result.current.mode).toBe("slash");
+    expect(result.current.slashRows.map((row) => row.id)).toEqual(["cat:command"]);
+
+    await act(async () => {
+      result.current.update("/he", 3);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.slashRows.some((row) => row.type === "item")).toBe(true);
+  });
+
+  it("hides an empty no-project universe and retries on the next slash", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ commands: [], prompts: [], skills: [], loops: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          commands: [
+            {
+              kind: "command",
+              id: "command:built-in:help",
+              displayName: "Help",
+              isActive: true,
+              slashName: "/help",
+            },
+          ],
+          prompts: [],
+          skills: [],
+          loops: [],
+        }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
+
+    await act(async () => {
+      result.current.update("/", 1);
+    });
+    expect(result.current.mode).toBeNull();
+    expect(result.current.slashRows).toEqual([]);
+
+    await act(async () => {
+      result.current.update("", 0);
+      result.current.update("/", 1);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.mode).toBe("slash");
+  });
+
+  it("drills into a category and Escape returns to the picker", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commands: [
+          {
+            kind: "command",
+            id: "command:built-in:help",
+            displayName: "Help",
+            isActive: true,
+            slashName: "/help",
+          },
+        ],
+        prompts: [],
+        skills: [],
+        loops: [],
+      }),
+    } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
+    await act(async () => {
+      result.current.update("/", 1);
+    });
+    const category = result.current.slashRows[0];
+    expect(category?.type).toBe("category");
+    act(() => {
+      if (category) result.current.acceptSlashRow(category);
+    });
+    expect(result.current.slashScreen).toEqual({ type: "category", category: "command" });
+    expect(result.current.slashRows.some((row) => row.type === "item")).toBe(true);
+
+    act(() => {
+      const event = {
+        key: "Escape",
+        preventDefault: vi.fn(),
+      } as unknown as React.KeyboardEvent;
+      expect(result.current.handleKeyDown(event)).toBe(true);
+    });
+    expect(result.current.mode).toBe("slash");
+    expect(result.current.slashScreen).toEqual({ type: "picker" });
+  });
+
+  it("returns from a filtered category to the picker on Escape", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commands: [
+          {
+            kind: "command",
+            id: "command:built-in:help",
+            displayName: "Help",
+            isActive: true,
+            slashName: "/help",
+          },
+        ],
+        prompts: [],
+        skills: [],
+        loops: [],
+      }),
+    } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
+    await act(async () => {
+      result.current.update("/", 1);
+    });
+    const category = result.current.slashRows[0];
+    act(() => {
+      if (category) result.current.acceptSlashRow(category);
+    });
+    await act(async () => {
+      result.current.update("/xyz", 4);
+    });
+    act(() => {
+      const event = {
+        key: "Escape",
+        preventDefault: vi.fn(),
+      } as unknown as React.KeyboardEvent;
+      expect(result.current.handleKeyDown(event)).toBe(true);
+    });
+    expect(result.current.mode).toBe("slash");
+    expect(result.current.slashScreen).toEqual({ type: "picker" });
+  });
+
+  it("does not open slash suggestions without a project", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSuggestions("session-1", null));
+    act(() => result.current.update("/", 1));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.mode).toBeNull();
+  });
+
   it("does not request a bare @ query and cancels a pending file timer on close", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = renderHook(() => useSuggestions("session-1"));
+    const { result } = renderHook(() => useSuggestions("session-1", "project-1"));
 
     act(() => result.current.update("@", 1));
     act(() => vi.advanceTimersByTime(120));

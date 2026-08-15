@@ -183,6 +183,8 @@ export const ClientMessage = Schema.Union(
         ),
       ),
     ),
+    /** Optional title-generation source. Not persisted; ignore malformed at the type level. */
+    titleSource: Schema.optional(Schema.String),
     /** Preserve Pi's prompt expansion path while choosing its live queue. */
     streamingBehavior: Schema.optional(StreamingBehavior),
   }).pipe(

@@ -416,12 +416,13 @@ export class ManagedSession {
     message: string,
     images?: Parameters<ManagedSessionRuntime["prompt"]>[1],
     streamingBehavior?: Parameters<ManagedSessionRuntime["prompt"]>[2],
+    titleSource?: string,
   ): Promise<void> {
     const session = await this.piSession();
     session.enableActivityPublication();
     await runPromiseUnwrapped(
       session.runtime,
-      session.rt.prompt(message, images, streamingBehavior),
+      session.rt.prompt(message, images, streamingBehavior, titleSource),
     );
   }
 

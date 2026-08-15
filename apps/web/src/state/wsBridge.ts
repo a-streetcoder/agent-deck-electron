@@ -300,9 +300,7 @@ export async function refreshCheckpoints(sessionId: string): Promise<void> {
  * reloads to the restored state); we then refresh the sideband (changed-file
  * set + the checkpoint timeline itself, now truncated + carrying the safety
  * checkpoint). Returns whether the workspace files were restored. */
-export async function rollbackToCheckpoint(
-  turnIndex: number,
-): Promise<{
+export async function rollbackToCheckpoint(turnIndex: number): Promise<{
   filesRestored: boolean;
   nextPrompt: string | null;
   nextPromptHadAttachments: boolean;
@@ -1307,6 +1305,7 @@ export function sendPrompt(
     transcriptText: string;
     pastes: Array<{ id: number; marker: string; text: string }>;
   },
+  titleSource?: string,
 ): Promise<void> {
   // The caller captures the originating session. Never retarget an in-flight
   // composer submission merely because the user switched sessions.
@@ -1320,6 +1319,7 @@ export function sendPrompt(
     ...(pasteProjection
       ? { transcriptText: pasteProjection.transcriptText, pastes: pasteProjection.pastes }
       : {}),
+    ...(titleSource !== undefined ? { titleSource } : {}),
   });
 }
 

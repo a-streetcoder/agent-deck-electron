@@ -618,8 +618,28 @@ describe("createRpcConnection", () => {
         streamingBehavior: "followUp",
       }),
     );
-    expect(ops.prompt).toHaveBeenCalledWith("hi", images, "followUp");
+    expect(ops.prompt).toHaveBeenCalledWith("hi", images, "followUp", undefined);
     expect(frames).toEqual([{ kind: "reply", id: 1, ok: true }]);
+  });
+
+  it("forwards an optional titleSource on prompt", async () => {
+    const { session, ops } = makeSession("s1");
+    const { conn, frames } = harness(makeManager({ s1: session }));
+    await conn.handleMessage(
+      frame(3, {
+        type: "prompt",
+        sessionId: "s1",
+        message: "/skill:review\ncheck this",
+        titleSource: "check this",
+      }),
+    );
+    expect(ops.prompt).toHaveBeenCalledWith(
+      "/skill:review\ncheck this",
+      undefined,
+      undefined,
+      "check this",
+    );
+    expect(frames).toEqual([{ kind: "reply", id: 3, ok: true }]);
   });
 
   it("stages compact paste metadata while forwarding only expanded text to Pi", async () => {
@@ -653,7 +673,7 @@ describe("createRpcConnection", () => {
     );
 
     expect(stage).toHaveBeenCalledWith("s1", text, marker, pastes);
-    expect(ops.prompt).toHaveBeenCalledWith(text, undefined, undefined);
+    expect(ops.prompt).toHaveBeenCalledWith(text, undefined, undefined, undefined);
     expect(rollbackPaste).not.toHaveBeenCalled();
     expect(frames).toEqual([{ kind: "reply", id: 2, ok: true }]);
   });

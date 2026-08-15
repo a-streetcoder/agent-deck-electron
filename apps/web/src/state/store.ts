@@ -46,6 +46,13 @@ export type ResourceCommandAction =
   | "prompt.openFile"
   | "prompt.reveal";
 
+/** One-shot Loop Bank handoff from the composer `/` browser. */
+export interface LoopCommandRequest {
+  action: "loop.create" | "loop.launch";
+  loopId: string | null;
+  token: number;
+}
+
 /** One-shot request consumed by the screen that owns the existing resource workflow. */
 export interface ResourceCommandRequest {
   action: ResourceCommandAction;
@@ -370,6 +377,8 @@ export interface AppState {
   selectedPromptFilePath: string | null;
   /** One-shot request consumed only by the resource screen that owns the action. */
   resourceCommandRequest: ResourceCommandRequest | null;
+  /** One-shot request consumed only by LoopsScreen. */
+  loopCommandRequest: LoopCommandRequest | null;
   /** One-shot, identity-bound Git workflow request consumed only by GitScreen. */
   gitActionRequest: GitActionRequest | null;
   /** One-shot, session-bound request consumed only by the matching Transcript. */
@@ -413,6 +422,8 @@ export interface AppState {
   requestResourceCommand(request: Omit<ResourceCommandRequest, "token">): void;
   /** Token-scoped so an older screen effect cannot clear a newer command. */
   clearResourceCommandRequest(token: number): void;
+  requestLoopCommand(request: Omit<LoopCommandRequest, "token">): void;
+  clearLoopCommandRequest(token: number): void;
   requestGitAction(request: Omit<GitActionRequest, "token">): void;
   /** Token-scoped so an older consumer cannot clear a newer request. */
   clearGitActionRequest(token: number): void;
@@ -492,6 +503,7 @@ function initialPanelExpanded(): boolean {
 let nextGitActionToken = 0;
 let nextQuestionNavigationToken = 0;
 let nextResourceCommandToken = 0;
+let nextLoopCommandToken = 0;
 let nextMemoryNavigationRequestId = 0;
 
 export const useAppStore = create<AppState>((set) => ({
@@ -531,6 +543,7 @@ export const useAppStore = create<AppState>((set) => ({
   selectedAgentFilePath: null,
   selectedPromptFilePath: null,
   resourceCommandRequest: null,
+  loopCommandRequest: null,
   gitActionRequest: null,
   questionNavigationRequest: null,
   memoryNavigationRequest: null,
@@ -651,6 +664,10 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) =>
       state.resourceCommandRequest?.token === token ? { resourceCommandRequest: null } : {},
     ),
+  requestLoopCommand: (request) =>
+    set({ loopCommandRequest: { ...request, token: ++nextLoopCommandToken } }),
+  clearLoopCommandRequest: (token) =>
+    set((state) => (state.loopCommandRequest?.token === token ? { loopCommandRequest: null } : {})),
   requestGitAction: (request) =>
     set({
       gitActionRequest: {

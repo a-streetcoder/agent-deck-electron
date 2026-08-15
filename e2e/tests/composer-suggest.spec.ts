@@ -47,17 +47,23 @@ async function openProject(page: Page): Promise<void> {
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 }
 
-test("slash panel lists pi commands and inserts one", async ({ page }) => {
+test("slash panel lists catalog skills and leaves args in the composer", async ({ page }) => {
   await openProject(page);
   const input = page.getByTestId("composer-input");
   await input.click();
-  await input.pressSequentially("/skill:dep");
+  await input.pressSequentially("/");
 
   const panel = page.getByTestId("slash-panel");
   await expect(panel).toBeVisible({ timeout: 30_000 });
-  await expect(panel).toContainText("skill:deployer");
-  await page.getByTestId("slash-panel-item-skill:deployer").click();
-  await expect(input).toHaveValue("/skill:deployer ");
+  await expect(panel).toContainText("Skills");
+  await page.getByTestId("slash-panel-item-cat:skill").click();
+  await expect(panel).toContainText("deployer");
+  await page
+    .locator('[data-testid^="slash-panel-item-item:skill:"]')
+    .filter({ hasText: "deployer" })
+    .click();
+  await expect(input).toHaveValue("");
+  await expect(page.getByTestId("slash-selection-chip")).toContainText("deployer");
 });
 
 test("@ panel lists project files and inserts a path", async ({ page }) => {

@@ -37,6 +37,7 @@ import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
 import { SessionMutationClaims } from "../sessionMutationClaims.ts";
+import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 
 const mergeLocks = new Set<string>();
 
@@ -237,6 +238,18 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
       return { commands: await session.getCommands() };
+    } catch (error) {
+      return reply.status(500).send({ error: String(error) });
+    }
+  });
+
+  // Composer `/` catalog browser. Distinct from Pi get_commands above.
+  fastify.get("/sessions/:id/slash-universe", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const session = sessions.get(id);
+    if (!session) return reply.status(404).send({ error: "unknown session" });
+    try {
+      return assembleSlashUniverseForSession(ctx, session);
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
     }
