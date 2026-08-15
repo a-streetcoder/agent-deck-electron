@@ -54,7 +54,9 @@ describe("listProjectFiles", () => {
     await expect(listProjectFiles(root, "deep-target.ts", { limit: 5 })).resolves.toEqual([
       "dir-2009/deep-target.ts",
     ]);
-  });
+    // 2,010 mkdirs on a saturated Windows filesystem routinely exceed vitest's 5s default when
+    // the whole workspace suite runs in parallel; the walk itself is the point of the test.
+  }, 30_000);
 
   it("does not let more than 50 broad early matches starve a later exact basename", async () => {
     const root = await scratch();
