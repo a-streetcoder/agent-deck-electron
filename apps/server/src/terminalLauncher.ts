@@ -397,7 +397,18 @@ export function buildWindowsCommandScript(command: string): string {
 /** One-shot POSIX sh script running a fix command; keeps the window open. */
 export function buildPosixCommandScript(command: string): string {
   assertSingleLineCommand(command);
-  return ["#!/bin/sh", command, "echo", 'printf "Press Enter to close."', "read _", ""].join("\n");
+  return [
+    "#!/bin/sh",
+    // Finder-launched apps inherit a minimal PATH: package managers live in
+    // /opt/homebrew/bin (Apple Silicon) / /usr/local/bin (Intel), which the
+    // plain sh here would otherwise miss (native augments PATH the same way).
+    'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"',
+    command,
+    "echo",
+    'printf "Press Enter to close."',
+    "read _",
+    "",
+  ].join("\n");
 }
 
 /**

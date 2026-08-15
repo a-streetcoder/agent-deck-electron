@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 15 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 14 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -71,7 +71,6 @@ These are recommended checks for future implementation and regression coverage. 
 <!-- prettier-ignore -->
 | ID     | Priority | Status   | Difference                      | Plain English                                                                         | Why it matters                                                                              | Evidence                                                                       |
 | ------ | -------- | -------- | ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| DOC-07 | **P2**   | Partial  | GitHub connect action           | Issues depend on existing `gh` auth; Doctor lacks a full guided connect flow.         | New users can get stuck outside the app.                                                    | **E:** Doctor/issues routes. **N:** GitHub connection views.                   |
 | ONB-01 | **P2**   | Partial  | Onboarding gates                | Electron checks core setup but not every native integration/readiness gate.           | Setup can finish while a chosen workflow is not ready.                                      | **E:** `OnboardingOverlay.tsx`. **N:** `OnboardingViews.swift`.                |
 
 ## Analytics decision — blocked

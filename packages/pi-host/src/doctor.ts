@@ -326,6 +326,15 @@ function readSignedInProviders(home: string): string[] {
   return [];
 }
 
+/** DOC-07 (native openGitHubSetupInTerminal): the guided gh INSTALL half.
+ * Per-platform package-manager constants (SAFE_FIX_COMMAND-compatible);
+ * linux has no universal manager, so it stays detail-only (cli.github.com). */
+export function ghInstallFixCommand(platform: NodeJS.Platform): string | undefined {
+  if (platform === "win32") return "winget install --id GitHub.cli";
+  if (platform === "darwin") return "brew install gh";
+  return undefined;
+}
+
 export async function runDoctor(
   home: string = homedir(),
   projectPath?: string,
@@ -423,11 +432,13 @@ export async function runDoctor(
   const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
   const ghVersion = await probeVersion(ghBin);
   if (!ghVersion) {
+    const ghInstall = ghInstallFixCommand(process.platform);
     checks.push({
       id: "github",
       label: "GitHub CLI",
       status: "warn",
       detail: "gh not on PATH — the Issues screen needs the GitHub CLI (install gh)",
+      fixCommand: ghInstall,
     });
   } else {
     const authed = await probeSuccess(ghBin, ["auth", "status"]);

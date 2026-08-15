@@ -23,6 +23,7 @@ import {
   parseNodeVersion,
   probeVersion,
   resolveDoctorAgentDir,
+  ghInstallFixCommand,
   runDoctor,
   summarizeSettings,
   webAccessChecks,
@@ -488,6 +489,31 @@ describe("pi-version repair fix (DOC-03)", () => {
     } finally {
       if (previous === undefined) delete process.env.AGENT_DECK_PI_PATH;
       else process.env.AGENT_DECK_PI_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gh install guidance (DOC-07)", () => {
+  it("selects the per-platform install command deterministically for ALL platforms", () => {
+    expect(ghInstallFixCommand("win32")).toBe("winget install --id GitHub.cli");
+    expect(ghInstallFixCommand("darwin")).toBe("brew install gh");
+    expect(ghInstallFixCommand("linux")).toBeUndefined();
+  });
+
+  it("a MISSING gh carries a platform-appropriate runnable install command", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "doctor-doc07-"));
+    const previous = process.env.AGENT_DECK_GH_BIN;
+    process.env.AGENT_DECK_GH_BIN = path.join(dir, "definitely-not-gh");
+    try {
+      const report = await runDoctor(dir);
+      const github = report.checks.find((check) => check.id === "github");
+      expect(github).toBeDefined();
+      expect(github!.status).toBe("warn");
+      expect(github!.fixCommand).toBe(ghInstallFixCommand(process.platform));
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_DECK_GH_BIN;
+      else process.env.AGENT_DECK_GH_BIN = previous;
       rmSync(dir, { recursive: true, force: true });
     }
   });

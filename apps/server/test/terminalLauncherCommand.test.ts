@@ -31,6 +31,9 @@ describe("command script builders (DOC-01)", () => {
   it("posix: sh script with the fix command and a keep-open read", () => {
     const script = buildPosixCommandScript("gh auth login");
     expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    // Finder-launched PATH misses Homebrew's dirs — the script augments them
+    // (DOC-07 Codex HIGH: `brew install gh` must resolve on Apple Silicon).
+    expect(script).toContain("/opt/homebrew/bin:/usr/local/bin");
     expect(script).toContain("gh auth login");
     expect(script).toContain("read");
     const nl = String.fromCharCode(10);
