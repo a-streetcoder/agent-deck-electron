@@ -40,6 +40,8 @@ interface Issue {
   projectId?: string | null;
   /** ISS-08: the issue TYPE from the raw REST payload (null when none). */
   type?: string | null;
+  /** ISS-09: closed rows carry why ("completed" | "not_planned" | null). */
+  stateReason?: string | null;
 }
 
 interface IssueComment {
@@ -117,6 +119,10 @@ export function IssuesScreen() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   // ISS-08: native's single-select issue-type facet (githubTypeFilter).
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  // ISS-09: native's close-reason filter. Native narrows the SEARCH QUERY by
+  // reason; we filter the loaded board client-side, which also works for the
+  // aggregate view (deviation noted in the slice commit).
+  const [reasonFilter, setReasonFilter] = useState<string | null>(null);
   // Native free-text search (IssuesScreen.searchFiltered): a lowercased substring
   // match over each item's searchableHaystack, applied AFTER the facet filters.
   const [searchQuery, setSearchQuery] = useState("");
@@ -203,6 +209,7 @@ export function IssuesScreen() {
     setLocalError(null);
     setIncompleteResults(false);
     setTypeFilter(null);
+    setReasonFilter(null);
     // The old repo's labels/assignees/authors don't apply to the new one.
     setLabelFilters([]);
     setAssigneeFilter(null);
@@ -421,6 +428,20 @@ export function IssuesScreen() {
     () => [...new Set(issues.flatMap((i) => (i.type ? [i.type] : [])))].sort(sortCI),
     [issues],
   );
+  const availableReasons = useMemo(
+    () =>
+      [
+        ...new Set(
+          issues.flatMap((i) =>
+            i.state.toLowerCase() === "closed" &&
+            (i.stateReason === "completed" || i.stateReason === "not_planned")
+              ? [i.stateReason]
+              : [],
+          ),
+        ),
+      ].sort(sortCI),
+    [issues],
+  );
 
   // Client-side filter (native filteredBoardItems + searchFiltered): label OR +
   // assignee contains, then a lowercased substring search over the item's
@@ -431,6 +452,7 @@ export function IssuesScreen() {
     () =>
       issues.filter((issue) => {
         if (typeFilter && issue.type !== typeFilter) return false;
+        if (reasonFilter && issue.stateReason !== reasonFilter) return false;
         if (authorFilter && issue.author !== authorFilter) return false;
         if (assigneeFilter && !issue.assignees.includes(assigneeFilter)) return false;
         if (labelFilters.length && !labelFilters.some((l) => issue.labels.includes(l)))
@@ -450,18 +472,20 @@ export function IssuesScreen() {
         }
         return true;
       }),
-    [issues, typeFilter, authorFilter, assigneeFilter, labelFilters, search],
+    [issues, typeFilter, reasonFilter, authorFilter, assigneeFilter, labelFilters, search],
   );
   const filtersActive =
     labelFilters.length > 0 ||
     assigneeFilter !== null ||
     authorFilter !== null ||
-    typeFilter !== null;
+    typeFilter !== null ||
+    reasonFilter !== null;
   const clearFilters = (): void => {
     setLabelFilters([]);
     setAssigneeFilter(null);
     setAuthorFilter(null);
     setTypeFilter(null);
+    setReasonFilter(null);
   };
 
   // Prune selections that no longer exist in the reloaded board (e.g. after a
@@ -476,7 +500,8 @@ export function IssuesScreen() {
     setAssigneeFilter((prev) => (prev && !availableAssignees.includes(prev) ? null : prev));
     setAuthorFilter((prev) => (prev && !availableAuthors.includes(prev) ? null : prev));
     setTypeFilter((prev) => (prev && !availableTypes.includes(prev) ? null : prev));
-  }, [availableLabels, availableAssignees, availableAuthors, availableTypes]);
+    setReasonFilter((prev) => (prev && !availableReasons.includes(prev) ? null : prev));
+  }, [availableLabels, availableAssignees, availableAuthors, availableTypes, availableReasons]);
 
   if (!project) {
     return (
@@ -794,6 +819,8 @@ export function IssuesScreen() {
                         // Clear synchronously with the query change rather than
                         // leaving the previous state's notice until the effect runs.
                         setIncompleteResults(false);
+                        // the close-reason facet is scoped to the closed board
+                        setReasonFilter(null);
                         setStateFilter(s);
                       }}
                     >
@@ -854,8 +881,8 @@ export function IssuesScreen() {
                 role="status"
                 aria-live="polite"
               >
-                Showing the first 50 issues returned by GitHub. Search and label, assignee, and
-                author filters apply only to these results.
+                Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
+                type, and close-reason filters apply only to these results.
               </div>
             ) : null}
 
@@ -865,7 +892,8 @@ export function IssuesScreen() {
             (availableLabels.length > 0 ||
               availableAssignees.length > 0 ||
               availableAuthors.length > 0 ||
-              availableTypes.length > 0) ? (
+              availableTypes.length > 0 ||
+              availableReasons.length > 0) ? (
               <div className="flex flex-wrap items-center gap-1.5 pb-3" data-testid="issues-facets">
                 {availableTypes.length > 0 ? (
                   <div className="flex items-center gap-1" data-testid="issues-type-filter">
@@ -886,6 +914,30 @@ export function IssuesScreen() {
                           onClick={() => setTypeFilter(on ? null : issueType)}
                         >
                           {issueType}
+                        </ControlButton>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {availableReasons.length > 0 ? (
+                  <div className="flex items-center gap-1" data-testid="issues-reason-filter">
+                    <CheckCircle2 size={12} className="text-text-muted" aria-hidden />
+                    {availableReasons.map((reason) => {
+                      const on = reasonFilter === reason;
+                      return (
+                        <ControlButton
+                          key={reason}
+                          data-testid={`issues-reason-${reason}`}
+                          aria-pressed={on}
+                          className={cn(
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                            on
+                              ? "border-border-strong bg-selection text-text-primary"
+                              : "border-border-subtle text-text-muted hover:text-text-primary",
+                          )}
+                          onClick={() => setReasonFilter(on ? null : reason)}
+                        >
+                          {reason.toLowerCase().replaceAll("_", " ")}
                         </ControlButton>
                       );
                     })}

@@ -41,6 +41,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("close-reason facet (ISS-09)", () => {
+  it("filters closed rows by state reason", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("state=closed")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [
+              { ...issue(1), title: "Done work", state: "closed", stateReason: "completed" },
+              { ...issue(2), title: "Dropped work", state: "closed", stateReason: "not_planned" },
+            ],
+            incompleteResults: false,
+          }),
+        );
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(jsonResponse({ issues: [], incompleteResults: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByTestId("issues-state-closed"));
+    await screen.findByText("Done work");
+    // the reason facet appears for closed rows and filters client-side
+    fireEvent.click(screen.getByTestId("issues-reason-not_planned"));
+    await waitFor(() => {
+      expect(screen.queryByText("Done work")).toBeNull();
+      expect(screen.getByText("Dropped work")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("issues-reason-not_planned"));
+    await screen.findByText("Done work");
+  });
+
+  it("a reopened OPEN row never feeds the close-reason facet", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/issues")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [{ ...issue(3), title: "Back again", state: "open", stateReason: "reopened" }],
+            incompleteResults: false,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+    await screen.findByText("Back again");
+    expect(screen.queryByTestId("issues-reason-filter")).toBeNull();
+  });
+});
+
 describe("issue type facet (ISS-08)", () => {
   it("filters the loaded board by issue type", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -291,7 +346,7 @@ describe("issues incomplete-results notice", () => {
     expect(notice.getAttribute("aria-live")).toBe("polite");
     expect(notice.textContent).toContain("first 50 issues returned by GitHub");
     expect(notice.textContent).toContain(
-      "Search and label, assignee, and author filters apply only to these results",
+      "Search and label, assignee, author, type, and close-reason filters apply only to these results",
     );
     expect(screen.getAllByTestId(/^issue-\d+$/)).toHaveLength(50);
   });
