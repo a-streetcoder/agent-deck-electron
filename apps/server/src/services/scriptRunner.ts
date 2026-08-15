@@ -55,13 +55,20 @@ import { TERMINAL_ENV_BLOCKLIST } from "./terminal.ts";
  * only connects to loopback — a script can never make the UI embed an arbitrary
  * external origin (the client also re-validates loopback at the iframe boundary).
  *
- * What it does NOT guarantee: that the confirmed listener is THIS run's own
- * process. If the script prints a loopback URL for a *different* already-running
- * service (a proxy target `→ http://localhost:8080`, a DB `localhost:5432`), the
- * blind connect confirms it and we'd report that unrelated loopback port. Bounded
- * to loopback and visible to the user, but a real limitation. TODO: adopt the
- * donor's socket→process-tree mapping (Get-NetTCPConnection OwningProcess on
- * win32) to bind the port to this run's own PID tree — deferred from Slice 15.
+ * Ownership (DEV-04, the donor's socket→process-tree mapping): after the
+ * confirm probe, the listener's owning pid(s) are resolved from the OS socket
+ * table (win32 `netstat -ano`; POSIX `lsof -iTCP -sTCP:LISTEN`) and checked
+ * against this run's own process tree (a ppid walk over `Get-CimInstance
+ * Win32_Process` / `ps -eo pid=,ppid=`). A port whose listener is provably a
+ * foreign process — a proxy target `→ http://localhost:8080`, a DB
+ * `localhost:5432` — is never reported. When the platform cannot answer (tool
+ * missing, parse failure, no visible owner), we fall back to confirmed-listening
+ * rather than break the preview: ownership is a correctness upgrade on top of
+ * the loopback security boundary, not a trust boundary itself. Known snapshot
+ * limits, shared with the donor: pid reuse/reparenting between the two lookups
+ * can misjudge a daemonizing server, and a candidate whose ownership is
+ * UNKNOWN can still win the single server slot before a later provably-owned
+ * port (strictly no worse than the pre-ownership behavior).
  *
  * ## Scope-owned child (acquireRelease), streaming, tree-kill
  *
@@ -183,6 +190,12 @@ export interface ScriptHandle {
 /** A loopback TCP confirm probe: does something accept a connection on `port`? */
 export type PortProber = (port: number) => Promise<boolean>;
 
+/** Pids owning a LISTEN socket on `port`: `null` when the platform can't say. */
+export type PortOwnersResolver = (port: number) => Promise<readonly number[] | null>;
+
+/** The live pid → ppid table, or `null` when the platform can't provide one. */
+export type ProcessTableReader = () => Promise<ReadonlyMap<number, number> | null>;
+
 export interface ScriptSpawnOptions {
   readonly commandId: string;
   /** Working directory — the owning session's cwd (worktree-aware `meta.cwd`). */
@@ -193,6 +206,9 @@ export interface ScriptSpawnOptions {
   /** Full server-owned launch override for process-behavior tests. */
   readonly launch?: ScriptLaunch;
   readonly probePort?: PortProber;
+  /** Ownership seams (DEV-04) — default to the real OS socket/process tables. */
+  readonly resolvePortOwners?: PortOwnersResolver;
+  readonly readProcessTable?: ProcessTableReader;
   readonly maxScrollbackChars?: number;
 }
 
@@ -469,6 +485,120 @@ const defaultProbePort: PortProber = (port) =>
   });
 
 /**
+ * Is `owner` the root pid or one of its descendants? Walks `owner`'s ppid chain
+ * upward through `table`, bounded by the table size so a corrupt/cyclic table
+ * terminates. Exported for unit tests.
+ */
+export function pidWithinTree(
+  owner: number,
+  root: number,
+  table: ReadonlyMap<number, number>,
+): boolean {
+  let current = owner;
+  for (let steps = 0; steps <= table.size; steps += 1) {
+    if (current === root) return true;
+    const parent = table.get(current);
+    if (parent === undefined || parent === current) return false;
+    current = parent;
+  }
+  return false;
+}
+
+/** Run a diagnostic command and capture stdout, `null` on any failure/timeout. */
+function captureCommand(executable: string, argv: readonly string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let output = "";
+    const done = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    let child: ReturnType<typeof nodeSpawn>;
+    try {
+      child = nodeSpawn(executable, [...argv], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(null);
+    }, OWNERSHIP_COMMAND_TIMEOUT_MS);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (output.length < OWNERSHIP_OUTPUT_CAP) output += chunk.toString("utf8");
+    });
+    child.once("error", () => done(null));
+    child.once("close", (code) => done(code === 0 ? output : null));
+  });
+}
+
+/** Bound for the one-shot netstat/lsof/ps/CIM ownership lookups. */
+const OWNERSHIP_COMMAND_TIMEOUT_MS = 10_000;
+/** Enough for even a huge socket/process table; beyond it we stop appending. */
+const OWNERSHIP_OUTPUT_CAP = 4 * 1024 * 1024;
+
+/**
+ * Default owners lookup: which pids hold a LISTEN socket on `port`?
+ * win32 parses `netstat -ano` (both address families; the local-address column
+ * ends `:port`); elsewhere `lsof -nP -iTCP:port -sTCP:LISTEN -Fp` prints
+ * `p<pid>` lines. `null` = undeterminable, `[]` = table parsed but no visible
+ * owner (both fall back to confirmed-listening — see the module doc).
+ */
+export const defaultResolvePortOwners: PortOwnersResolver = async (port) => {
+  if (process.platform === "win32") {
+    const out = await captureCommand("netstat", ["-ano"]);
+    if (out === null) return null;
+    const owners: number[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      // The state word is LOCALIZED (LISTENING/ABHÖREN/…), so don't match it.
+      // Any TCP row whose LOCAL address ends `:port` is owned by the listening
+      // process: the LISTEN row itself plus its accepted-connection rows — a
+      // loopback client's local port is always ephemeral, never the server's.
+      const match = /^\s*TCP\s+(\S+)\s+\S+\s+\S+\s+(\d+)\s*$/i.exec(line);
+      if (!match || !match[1]!.endsWith(`:${port}`)) continue;
+      const pid = Number.parseInt(match[2]!, 10);
+      if (Number.isInteger(pid) && pid > 0 && !owners.includes(pid)) owners.push(pid);
+    }
+    return owners;
+  }
+  const out = await captureCommand("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"]);
+  // lsof exits 1 both for "nothing matched" and real errors — either way we
+  // could not name an owner, so report undeterminable rather than an empty set.
+  if (out === null) return null;
+  const owners: number[] = [];
+  for (const line of out.split("\n")) {
+    const match = /^p(\d+)$/.exec(line.trim());
+    if (!match) continue;
+    const pid = Number.parseInt(match[1]!, 10);
+    if (Number.isInteger(pid) && pid > 0 && !owners.includes(pid)) owners.push(pid);
+  }
+  return owners;
+};
+
+/** Default pid → ppid table: PowerShell CIM on win32, `ps -eo pid=,ppid=` elsewhere. */
+export const defaultReadProcessTable: ProcessTableReader = async () => {
+  const out =
+    process.platform === "win32"
+      ? await captureCommand("powershell", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }',
+        ])
+      : await captureCommand("ps", ["-eo", "pid=,ppid="]);
+  if (out === null) return null;
+  const table = new Map<number, number>();
+  for (const line of out.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (!match) continue;
+    table.set(Number.parseInt(match[1]!, 10), Number.parseInt(match[2]!, 10));
+  }
+  return table.size > 0 ? table : null;
+};
+
+/**
  * Cap the scrollback buffer by characters, trimming the oldest output, rounded
  * to a code-point boundary (terminal.ts parity: a raw UTF-16 slice opening on a
  * low surrogate would render as U+FFFD in every future replay).
@@ -592,6 +722,8 @@ export const spawnScript = (
         }
         const env = buildScriptEnv(baseEnv, options.cwd);
         const probePort = options.probePort ?? defaultProbePort;
+        const resolvePortOwners = options.resolvePortOwners ?? defaultResolvePortOwners;
+        const readProcessTable = options.readProcessTable ?? defaultReadProcessTable;
 
         const proc = yield* Effect.try({
           try: () =>
@@ -626,10 +758,31 @@ export const spawnScript = (
         const considerPort = (port: number): void => {
           if (seenPorts.has(port)) return;
           seenPorts.add(port);
-          void probePort(port).then((listening) => {
+          void probePort(port).then(async (listening) => {
             // A port is eligible only because this child printed its loopback
             // URL. defaultPort metadata is advisory and never triggers a probe.
             if (!listening || abandoned || server !== null || Option.isSome(exitState)) return;
+            // DEV-04: bind the confirmed listener to this run's own pid tree.
+            // Reject only on PROOF of a foreign owner: every owner must be
+            // PRESENT in the table and none within this run's tree — an owner
+            // the snapshot missed is unknown, not foreign (Codex). A rejected
+            // lookup is likewise unknown, never an unhandled rejection. Both
+            // fall back to confirmed-listening (see the module doc).
+            try {
+              const owners = await resolvePortOwners(port);
+              if (owners !== null && owners.length > 0) {
+                const table = await readProcessTable();
+                if (
+                  table !== null &&
+                  owners.every((owner) => table.has(owner)) &&
+                  !owners.some((owner) => pidWithinTree(owner, proc.pid, table))
+                )
+                  return;
+              }
+            } catch {
+              // ownership undeterminable — fall through to confirmed-listening
+            }
+            if (abandoned || server !== null || Option.isSome(exitState)) return;
             server = loopbackServer(port);
             dispatch({ _tag: "Server", server });
           });

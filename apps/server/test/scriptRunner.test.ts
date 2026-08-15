@@ -6,8 +6,11 @@ import { Effect, Either, Exit, Scope } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeServerRuntime } from "../src/runtime.ts";
 import {
+  defaultReadProcessTable,
+  defaultResolvePortOwners,
   extractLoopbackPorts,
   listProjectScripts,
+  pidWithinTree,
   resolveProjectServerLaunch,
   ScriptRunner,
   spawnScript,
@@ -84,13 +87,16 @@ function fakeAdapter(): {
   };
 }
 
-/** Base spawn options: a command override (bypasses package.json) + always-true probe. */
+/** Base spawn options: a command override (bypasses package.json) + always-true probe.
+ * Ownership is pinned "unknown" so choreographed tests never shell out to
+ * netstat/ps — and never flake on whatever really listens on the fake port. */
 const okProbe: PortProber = async () => true;
 const baseOpts = {
   commandId: "test",
   cwd: process.cwd(),
   launch: { executable: "noop", argv: [], command: "noop" },
   probePort: okProbe,
+  resolvePortOwners: async () => null,
 };
 
 // Let the microtask that the confirm probe schedules run.
@@ -570,6 +576,157 @@ describe("spawnScript scoped child service (fake adapter)", () => {
       }),
     );
   }, 10_000);
+});
+
+// --- Port ownership (DEV-04, donor socket→process-tree mapping) -------------
+
+describe("port ownership (DEV-04)", () => {
+  it("pidWithinTree walks the ppid chain upward, bounded against cycles", () => {
+    const table = new Map([
+      [100, 1],
+      [200, 100],
+      [300, 200],
+      [999, 999],
+      [500, 501],
+      [501, 500],
+    ]);
+    expect(pidWithinTree(100, 100, table)).toBe(true); // the root itself
+    expect(pidWithinTree(300, 200, table)).toBe(true); // direct child
+    expect(pidWithinTree(300, 100, table)).toBe(true); // grandchild chain
+    expect(pidWithinTree(200, 300, table)).toBe(false); // wrong direction
+    expect(pidWithinTree(999, 100, table)).toBe(false); // unrelated (self-parented)
+    expect(pidWithinTree(500, 100, table)).toBe(false); // a ppid cycle terminates
+    expect(pidWithinTree(42, 100, table)).toBe(false); // absent from the table
+  });
+
+  it("suppresses a confirmed port whose listener is provably outside this run's tree", async () => {
+    const { adapter, procs } = fakeAdapter();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawnScript(adapter, {
+            ...baseOpts,
+            // Something accepts on 5173, but it is pid 7777 under init — not
+            // a descendant of the fake child (pid 4321).
+            resolvePortOwners: async () => [7777],
+            readProcessTable: async () => new Map([[7777, 1]]),
+          });
+          const events: ScriptEvent[] = [];
+          yield* handle.attach((event) => events.push(event));
+          procs[0]!.emitData("proxying to http://localhost:5173/\n");
+          yield* Effect.promise(flush);
+          expect(events.filter((e) => e._tag === "Server")).toEqual([]);
+          const attachment = yield* handle.attach(() => {});
+          expect(attachment.server).toBeNull();
+        }),
+      ),
+    );
+  });
+
+  it("reports a confirmed port owned by a descendant of the spawned child", async () => {
+    const { adapter, procs } = fakeAdapter();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawnScript(adapter, {
+            ...baseOpts,
+            // The listener (300) is a grandchild of the fake child: 300 → 200 → 4321.
+            resolvePortOwners: async () => [300],
+            readProcessTable: async () =>
+              new Map([
+                [300, 200],
+                [200, 4321],
+                [4321, 1],
+              ]),
+          });
+          const events: ScriptEvent[] = [];
+          yield* handle.attach((event) => events.push(event));
+          procs[0]!.emitData("ready at http://localhost:5173/\n");
+          yield* Effect.promise(flush);
+          expect(events.filter((e) => e._tag === "Server")).toEqual([
+            {
+              _tag: "Server",
+              server: { host: "localhost", port: 5173, url: "http://localhost:5173" },
+            },
+          ]);
+        }),
+      ),
+    );
+  });
+
+  it("treats an owner the process-table snapshot missed as unknown, not foreign", async () => {
+    const { adapter, procs } = fakeAdapter();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawnScript(adapter, {
+            ...baseOpts,
+            // The listener pid is real, but the (racy/truncated) table snapshot
+            // never captured it — that is NOT proof of a foreign owner.
+            resolvePortOwners: async () => [300],
+            readProcessTable: async () => new Map([[4321, 1]]),
+          });
+          const events: ScriptEvent[] = [];
+          yield* handle.attach((event) => events.push(event));
+          procs[0]!.emitData("ready at http://localhost:5173/\n");
+          yield* Effect.promise(flush);
+          expect(events.filter((e) => e._tag === "Server")).toHaveLength(1);
+        }),
+      ),
+    );
+  });
+
+  it("falls back to confirmed-listening when ownership cannot be determined", async () => {
+    const rejecting = async (): Promise<readonly number[] | null> => {
+      throw new Error("no socket table on this platform");
+    };
+    for (const resolvePortOwners of [async () => null, async () => [], rejecting]) {
+      const { adapter, procs } = fakeAdapter();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* spawnScript(adapter, { ...baseOpts, resolvePortOwners });
+            const events: ScriptEvent[] = [];
+            yield* handle.attach((event) => events.push(event));
+            procs[0]!.emitData("ready at http://localhost:5173/\n");
+            yield* Effect.promise(flush);
+            expect(events.filter((e) => e._tag === "Server")).toHaveLength(1);
+          }),
+        ),
+      );
+    }
+  });
+
+  it("real resolvers see this test process owning its own loopback listener", async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = listener.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      expect(port).toBeGreaterThan(0);
+      const owners = await defaultResolvePortOwners(port);
+      // A platform without the lookup tool (e.g. lsof-less minimal Linux) is a
+      // SUPPORTED fallback configuration, not a failure — nothing to pin there.
+      if (owners !== null) {
+        expect(owners).toContain(process.pid);
+      }
+      const table = await defaultReadProcessTable();
+      if (table !== null) {
+        expect(table.has(process.pid)).toBe(true);
+        expect(pidWithinTree(process.pid, process.pid, table)).toBe(true);
+      }
+      // On the platforms we actually develop/CI on, both must answer for real.
+      if (process.platform === "win32" || process.platform === "darwin") {
+        expect(owners).not.toBeNull();
+        expect(table).not.toBeNull();
+      }
+    } finally {
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
+  }, 30_000);
 });
 
 // --- Real child-process smoke test -----------------------------------------
