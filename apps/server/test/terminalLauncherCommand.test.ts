@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPosixCommandScript,
+  buildPosixPiUpdateScript,
   buildWindowsCommandScript,
+  buildWindowsPiUpdateScript,
   createExternalCommandLauncher,
   findDoctorFixCommand,
   planExternalCommandLaunch,
+  planPiUpdateLaunch,
 } from "../src/terminalLauncher.ts";
 
 /**
@@ -103,6 +106,103 @@ describe("createExternalCommandLauncher", () => {
       resolveCommand: () => null,
     });
     await expect(launcher.run("gh auth login")).rejects.toThrow(/no supported terminal/i);
+  });
+});
+
+describe("pi self-update in terminal (DOC-02, native openPiSelfUpdateInTerminal)", () => {
+  it("windows: the RESOLVED pi path is batch-quoted (spaces, %%) around `update pi`", () => {
+    const script = buildWindowsPiUpdateScript(String.raw`C:\tools dir\pi.cmd`);
+    expect(script).toContain(String.raw`"C:\tools dir\pi.cmd" update pi`);
+    expect(script).toContain("pause");
+    expect(script).toContain("chcp 65001");
+    // Delayed expansion explicitly OFF so a legal `!` in a path stays inert.
+    expect(script).toContain("setlocal disabledelayedexpansion");
+    // A real % in the path is doubled (pinned with an actual percent).
+    expect(buildWindowsPiUpdateScript(String.raw`C:\100%dir\pi.cmd`)).toContain(
+      String.raw`"C:\100%%dir\pi.cmd" update pi`,
+    );
+    const nl = String.fromCharCode(10);
+    expect(() => buildWindowsPiUpdateScript("C:" + nl + "del x")).toThrow(/path/i);
+  });
+
+  it("posix: the resolved path is single-quoted around `update pi`, window kept open", () => {
+    const script = buildPosixPiUpdateScript("/usr/local/bin dir/pi");
+    expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(script).toContain("'/usr/local/bin dir/pi' update pi");
+    expect(script).toContain("read");
+  });
+
+  it("plans per platform like the fix flow (win32 script, darwin open, linux trio)", () => {
+    const pi = "/usr/local/bin/pi";
+    expect(planPiUpdateLaunch("win32", "C:\\pi.cmd", () => null)).toEqual({
+      kind: "winScript",
+      script: buildWindowsPiUpdateScript("C:\\pi.cmd"),
+    });
+    const resolve = (name: string) => (name === "open" ? "/usr/bin/open" : null);
+    expect(planPiUpdateLaunch("darwin", pi, resolve)).toEqual({
+      kind: "macScript",
+      open: "/usr/bin/open",
+      script: buildPosixPiUpdateScript(pi),
+    });
+    const only = (available: string) => (name: string) =>
+      name === available ? `/usr/bin/${available}` : null;
+    expect(planPiUpdateLaunch("linux", pi, only("konsole"))).toEqual({
+      kind: "linuxScript",
+      terminal: "/usr/bin/konsole",
+      argsPrefix: ["-e"],
+      script: buildPosixPiUpdateScript(pi),
+    });
+    expect(planPiUpdateLaunch("sunos", pi, () => "/bin/x")).toBeNull();
+  });
+
+  it("runPiUpdate resolves pi server-side and launches the update script", async () => {
+    const { mkdtempSync, writeFileSync: writeF } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "agent-deck-doc02-"));
+    const piStub = join(dir, "pi.cmd");
+    writeF(piStub, "@echo off");
+    const child = {
+      on: vi.fn(),
+      once: vi.fn((event: string, cb: (code?: number) => void) => {
+        if (event === "close") queueMicrotask(() => cb(0));
+      }),
+      unref: vi.fn(),
+    };
+    const spawnFn = vi.fn(() => child);
+    const launcher = createExternalCommandLauncher({
+      platform: "win32",
+      spawnFn,
+      env: { AGENT_DECK_PI_PATH: piStub },
+      resolveCommand: () => null,
+    });
+    await launcher.runPiUpdate();
+    const [command, args] = spawnFn.mock.calls[0]! as unknown as [string, string[]];
+    expect(command).toBe("start");
+    const scriptPath = args[1]!.replaceAll("^", "").replaceAll('"', "");
+    expect(readFileSync(scriptPath, "utf8")).toBe(buildWindowsPiUpdateScript(piStub));
+  });
+
+  it("refuses to self-update the app-BUNDLED pi (application-owned files)", async () => {
+    const launcher = createExternalCommandLauncher({
+      platform: "win32",
+      spawnFn: vi.fn(),
+      resolveCommand: () => null,
+      resolvePi: () => ({ path: String.raw`C:\app\resources\pi.cmd`, source: "bundled" }),
+    });
+    await expect(launcher.runPiUpdate()).rejects.toThrow(/bundled/i);
+  });
+
+  it("maps a missing pi to a stable public message", async () => {
+    const launcher = createExternalCommandLauncher({
+      platform: "win32",
+      spawnFn: vi.fn(),
+      // An explicit override pointing nowhere fails loudly (PiNotFoundError) —
+      // an empty PATH alone would still resolve the bundled pi dependency.
+      env: { AGENT_DECK_PI_PATH: String.raw`C:\gone\pi.cmd` },
+      resolveCommand: () => null,
+    });
+    await expect(launcher.runPiUpdate()).rejects.toThrow(/pi could not be found/i);
   });
 });
 

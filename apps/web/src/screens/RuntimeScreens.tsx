@@ -302,6 +302,44 @@ function RunFixButton({ checkId, projectId }: { checkId: string; projectId?: str
   );
 }
 
+/** DOC-02 (native openPiSelfUpdateInTerminal): update pi in the user's own
+ * terminal — no data crosses the wire; the server resolves its own binary. */
+function UpdatePiButton() {
+  const [state, setState] = useState<"idle" | "busy" | "opened" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  const run = (): void => {
+    setState("busy");
+    void fetch("/runtime/doctor/update-pi", { method: "POST" })
+      .then((response) => {
+        setState(response.ok ? "opened" : "failed");
+      })
+      .catch(() => setState("failed"))
+      .finally(() => {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setState("idle"), 2000);
+      });
+  };
+
+  return (
+    <ControlButton
+      data-testid="doctor-update-pi"
+      title="Update pi in your terminal (pi update pi)"
+      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+      disabled={state === "busy"}
+      onClick={run}
+    >
+      <SquareTerminal size={11} />
+      {state === "opened" ? "Opened" : state === "failed" ? "Failed" : "Update pi"}
+    </ControlButton>
+  );
+}
+
 /** Copy a check's suggested fix command; flips to "Copied" briefly (native Doctor Fix). */
 function CopyFixButton({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
@@ -503,6 +541,7 @@ export function DoctorScreen() {
                     {check.detail}
                   </div>
                 </div>
+                {check.id === "pi-version" ? <UpdatePiButton /> : null}
                 {check.fixCommand ? (
                   <div className="flex shrink-0 items-center gap-1">
                     {check.runnableFix ? (

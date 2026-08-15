@@ -58,6 +58,23 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     enabledExtensionPaths,
   } = ctx;
 
+  // Browser-CSRF guard for the terminal-launching POSTs (Codex): a hostile
+  // webpage can fire a no-cors POST at a discovered loopback port; browsers
+  // attach an Origin header to those, while the app's own renderer fetches are
+  // same-origin. Reject any cross-origin browser request. (The platform-wide
+  // control-plane posture is documented in apps/desktop/main.js — this narrows
+  // the two routes that OPEN TERMINALS.)
+  const rejectCrossOrigin = (request: { headers: Record<string, unknown> }): boolean => {
+    const origin = request.headers.origin;
+    const host = request.headers.host;
+    if (typeof origin !== "string" || origin.length === 0) return false;
+    try {
+      return new URL(origin).host !== host;
+    } catch {
+      return true; // an unparseable Origin is not the app's renderer
+    }
+  };
+
   // The default fix-terminal launcher, created once (its scratch dir is
   // shared across launches); tests inject ctx.fixTerminal instead.
   let fixTerminalSingleton: ExternalCommandLauncher | null = null;
@@ -163,6 +180,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // server's own doctor fixCommand constant, re-resolved here at USE time
   // (findDoctorFixCommand is the boundary — client text never launches).
   fastify.post("/runtime/doctor/fix", async (request, reply) => {
+    if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
+      return reply.status(403).send({ error: "cross-origin requests are not allowed" });
+    }
     const { checkId, projectId } = (request.body ?? {}) as {
       checkId?: unknown;
       projectId?: unknown;
@@ -181,6 +201,26 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       // Stable public message; the detail stays in the server log (Codex).
       console.error("[doctor] fix launch failed:", error);
       return reply.status(500).send({ error: "The fix could not be launched in a terminal." });
+    }
+    return { ok: true };
+  });
+
+  // DOC-02 (native openPiSelfUpdateInTerminal): update pi in the user's own
+  // terminal. NO client data is consumed at all — the server resolves its own
+  // pi binary and composes the whole script (the resolved path is quoted by
+  // the launcher's batch/posix quoters, the same rule as TER-01's resume).
+  fastify.post("/runtime/doctor/update-pi", async (request, reply) => {
+    if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
+      return reply.status(403).send({ error: "cross-origin requests are not allowed" });
+    }
+    try {
+      await (ctx.fixTerminal ?? defaultFixTerminal()).runPiUpdate();
+    } catch (error) {
+      // Stable public message; the detail stays in the server log.
+      console.error("[doctor] pi update launch failed:", error);
+      return reply
+        .status(500)
+        .send({ error: "The pi update could not be launched in a terminal." });
     }
     return { ok: true };
   });

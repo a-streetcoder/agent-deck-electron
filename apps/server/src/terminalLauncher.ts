@@ -93,20 +93,24 @@ export function buildResumeScript(cwd: string, piBinary: string, sessionRef: str
  * script carrying every argument internally (a quoted argument AFTER the
  * program breaks `start`'s parsing — proven by execution, not reasoning).
  */
+/** Double-quote a PATH value for a batch line: `%` doubled, control chars and
+ * embedded quotes (invalid in Windows paths anyway) REJECTED, never escaped. */
+function quoteBatch(value: string): string {
+  // eslint-disable-next-line no-control-regex -- control chars ARE the hazard rejected here
+  if (/[\u0000-\u001f\u007f"]/.test(value)) {
+    throw new Error("This path cannot be launched in a Windows terminal.");
+  }
+  return `"${value.replaceAll("%", "%%")}"`;
+}
+
 export function buildWindowsResumeScript(
   cwd: string,
   piBinary: string,
   sessionRef: string,
 ): string {
-  const quoteBatch = (value: string): string => {
-    // eslint-disable-next-line no-control-regex -- control chars ARE the hazard rejected here
-    if (/[\u0000-\u001f\u007f"]/.test(value)) {
-      throw new Error("This session's paths cannot be launched in a Windows terminal.");
-    }
-    return `"${value.replaceAll("%", "%%")}"`;
-  };
   return [
     "@echo off",
+    "setlocal disabledelayedexpansion",
     // The file is WRITTEN as UTF-8; cmd re-reads batch files line by line, so
     // switching the code page up front makes the later non-ASCII path lines
     // parse as the bytes we wrote (a legacy ANSI code page would corrupt them).
@@ -214,6 +218,8 @@ export interface ExternalTerminalLauncherOptions {
   readonly env?: NodeJS.ProcessEnv;
   /** PATH-probe override for tests; defaults to editorLauncher's resolver. */
   readonly resolveCommand?: (name: string) => string | null;
+  /** Pi resolution seam for tests; defaults to the real resolvePiBinary. */
+  readonly resolvePi?: () => { path: string; source: string };
 }
 
 export function createExternalTerminalLauncher(
@@ -377,7 +383,15 @@ function assertSingleLineCommand(command: string): void {
 /** One-shot batch script running a fix command; the window stays for reading. */
 export function buildWindowsCommandScript(command: string): string {
   assertSingleLineCommand(command);
-  return ["@echo off", "chcp 65001 >nul", "title Agent Deck", command, "pause", ""].join("\r\n");
+  return [
+    "@echo off",
+    "setlocal disabledelayedexpansion",
+    "chcp 65001 >nul",
+    "title Agent Deck",
+    command,
+    "pause",
+    "",
+  ].join("\r\n");
 }
 
 /** One-shot POSIX sh script running a fix command; keeps the window open. */
@@ -421,9 +435,68 @@ export function planExternalCommandLaunch(
   return null;
 }
 
+/** One-shot batch script updating pi in place (DOC-02, native
+ * terminalPiSelfUpdateCommand): the RESOLVED pi path, batch-quoted. */
+export function buildWindowsPiUpdateScript(piBinary: string): string {
+  return [
+    "@echo off",
+    "setlocal disabledelayedexpansion",
+    "chcp 65001 >nul",
+    "title Agent Deck",
+    `${quoteBatch(piBinary)} update pi`,
+    "pause",
+    "",
+  ].join("\r\n");
+}
+
+/** One-shot POSIX sh script updating pi in place; keeps the window open. */
+export function buildPosixPiUpdateScript(piBinary: string): string {
+  return [
+    "#!/bin/sh",
+    `${shellQuotePosix(piBinary)} update pi`,
+    "echo",
+    'printf "Press Enter to close."',
+    "read _",
+    "",
+  ].join("\n");
+}
+
+/** Compose the platform launch for the pi self-update script. Pure; null =
+ * no supported terminal (fail closed). Same shape as the fix-command plan. */
+export function planPiUpdateLaunch(
+  platform: NodeJS.Platform | string,
+  piBinary: string,
+  resolveCommand: (name: string) => string | null,
+): ExternalTerminalPlan | null {
+  if (platform === "win32") {
+    return { kind: "winScript", script: buildWindowsPiUpdateScript(piBinary) };
+  }
+  if (platform === "darwin") {
+    const open = resolveCommand("open");
+    if (open === null) return null;
+    return { kind: "macScript", open, script: buildPosixPiUpdateScript(piBinary) };
+  }
+  if (platform === "linux") {
+    const script = buildPosixPiUpdateScript(piBinary);
+    const xte = resolveCommand("x-terminal-emulator");
+    if (xte !== null) return { kind: "linuxScript", terminal: xte, argsPrefix: ["-e"], script };
+    const gnome = resolveCommand("gnome-terminal");
+    if (gnome !== null) return { kind: "linuxScript", terminal: gnome, argsPrefix: ["--"], script };
+    const konsole = resolveCommand("konsole");
+    if (konsole !== null) {
+      return { kind: "linuxScript", terminal: konsole, argsPrefix: ["-e"], script };
+    }
+    return null;
+  }
+  return null;
+}
+
 export interface ExternalCommandLauncher {
   /** Run one server-composed fix command in the user's terminal. */
   readonly run: (command: string) => Promise<void>;
+  /** Update pi in the user's terminal (DOC-02): the server resolves the pi
+   * binary itself — no input of any kind crosses the wire for this. */
+  readonly runPiUpdate: () => Promise<void>;
 }
 
 export function createExternalCommandLauncher(
@@ -450,6 +523,30 @@ export function createExternalCommandLauncher(
   return {
     run: async (command: string): Promise<void> => {
       const plan = planExternalCommandLaunch(platform, command, resolveCommand);
+      if (plan === null) {
+        throw new Error("No supported terminal application was found on this machine.");
+      }
+      await executeExternalPlan(plan, spawnFn, scriptPathFor);
+    },
+    runPiUpdate: async (): Promise<void> => {
+      let resolved: { path: string; source: string };
+      try {
+        resolved = (options.resolvePi ?? (() => resolvePiBinary(env(), platform)))();
+      } catch (error) {
+        // Stable public message; the detail (env paths) stays in the server log.
+        console.error("[terminal] pi resolution failed:", error);
+        if (error instanceof PiNotFoundError) {
+          throw new Error("Pi could not be found on this machine.");
+        }
+        throw new Error("Pi could not be resolved for the update.");
+      }
+      // The app-BUNDLED pi is application-owned (read-only/asar in packaged
+      // builds) and updates with the app itself — never self-update it (Codex).
+      if (resolved.source === "bundled") {
+        throw new Error("Pi is bundled with Agent Deck and updates with the app.");
+      }
+      const piBinary = resolved.path;
+      const plan = planPiUpdateLaunch(platform, piBinary, resolveCommand);
       if (plan === null) {
         throw new Error("No supported terminal application was found on this machine.");
       }
