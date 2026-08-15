@@ -57,7 +57,13 @@ export type ExternalTerminalPlan =
       readonly shell: boolean;
     }
   | { readonly kind: "macScript"; readonly open: string; readonly script: string }
-  | { readonly kind: "winScript"; readonly script: string };
+  | { readonly kind: "winScript"; readonly script: string }
+  | {
+      readonly kind: "linuxScript";
+      readonly terminal: string;
+      readonly argsPrefix: string[];
+      readonly script: string;
+    };
 
 /** POSIX single-quote: safe verbatim inside a shell script (native shellQuoted). */
 export function shellQuotePosix(value: string): string {
@@ -266,71 +272,219 @@ export function createExternalTerminalLauncher(
       throw new Error("No supported terminal application was found on this machine.");
     }
 
-    let command: string;
-    let args: string[];
-    let shell = false;
-    let cwd: string | undefined;
-    let isScriptPlan = false;
-    try {
-      if (plan.kind === "macScript") {
-        const scriptPath = scriptPathFor(".command");
-        writeFileSync(scriptPath, plan.script, "utf8");
-        chmodSync(scriptPath, 0o755);
-        command = plan.open;
-        args = [scriptPath];
-        isScriptPlan = true;
-      } else if (plan.kind === "winScript") {
-        const scriptPath = scriptPathFor(".cmd");
-        writeFileSync(scriptPath, plan.script, "utf8");
-        // The empirically verified form: title, then ONE quoted target.
-        command = "start";
-        args = ['""', escapeWindowsShellArg(scriptPath)];
-        shell = true;
-        isScriptPlan = true;
-      } else {
-        ({ command, shell } = plan);
-        args = plan.args;
-        cwd = plan.cwd;
-      }
-    } catch (error) {
-      // Stable public message; the detail (temp paths) stays in the server log.
-      console.error("[terminal] launch preparation failed:", error);
-      throw new Error("The external terminal launch could not be prepared.");
-    }
-    let child: ReturnType<TerminalSpawnLike>;
-    try {
-      child = spawnFn(command, args, {
-        detached: true,
-        stdio: "ignore",
-        shell,
-        ...(cwd !== undefined ? { cwd } : {}),
-      });
-    } catch (error) {
-      console.error("[terminal] external launch failed:", error);
-      throw new Error("The terminal application could not be started.");
-    }
-    // Launch handshake. Script plans run through a short-lived wrapper (`cmd`
-    // hosting start / `open`) whose EXIT CODE is the real verdict — a start
-    // parse failure or a missing .command association surfaces there, after
-    // the 'spawn' event already fired. Long-lived argv plans (wt, the linux
-    // terminals) settle on 'spawn' — their exit is the terminal's own life.
-    await new Promise<void>((resolve, reject) => {
-      const fail = (detail: unknown): void => {
-        console.error("[terminal] external launch failed:", detail);
-        reject(new Error("The terminal application could not be started."));
-      };
-      child.once("error", fail);
-      if (isScriptPlan) {
-        child.once("close", (code) => {
-          if (code === 0) resolve();
-          else fail(`launcher wrapper exited with code ${String(code)}`);
-        });
-      } else {
-        child.once("spawn", () => resolve());
-      }
-    });
-    child.unref();
+    await executeExternalPlan(plan, spawnFn, scriptPathFor);
   };
 
   return { open };
+}
+
+/**
+ * Execute a composed launch plan: script plans are written one-shot (unique
+ * name, delayed cleanup by the caller's scriptPathFor) and opened through the
+ * platform's window-owning wrapper; argv plans spawn directly. The handshake:
+ * script plans run through a short-lived wrapper (`cmd` hosting start / `open`
+ * / the linux terminal's forker) whose EXIT CODE is the real verdict; argv
+ * plans settle on 'spawn' — their exit is the terminal's own life.
+ */
+async function executeExternalPlan(
+  plan: ExternalTerminalPlan,
+  spawnFn: TerminalSpawnLike,
+  scriptPathFor: (extension: string) => string,
+): Promise<void> {
+  let command: string;
+  let args: string[];
+  let shell = false;
+  let cwd: string | undefined;
+  let isScriptPlan = false;
+  try {
+    if (plan.kind === "macScript") {
+      const scriptPath = scriptPathFor(".command");
+      writeFileSync(scriptPath, plan.script, "utf8");
+      chmodSync(scriptPath, 0o755);
+      command = plan.open;
+      args = [scriptPath];
+      isScriptPlan = true;
+    } else if (plan.kind === "winScript") {
+      const scriptPath = scriptPathFor(".cmd");
+      writeFileSync(scriptPath, plan.script, "utf8");
+      // The empirically verified form: title, then ONE quoted target.
+      command = "start";
+      args = ['""', escapeWindowsShellArg(scriptPath)];
+      shell = true;
+      isScriptPlan = true;
+    } else if (plan.kind === "linuxScript") {
+      const scriptPath = scriptPathFor(".sh");
+      writeFileSync(scriptPath, plan.script, "utf8");
+      chmodSync(scriptPath, 0o755);
+      command = plan.terminal;
+      args = [...plan.argsPrefix, scriptPath];
+      isScriptPlan = true;
+    } else {
+      ({ command, shell } = plan);
+      args = plan.args;
+      cwd = plan.cwd;
+    }
+  } catch (error) {
+    // Stable public message; the detail (temp paths) stays in the server log.
+    console.error("[terminal] launch preparation failed:", error);
+    throw new Error("The external terminal launch could not be prepared.");
+  }
+  let child: ReturnType<TerminalSpawnLike>;
+  try {
+    child = spawnFn(command, args, {
+      detached: true,
+      stdio: "ignore",
+      shell,
+      ...(cwd !== undefined ? { cwd } : {}),
+    });
+  } catch (error) {
+    console.error("[terminal] external launch failed:", error);
+    throw new Error("The terminal application could not be started.");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const fail = (detail: unknown): void => {
+      console.error("[terminal] external launch failed:", detail);
+      reject(new Error("The terminal application could not be started."));
+    };
+    child.once("error", fail);
+    if (isScriptPlan) {
+      child.once("close", (code) => {
+        if (code === 0) resolve();
+        else fail(`launcher wrapper exited with code ${String(code)}`);
+      });
+    } else {
+      child.once("spawn", () => resolve());
+    }
+  });
+  child.unref();
+}
+
+// ---------------------------------------------------------------------------
+// DOC-01 — run a Doctor fix command in the user's own terminal (native
+// openPiInstallInTerminal: a one-shot script, a real TTY, never a pipe).
+// The command is ALWAYS a server-composed doctor `fixCommand` constant — the
+// wire carries only a check id (see findDoctorFixCommand).
+// ---------------------------------------------------------------------------
+
+/** Reject control characters in a server-composed one-line command. */
+function assertSingleLineCommand(command: string): void {
+  // eslint-disable-next-line no-control-regex -- control chars ARE the hazard rejected here
+  if (/[\u0000-\u001f\u007f]/.test(command) || command.trim().length === 0) {
+    throw new Error("This fix command cannot be launched in a terminal.");
+  }
+}
+
+/** One-shot batch script running a fix command; the window stays for reading. */
+export function buildWindowsCommandScript(command: string): string {
+  assertSingleLineCommand(command);
+  return ["@echo off", "chcp 65001 >nul", "title Agent Deck", command, "pause", ""].join("\r\n");
+}
+
+/** One-shot POSIX sh script running a fix command; keeps the window open. */
+export function buildPosixCommandScript(command: string): string {
+  assertSingleLineCommand(command);
+  return ["#!/bin/sh", command, "echo", 'printf "Press Enter to close."', "read _", ""].join("\n");
+}
+
+/**
+ * Compose the platform launch for a one-shot fix command. Pure; null = no
+ * supported terminal (fail closed). win32 needs no wt: the script owns its
+ * console window via `start`.
+ */
+export function planExternalCommandLaunch(
+  platform: NodeJS.Platform | string,
+  command: string,
+  resolveCommand: (name: string) => string | null,
+): ExternalTerminalPlan | null {
+  if (platform === "win32") {
+    return { kind: "winScript", script: buildWindowsCommandScript(command) };
+  }
+  if (platform === "darwin") {
+    const open = resolveCommand("open");
+    if (open === null) return null;
+    return { kind: "macScript", open, script: buildPosixCommandScript(command) };
+  }
+  if (platform === "linux") {
+    const script = buildPosixCommandScript(command);
+    const xte = resolveCommand("x-terminal-emulator");
+    if (xte !== null) return { kind: "linuxScript", terminal: xte, argsPrefix: ["-e"], script };
+    const gnome = resolveCommand("gnome-terminal");
+    if (gnome !== null) {
+      return { kind: "linuxScript", terminal: gnome, argsPrefix: ["--"], script };
+    }
+    const konsole = resolveCommand("konsole");
+    if (konsole !== null) {
+      return { kind: "linuxScript", terminal: konsole, argsPrefix: ["-e"], script };
+    }
+    return null;
+  }
+  return null;
+}
+
+export interface ExternalCommandLauncher {
+  /** Run one server-composed fix command in the user's terminal. */
+  readonly run: (command: string) => Promise<void>;
+}
+
+export function createExternalCommandLauncher(
+  options: ExternalTerminalLauncherOptions = {},
+): ExternalCommandLauncher {
+  const platform = options.platform ?? process.platform;
+  const env = (): NodeJS.ProcessEnv => options.env ?? process.env;
+  const spawnFn: TerminalSpawnLike =
+    options.spawnFn ?? ((command, args, spawnOptions) => spawn(command, [...args], spawnOptions));
+  const resolveCommand =
+    options.resolveCommand ?? ((name: string) => resolveCommandPath(name, env(), platform));
+
+  let scriptDir: string | null = null;
+  let launchSeq = 0;
+  const scriptPathFor = (extension: string): string => {
+    scriptDir ??= mkdtempSync(nodePath.join(tmpdir(), "agent-deck-fix-"));
+    launchSeq += 1;
+    const scriptPath = nodePath.join(scriptDir, `fix-${launchSeq}${extension}`);
+    const timer = setTimeout(() => rmSync(scriptPath, { force: true }), 60_000);
+    timer.unref();
+    return scriptPath;
+  };
+
+  return {
+    run: async (command: string): Promise<void> => {
+      const plan = planExternalCommandLaunch(platform, command, resolveCommand);
+      if (plan === null) {
+        throw new Error("No supported terminal application was found on this machine.");
+      }
+      await executeExternalPlan(plan, spawnFn, scriptPathFor);
+    },
+  };
+}
+
+/**
+ * Doctor checks whose fix commands are RUNNABLE one-shot in a terminal. An
+ * ALLOWLIST, not a convention (Codex): `auth`'s `export …_API_KEY` is
+ * deliberately absent — an export dies with its one-shot window, so running it
+ * would mislead (it stays copy-only). New runnable fixes are added here
+ * consciously, next to the charset backstop below.
+ */
+export const RUNNABLE_DOCTOR_FIXES: ReadonlySet<string> = new Set(["pi-binary", "github"]);
+
+/** The safe shape of a runnable fix: words, paths, flags — NO shell
+ * metacharacters (`;`, `&`, `|`, `$`, backticks, quotes, redirects). A future
+ * fixCommand that interpolates runtime data trips this and simply isn't
+ * runnable, rather than reaching a shell script. */
+const SAFE_FIX_COMMAND = /^[A-Za-z0-9 @._=/-]+$/;
+
+/**
+ * Resolve a doctor check id to its SERVER-composed fix command, or null (fail
+ * closed: unknown id, a check with no fix, a check outside the runnable
+ * allowlist, or a command that fails the safe-charset backstop). The wire
+ * never carries command text — this lookup is the boundary.
+ */
+export function findDoctorFixCommand(
+  report: { checks: Array<{ id: string; fixCommand?: string | undefined }> },
+  checkId: string,
+): string | null {
+  if (!RUNNABLE_DOCTOR_FIXES.has(checkId)) return null;
+  const command = report.checks.find((entry) => entry.id === checkId)?.fixCommand?.trim();
+  if (!command || !SAFE_FIX_COMMAND.test(command)) return null;
+  return command;
 }

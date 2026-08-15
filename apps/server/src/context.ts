@@ -100,6 +100,9 @@ export interface NamedAgentLaunch {
  */
 export interface ServerContext {
   fastify: FastifyInstance;
+  /** DOC-01 test seam: run a doctor fix command in the user's terminal.
+   * Omitted in production — the settings routes construct the real launcher. */
+  fixTerminal?: { run(command: string): Promise<void> };
   sessions: SessionManager;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;

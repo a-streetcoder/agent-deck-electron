@@ -29,6 +29,11 @@ import { z } from "zod";
 import type { AppSettings } from "../persistence.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import {
+  createExternalCommandLauncher,
+  findDoctorFixCommand,
+  type ExternalCommandLauncher,
+} from "../terminalLauncher.ts";
+import {
   ancestorDirsOf,
   projectPiDirEscapes,
   INSTRUCTIONS_MAX,
@@ -52,6 +57,12 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     rootsFor,
     enabledExtensionPaths,
   } = ctx;
+
+  // The default fix-terminal launcher, created once (its scratch dir is
+  // shared across launches); tests inject ctx.fixTerminal instead.
+  let fixTerminalSingleton: ExternalCommandLauncher | null = null;
+  const defaultFixTerminal = (): ExternalCommandLauncher =>
+    (fixTerminalSingleton ??= createExternalCommandLauncher());
 
   // Runtime screens: masked env inspector and the doctor health probe.
   fastify.get("/runtime/env", async (request) => {
@@ -109,8 +120,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
-  fastify.get("/runtime/doctor", async (request) => {
-    const { projectId } = request.query as { projectId?: string };
+  const buildDoctorReport = async (projectId: string | undefined) => {
     const roots = rootsFor(projectId);
     const defaults = envDefaults();
     const agentDir = resolveDoctorAgentDir(
@@ -132,7 +142,47 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         .join(", ")}`;
       delete authCheck.fixCommand;
     }
-    return { report };
+    return report;
+  };
+
+  fastify.get("/runtime/doctor", async (request) => {
+    const { projectId } = request.query as { projectId?: string };
+    const report = await buildDoctorReport(projectId);
+    // DOC-01: the UI shows Run-fix ONLY where the server would launch it —
+    // the same findDoctorFixCommand boundary decides both.
+    const checks = report.checks.map((check) => ({
+      ...check,
+      runnableFix: findDoctorFixCommand(report, check.id) !== null,
+    }));
+    return { report: { ...report, checks } };
+  });
+
+  // DOC-01 (native openPiInstallInTerminal / Doctor Fix): run ONE check's fix
+  // command in the user's own terminal — a one-shot script with a real TTY,
+  // never a pipe. The wire carries ONLY the check id; the command is the
+  // server's own doctor fixCommand constant, re-resolved here at USE time
+  // (findDoctorFixCommand is the boundary — client text never launches).
+  fastify.post("/runtime/doctor/fix", async (request, reply) => {
+    const { checkId, projectId } = (request.body ?? {}) as {
+      checkId?: unknown;
+      projectId?: unknown;
+    };
+    if (typeof checkId !== "string" || checkId.length === 0) {
+      return reply.status(400).send({ error: "checkId is required" });
+    }
+    const report = await buildDoctorReport(typeof projectId === "string" ? projectId : undefined);
+    const command = findDoctorFixCommand(report, checkId);
+    if (command === null) {
+      return reply.status(404).send({ error: "no fix command for this check" });
+    }
+    try {
+      await (ctx.fixTerminal ?? defaultFixTerminal()).run(command);
+    } catch (error) {
+      // Stable public message; the detail stays in the server log (Codex).
+      console.error("[doctor] fix launch failed:", error);
+      return reply.status(500).send({ error: "The fix could not be launched in a terminal." });
+    }
+    return { ok: true };
   });
 
   // Provider auth (native provider-login surface): the OAuth-capable model

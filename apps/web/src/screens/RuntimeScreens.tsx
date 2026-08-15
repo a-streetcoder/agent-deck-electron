@@ -15,6 +15,7 @@ import {
   TriangleAlert,
   Trash2,
   XCircle,
+  SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
@@ -254,6 +255,51 @@ interface HealthCheck {
   status: "ok" | "warn" | "error";
   detail: string;
   fixCommand?: string;
+  /** Server-decided: the fix is runnable one-shot in a terminal (DOC-01). */
+  runnableFix?: boolean;
+}
+
+/** DOC-01 (native openPiInstallInTerminal): run the fix in the user's own
+ * terminal — the wire carries ONLY the check id; the server re-resolves its
+ * own fixCommand constant and opens a one-shot script with a real TTY. */
+function RunFixButton({ checkId, projectId }: { checkId: string; projectId?: string }) {
+  const [state, setState] = useState<"idle" | "busy" | "opened" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  const run = (): void => {
+    setState("busy");
+    void fetch("/runtime/doctor/fix", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkId, projectId }),
+    })
+      .then((response) => {
+        setState(response.ok ? "opened" : "failed");
+      })
+      .catch(() => setState("failed"))
+      .finally(() => {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setState("idle"), 2000);
+      });
+  };
+
+  return (
+    <ControlButton
+      data-testid="doctor-fix-run"
+      title="Run this fix in your terminal"
+      className="flex shrink-0 items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-micro text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+      disabled={state === "busy"}
+      onClick={run}
+    >
+      <SquareTerminal size={11} />
+      {state === "opened" ? "Opened" : state === "failed" ? "Failed" : "Run fix"}
+    </ControlButton>
+  );
 }
 
 /** Copy a check's suggested fix command; flips to "Copied" briefly (native Doctor Fix). */
@@ -457,7 +503,14 @@ export function DoctorScreen() {
                     {check.detail}
                   </div>
                 </div>
-                {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
+                {check.fixCommand ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    {check.runnableFix ? (
+                      <RunFixButton checkId={check.id} projectId={currentProjectId ?? undefined} />
+                    ) : null}
+                    <CopyFixButton command={check.fixCommand} />
+                  </div>
+                ) : null}
               </div>
             );
           })}
