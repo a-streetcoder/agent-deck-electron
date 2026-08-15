@@ -18,6 +18,7 @@ import type { DiscoveredServer, ProjectServerCommand } from "@agent-deck/contrac
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../../state/store.ts";
 import { parseLoopbackHttpUrl } from "../../lib/loopback.ts";
+import { isElectron } from "../../lib/native.ts";
 import { buildPendingElementContext, newElementContextId } from "../../lib/elementContext.ts";
 import {
   attachSessionRun,
@@ -547,7 +548,11 @@ export function ScriptsRunner(props: {
 // overlay and a "still starting?" hint.
 // ---------------------------------------------------------------------------
 
-function PreviewBrowser(props: {
+/** The preview guest's persisted partition — its own storage, isolated from the
+ * general-purpose browser's login session (a dev server never needs those cookies). */
+const PREVIEW_PARTITION = "persist:agentdeck-preview";
+
+export function PreviewBrowser(props: {
   url: string;
   onNavigate: (url: string) => void;
   onBack: () => void;
@@ -562,6 +567,8 @@ function PreviewBrowser(props: {
   // Slice 16: whether the manual element-capture form is open.
   const [selecting, setSelecting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The live Electron <webview> guest (null in the web build / while blocked).
+  const guestRef = useRef<HTMLElement | null>(null);
 
   // The embed-boundary guard: whatever the URL's provenance (typed, or a
   // discovered-server frame off the wire), it only ever becomes an iframe src
@@ -585,6 +592,20 @@ function PreviewBrowser(props: {
     const timer = setTimeout(() => setShowHint(true), IFRAME_LOAD_HINT_MS);
     return () => clearTimeout(timer);
   }, [loading, reloadNonce]);
+
+  // The webview guest's load signal. Effect-scoped (added once per mounted
+  // guest, removed on remount/unmount) so a detached previous guest can never
+  // clear a newer load's overlay, and StrictMode double-invocation stays clean.
+  useEffect(() => {
+    const guest = guestRef.current;
+    if (!guest) return;
+    const onStop = (): void => {
+      setLoading(false);
+      setShowHint(false);
+    };
+    guest.addEventListener("did-stop-loading", onStop);
+    return () => guest.removeEventListener("did-stop-loading", onStop);
+  }, [url, reloadNonce]);
 
   const submit = useCallback(
     (event?: FormEvent) => {
@@ -683,12 +704,18 @@ function PreviewBrowser(props: {
         />
       ) : null}
 
-      {/* The embed. A plain iframe works in the browser AND the Electron shell;
-          it never leaks the parent origin (cross-origin isolation). The sandbox
-          keeps the embedded dev server contained: scripts/forms/same-origin run
-          normally, but top-navigation, popups, and downloads are withheld so a
-          click inside the site can't bust out of the panel or hijack the app
-          window (critical in the Electron renderer). */}
+      {/* The embed (PRE-01). In the Electron shell it is a REAL Chromium
+          `<webview>` guest — a top-level browsing context, so a dev server's
+          X-Frame-Options / CSP frame-ancestors can never blank the preview
+          (native never frames at all: it opens the system browser). Containment
+          is main-process enforced (apps/desktop/preview-guard.js, keyed to this
+          partition): navigation AND redirects clamped to loopback http(s) minus
+          the control plane, every permission denied, downloads blocked; the
+          Slice L2 will-attach-webview hardening applies, and no `allowpopups`
+          means window.open stays dropped like the iframe. In the plain web
+          build the sandboxed iframe remains: scripts/forms/same-origin run
+          normally, but top-navigation, popups, and downloads are withheld.
+          Either way, `safeSrc` is the single loopback-only gate to the embed. */}
       <div className="relative min-h-0 flex-1 bg-white">
         {safeSrc === null ? (
           <div
@@ -697,6 +724,18 @@ function PreviewBrowser(props: {
           >
             Only a loopback (localhost) dev server can be embedded here.
           </div>
+        ) : isElectron() ? (
+          <webview
+            key={`${safeSrc}#${reloadNonce}`}
+            src={safeSrc}
+            partition={PREVIEW_PARTITION}
+            data-testid="preview-webview"
+            className="h-full w-full border-0"
+            style={{ display: "flex", width: "100%", height: "100%" }}
+            ref={(node) => {
+              guestRef.current = node;
+            }}
+          />
         ) : (
           <iframe
             key={`${safeSrc}#${reloadNonce}`}

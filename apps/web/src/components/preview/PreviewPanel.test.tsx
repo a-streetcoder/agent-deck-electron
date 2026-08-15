@@ -4,7 +4,7 @@ import type { ProjectServerCommand } from "@agent-deck/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { refreshedCommandSelection, ScriptsRunner } from "./PreviewPanel.tsx";
+import { PreviewBrowser, refreshedCommandSelection, ScriptsRunner } from "./PreviewPanel.tsx";
 
 const command = (
   id: string,
@@ -70,5 +70,72 @@ describe("ScriptsRunner candidate states", () => {
     expect(screen.queryByText("No server command detected")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
+  });
+});
+
+describe("PreviewBrowser embed (PRE-01, frame-blocking)", () => {
+  const renderBrowser = (url: string) =>
+    render(
+      <PreviewBrowser
+        url={url}
+        onNavigate={() => {}}
+        onBack={() => {}}
+        onCaptureElement={() => true}
+      />,
+    );
+
+  afterEach(() => {
+    delete (window as { agentDeck?: unknown }).agentDeck;
+  });
+
+  it("embeds via a sandboxed iframe in the plain web build", () => {
+    renderBrowser("http://localhost:5173/");
+    expect(screen.getByTestId("preview-iframe")).toBeTruthy();
+    expect(screen.queryByTestId("preview-webview")).toBeNull();
+  });
+
+  it("embeds via a real <webview> guest in the Electron shell, immune to X-Frame-Options", () => {
+    (window as { agentDeck?: unknown }).agentDeck = { isElectron: true };
+    renderBrowser("http://localhost:5173/");
+    const webview = screen.getByTestId("preview-webview");
+    expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    expect(webview.getAttribute("partition")).toBe("persist:agentdeck-preview");
+    // No popups: window.open inside the preview stays dropped, like the iframe.
+    expect(webview.hasAttribute("allowpopups")).toBe(false);
+    expect(screen.queryByTestId("preview-iframe")).toBeNull();
+  });
+
+  it("clears the loading overlay when the webview guest stops loading", () => {
+    (window as { agentDeck?: unknown }).agentDeck = { isElectron: true };
+    renderBrowser("http://localhost:5173/");
+    expect(screen.getByTestId("preview-loading")).toBeTruthy();
+    fireEvent(screen.getByTestId("preview-webview"), new Event("did-stop-loading"));
+    expect(screen.queryByTestId("preview-loading")).toBeNull();
+  });
+
+  it("reload remounts the guest, and the old guest's late event can't clear the new overlay", () => {
+    (window as { agentDeck?: unknown }).agentDeck = { isElectron: true };
+    renderBrowser("http://localhost:5173/");
+    const first = screen.getByTestId("preview-webview");
+    fireEvent(first, new Event("did-stop-loading"));
+    expect(screen.queryByTestId("preview-loading")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("preview-reload"));
+    const second = screen.getByTestId("preview-webview");
+    expect(second).not.toBe(first); // key remount: a fresh guest element
+    expect(screen.getByTestId("preview-loading")).toBeTruthy();
+    // The DETACHED first guest firing late must not clear the new load's overlay.
+    fireEvent(first, new Event("did-stop-loading"));
+    expect(screen.getByTestId("preview-loading")).toBeTruthy();
+    fireEvent(second, new Event("did-stop-loading"));
+    expect(screen.queryByTestId("preview-loading")).toBeNull();
+  });
+
+  it("never mounts a webview for a non-loopback URL, even in the Electron shell", () => {
+    (window as { agentDeck?: unknown }).agentDeck = { isElectron: true };
+    renderBrowser("http://evil.example.com:5173/");
+    expect(screen.getByTestId("preview-blocked")).toBeTruthy();
+    expect(screen.queryByTestId("preview-webview")).toBeNull();
+    expect(screen.queryByTestId("preview-iframe")).toBeNull();
   });
 });

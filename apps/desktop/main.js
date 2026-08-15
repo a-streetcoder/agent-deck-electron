@@ -15,6 +15,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { createWindowsAttentionOverlay, windowsAttentionDescription } from "./attention-overlay.js";
 import {
+  allowPreviewNavigation,
+  configurePreviewSession,
+  PREVIEW_PARTITION,
+} from "./preview-guard.js";
+import {
   app,
   BrowserWindow,
   dialog,
@@ -24,6 +29,7 @@ import {
   nativeTheme,
   Notification,
   screen,
+  session,
   shell,
 } from "electron";
 
@@ -61,6 +67,13 @@ const windowColors = () =>
 let serverProcess = null;
 let serverPort = null;
 let mainWindow = null;
+// This app's own control-plane origin (the agent-deck server): its REST routes
+// have no CSRF/Origin guard, so no guest webContents may ever reach it. Reads
+// `serverPort` at CALL time — the server may start after handlers are wired.
+const isControlPlaneUrl = (parsed) =>
+  serverPort !== null &&
+  (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+  parsed.port === String(serverPort);
 // Generation-orders backend refreshes so a slower old response cannot restore
 // a stale badge. The count itself is always derived from distinct durable rows.
 let attentionRefreshGeneration = 0;
@@ -1014,10 +1027,7 @@ app.on("web-contents-created", (_event, contents) => {
   //   guard on its REST routes — untrusted page JS must not be able to drive it.
   //   Other loopback origins (the user's own dev servers) stay reachable.
   if (contents.getType() === "webview") {
-    const isControlPlane = (parsed) =>
-      serverPort !== null &&
-      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
-      parsed.port === String(serverPort);
+    const isControlPlane = isControlPlaneUrl;
 
     contents.setWindowOpenHandler(({ url }) => {
       let parsed;
@@ -1038,26 +1048,46 @@ app.on("web-contents-created", (_event, contents) => {
       return { action: "deny" };
     });
 
-    contents.on("will-navigate", (event, url) => {
+    // The dev-server PREVIEW guest (PRE-01) is identified by its partition and
+    // held to a stricter rule than the general browser: loopback http(s) only,
+    // never the control plane. Its renderer-side gate covers only the INITIAL
+    // src — post-mount navigation is enforceable only here in main. Applied to
+    // will-navigate AND will-redirect (a server-side redirect never fires
+    // will-navigate).
+    const isPreviewGuest = contents.session === session.fromPartition(PREVIEW_PARTITION);
+
+    const guardNavigation = (event, url) => {
+      if (isPreviewGuest) {
+        if (!allowPreviewNavigation(url, isControlPlane)) event.preventDefault();
+        return;
+      }
       let parsed;
       try {
         parsed = new URL(url);
       } catch {
         return; // an unparseable target won't navigate a webContents anyway
       }
-      // Deny only the genuinely dangerous top-level targets: file: (local-file
-      // read) and this app's own control-plane origin (unguarded REST → CSRF).
-      // http(s) browses freely (incl. the user's OWN other localhost dev
-      // servers), and benign schemes (about:blank, data:) are left alone so the
-      // blank new-tab and in-page renders work.
+      // The general browser: deny only the genuinely dangerous top-level
+      // targets — file: (local-file read) and this app's own control-plane
+      // origin (unguarded REST → CSRF). http(s) browses freely (incl. the
+      // user's OWN other localhost dev servers), and benign schemes
+      // (about:blank, data:) are left alone so the blank new-tab and in-page
+      // renders work.
       if (parsed.protocol === "file:" || isControlPlane(parsed)) event.preventDefault();
-    });
+    };
+    contents.on("will-navigate", guardNavigation);
+    // Sibling of will-navigate: without this, a SERVER-SIDE redirect could
+    // carry either guest to a target the click-time check would have denied.
+    contents.on("will-redirect", guardNavigation);
   }
 });
 
 app.whenReady().then(() => {
   startupTrace("electron ready");
   registerNativeThemeUpdates();
+  // PRE-01: clamp the dev-server preview guest's session before any embed can
+  // exist — no permission grants, no downloads (see preview-guard.js).
+  configurePreviewSession(session.fromPartition(PREVIEW_PARTITION), isControlPlaneUrl);
   if (process.platform === "win32") {
     app.setAppUserModelId("com.streetcoding.agentdeck");
     startupTrace("Windows application identity configured");

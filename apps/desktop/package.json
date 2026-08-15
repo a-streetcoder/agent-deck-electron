@@ -9,6 +9,7 @@
   "scripts": {
     "build:web": "pnpm --filter @agent-deck/web build",
     "start": "electron .",
+    "test": "node --test",
     "dev": "concurrently --kill-others --names server,web,electron --prefix-colors cyan,magenta,green \"pnpm --filter @agent-deck/server dev:watch\" \"pnpm --filter @agent-deck/web dev\" \"pnpm run dev:electron\"",
     "dev:electron": "wait-on http-get://127.0.0.1:4200/health http-get://127.0.0.1:5199 && cross-env AGENT_DECK_SERVER_URL=http://127.0.0.1:4200 AGENT_DECK_RENDERER_URL=http://127.0.0.1:5199 nodemon --quiet --watch main.js --watch preload.cjs --exec \"electron .\"",
     "dev:build": "pnpm run build:web && electron ."
