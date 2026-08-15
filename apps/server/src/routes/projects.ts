@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 import type { ProjectMeta } from "@agent-deck/contracts";
@@ -467,6 +467,40 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         error: "Couldn't load the issue — needs the gh CLI installed, authenticated, and a remote.",
       });
     }
+  });
+
+  // Post a comment on an issue (ISS-01, native GitHubIssueDetailView reply).
+  // The body travels as a FILE (`--body-file`), never argv — a long or
+  // multiline comment survives Windows argv limits and needs no escaping.
+  fastify.post("/projects/:id/issues/:number/comment", async (request, reply) => {
+    const { id, number } = request.params as { id: string; number: string };
+    const project = projects.find((p) => p.id === id);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+    if (!/^\d+$/.test(number)) return reply.status(400).send({ error: "invalid issue number" });
+    const parsed = z.object({ body: z.string().trim().min(1).max(65_536) }).safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "a non-empty comment body is required" });
+    }
+    const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
+    const bodyFile = nodePath.join(tmpdir(), `agent-deck-issue-comment-${randomUUID()}.md`);
+    try {
+      // exclusive private create: never follows a pre-existing path, unreadable
+      // to other local users while gh reads it
+      writeFileSync(bodyFile, parsed.data.body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await execFileAsync(ghBin, ["issue", "comment", number, "--body-file", bodyFile], {
+        cwd: project.path,
+        timeout: 15_000,
+        maxBuffer: 8_000_000,
+      });
+    } catch {
+      return reply.status(502).send({
+        error:
+          "Couldn't post the comment — needs the gh CLI installed, authenticated, and a remote.",
+      });
+    } finally {
+      rmSync(bodyFile, { force: true });
+    }
+    return { ok: true };
   });
 
   // Close an issue (native Issues close split-button 10.9): completed or not

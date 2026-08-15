@@ -1,4 +1,8 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -199,6 +203,8 @@ export function IssuesScreen() {
 
   // Load a single issue's detail (title/state/labels/assignees/author/body).
   const openDetail = async (number: number): Promise<void> => {
+    // ISS-01: a reply draft belongs to ONE selection (Codex: leak across issues)
+    setReplyDraft("");
     if (!currentProjectId) return;
     const req = ++detailReq.current;
     setDetailNumber(number);
@@ -252,6 +258,50 @@ export function IssuesScreen() {
     // Reflect the close locally (the list re-filters by the server's state on
     // its next load).
     setDetail((current) => (current ? { ...current, state: "CLOSED" } : current));
+  };
+
+  // ISS-01: reply box state + post (native GitHubIssueDetailView reply). The ref
+  // is the SYNCHRONOUS double-submit lock (state commits lag click bursts); busy
+  // state only drives the visuals and always clears — the success path itself
+  // bumps detailReq via openDetail, so a token-guarded finally would wedge the
+  // box disabled forever (Codex).
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const replyInFlight = useRef(false);
+  const postComment = async (): Promise<void> => {
+    const body = replyDraft.trim();
+    if (!currentProjectId || !detail || !body || replyInFlight.current) return;
+    replyInFlight.current = true;
+    const req = detailReq.current;
+    setReplyBusy(true);
+    try {
+      const res = await fetch(
+        `/projects/${encodeURIComponent(currentProjectId)}/issues/${detail.number}/comment`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        },
+      );
+      if (detailReq.current !== req) return; // selection changed — ignore this response
+      if (!res.ok) {
+        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+        setGlobalError(error ?? "Couldn't post the comment.");
+        return;
+      }
+      setReplyDraft("");
+      // Re-fetch the detail so the new comment shows with server-authoritative
+      // author/timestamp instead of a fabricated local echo.
+      await openDetail(detail.number);
+    } catch (error) {
+      // a network-level rejection must surface too, not vanish from a void handler
+      if (detailReq.current === req) {
+        setGlobalError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      replyInFlight.current = false;
+      setReplyBusy(false);
+    }
   };
 
   // Facets derived from the loaded board (native githubAvailableLabels /
@@ -467,6 +517,26 @@ export function IssuesScreen() {
                       ))}
                     </div>
                   )}
+                  <div className="mt-3 space-y-1.5" data-testid="issue-reply">
+                    <ControlTextArea
+                      data-testid="issue-reply-body"
+                      className="min-h-20 w-full rounded-xl border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted"
+                      placeholder="Write a reply (Markdown)…"
+                      value={replyDraft}
+                      disabled={replyBusy}
+                      onChange={(e) => setReplyDraft(e.target.value)}
+                    />
+                    <div className="flex justify-end">
+                      <ControlButton
+                        data-testid="issue-reply-post"
+                        className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        disabled={replyBusy || replyDraft.trim() === ""}
+                        onClick={() => void postComment()}
+                      >
+                        {replyBusy ? "Posting…" : "Comment"}
+                      </ControlButton>
+                    </div>
+                  </div>
                 </div>
               </>
             )}

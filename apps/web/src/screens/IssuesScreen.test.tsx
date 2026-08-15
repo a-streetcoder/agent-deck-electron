@@ -41,6 +41,60 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("issue reply (ISS-01)", () => {
+  it("posts the drafted comment and re-fetches the detail", async () => {
+    let detailComments: Array<{ author: string | null; body: string; createdAt: string | null }> =
+      [];
+    let postedBody: unknown = null;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/issues/7/comment") && init?.method === "POST") {
+        postedBody = JSON.parse(String(init.body));
+        detailComments = [{ author: "ale", body: "Looks good.", createdAt: null }];
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url.includes("/issues/7")) {
+        return Promise.resolve(
+          jsonResponse({
+            issue: {
+              number: 7,
+              title: "Issue 7",
+              body: "The body",
+              state: "OPEN",
+              url: "https://example.test/issues/7",
+              labels: [],
+              assignees: [],
+              author: null,
+              comments: detailComments,
+            },
+          }),
+        );
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(jsonResponse({ issues: [issue(7)], incompleteResults: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByText("Issue 7"));
+    const box = await screen.findByTestId("issue-reply-body");
+    // the button is disabled until a non-empty draft exists
+    expect((screen.getByTestId("issue-reply-post") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(box, { target: { value: "Looks good." } });
+    fireEvent.click(screen.getByTestId("issue-reply-post"));
+
+    // the route received the trimmed draft, and the re-fetched detail shows it
+    await screen.findByText("Looks good.", { selector: "p" });
+    expect(postedBody).toEqual({ body: "Looks good." });
+    // the draft box cleared after a successful post AND the controls re-enabled
+    // (the success path bumps the selection token — busy must still clear)
+    expect((screen.getByTestId("issue-reply-body") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByTestId("issue-reply-body") as HTMLTextAreaElement).disabled).toBe(false);
+  });
+});
+
 describe("issues incomplete-results notice", () => {
   it("shows an accessible notice only for an incomplete successful result", async () => {
     vi.stubGlobal(

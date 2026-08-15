@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 40 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 39 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -54,7 +54,6 @@ These are recommended checks for future implementation and regression coverage. 
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                           | Plain English                                                                              | Why it matters                                                    | Evidence                                                          |
 | ------ | -------- | --------- | ------------------------------------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| ISS-01 | **P2**   | Missing   | Post reply                           | Users cannot add an issue comment.                                                         | Common issue work requires leaving the app.                       | **E:** issue routes/UI. **N:** GitHub issue service/views.        |
 | ISS-02 | **P2**   | Missing   | Reopen issue                         | A closed issue cannot be reopened.                                                         | Mistaken closure cannot be fixed in-app.                          | Same as ISS-01.                                                   |
 | ISS-03 | **P2**   | Partial   | Structured Open-in-Pi context        | Electron sends thinner issue text rather than the full structured context block.           | Pi receives less body/comment/provenance information.             | **E:** Issues UI/open flow. **N:** `PiIssuePromptBuilder.swift`.  |
 | ISS-04 | **P2**   | Missing   | Issue relationships                  | Parent, sub-issue, blocked-by, and blocking links are absent.                              | Pi and users miss dependency context.                             | **E:** issue route types. **N:** GitHub models/service.           |
