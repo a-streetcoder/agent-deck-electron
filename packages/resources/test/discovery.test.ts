@@ -90,3 +90,26 @@ describe("discoverProjectsInRoot", () => {
     expect(names).not.toContain("linked"); // symlinked child skipped
   });
 });
+
+describe("nested Xcode discovery (PRJ-04, native containsDescendant depth-2)", () => {
+  it("finds .xcodeproj/.xcworkspace up to two levels down, skipping dependency trees", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "disc-xcode-"));
+    // depth 1
+    mkdirSync(path.join(root, "one", "App.xcodeproj"), { recursive: true });
+    expect(detectProjectType(path.join(root, "one"))).toBe("xcode");
+    // depth 2
+    mkdirSync(path.join(root, "two", "inner", "App.xcworkspace"), { recursive: true });
+    expect(detectProjectType(path.join(root, "two"))).toBe("xcode");
+    // depth 3 still matches — native's maxDepth-2 walk checks three name levels
+    mkdirSync(path.join(root, "three", "a", "b", "App.xcodeproj"), { recursive: true });
+    expect(detectProjectType(path.join(root, "three"))).toBe("xcode");
+    // depth 4 is beyond native's bound
+    mkdirSync(path.join(root, "deep", "a", "b", "c", "App.xcodeproj"), { recursive: true });
+    expect(detectProjectType(path.join(root, "deep"))).not.toBe("xcode");
+    // dependency trees never count (an .xcodeproj inside Pods is not the user's project)
+    mkdirSync(path.join(root, "four", "Pods", "Dep.xcodeproj"), { recursive: true });
+    expect(detectProjectType(path.join(root, "four"))).not.toBe("xcode");
+    mkdirSync(path.join(root, "five", "node_modules", "Dep.xcodeproj"), { recursive: true });
+    expect(detectProjectType(path.join(root, "five"))).not.toBe("xcode");
+  });
+});

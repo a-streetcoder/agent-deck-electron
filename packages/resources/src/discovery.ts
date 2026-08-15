@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { ProjectType } from "@agent-deck/domain";
 
@@ -22,12 +23,36 @@ function hasAny(dir: string, files: string[]): boolean {
   return files.some((file) => has(dir, file));
 }
 
-function hasXcodeProject(dir: string): boolean {
+/**
+ * Native containsDescendant: `.xcodeproj`/`.xcworkspace` up to two levels down
+ * (nested Apple workspace layouts), never descending into dependency trees or
+ * hidden dirs — an .xcodeproj inside Pods/node_modules is not the user's
+ * project (PRJ-04). Unmemoized: our discovery runs on demand, not on a watch
+ * loop like native's.
+ */
+function hasXcodeProject(dir: string, depth = 2): boolean {
+  let entries: Dirent[];
   try {
-    return readdirSync(dir).some((e) => e.endsWith(".xcodeproj") || e.endsWith(".xcworkspace"));
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return false;
   }
+  // Bounded like the root scan: a huge directory can't stall the event loop on a
+  // synchronous walk (Codex; native bounds cost via memoization instead).
+  for (const entry of entries.slice(0, 500)) {
+    // native enumerates with skipsHiddenFiles — hidden entries neither match nor descend
+    if (entry.name.startsWith(".")) continue;
+    if (entry.name.endsWith(".xcodeproj") || entry.name.endsWith(".xcworkspace")) return true;
+    if (
+      depth > 0 &&
+      entry.isDirectory() &&
+      entry.name !== "node_modules" &&
+      entry.name !== "Pods"
+    ) {
+      if (hasXcodeProject(path.join(dir, entry.name), depth - 1)) return true;
+    }
+  }
+  return false;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
