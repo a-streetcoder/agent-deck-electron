@@ -95,6 +95,59 @@ describe("issue reply (ISS-01)", () => {
   });
 });
 
+describe("issue reopen (ISS-02)", () => {
+  it("shows Reopen only for a closed issue and flips local state on success", async () => {
+    let reopened = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/issues/9/reopen") && init?.method === "POST") {
+        reopened = true;
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url.includes("/issues/9")) {
+        return Promise.resolve(
+          jsonResponse({
+            issue: {
+              number: 9,
+              title: "Issue 9",
+              body: "Closed body",
+              state: "CLOSED",
+              url: "https://example.test/issues/9",
+              labels: [],
+              assignees: [],
+              author: null,
+              comments: [],
+            },
+          }),
+        );
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [{ ...issue(9), state: "CLOSED" }],
+            incompleteResults: false,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByText("Issue 9"));
+    // a closed issue offers Reopen, not the close split-buttons
+    const reopen = await screen.findByTestId("issue-reopen");
+    expect(screen.queryByTestId("issue-close-completed")).toBeNull();
+    fireEvent.click(reopen);
+    await waitFor(() => {
+      expect(reopened).toBe(true);
+      // local state flips to OPEN: the close buttons return, Reopen goes
+      expect(screen.queryByTestId("issue-reopen")).toBeNull();
+      expect(screen.getByTestId("issue-close-completed")).toBeTruthy();
+    });
+  });
+});
+
 describe("issues incomplete-results notice", () => {
   it("shows an accessible notice only for an incomplete successful result", async () => {
     vi.stubGlobal(

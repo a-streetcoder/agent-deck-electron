@@ -469,6 +469,28 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
   });
 
+  // Reopen a closed issue (ISS-02, native Issues reopen): `gh issue reopen <n>`.
+  fastify.post("/projects/:id/issues/:number/reopen", async (request, reply) => {
+    const { id, number } = request.params as { id: string; number: string };
+    const project = projects.find((p) => p.id === id);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+    if (!/^\d+$/.test(number)) return reply.status(400).send({ error: "invalid issue number" });
+    const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
+    try {
+      await execFileAsync(ghBin, ["issue", "reopen", number], {
+        cwd: project.path,
+        timeout: 15_000,
+        maxBuffer: 8_000_000,
+      });
+    } catch {
+      return reply.status(502).send({
+        error:
+          "Couldn't reopen the issue — needs the gh CLI installed, authenticated, and a remote.",
+      });
+    }
+    return { ok: true };
+  });
+
   // Post a comment on an issue (ISS-01, native GitHubIssueDetailView reply).
   // The body travels as a FILE (`--body-file`), never argv — a long or
   // multiline comment survives Windows argv limits and needs no escaping.

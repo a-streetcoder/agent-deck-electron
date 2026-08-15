@@ -232,8 +232,21 @@ export function IssuesScreen() {
     setDetailError(null);
   };
 
+  // ONE state-changing gh op (close/reopen) at a time: a rapid double-click or a
+  // close racing a reopen must not leave stale local state (Codex, ISS-02 —
+  // fixed at the shared root; the close path had the same latent hazard).
+  const issueStateOpInFlight = useRef(false);
   // Close the open issue (native 10.9 split-button: completed / not planned).
   const closeIssue = async (reason: "completed" | "not_planned"): Promise<void> => {
+    if (!currentProjectId || !detail || issueStateOpInFlight.current) return;
+    issueStateOpInFlight.current = true;
+    try {
+      await closeIssueInner(reason);
+    } finally {
+      issueStateOpInFlight.current = false;
+    }
+  };
+  const closeIssueInner = async (reason: "completed" | "not_planned"): Promise<void> => {
     if (!currentProjectId || !detail) return;
     // Token identifies the current selection (bumped on project switch AND on
     // opening any issue), so a delayed response can't touch a newer selection —
@@ -258,6 +271,32 @@ export function IssuesScreen() {
     // Reflect the close locally (the list re-filters by the server's state on
     // its next load).
     setDetail((current) => (current ? { ...current, state: "CLOSED" } : current));
+  };
+
+  // Reopen a closed issue (ISS-02, native Issues reopen).
+  const reopenIssue = async (): Promise<void> => {
+    if (!currentProjectId || !detail || issueStateOpInFlight.current) return;
+    issueStateOpInFlight.current = true;
+    try {
+      await reopenIssueInner();
+    } finally {
+      issueStateOpInFlight.current = false;
+    }
+  };
+  const reopenIssueInner = async (): Promise<void> => {
+    if (!currentProjectId || !detail) return;
+    const req = detailReq.current;
+    const res = await fetch(
+      `/projects/${encodeURIComponent(currentProjectId)}/issues/${detail.number}/reopen`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+    );
+    if (detailReq.current !== req) return; // selection changed — ignore this response
+    if (!res.ok) {
+      const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+      setGlobalError(error ?? "Couldn't reopen the issue.");
+      return;
+    }
+    setDetail((current) => (current ? { ...current, state: "OPEN" } : current));
   };
 
   // ISS-01: reply box state + post (native GitHubIssueDetailView reply). The ref
@@ -478,7 +517,15 @@ export function IssuesScreen() {
                         <CircleSlash size={13} /> Not planned
                       </ControlButton>
                     </>
-                  ) : null}
+                  ) : (
+                    <ControlButton
+                      data-testid="issue-reopen"
+                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                      onClick={() => void reopenIssue()}
+                    >
+                      <CircleDot size={13} /> Reopen
+                    </ControlButton>
+                  )}
                 </div>
                 <div
                   className="mt-4 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
