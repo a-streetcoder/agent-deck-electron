@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 28 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 27 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -53,7 +53,6 @@ These are recommended checks for future implementation and regression coverage. 
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                           | Plain English                                                                              | Why it matters                                                    | Evidence                                                          |
 | ------ | -------- | --------- | ------------------------------------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| ISS-11 | **P3**   | Missing   | Pull-request search                  | The Issues surface does not include broader PR search.                                     | Related review work is outside the workflow.                      | Same as ISS-10.                                                   |
 
 ## Projects, preview, terminal, files, diffs, palette, and checkpoints
 

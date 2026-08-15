@@ -35,10 +35,19 @@ beforeAll(async () => {
     stub,
     `#!/bin/sh
 echo "$@" >> "$GH_ARGS_LOG"
+case "$2" in
+  *is%3Apr*)
+cat <<JSON
+{"items":[{"number":77,"title":"A pull request","state":"open","html_url":"https://github.com/acme/one/pull/77","labels":[],"assignees":[],"user":{"login":"doc"},"updated_at":"2026-02-02T00:00:00Z","pull_request":{"url":"x"}}]}
+JSON
+  ;;
+  *)
 cat <<JSON
 {"items":[{"number":5,"title":"One bug","state":"open","html_url":"https://github.com/acme/one/issues/5","labels":[{"name":"bug"}],"assignees":[],"user":{"login":"doc"},"updated_at":"2026-02-01T00:00:00Z","type":{"name":"Bug"}},
  {"number":9,"title":"Two task","state":"open","html_url":"https://github.com/acme/two/issues/9","labels":[],"assignees":[{"login":"marty"}],"user":null,"updated_at":"2026-01-01T00:00:00Z"}]}
 JSON
+  ;;
+esac
 `,
   );
   chmodSync(stub, 0o755);
@@ -96,6 +105,22 @@ describe.skipIf(isWindows)("GET /issues/search", () => {
     const two = body.issues.find((i) => i.number === 9)!;
     expect(two.repository).toBe("acme/two");
     expect(two.projectId).not.toBeNull();
+  });
+
+  it("kind=prs searches pull requests and keeps their rows (ISS-11)", async () => {
+    writeFileSync(argsLog, "");
+    const res = await fetch(`http://127.0.0.1:${server.port}/issues/search?state=open&kind=prs`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      issues: Array<{ number: number; url: string; repository: string | null }>;
+    };
+    const argv = readFileSync(argsLog, "utf8");
+    expect(argv).toContain(encodeURIComponent("is:pr"));
+    expect(argv).not.toContain(encodeURIComponent("is:issue"));
+    // PR rows survive the mapper in PR scope (the marker excludes them elsewhere)
+    expect(body.issues).toHaveLength(1);
+    expect(body.issues[0]!.number).toBe(77);
+    expect(body.issues[0]!.repository).toBe("acme/one");
   });
 
   it("400s an invalid state filter without invoking gh", async () => {

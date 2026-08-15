@@ -100,8 +100,9 @@ export interface RawRestIssueRow {
  *  board shape — TYPE and state_reason ride along (gh's --json wrappers omit
  *  type), PRs are excluded, repository derives from html_url, and one row past
  *  50 discloses truncation like the gh-backed list did. */
-export function normalizeRestIssueList(raw: RawRestIssueRow[]) {
-  const issues = raw.filter((row) => row.pull_request === undefined);
+export function normalizeRestIssueList(raw: RawRestIssueRow[], includePullRequests = false) {
+  // ISS-11: a PR-scoped search WANTS the marker rows; issue boards exclude them
+  const issues = includePullRequests ? raw : raw.filter((row) => row.pull_request === undefined);
   return {
     issues: issues.slice(0, 50).map((row) => {
       const url = row.html_url ?? "";

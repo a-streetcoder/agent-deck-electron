@@ -54,6 +54,55 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("aggregate PR search (ISS-11)", () => {
+  it("toggles the aggregate board to PRs and opens PR rows externally", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/issues/search") && url.includes("kind=prs")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [
+              {
+                ...issue(77),
+                title: "A pull request",
+                url: "https://github.com/acme/one/pull/77",
+                repository: "acme/one",
+                projectId: project.id,
+              },
+            ],
+            incompleteResults: false,
+          }),
+        );
+      }
+      if (url.includes("/issues/search")) {
+        return Promise.resolve(jsonResponse({ issues: [issue(5)], incompleteResults: false }));
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(jsonResponse({ issues: [issue(1)], incompleteResults: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByTestId("issues-scope-all"));
+    await screen.findByText("Issue 5");
+    fireEvent.click(screen.getByTestId("issues-kind-toggle"));
+    await screen.findByText("A pull request");
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("kind=prs"))).toBe(true);
+
+    // a PR row opens on GitHub instead of the issue detail pane
+    fireEvent.click(screen.getByText("A pull request"));
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://github.com/acme/one/pull/77",
+      "_blank",
+      "noreferrer",
+    );
+  });
+});
+
 describe("gh connection surface (ISS-12)", () => {
   it("shows the signed-in account, and guidance when disconnected", async () => {
     let connected = true;

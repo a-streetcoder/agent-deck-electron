@@ -554,6 +554,12 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       .default("open")
       .safeParse((request.query as { state?: string }).state);
     if (!stateParsed.success) return reply.status(400).send({ error: "invalid state filter" });
+    // ISS-11 (native broader PR search): the same aggregate board, PR-scoped.
+    const kindParsed = z
+      .enum(["issues", "prs"])
+      .default("issues")
+      .safeParse((request.query as { kind?: string }).kind);
+    if (!kindParsed.success) return reply.status(400).send({ error: "invalid kind filter" });
     const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
     const visible = projects.list().filter((p) => !p.hidden);
     const repoProjects = (
@@ -573,7 +579,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     // unlike `gh search issues --json`, its items carry the issue TYPE (ISS-08).
     const qualifiers = [
       ...[...new Set(repoProjects.map(({ repo }) => repo))].map((repo) => `repo:${repo}`),
-      "is:issue",
+      kindParsed.data === "prs" ? "is:pr" : "is:issue",
       ...(stateParsed.data === "all" ? [] : [`state:${stateParsed.data}`]),
     ];
     try {
@@ -586,7 +592,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         { timeout: 15_000, maxBuffer: 8_000_000 },
       );
       const raw = JSON.parse(stdout) as { items?: RawRestIssueRow[] };
-      const normalized = normalizeRestIssueList(raw.items ?? []);
+      const normalized = normalizeRestIssueList(raw.items ?? [], kindParsed.data === "prs");
       return {
         issues: normalized.issues.map((issue) => ({
           ...issue,

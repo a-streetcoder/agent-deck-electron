@@ -107,6 +107,8 @@ export function IssuesScreen() {
   const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
   // ISS-10 (native aggregate board): search across every registered project's repo.
   const [allProjects, setAllProjects] = useState(false);
+  // ISS-11: the aggregate board's scope — issues or pull requests.
+  const [searchKind, setSearchKind] = useState<"issues" | "prs">("issues");
   // The project whose routes serve the OPEN detail (a cross-project row's owner).
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   // Native client-side facet filters (AppViewModel.filteredBoardItems): labels
@@ -167,7 +169,7 @@ export function IssuesScreen() {
   // effect for a changed project/state starts. This closes the window where the
   // previous request could otherwise settle after the new query commits but
   // before reqRef bumps, without mutating refs during render.
-  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}`;
+  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}\u0000${searchKind}`;
   const queryEpochRef = useRef({ key: renderedQueryKey, epoch: 0 });
   useLayoutEffect(() => {
     if (queryEpochRef.current.key !== renderedQueryKey) {
@@ -186,7 +188,7 @@ export function IssuesScreen() {
   const load = useCallback(
     async (projectId: string): Promise<void> => {
       const req = ++reqRef.current;
-      const requestQueryKey = `${projectId}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}`;
+      const requestQueryKey = `${projectId}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}\u0000${searchKind}`;
       const requestQueryEpoch = queryEpochRef.current.epoch;
       const ownsCurrentQuery = (): boolean =>
         reqRef.current === req &&
@@ -200,7 +202,7 @@ export function IssuesScreen() {
       try {
         const response = await fetch(
           allProjects
-            ? `/issues/search?state=${stateFilter}`
+            ? `/issues/search?state=${stateFilter}&kind=${searchKind}`
             : `/projects/${encodeURIComponent(projectId)}/issues?state=${stateFilter}`,
         );
         const data = (await response.json()) as {
@@ -222,7 +224,7 @@ export function IssuesScreen() {
         if (ownsCurrentQuery()) setLoading(false);
       }
     },
-    [stateFilter, allProjects],
+    [stateFilter, allProjects, searchKind],
   );
 
   useEffect(() => {
@@ -896,11 +898,37 @@ export function IssuesScreen() {
                   title="Search across every registered project's repository (native aggregate board)"
                   onClick={() => {
                     setIncompleteResults(false);
-                    setAllProjects((v) => !v);
+                    // leaving the aggregate scope drops its PR mode too (Codex)
+                    setAllProjects((v) => {
+                      if (v) setSearchKind("issues");
+                      return !v;
+                    });
                   }}
                 >
                   All projects
                 </ControlButton>
+                {allProjects ? (
+                  <ControlButton
+                    data-testid="issues-kind-toggle"
+                    aria-pressed={searchKind === "prs"}
+                    className={cn(
+                      "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                      searchKind === "prs"
+                        ? "border-border-strong bg-selection text-text-primary"
+                        : "border-border-subtle text-text-muted hover:text-text-primary",
+                    )}
+                    title="Search pull requests instead of issues (native broader PR search)"
+                    onClick={() => {
+                      setIncompleteResults(false);
+                      // issue-only facets have no meaning over PR rows (Codex)
+                      setTypeFilter(null);
+                      setReasonFilter(null);
+                      setSearchKind((k) => (k === "prs" ? "issues" : "prs"));
+                    }}
+                  >
+                    PRs
+                  </ControlButton>
+                ) : null}
                 <ControlButton
                   data-testid="issues-refresh"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
@@ -1096,7 +1124,15 @@ export function IssuesScreen() {
                     key={`${issue.repository ?? ""}#${issue.number}`}
                     data-testid={`issue-${issue.number}`}
                     className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
-                    onClick={() => void openDetail(issue.number, issue.projectId ?? undefined)}
+                    onClick={() => {
+                      // a PR row has no issue detail — open it on GitHub (the
+                      // main-window policy routes _blank/window.open externally)
+                      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
+                        window.open(issue.url, "_blank", "noreferrer");
+                        return;
+                      }
+                      void openDetail(issue.number, issue.projectId ?? undefined);
+                    }}
                   >
                     <span className="font-mono text-xs text-text-muted">
                       {issue.repository
