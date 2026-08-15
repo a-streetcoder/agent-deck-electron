@@ -669,6 +669,13 @@ export class SessionManager {
       users: readonly { entryId: string; cellId: string; text: string; rawMessage: unknown }[],
     ) => void,
     private readonly expirePendingSessionImages?: (sessionId: string) => void,
+    /**
+     * PRJ-07 (native EnvRuntimeEnvironment): the global + project .env file
+     * values, layered UNDER every explicit value at the ONE spawn chokepoint so
+     * create/resume/reopen/refresh/parked-wake all launch with them — a per-route
+     * spread provably misses siblings (Codex found four).
+     */
+    private readonly envFileLayer: (projectId?: string) => Record<string, string> = () => ({}),
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1125,7 +1132,13 @@ export class SessionManager {
         if (activityPublicationEnabled) this.onMetaChange(changed);
         else this.onParkingMetaChange(changed);
       };
-      const params = this.buildSpawnParams(meta, plan, env, tempDirs, publishMeta);
+      const params = this.buildSpawnParams(
+        meta,
+        plan,
+        { ...this.envFileLayer(meta.projectId), ...env },
+        tempDirs,
+        publishMeta,
+      );
       const scope = this.runtime.runSync(Scope.make());
       let rt: ManagedSessionRuntime;
       try {

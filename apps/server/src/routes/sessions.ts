@@ -1541,6 +1541,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         cwd,
         projectId: body.projectId,
         agentName: body.agentName,
+        // PRJ-07: the .env file layer is applied at SessionManager's spawn
+        // chokepoint, under these explicit values.
         env: { ...defaults.env, ...body.env },
         ...(body.env !== undefined ? { environmentOverride: { ...body.env } } : {}),
         plan,

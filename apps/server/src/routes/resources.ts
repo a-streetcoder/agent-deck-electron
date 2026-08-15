@@ -34,6 +34,7 @@ import {
   scanAgents,
   scanPackagePromptLocations,
   scanPackageSkillLocations,
+  runtimeEnvFiles,
   scanExtensions,
   scanPrompts,
   setAgentDisabledFile,
@@ -479,7 +480,8 @@ ${content}
         provider: defaults.provider,
         model: defaults.model,
         extensions: defaults.providerExtensions,
-        env: defaults.env,
+        // PRJ-07: the .env files ride under the defaults like every pi spawn
+        env: { ...runtimeEnvFiles(rootsFor(projectId)), ...defaults.env },
         timeoutMs: 30_000,
       });
       const summary = sanitizeSummary(raw);

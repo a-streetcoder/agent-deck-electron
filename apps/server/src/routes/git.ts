@@ -14,6 +14,7 @@ import {
   nextReleaseVersions,
 } from "../git.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
+import { runtimeEnvFiles } from "@agent-deck/resources";
 
 // Commit-message generator prompt (native PiAgentShipService.commitMessageSystemPrompt).
 const COMMIT_MESSAGE_SYSTEM_PROMPT = `You are Agent Deck's git commit message generator. Your only job is to write a commit message from the supplied git status and diff.
@@ -40,7 +41,7 @@ Do NOT write a top-level title (no "# " or "## " line). Output ONLY the markdown
  * verbatim from server.ts.
  */
 export function registerGitRoutes(ctx: ServerContext): void {
-  const { fastify, projects, sessions, broadcast } = ctx;
+  const { fastify, projects, sessions, broadcast, rootsFor } = ctx;
 
   // Git automation (native GitRepositoryService): the working-tree status of a
   // project + commit-all. Push/remote is a follow-up. Project-scoped: git runs
@@ -129,7 +130,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
         provider: defaults.provider,
         model: defaults.model,
         extensions: defaults.providerExtensions,
-        env: defaults.env,
+        env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
       });
       const trimmed = message.trim();
       if (!trimmed)
@@ -193,7 +194,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
         provider: defaults.provider,
         model: defaults.model,
         extensions: defaults.providerExtensions,
-        env: defaults.env,
+        env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
       });
       const trimmed = notes.trim().replace(/^```[a-z]*\n?|\n?```$/g, "");
       return { notes: trimmed || "Performance and stability improvements." };

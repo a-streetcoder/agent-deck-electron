@@ -103,7 +103,7 @@ export {
   type SkillTreeEntry,
   type SkillTreeSnapshot,
 } from "./skillTreeFingerprint.ts";
-export { scanEnv, writeEnvVar, type EnvEntry, type EnvScope } from "./env.ts";
+export { runtimeEnvFiles, scanEnv, writeEnvVar, type EnvEntry, type EnvScope } from "./env.ts";
 export { resolveSkillSource, type RemoteSkillSource } from "./skillSource.ts";
 export {
   scanPackagePromptLocations,

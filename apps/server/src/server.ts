@@ -11,6 +11,7 @@ import {
   readMcpServerCatalog,
   resolveCodexPluginSkillRefs,
   scanAgents,
+  runtimeEnvFiles,
   scanEnv,
   scanExtensions,
   scanSkillCandidates,
@@ -479,6 +480,10 @@ async function initServer(
         // Paste cleanup must not perturb session failure or shutdown.
       }
     },
+    // PRJ-07: every session spawn layers the global + project .env files under
+    // its explicit env (native EnvRuntimeEnvironment) — applied at the ONE
+    // SessionManager chokepoint so resume/reopen/refresh can't miss it.
+    (projectId) => runtimeEnvFiles(rootsFor(projectId)),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.

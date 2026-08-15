@@ -71,6 +71,25 @@ function readEnvFile(filePath: string): Map<string, string> {
   }
 }
 
+/**
+ * The launch-time env-file values (PRJ-07, native EnvRuntimeEnvironment):
+ * global `~/.pi/agent/.env` merged with the project's `.pi/.env`, project
+ * winning — the same files the inspector shows, composed for a spawn. Callers
+ * layer these UNDER their explicit env so a deliberate override still wins.
+ */
+export function runtimeEnvFiles(roots: ResourceRoots): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const [key, value] of readEnvFile(path.join(piAgentHome(roots), ".env"))) {
+    merged[key] = value;
+  }
+  if (roots.projectPath) {
+    for (const [key, value] of readEnvFile(path.join(roots.projectPath, ".pi", ".env"))) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
 export function scanEnv(roots: ResourceRoots): EnvEntry[] {
   const globalSource = path.join(piAgentHome(roots), ".env");
   const projectSource = roots.projectPath ? path.join(roots.projectPath, ".pi", ".env") : undefined;

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { scanEnv, writeEnvVar } from "../src/env.ts";
+import { runtimeEnvFiles, scanEnv, writeEnvVar } from "../src/env.ts";
 
 function makeHome(): string {
   return mkdtempSync(path.join(tmpdir(), "env-home-"));
@@ -101,5 +101,31 @@ describe("writeEnvVar / scanEnv round-trip", () => {
       path.join(home, ".pi", "agent", ".env"),
     );
     expect(entries.find((e) => e.key === "PKEY")!.source).toBe(path.join(project, ".pi", ".env"));
+  });
+});
+
+describe("runtimeEnvFiles (PRJ-07, native EnvRuntimeEnvironment)", () => {
+  it("merges global then project .env, project winning, tolerating absences", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "env-home-"));
+    const project = mkdtempSync(path.join(tmpdir(), "env-proj-"));
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    mkdirSync(path.join(project, ".pi"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", ".env"),
+      ["SHARED=global", "GLOBAL_ONLY=g", "# comment", "", "BAD LINE", ""].join("\n"),
+    );
+    writeFileSync(
+      path.join(project, ".pi", ".env"),
+      ["SHARED=project", "PROJECT_ONLY=p", ""].join("\n"),
+    );
+
+    expect(runtimeEnvFiles({ home, projectPath: project })).toEqual({
+      SHARED: "project",
+      GLOBAL_ONLY: "g",
+      PROJECT_ONLY: "p",
+    });
+    // no project → global only; nothing anywhere → empty
+    expect(runtimeEnvFiles({ home })).toEqual({ SHARED: "global", GLOBAL_ONLY: "g" });
+    expect(runtimeEnvFiles({ home: mkdtempSync(path.join(tmpdir(), "env-none-")) })).toEqual({});
   });
 });
