@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,9 +7,11 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * Issues state filter (native Issues screen's Open / Closed / All): the server
- * forwards the requested state to `gh issue list --state <state>`. The gh CLI
- * is stubbed with a shell script that echoes back the --state it received, so
- * we can assert the server passes the filter through (and defaults to open).
+ * forwards the requested state to the raw REST list (`gh api
+ * repos/O/R/issues?state=<state>` — the only payload carrying issue TYPE,
+ * ISS-08). The gh stub echoes the state back in the row title, so we assert
+ * the pass-through (and the open default); the project fixture is a real git
+ * repo with a GitHub origin, which the route derives the O/R from.
  *
  * The stub is a unix shell script; on Windows gh runs natively, so this leg is
  * covered by the ubuntu/macos runners (mirrors the e2e issues stub's skip).
@@ -39,20 +42,28 @@ async function issuesFor(
 }
 
 beforeAll(async () => {
-  // Stub gh: parse --state out of the args and echo it back in the issue title.
+  execFileSync("git", ["init", "-q", projectDir]);
+  execFileSync("git", [
+    "-C",
+    projectDir,
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/acme/fixture.git",
+  ]);
+  // Stub gh: parse state=<s> out of the api path and echo it back in the title.
   const stub = path.join(mkdtempSync(path.join(tmpdir(), "gh-stub-")), "gh");
   writeFileSync(
     stub,
     `#!/bin/sh
 state=none
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --state) shift; state="$1" ;;
-  esac
-  shift
-done
+case "$2" in
+  *state=open*) state=open ;;
+  *state=closed*) state=closed ;;
+  *state=all*) state=all ;;
+esac
 cat <<JSON
-[{"number":1,"title":"state=$state","state":"OPEN","url":"https://x/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"updatedAt":"2026-02-01T09:30:00Z"}]
+[{"number":1,"title":"state=$state","state":"open","state_reason":null,"html_url":"https://github.com/acme/fixture/issues/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"user":{"login":"doc"},"updated_at":"2026-02-01T09:30:00Z","type":{"name":"Bug"}}]
 JSON
 `,
   );
@@ -103,5 +114,7 @@ describe.skipIf(isWindows)("issues state filter", () => {
     expect(issues[0]!.author).toEqual("doc");
     // updatedAt drives the native issue-row relative "N ago" caption.
     expect(issues[0]!.updatedAt).toEqual("2026-02-01T09:30:00Z");
+    // ISS-08: the raw REST payload's TYPE rides the row for the type facet
+    expect((issues[0] as unknown as { type: string | null }).type).toBe("Bug");
   });
 });

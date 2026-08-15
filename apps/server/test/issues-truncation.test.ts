@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,30 +28,33 @@ async function load(state: "open" | "closed" | "all"): Promise<{
 }
 
 beforeAll(async () => {
-  // Emit 49/50/51 rows for open/closed/all and record argv. This keeps the
+  execFileSync("git", ["init", "-q", projectDir]);
+  execFileSync("git", [
+    "-C",
+    projectDir,
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/acme/trunc.git",
+  ]);
+  // Emit 49/50/51 REST rows for open/closed/all and record argv. This keeps the
   // boundary behavior deterministic without network access or a GitHub account.
   const stub = path.join(mkdtempSync(path.join(tmpdir(), "gh-truncation-stub-")), "gh");
   writeFileSync(
     stub,
     `#!/bin/sh
 echo "$@" >> "$GH_ARGS_LOG"
-state=open
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --state) shift; state="$1" ;;
-  esac
-  shift
-done
-case "$state" in
-  open) count=49 ;;
-  closed) count=50 ;;
-  all) count=51 ;;
+case "$2" in
+  *state=open*) count=49 ;;
+  *state=closed*) count=50 ;;
+  *state=all*) count=51 ;;
+  *) count=0 ;;
 esac
 printf '['
 i=1
 while [ "$i" -le "$count" ]; do
   [ "$i" -gt 1 ] && printf ','
-  printf '{"number":%s,"title":"Issue %s","state":"OPEN","url":"https://x/%s"}' "$i" "$i" "$i"
+  printf '{"number":%s,"title":"Issue %s","state":"open","html_url":"https://github.com/acme/trunc/issues/%s"}' "$i" "$i" "$i"
   i=$((i + 1))
 done
 printf ']'
@@ -78,11 +82,13 @@ afterAll(async () => {
 });
 
 describe.skipIf(isWindows)("issues truncation disclosure", () => {
-  it("requests one sentinel issue and does not mark fewer than 50 incomplete", async () => {
+  it("requests the full REST page and does not mark fewer than 50 incomplete", async () => {
     const result = await load("open");
     expect(result.issues).toHaveLength(49);
     expect(result.incompleteResults).toBe(false);
-    expect(readFileSync(argsLog, "utf8")).toContain("--limit 51");
+    // the mixed issues+PRs page is fetched at the REST max so PR-heavy pages
+    // can't fake truncation (ISS-08 review)
+    expect(readFileSync(argsLog, "utf8")).toContain("per_page=100");
   });
 
   it("does not claim incompleteness at exactly 50", async () => {

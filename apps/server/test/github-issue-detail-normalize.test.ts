@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeGitHubIssueDetail, normalizeIssueReference } from "../src/githubIssues.ts";
+import {
+  normalizeGitHubIssueDetail,
+  normalizeIssueReference,
+  normalizeRestIssueList,
+} from "../src/githubIssues.ts";
 
 /**
  * ISS-03: the detail normalizer carries the FULL structured context the native
@@ -100,6 +104,52 @@ describe("normalizeIssueReference (ISS-04)", () => {
       url: "https://x/3",
       repository: null,
       type: null,
+    });
+  });
+});
+
+describe("normalizeRestIssueList (ISS-08)", () => {
+  it("maps raw REST issues (type + state_reason included), excludes PRs, caps at 50", () => {
+    const rows = [
+      {
+        number: 5,
+        title: "Bug five",
+        state: "open",
+        state_reason: null,
+        html_url: "https://github.com/acme/one/issues/5",
+        labels: [{ name: "bug" }],
+        assignees: [{ login: "marty" }],
+        user: { login: "doc" },
+        updated_at: "2026-02-01T09:30:00Z",
+        type: { name: "Bug" },
+      },
+      {
+        number: 6,
+        title: "A PR, not an issue",
+        state: "open",
+        html_url: "https://github.com/acme/one/pull/6",
+        pull_request: { url: "https://api.github.com/..." },
+        labels: [],
+        assignees: [],
+        user: { login: "doc" },
+        updated_at: "2026-02-01T09:31:00Z",
+      },
+    ];
+    const out = normalizeRestIssueList(rows);
+    expect(out.incompleteResults).toBe(false);
+    expect(out.issues).toHaveLength(1);
+    expect(out.issues[0]).toEqual({
+      number: 5,
+      title: "Bug five",
+      state: "open",
+      stateReason: null,
+      url: "https://github.com/acme/one/issues/5",
+      repository: "acme/one",
+      labels: ["bug"],
+      assignees: ["marty"],
+      author: "doc",
+      updatedAt: "2026-02-01T09:30:00Z",
+      type: "Bug",
     });
   });
 });

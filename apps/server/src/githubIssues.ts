@@ -1,30 +1,3 @@
-export interface RawGitHubIssueListRow {
-  number: number;
-  title: string;
-  state: string;
-  url: string;
-  labels?: Array<{ name: string }>;
-  assignees?: Array<{ login: string }>;
-  author?: { login: string } | null;
-  updatedAt?: string;
-}
-
-export function normalizeGitHubIssueList(raw: RawGitHubIssueListRow[]) {
-  return {
-    issues: raw.slice(0, 50).map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      state: issue.state,
-      url: issue.url,
-      labels: (issue.labels ?? []).map((label) => label.name),
-      assignees: (issue.assignees ?? []).map((assignee) => assignee.login),
-      author: issue.author?.login ?? null,
-      updatedAt: issue.updatedAt ?? null,
-    })),
-    incompleteResults: raw.length > 50,
-  };
-}
-
 export interface RawGitHubIssueDetail {
   number: number;
   title: string;
@@ -106,4 +79,47 @@ export interface IssueRelationships {
   subIssues: IssueReference[];
   blockedBy: IssueReference[];
   blocking: IssueReference[];
+}
+
+export interface RawRestIssueRow {
+  number: number;
+  title: string;
+  state: string;
+  state_reason?: string | null;
+  html_url?: string;
+  labels?: Array<{ name?: string }>;
+  assignees?: Array<{ login?: string }>;
+  user?: { login?: string } | null;
+  updated_at?: string | null;
+  type?: { name?: string } | null;
+  /** Present on pull requests — the REST issues list mixes them in. */
+  pull_request?: unknown;
+}
+
+/** ISS-08: raw REST issue rows (repos/O/R/issues or search/issues items) to the
+ *  board shape — TYPE and state_reason ride along (gh's --json wrappers omit
+ *  type), PRs are excluded, repository derives from html_url, and one row past
+ *  50 discloses truncation like the gh-backed list did. */
+export function normalizeRestIssueList(raw: RawRestIssueRow[]) {
+  const issues = raw.filter((row) => row.pull_request === undefined);
+  return {
+    issues: issues.slice(0, 50).map((row) => {
+      const url = row.html_url ?? "";
+      const repo = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\//i.exec(url);
+      return {
+        number: row.number,
+        title: row.title,
+        state: row.state,
+        stateReason: row.state_reason ?? null,
+        url,
+        repository: repo ? `${repo[1]}/${repo[2]}` : null,
+        labels: (row.labels ?? []).flatMap((label) => (label.name ? [label.name] : [])),
+        assignees: (row.assignees ?? []).flatMap((a) => (a.login ? [a.login] : [])),
+        author: row.user?.login ?? null,
+        updatedAt: row.updated_at ?? null,
+        type: row.type?.name ?? null,
+      };
+    }),
+    incompleteResults: issues.length > 50,
+  };
 }

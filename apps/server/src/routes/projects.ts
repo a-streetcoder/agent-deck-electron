@@ -21,12 +21,12 @@ import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import {
   normalizeGitHubIssueDetail,
-  normalizeGitHubIssueList,
   normalizeIssueReference,
+  normalizeRestIssueList,
   type IssueRelationships,
   type RawGitHubIssueDetail,
-  type RawGitHubIssueListRow,
   type RawIssueRelationship,
+  type RawRestIssueRow,
 } from "../githubIssues.ts";
 import {
   ancestorDirsOf,
@@ -379,6 +379,28 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   // GitHub issues for a project, via the gh CLI (reuses the user's gh auth so
   // there's no OAuth to build). AGENT_DECK_GH_BIN overrides the binary (tests).
   const execFileAsync = promisify(execFile);
+  // Each project's GitHub repo from its origin remote (https or ssh form);
+  // null when there is none. Shared by the list + aggregate-search routes.
+  const repoOfProject = async (projectPath: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", projectPath, "remote", "get-url", "origin"],
+        { timeout: 10_000 },
+      );
+      const url = stdout.trim();
+      const match =
+        /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
+        /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
+        /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+      // a shape-matched capture is still untrusted local config: only owner/repo
+      // charset survives, so a crafted origin can't smuggle a search qualifier
+      const SEG = /^[A-Za-z0-9_.-]+$/;
+      return match && SEG.test(match[1]!) && SEG.test(match[2]!) ? `${match[1]}/${match[2]}` : null;
+    } catch {
+      return null;
+    }
+  };
   fastify.get("/projects/:id/issues", async (request, reply) => {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
@@ -390,28 +412,27 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     if (!stateParsed.success) return reply.status(400).send({ error: "invalid state filter" });
     const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
     try {
+      // The RAW REST payload, like native's GitHubAPIClient — the only place the
+      // issue TYPE lives (ISS-08; gh's --json wrappers omit it). PRs mixed into
+      // the issues endpoint are excluded by the mapper; one row past 50 discloses
+      // truncation without pagination.
+      const repo = await repoOfProject(project.path);
+      if (!repo) throw new Error("no GitHub origin");
       const { stdout } = await execFileAsync(
         ghBin,
         [
-          "issue",
-          "list",
-          "--state",
-          stateParsed.data,
-          "--json",
-          // assignees/author are included so the Issues screen can offer the
-          // native client-side assignee + author facet filters (native
-          // filteredBoardItems) and search over the already-loaded board
-          // without a per-filter re-query.
-          "number,title,state,url,labels,assignees,author,updatedAt",
-          "--limit",
-          // Fetch one sentinel beyond the visible cap so the response can
-          // truthfully disclose truncation without introducing pagination.
-          "51",
+          "api",
+          // per_page=100 (the REST max): the mixed issues+PRs page must leave
+          // MORE than 50 actual issues visible before truncation is disclosed —
+          // a 51-row page could be mostly PRs (Codex). A repo whose first 100
+          // mixed rows hold under 51 issues while more exist beyond is the
+          // residual (rare) blind spot, noted here deliberately.
+          `repos/${repo}/issues?state=${stateParsed.data}&sort=updated&direction=desc&per_page=100`,
         ],
         { cwd: project.path, timeout: 15_000, maxBuffer: 8_000_000 },
       );
-      const raw = JSON.parse(stdout) as RawGitHubIssueListRow[];
-      return normalizeGitHubIssueList(raw);
+      const raw = JSON.parse(stdout) as RawRestIssueRow[];
+      return normalizeRestIssueList(raw);
     } catch {
       return {
         issues: [],
@@ -504,27 +525,11 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       .safeParse((request.query as { state?: string }).state);
     if (!stateParsed.success) return reply.status(400).send({ error: "invalid state filter" });
     const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
-    // Each project's GitHub repo from its origin remote (https or ssh form);
-    // projects without one contribute nothing and break nothing.
-    const repoOf = async (projectPath: string): Promise<string | null> => {
-      try {
-        const { stdout } = await execFileAsync(
-          "git",
-          ["-C", projectPath, "remote", "get-url", "origin"],
-          { timeout: 10_000 },
-        );
-        const url = stdout.trim();
-        const match =
-          /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
-          /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
-        return match ? `${match[1]}/${match[2]}` : null;
-      } catch {
-        return null;
-      }
-    };
     const visible = projects.list().filter((p) => !p.hidden);
     const repoProjects = (
-      await Promise.all(visible.map(async (p) => ({ projectId: p.id, repo: await repoOf(p.path) })))
+      await Promise.all(
+        visible.map(async (p) => ({ projectId: p.id, repo: await repoOfProject(p.path) })),
+      )
     ).filter((entry): entry is { projectId: string; repo: string } => entry.repo !== null);
     // first project wins a shared repo — one row, one deterministic owner
     const projectByRepo = new Map<string, string>();
@@ -534,45 +539,31 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     if (projectByRepo.size === 0) {
       return { issues: [], incompleteResults: false, error: "No GitHub repositories discovered." };
     }
-    const repoArgs = [...new Set(repoProjects.map(({ repo }) => repo))].flatMap((repo) => [
-      "--repo",
-      repo,
-    ]);
+    // The RAW search REST payload (native GitHubSearchService's /search/issues):
+    // unlike `gh search issues --json`, its items carry the issue TYPE (ISS-08).
+    const qualifiers = [
+      ...[...new Set(repoProjects.map(({ repo }) => repo))].map((repo) => `repo:${repo}`),
+      "is:issue",
+      ...(stateParsed.data === "all" ? [] : [`state:${stateParsed.data}`]),
+    ];
     try {
       const { stdout } = await execFileAsync(
         ghBin,
         [
-          "search",
-          "issues",
-          ...repoArgs,
-          "--state",
-          stateParsed.data === "all" ? "open" : stateParsed.data,
-          "--sort",
-          "updated",
-          "--json",
-          "number,title,state,url,labels,assignees,author,updatedAt,repository",
-          "--limit",
-          "51",
-        ].filter(
-          // gh search has no state:all — omit the flag entirely for "all"
-          (arg, index, argv) =>
-            stateParsed.data !== "all" || (arg !== "--state" && argv[index - 1] !== "--state"),
-        ),
+          "api",
+          `search/issues?q=${encodeURIComponent(qualifiers.join(" "))}&sort=updated&order=desc&per_page=51`,
+        ],
         { timeout: 15_000, maxBuffer: 8_000_000 },
       );
-      const raw = JSON.parse(stdout) as Array<
-        RawGitHubIssueListRow & { repository?: { nameWithOwner?: string } }
-      >;
-      const normalized = normalizeGitHubIssueList(raw);
+      const raw = JSON.parse(stdout) as { items?: RawRestIssueRow[] };
+      const normalized = normalizeRestIssueList(raw.items ?? []);
       return {
-        issues: normalized.issues.map((issue, index) => {
-          const repository = raw[index]?.repository?.nameWithOwner ?? null;
-          return {
-            ...issue,
-            repository,
-            projectId: repository ? (projectByRepo.get(repository.toLowerCase()) ?? null) : null,
-          };
-        }),
+        issues: normalized.issues.map((issue) => ({
+          ...issue,
+          projectId: issue.repository
+            ? (projectByRepo.get(issue.repository.toLowerCase()) ?? null)
+            : null,
+        })),
         incompleteResults: normalized.incompleteResults,
       };
     } catch {

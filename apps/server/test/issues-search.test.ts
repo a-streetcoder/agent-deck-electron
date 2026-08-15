@@ -36,8 +36,8 @@ beforeAll(async () => {
     `#!/bin/sh
 echo "$@" >> "$GH_ARGS_LOG"
 cat <<JSON
-[{"number":5,"title":"One bug","state":"open","url":"https://github.com/acme/one/issues/5","labels":[{"name":"bug"}],"assignees":[],"author":{"login":"doc"},"updatedAt":"2026-02-01T00:00:00Z","repository":{"nameWithOwner":"acme/one"}},
- {"number":9,"title":"Two task","state":"open","url":"https://github.com/acme/two/issues/9","labels":[],"assignees":[{"login":"marty"}],"author":null,"updatedAt":"2026-01-01T00:00:00Z","repository":{"nameWithOwner":"acme/two"}}]
+{"items":[{"number":5,"title":"One bug","state":"open","html_url":"https://github.com/acme/one/issues/5","labels":[{"name":"bug"}],"assignees":[],"user":{"login":"doc"},"updated_at":"2026-02-01T00:00:00Z","type":{"name":"Bug"}},
+ {"number":9,"title":"Two task","state":"open","html_url":"https://github.com/acme/two/issues/9","labels":[],"assignees":[{"login":"marty"}],"user":null,"updated_at":"2026-01-01T00:00:00Z"}]}
 JSON
 `,
   );
@@ -83,12 +83,12 @@ describe.skipIf(isWindows)("GET /issues/search", () => {
       issues: Array<{ number: number; repository: string | null; projectId: string | null }>;
       incompleteResults: boolean;
     };
-    // both repos in ONE gh call, both url forms parsed
+    // both repos in ONE raw search call (ISS-08: gh api carries the type field)
     const argv = readFileSync(argsLog, "utf8");
-    expect(argv).toContain("search issues");
-    expect(argv).toContain("--repo acme/one");
-    expect(argv).toContain("--repo acme/two");
-    expect(argv).toContain("--state open");
+    expect(argv).toContain("search/issues");
+    expect(argv).toContain(encodeURIComponent("repo:acme/one"));
+    expect(argv).toContain(encodeURIComponent("repo:acme/two"));
+    expect(argv).toContain(encodeURIComponent("state:open"));
     // rows carry repository + the owning registered project
     const one = body.issues.find((i) => i.number === 5)!;
     expect(one.repository).toBe("acme/one");

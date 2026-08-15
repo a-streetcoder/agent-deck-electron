@@ -41,6 +41,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("issue type facet (ISS-08)", () => {
+  it("filters the loaded board by issue type", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/issues")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [
+              { ...issue(1), title: "A bug", type: "Bug" },
+              { ...issue(2), title: "A task", type: "Task" },
+            ],
+            incompleteResults: false,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    await screen.findByText("A bug");
+    fireEvent.click(screen.getByTestId("issues-type-Bug"));
+    await waitFor(() => {
+      expect(screen.queryByText("A task")).toBeNull();
+      expect(screen.getByText("A bug")).toBeTruthy();
+    });
+    // toggling off restores the board
+    fireEvent.click(screen.getByTestId("issues-type-Bug"));
+    await screen.findByText("A task");
+  });
+});
+
 describe("aggregate all-projects search (ISS-10)", () => {
   it("toggles to the aggregate board, prefixes repos, and opens cross-project details", async () => {
     const projectB = {
