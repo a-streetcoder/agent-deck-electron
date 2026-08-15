@@ -635,6 +635,43 @@ export function SkillsScreen() {
   // SKL-03/04: preview-first git import. Inspect discovers what the repository contains (the
   // engine caches the clone), the dialog owns per-skill selection, and the confirmed import
   // materializes exactly what was shown. Cancel discards the cached preview.
+  // SKL-20: on-demand AI summaries (native SkillDescriptionGenerationService),
+  // keyed by scope:name; the server caches by content hash so re-clicks are free.
+  const [skillSummary, setSkillSummary] = useState<
+    Record<string, { text?: string; error?: string; busy?: boolean }>
+  >({});
+  // key includes the project so a same-named skill in another project never
+  // shows this one's summary (Codex)
+  const summaryKey = (skill: SkillInfo): string =>
+    `${currentProjectId ?? ""}:${skill.scope}:${skill.name}`;
+  const doSummarize = async (skill: SkillInfo): Promise<void> => {
+    const key = summaryKey(skill);
+    setSkillSummary((prev) => ({ ...prev, [key]: { ...prev[key], busy: true } }));
+    try {
+      const res = await fetch("/resources/skills/summarize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: skill.scope,
+          name: skill.name,
+          ...(currentProjectId ? { projectId: currentProjectId } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error(await responseErrorMessage(res, "Couldn't generate a summary."));
+      const data = (await res.json()) as { summary: string };
+      setSkillSummary((prev) => ({ ...prev, [key]: { text: data.summary } }));
+    } catch (error) {
+      setSkillSummary((prev) => ({
+        ...prev,
+        [key]: {
+          ...prev[key],
+          busy: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  };
+
   const [gitPreview, setGitPreview] = useState<{
     repoId: string;
     url: string;
@@ -2272,6 +2309,36 @@ export function SkillsScreen() {
 
           <div className="mt-5 space-y-4">
             <AssignmentCard skill={selected} />
+            {(() => {
+              const s = skillSummary[summaryKey(selected)];
+              return (
+                <div
+                  data-testid="skill-detail-summary"
+                  className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                >
+                  <div className="flex items-center justify-between pb-2">
+                    <span className="text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      AI summary
+                    </span>
+                    <ControlButton
+                      data-testid="skill-summarize"
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                      disabled={s?.busy === true}
+                      onClick={() => void doSummarize(selected)}
+                    >
+                      {s?.busy ? "Summarizing…" : s?.text ? "Regenerate" : "Summarize"}
+                    </ControlButton>
+                  </div>
+                  {s?.text ? <div className="text-xs text-text-secondary">{s.text}</div> : null}
+                  {s?.error ? <div className="text-xs text-danger">{s.error}</div> : null}
+                  {!s?.text && !s?.error && !s?.busy ? (
+                    <div className="text-xs text-text-muted">
+                      Ask the configured model what this skill does and when to reach for it.
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
             {(() => {
               // SKL-12: native's "Synced Repository" card — this skill's managed collection,
               // with the update action wired to the same repo endpoint the panel uses.

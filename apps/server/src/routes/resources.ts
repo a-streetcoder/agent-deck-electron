@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
@@ -45,7 +46,7 @@ import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { curateProjectAgents } from "../agentCuration.ts";
 import { AgentAvatarStoreError } from "../agentAvatars.ts";
-import type { ServerContext } from "../context.ts";
+import { envDefaults, type ServerContext } from "../context.ts";
 import { InjectedCommandError } from "../injectedCommands.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
@@ -172,6 +173,7 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     injectedCommands,
     scanSkillCandidatesFor,
     createAgentWarningContext,
+    sessions,
   } = ctx;
 
   const resourceMutationFailure = (error: unknown): { status: number; error: string } => {
@@ -386,6 +388,114 @@ export function registerResourceRoutes(ctx: ServerContext): void {
       codexPluginRefs: refs,
       codexPluginWarnings: pluginResolution.warnings,
     };
+  });
+
+  // SKL-20: AI skill summary (native SkillDescriptionGenerationService): a one-shot
+  // pi helper over the skill's SKILL.md, sanitized like native, cached in-memory by
+  // content hash so a repeat click never re-bills. The skill resolves through the
+  // CATALOG (scope+name must match a scanned skill) — never a caller-supplied path.
+  // Values are promises so concurrent misses COALESCE — two clicks racing the same
+  // uncached skill share one model call (Codex). Failed generations are evicted so
+  // the next click retries. Bounded: a full clear at 200 entries beats bookkeeping.
+  const skillSummaryCache = new Map<string, Promise<string>>();
+  const SKILL_SUMMARY_SYSTEM_PROMPT = [
+    "You write a 2-3 sentence summary of a coding-agent skill, to help a developer decide whether it is worth importing.",
+    "",
+    "Read the entire SKILL.md (frontmatter + body) and explain in concrete terms: what the skill DOES (the verb), WHEN an agent should reach for it (the trigger), and any non-obvious requirements (auth, dependencies, side effects). You may draw on the frontmatter `description:` field - paraphrase and condense it rather than echo it verbatim, and add anything notable from the body.",
+    "",
+    "Plain prose only - no markdown, bullets, headings, or labels. Under 60 words. Always produce a summary based on whatever the SKILL.md provides - never refuse.",
+  ].join("\n");
+  const MAX_SUMMARY_INPUT = 6_000;
+  const sanitizeSummary = (raw: string): string | null => {
+    let text = raw.trim();
+    text = text.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "");
+    text = text.replace(/^(Summary|AI summary):\s*/i, "");
+    // strip wrapping quotes AGAIN — `Summary: "…"` leaves a leading quote after
+    // the label goes (one step past native, which stops at the first pass)
+    text = text.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "");
+    text = text.trim();
+    if (text.length > 600) text = text.slice(0, 600).trim();
+    if (text.length < 20) return null;
+    const lowered = text.toLowerCase();
+    if (
+      lowered.includes("insufficient information") ||
+      lowered.startsWith("i cannot summari") ||
+      lowered.startsWith("i can't summari")
+    ) {
+      return null;
+    }
+    return text;
+  };
+  fastify.post("/resources/skills/summarize", async (request, reply) => {
+    const parsed = z
+      .object({
+        // every catalog scope the listing can surface — resolution below still fails
+        // closed on anything the scanner doesn't actually return (Codex: package
+        // skills were summarizable in the UI but rejected here)
+        scope: z.enum(["builtin", "global", "library", "project", "package"]),
+        name: RESOURCE_NAME,
+        projectId: z.string().optional(),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const { scope, name, projectId } = parsed.data;
+    const skill = skillStore
+      .listSkills(projectId)
+      .find((s) => s.name === name && s.scope === scope);
+    if (!skill) return reply.status(404).send({ error: "No such skill." });
+    let content: string;
+    try {
+      content = readFileSync(skill.filePath, "utf8").trim();
+    } catch {
+      return reply.status(404).send({ error: "The skill's SKILL.md is unreadable." });
+    }
+    // Hash the FULL content — an edit past the truncation point must still
+    // invalidate (Codex); only the model input is truncated.
+    const hash = createHash("sha256").update(content).digest("hex");
+    if (content.length > MAX_SUMMARY_INPUT) {
+      content = `${content.slice(0, MAX_SUMMARY_INPUT)}
+...[truncated]`;
+    }
+    const inFlight = skillSummaryCache.get(hash);
+    if (inFlight) {
+      try {
+        return { summary: await inFlight, cached: true };
+      } catch {
+        // the shared attempt failed and evicted itself; fall through to retry
+      }
+    }
+    const defaults = envDefaults();
+    const attempt = (async () => {
+      const raw = await sessions.runHelper({
+        systemPrompt: SKILL_SUMMARY_SYSTEM_PROMPT,
+        userPrompt: `Summarise this SKILL.md so a developer can decide whether the skill is worth importing.
+
+SKILL.md:
+---
+${content}
+---`,
+        cwd: resourceHome(),
+        provider: defaults.provider,
+        model: defaults.model,
+        extensions: defaults.providerExtensions,
+        env: defaults.env,
+        timeoutMs: 30_000,
+      });
+      const summary = sanitizeSummary(raw);
+      if (!summary) throw new Error("The model returned an unusable summary.");
+      return summary;
+    })();
+    if (skillSummaryCache.size >= 200) skillSummaryCache.clear();
+    skillSummaryCache.set(hash, attempt);
+    attempt.catch(() => skillSummaryCache.delete(hash));
+    try {
+      return { summary: await attempt, cached: false };
+    } catch (error) {
+      return reply.status(502).send({
+        error: `Couldn't generate a summary: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   });
 
   // Diagnostic candidate view: preserve true same-priority duplicate names

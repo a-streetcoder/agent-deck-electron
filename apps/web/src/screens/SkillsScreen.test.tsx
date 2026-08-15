@@ -907,6 +907,48 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(card.textContent).toContain("Storage · Managed collection");
   });
 
+  it("the detail pane generates an AI summary on demand (SKL-20)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "synced",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(jsonResponse({ repos: [] }));
+      }
+      if (url === "/resources/skills/summarize" && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({ summary: "Runs alpha chores when an agent needs a release." }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    fireEvent.click(await screen.findByTestId("skill-summarize"));
+    await screen.findByText("Runs alpha chores when an agent needs a release.");
+    const call = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "/resources/skills/summarize",
+    );
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ scope: "global", name: "alpha" });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);
