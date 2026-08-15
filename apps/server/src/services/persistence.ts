@@ -126,6 +126,10 @@ export interface AppSettings {
   autoTitle: boolean;
   /** Allow automatic parent-session recall and model-facing memory tools. */
   agentMemoryEnabled: boolean;
+  /** Maximum grapheme clusters in model-facing recalled memory output. */
+  agentMemoryInjectionCharacterBudget: number;
+  /** Opt in ordinary managed children to task-relevant launch-only memory context. */
+  agentMemorySubagentsEnabled: boolean;
   /** Request semantic ranking for every memory recall path when an embedder is available. */
   semanticMemoryEnabled: boolean;
   /** Stop resumable parent Pi processes after an authoritative idle boundary. */
@@ -420,6 +424,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       disabledModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
       agentMemoryEnabled: true,
+      agentMemoryInjectionCharacterBudget: 6000,
+      // Native default: delegated agents receive project memory context.
+      agentMemorySubagentsEnabled: true,
       semanticMemoryEnabled: persistLegacySemanticSeed,
       piAgentIdleParkingEnabled: true,
       piAgentIdleParkingTimeoutMinutes: 10,
@@ -481,6 +488,17 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           // shipped enabled behavior. Only an explicit false pauses automation.
           agentMemoryEnabled:
             typeof record.agentMemoryEnabled === "boolean" ? record.agentMemoryEnabled : true,
+          // Native decoding preserves manually persisted values above the UI
+          // setter's 20,000 maximum, while enforcing the 1,000 minimum.
+          agentMemoryInjectionCharacterBudget:
+            typeof record.agentMemoryInjectionCharacterBudget === "number" &&
+            Number.isInteger(record.agentMemoryInjectionCharacterBudget)
+              ? Math.max(1_000, record.agentMemoryInjectionCharacterBudget)
+              : 6_000,
+          agentMemorySubagentsEnabled:
+            typeof record.agentMemorySubagentsEnabled === "boolean"
+              ? record.agentMemorySubagentsEnabled
+              : true,
           semanticMemoryEnabled:
             typeof record.semanticMemoryEnabled === "boolean"
               ? record.semanticMemoryEnabled
@@ -564,6 +582,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // Absence is the shipped enabled state, preserving legacy settings bytes.
       // Persist only the user's explicit pause.
       if (value.agentMemoryEnabled === true) delete persisted.agentMemoryEnabled;
+      if (value.agentMemoryInjectionCharacterBudget === 6000)
+        delete persisted.agentMemoryInjectionCharacterBudget;
+      if (value.agentMemorySubagentsEnabled === true) delete persisted.agentMemorySubagentsEnabled;
       // Omit only the untouched shipped false default. Once the user explicitly
       // chooses a value, retain false too: it must continue to override a legacy
       // AGENT_DECK_SEMANTIC_MEMORY=1 environment after restart.

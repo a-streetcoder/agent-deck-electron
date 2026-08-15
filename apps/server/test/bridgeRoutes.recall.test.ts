@@ -22,55 +22,86 @@ function harness(
   project?: { id: string; path: string },
   sessionProjectId = project?.id,
   agentMemoryPreference = memoryEnabled,
+  childAllowed?: readonly string[],
 ) {
   const fastify = Fastify();
   fastifies.push(fastify);
   const recall = vi.fn();
+  let liveProject = project;
+  let liveSessionProjectId = sessionProjectId;
   registerBridgeRoutes({
     fastify,
     sessions: {
       get: () =>
         cwd
-          ? { meta: { cwd, ...(sessionProjectId ? { projectId: sessionProjectId } : {}) } }
+          ? {
+              meta: {
+                cwd,
+                ...(liveSessionProjectId ? { projectId: liveSessionProjectId } : {}),
+              },
+            }
           : undefined,
     },
     projects: {
       find: (predicate: (value: { id: string; path: string }) => boolean) =>
-        project && predicate(project) ? project : undefined,
+        liveProject && predicate(liveProject) ? liveProject : undefined,
     },
     bridge: { dispatch: vi.fn() },
     bridgeTokens: new Map([["session-a", "token-a"]]),
     askUser: {},
     supervisor: {},
     childSupervisors: new Map(),
+    childAllowedTools: childAllowed ? new Map([["session-a", new Set(childAllowed)]]) : new Map(),
     pendingSupervisor: new Map(),
     memoryEnabled,
     agentMemoryEnabled: () => memoryEnabled && agentMemoryPreference,
     memoryBaseDir: "/tmp/memory",
     semanticRecall: { getStatus: () => recallStatus, recall },
   } as unknown as ServerContext);
-  const invoke = (params: Record<string, unknown>) =>
+  const invokeTool = (tool: string, params: Record<string, unknown>) =>
     fastify.inject({
       method: "POST",
       url: "/bridge",
       payload: {
         sessionId: "session-a",
         token: "token-a",
-        tool: "__recall__",
+        tool,
         toolCallId: "recall-a",
         params,
       },
     });
+  const invoke = (params: Record<string, unknown>) => invokeTool("__recall__", params);
   return {
     invoke,
+    invokeTool,
     recall,
     setAgentMemoryPreference: (enabled: boolean) => {
       agentMemoryPreference = enabled;
+    },
+    setProject: (next: typeof project) => {
+      liveProject = next;
+    },
+    setSessionProjectId: (next: string | undefined) => {
+      liveSessionProjectId = next;
     },
   };
 }
 
 describe("__recall__ bridge metadata", () => {
+  it("denies app tools outside a child token's exact allowlist", async () => {
+    const { invokeTool } = harness(
+      true,
+      "/project",
+      { id: "project-a", path: "/project" },
+      "project-a",
+      true,
+      ["contact_supervisor", "agent_deck_memory_search"],
+    );
+    const response = await invokeTool("ask_user", {});
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "tool is not authorized for this child" });
+  });
+
   it("uses the registered project path and returns bounded payload-free hit metadata", async () => {
     const { invoke, recall } = harness(true, "/worktrees/session", {
       id: "project-a",
@@ -95,7 +126,7 @@ describe("__recall__ bridge metadata", () => {
     expect(recall).toHaveBeenCalledWith(
       { baseDir: "/tmp/memory", projectPath: "/registered/project" },
       "oauth callback",
-      4,
+      5,
     );
     expect(response.json()).toEqual({
       content: expect.any(String),
@@ -126,7 +157,7 @@ describe("__recall__ bridge metadata", () => {
     expect(recall).toHaveBeenCalledWith(
       { baseDir: "/tmp/memory", projectPath: "/legacy/project" },
       "oauth callback",
-      4,
+      5,
     );
     expect(response.json()).toEqual({
       content: expect.stringContaining("legacy recall body"),
@@ -175,6 +206,25 @@ describe("__recall__ bridge metadata", () => {
     expect(completed.json()).toEqual({ content: "", recall: recallStatus });
     expect(JSON.stringify(completed.json())).not.toContain("Should not inject");
     expect(JSON.stringify(completed.json())).not.toContain("private recalled body");
+  });
+
+  it("discards ranking when authoritative project identity changes in flight", async () => {
+    const project = { id: "project-a", path: "/registered/project" };
+    const { invoke, recall, setProject, setSessionProjectId } = harness(
+      true,
+      "/worktrees/session",
+      project,
+    );
+    let resolveRecall!: (value: { recall: SemanticRecallStatus; hits: never[] }) => void;
+    recall.mockReturnValue(new Promise((resolve) => (resolveRecall = resolve)));
+
+    const response = invoke({ query: "oauth callback" });
+    await vi.waitFor(() => expect(recall).toHaveBeenCalledTimes(1));
+    setProject({ id: "project-b", path: "/other/project" });
+    setSessionProjectId("project-b");
+    resolveRecall({ recall: recallStatus, hits: [] });
+
+    expect((await response).json()).toEqual({ content: "", recall: recallStatus });
   });
 
   it("returns no card and never ranks while agent memory is paused", async () => {

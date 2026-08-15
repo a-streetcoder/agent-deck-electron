@@ -15,6 +15,7 @@ describe("generated recall bridge", () => {
     try {
       const source = readFileSync(file, "utf8");
       expect(source).toContain("pendingRecall = { version: 1, memories: recalled };");
+      expect(source).toContain("recalledRaw.length <= 5");
       expect(source).toContain('pi.appendEntry("agent-deck.memory-recall", recall);');
       expect(source).toContain("if (block)");
       expect(source).toContain("if (recalled.length > 0)");

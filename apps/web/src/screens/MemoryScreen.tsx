@@ -58,12 +58,15 @@ type SemanticPreferenceState = "loading" | "ready" | "error";
 function AgentMemoryPreference() {
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [enabled, setEnabled] = useState(true);
+  const [budget, setBudget] = useState("6000");
+  const [subagentsEnabled, setSubagentsEnabled] = useState(true);
   const [capabilityAvailable, setCapabilityAvailable] = useState(true);
   const [state, setState] = useState<SemanticPreferenceState>("loading");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const loadSeq = useRef(0);
   const saveSeq = useRef(0);
+  const savedBudget = useRef(6000);
   const loaded = useRef(false);
   const saveInFlight = useRef(false);
 
@@ -79,11 +82,19 @@ function AgentMemoryPreference() {
       const response = await fetch("/settings", { signal });
       if (!response.ok) throw new Error("We couldn’t load the memory automation preference.");
       const data = (await response.json()) as {
-        settings: { agentMemoryEnabled?: boolean };
+        settings: {
+          agentMemoryEnabled?: boolean;
+          agentMemoryInjectionCharacterBudget?: number;
+          agentMemorySubagentsEnabled?: boolean;
+        };
         capabilities?: { agentMemory?: boolean };
       };
       if (seq !== loadSeq.current || signal?.aborted) return;
       setEnabled(data.settings.agentMemoryEnabled !== false);
+      const loadedBudget = data.settings.agentMemoryInjectionCharacterBudget ?? 6000;
+      savedBudget.current = loadedBudget;
+      setBudget(String(loadedBudget));
+      setSubagentsEnabled(data.settings.agentMemorySubagentsEnabled !== false);
       setCapabilityAvailable(data.capabilities?.agentMemory !== false);
       loaded.current = true;
       setState("ready");
@@ -141,6 +152,82 @@ function AgentMemoryPreference() {
     } catch (cause) {
       if (seq !== saveSeq.current) return;
       setEnabled(previous);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (seq === saveSeq.current) {
+        saveInFlight.current = false;
+        setSaving(false);
+      }
+    }
+  };
+
+  const toggleSubagents = async (): Promise<void> => {
+    if (state !== "ready" || saving || !capabilityAvailable || !enabled) return;
+    const previous = subagentsEnabled;
+    const next = !previous;
+    loadSeq.current += 1;
+    const seq = ++saveSeq.current;
+    saveInFlight.current = true;
+    setSubagentsEnabled(next);
+    setSaving(true);
+    setMessage("Saving…");
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemorySubagentsEnabled: next }),
+      });
+      if (!response.ok) throw new Error("We couldn’t save the delegated-agent preference.");
+      const data = (await response.json()) as {
+        settings: { agentMemorySubagentsEnabled: boolean };
+      };
+      if (seq !== saveSeq.current) return;
+      setSubagentsEnabled(data.settings.agentMemorySubagentsEnabled);
+      setMessage("Saved");
+    } catch (cause) {
+      if (seq !== saveSeq.current) return;
+      setSubagentsEnabled(previous);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (seq === saveSeq.current) {
+        saveInFlight.current = false;
+        setSaving(false);
+      }
+    }
+  };
+
+  const saveBudget = async (raw: string): Promise<void> => {
+    if (state !== "ready" || saving) return;
+    const next = Number(raw);
+    if (!raw.trim() || !Number.isInteger(next) || next < 1000 || next > 20000) {
+      setBudget(String(savedBudget.current));
+      setMessage("Enter a whole-number memory context limit from 1,000 to 20,000.");
+      return;
+    }
+    const previous = savedBudget.current;
+    loadSeq.current += 1;
+    const seq = ++saveSeq.current;
+    saveInFlight.current = true;
+    setBudget(String(next));
+    setSaving(true);
+    setMessage("Saving…");
+    try {
+      const response = await fetch("/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemoryInjectionCharacterBudget: next }),
+      });
+      if (!response.ok) throw new Error("We couldn’t save the memory context limit.");
+      const data = (await response.json()) as {
+        settings: { agentMemoryInjectionCharacterBudget: number };
+      };
+      if (seq !== saveSeq.current) return;
+      savedBudget.current = data.settings.agentMemoryInjectionCharacterBudget;
+      setBudget(String(data.settings.agentMemoryInjectionCharacterBudget));
+      setMessage("Saved");
+    } catch (cause) {
+      if (seq !== saveSeq.current) return;
+      setBudget(String(previous));
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (seq === saveSeq.current) {
@@ -212,6 +299,78 @@ function AgentMemoryPreference() {
                 )}
               />
             </ControlButton>
+          </div>
+          <div className="mt-3 grid gap-3 border-t border-border-subtle pt-3 sm:grid-cols-2">
+            <label className="text-xs text-text-muted" htmlFor="agent-memory-budget">
+              Memory context limit (characters)
+              <ControlInput
+                id="agent-memory-budget"
+                data-testid="agent-memory-budget"
+                type="number"
+                min={1000}
+                max={20000}
+                step={500}
+                value={budget}
+                disabled={saving}
+                aria-describedby="agent-memory-budget-help"
+                aria-invalid={
+                  Boolean(budget.trim()) &&
+                  (!Number.isInteger(Number(budget)) ||
+                    Number(budget) < 1000 ||
+                    Number(budget) > 20000)
+                }
+                onChange={(event) => setBudget(event.target.value)}
+                onBlur={(event) => void saveBudget(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-border-strong bg-surface px-2 py-1 text-sm text-text-primary"
+              />
+              <span id="agent-memory-budget-help" className="mt-1 block text-micro">
+                Whole-number grapheme limit from 1,000 to 20,000.
+              </span>
+            </label>
+            <div>
+              <div className="flex items-center justify-between gap-2 text-xs text-text-muted">
+                <span id="agent-memory-subagents-description">
+                  Control automatic child policy, index, and task recall. Child memory tools
+                  separately follow the master Memory automation switch.
+                </span>
+                <ControlButton
+                  role="switch"
+                  aria-label="Delegated agent memory context"
+                  aria-describedby="agent-memory-subagents-description"
+                  aria-checked={capabilityAvailable && enabled && subagentsEnabled}
+                  data-testid="agent-memory-subagents-toggle"
+                  disabled={saving || !capabilityAvailable || !enabled}
+                  onClick={() => void toggleSubagents()}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full border",
+                    capabilityAvailable && enabled && subagentsEnabled
+                      ? "border-accent bg-accent"
+                      : "border-border-strong bg-surface-muted",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow",
+                      capabilityAvailable && enabled && subagentsEnabled
+                        ? "translate-x-5"
+                        : "translate-x-0.5",
+                    )}
+                  />
+                </ControlButton>
+              </div>
+              <p
+                className="mt-1 text-micro text-text-muted"
+                data-testid="agent-memory-subagents-state"
+              >
+                {!capabilityAvailable
+                  ? "Inactive: memory capability unavailable."
+                  : !enabled
+                    ? "Inactive while memory automation is paused; your choice is retained."
+                    : subagentsEnabled
+                      ? "Automatic context is active for the next fresh or continued named managed child launch."
+                      : "Automatic context is off; child memory tools remain available while Memory automation is on."}
+              </p>
+            </div>
           </div>
           {message ? (
             <p

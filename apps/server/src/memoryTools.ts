@@ -1,6 +1,7 @@
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import {
   markStale,
+  renderRecalledMemories,
   searchMemories,
   writeMemory,
   type MemorySearchHit,
@@ -34,13 +35,6 @@ export type MemorySearch = (
 
 const MEMORY_TYPES = ["context", "decision", "runbook", "failure", "preference"] as const;
 
-/** Per-hit body cap so one large memory can't blow up the tool result. */
-const MAX_BODY_CHARS = 1200;
-
-function clampBody(body: string): string {
-  return body.length > MAX_BODY_CHARS ? `${body.slice(0, MAX_BODY_CHARS)}\n…[truncated]` : body;
-}
-
 const writeParams = z.object({
   type: z.enum(MEMORY_TYPES),
   title: z.string().min(1),
@@ -54,7 +48,7 @@ const writeParams = z.object({
 
 const searchParams = z.object({
   query: z.string().min(1),
-  limit: z.number().int().positive().max(20).optional(),
+  limit: z.number().int().positive().max(10).optional(),
 });
 
 const markStaleParams = z.object({ id: z.string().min(1) });
@@ -80,6 +74,7 @@ export function registerMemoryTools(
     message: "Semantic ranking is not requested. Recall is using lexical ranking.",
   }),
   isAgentMemoryEnabled: () => boolean = () => true,
+  characterBudget: () => number = () => 6000,
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -159,8 +154,8 @@ export function registerMemoryTools(
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 20,
-            description: "Max results (default 8).",
+            maximum: 10,
+            description: "Max results (default 5).",
           },
         },
         required: ["query"],
@@ -186,26 +181,29 @@ export function registerMemoryTools(
           isError: true,
         };
       }
-      const result = await search(store, parsed.data.query, parsed.data.limit);
+      const result = await search(store, parsed.data.query, parsed.data.limit ?? 5);
       // The preference can change while semantic ranking is in flight. Never
       // leak ranked content from a call admitted before a live pause.
       if (!isAgentMemoryEnabled()) {
         return { content: "Agent Deck memory is paused", isError: true };
+      }
+      if (resolveProjectPath(ctx.sessionId) !== store.projectPath) {
+        return { content: "Memory project access changed; retry the search.", isError: true };
       }
       if (result.hits.length === 0)
         return {
           content: "No matching project memory.",
           details: { hits: 0, recall: result.recall },
         };
-      const rendered = result.hits
-        .map(
-          (h) =>
-            `### ${h.record.title} (${h.record.type}, id ${h.record.id})\n${clampBody(h.record.body)}`,
-        )
-        .join("\n\n");
+      // Read after async ranking so the next call and an in-flight call both
+      // honor the latest preference without replacing Pi or refreshing resources.
+      const rendered = renderRecalledMemories(
+        result.hits.map((hit) => hit.record),
+        characterBudget(),
+      );
       return {
-        content: rendered,
-        details: { hits: result.hits.length, recall: result.recall },
+        content: rendered.content,
+        details: { hits: rendered.includedRecords.length, recall: result.recall },
       };
     },
   );

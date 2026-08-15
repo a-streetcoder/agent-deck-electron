@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -339,6 +339,11 @@ describe("durable generic child lifecycle", () => {
     const { piHost } = makeFakePiHost();
     const dataDir = makeTempDir();
     const store = new SubagentRunStore(dataDir, () => {});
+    let durableSystemPrompt = "";
+    const recallChildMemory = vi.fn(async () => ({
+      prompt: "VOLATILE_MEMORY_SENTINEL",
+      isStillValid: () => true,
+    }));
     const result = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -349,7 +354,16 @@ describe("durable generic child lifecycle", () => {
               childRuns: {
                 create: (record) => store.create(record),
                 update: (id, patch) => store.update(id, patch),
+                prepareTurn: (record, systemPrompt, continuation) => {
+                  const allocation = store.prepareTurn(record, systemPrompt, continuation);
+                  durableSystemPrompt = readFileSync(
+                    path.join(allocation.turnDirectory, "system-prompt.md"),
+                    "utf8",
+                  );
+                  return allocation;
+                },
               },
+              recallChildMemory,
             }),
           );
           return yield* rt.runChildAgent("finish normally", undefined, undefined, undefined, {
@@ -359,6 +373,14 @@ describe("durable generic child lifecycle", () => {
       ),
     );
 
+    expect(recallChildMemory).toHaveBeenCalledWith({
+      projectId: undefined,
+      agentName: undefined,
+      agentDescription: undefined,
+      task: "finish normally",
+    });
+    expect(durableSystemPrompt).not.toContain("VOLATILE_MEMORY_SENTINEL");
+    expect(JSON.stringify(store.get(result.runId))).not.toContain("VOLATILE_MEMORY_SENTINEL");
     expect(store.get(result.runId)).toEqual(
       expect.objectContaining({
         source: "parallel",
@@ -366,6 +388,36 @@ describe("durable generic child lifecycle", () => {
         status: "completed",
       }),
     );
+  });
+
+  it("rechecks volatile child memory on continuation and skips constrained children", async () => {
+    const { piHost } = makeFakePiHost();
+    const recallChildMemory = vi.fn(async () => ({
+      prompt: "VOLATILE_MEMORY",
+      isStillValid: () => true,
+    }));
+    const childRuns = { create: vi.fn(), update: vi.fn() };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({ childRuns, recallChildMemory }),
+          );
+          yield* rt.runChildAgent("continued task", undefined, undefined, undefined, {
+            source: "single",
+            runId: randomUUID(),
+            resumeSessionPath: FIXTURE,
+          });
+          expect(recallChildMemory).toHaveBeenCalledTimes(1);
+          yield* rt.runChildAgent("constrained task", undefined, "readOnly", undefined, {
+            source: "single",
+          });
+        }),
+      ),
+    );
+    expect(recallChildMemory).toHaveBeenCalledTimes(1);
   });
 
   it("replaces the live continuation card exactly once when startup fails before cell_open", async () => {
@@ -757,7 +809,14 @@ describe("child tool capability policy", () => {
   ];
 
   it("keeps default behavior while enforcing report-only and no-tool children", () => {
-    expect(resolveChildTools(dangerous, undefined, true)).toEqual([
+    expect(
+      resolveChildTools(dangerous, undefined, [
+        "contact_supervisor",
+        "agent_deck_memory_write",
+        "agent_deck_memory_search",
+        "agent_deck_memory_mark_stale",
+      ]),
+    ).toEqual([
       "read",
       "grep",
       "find",
@@ -766,8 +825,11 @@ describe("child tool capability policy", () => {
       "edit",
       "write",
       "contact_supervisor",
+      "agent_deck_memory_write",
+      "agent_deck_memory_search",
+      "agent_deck_memory_mark_stale",
     ]);
-    expect(resolveChildTools(dangerous, "configured", false)).toEqual([
+    expect(resolveChildTools(dangerous, "configured", [])).toEqual([
       "read",
       "grep",
       "find",
@@ -776,8 +838,8 @@ describe("child tool capability policy", () => {
       "edit",
       "write",
     ]);
-    expect(resolveChildTools(dangerous, "readOnly", false)).toEqual(["read", "grep", "find", "ls"]);
-    expect(resolveChildTools(dangerous, "none", false)).toEqual([]);
+    expect(resolveChildTools(dangerous, "readOnly", [])).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolveChildTools(dangerous, "none", [])).toEqual([]);
   });
 });
 

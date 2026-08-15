@@ -220,6 +220,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
         agentMemoryEnabled: z.boolean().optional(),
+        agentMemoryInjectionCharacterBudget: z.number().int().min(1000).max(20000).optional(),
+        agentMemorySubagentsEnabled: z.boolean().optional(),
         semanticMemoryEnabled: z.boolean().optional(),
         piAgentIdleParkingEnabled: z.boolean().optional(),
         piAgentIdleParkingTimeoutMinutes: z.number().int().min(1).max(120).optional(),
@@ -297,6 +299,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       patch.defaultPromptTemplates = d.defaultPromptTemplates;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
     if (d.agentMemoryEnabled !== undefined) patch.agentMemoryEnabled = d.agentMemoryEnabled;
+    if (d.agentMemoryInjectionCharacterBudget !== undefined)
+      patch.agentMemoryInjectionCharacterBudget = d.agentMemoryInjectionCharacterBudget;
+    if (d.agentMemorySubagentsEnabled !== undefined)
+      patch.agentMemorySubagentsEnabled = d.agentMemorySubagentsEnabled;
     if (d.semanticMemoryEnabled !== undefined)
       patch.semanticMemoryEnabled = d.semanticMemoryEnabled;
     if (d.piAgentIdleParkingEnabled !== undefined)

@@ -115,10 +115,17 @@ describe("semantic memory opt-in via /memory/search", () => {
     await setup(undefined);
     const url = `http://127.0.0.1:${server!.port}/settings`;
     const initial = (await (await fetch(url)).json()) as {
-      settings: { agentMemoryEnabled: boolean; semanticMemoryEnabled: boolean };
+      settings: {
+        agentMemoryEnabled: boolean;
+        agentMemoryInjectionCharacterBudget: number;
+        agentMemorySubagentsEnabled: boolean;
+        semanticMemoryEnabled: boolean;
+      };
       capabilities: { agentMemory: boolean };
     };
     expect(initial.settings.agentMemoryEnabled).toBe(true);
+    expect(initial.settings.agentMemoryInjectionCharacterBudget).toBe(6000);
+    expect(initial.settings.agentMemorySubagentsEnabled).toBe(true);
     expect(initial.capabilities.agentMemory).toBe(true);
     expect(initial.settings.semanticMemoryEnabled).toBe(false);
 
@@ -142,14 +149,36 @@ describe("semantic memory opt-in via /memory/search", () => {
       ).status,
     ).toBe(400);
 
+    for (const invalidBudget of [999, 20001, 1000.5, "6000"]) {
+      expect(
+        (
+          await fetch(url, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ agentMemoryInjectionCharacterBudget: invalidBudget }),
+          })
+        ).status,
+      ).toBe(400);
+    }
+
     const response = await fetch(url, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ semanticMemoryEnabled: true, agentMemoryEnabled: false }),
+      body: JSON.stringify({
+        semanticMemoryEnabled: true,
+        agentMemoryEnabled: false,
+        agentMemoryInjectionCharacterBudget: 3500,
+        agentMemorySubagentsEnabled: true,
+      }),
     });
     expect(response.status).toBe(200);
     expect((await response.json()) as unknown).toMatchObject({
-      settings: { semanticMemoryEnabled: true, agentMemoryEnabled: false },
+      settings: {
+        semanticMemoryEnabled: true,
+        agentMemoryEnabled: false,
+        agentMemoryInjectionCharacterBudget: 3500,
+        agentMemorySubagentsEnabled: true,
+      },
       capabilities: { agentMemory: true },
     });
   });

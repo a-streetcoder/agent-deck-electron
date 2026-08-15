@@ -127,17 +127,16 @@ import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 // ---------------------------------------------------------------------------
 
 /**
- * Builds a child subagent's `contact_supervisor` bridge for one run: returns the
- * generated extension path (loaded via --extension) and a dispose() that tears
- * down the child's bridge token + supervisor route + temp dir. Returns undefined
- * when no supervisor channel is available (e.g. the bridge endpoint isn't bound),
- * in which case the child runs tool-less as before. The server implements this;
- * `route` tells it which parent transcript cell the child's progress flows into.
+ * Builds an ordinary child's purpose-scoped bridge for one run. It always
+ * carries contact_supervisor and, while master memory is effective for an
+ * authoritative project, the three memory tools. `toolNames` lets restrictive
+ * named-agent allowlists include exactly those generated extension tools.
+ * dispose() tears down token, authorization, project mapping, and temp bytes.
  */
 export type ChildBridgeFactory = (
   childSessionId: string,
   route: { parentSessionId: string; cellId: string },
-) => { extension: string; dispose: () => void } | undefined;
+) => { extension: string; toolNames: string[]; dispose: () => void } | undefined;
 
 /** Resolves a named agent (for `managed_subagent{agent}`) to the launch inputs a
  * delegated child adopts — its persona body, model, thinking level, declared
@@ -146,6 +145,19 @@ export type ChildBridgeFactory = (
  * child adds `contact_supervisor` and drops parent-only bridge tools itself);
  * skills only surface when the child also has the `read` tool, so the two are
  * threaded together. */
+export interface ChildMemoryLaunchContext {
+  prompt: string;
+  /** Re-proves live settings/project ownership immediately before spawn. */
+  isStillValid(): boolean;
+}
+
+export type ChildMemoryRecall = (request: {
+  projectId?: string;
+  agentName?: string;
+  agentDescription?: string;
+  task: string;
+}) => Promise<ChildMemoryLaunchContext | undefined>;
+
 export type AgentResolver = (
   name: string,
   projectId?: string,
@@ -153,6 +165,7 @@ export type AgentResolver = (
   | { error: string }
   | {
       body: string;
+      description?: string;
       model?: string;
       thinking?: AgentSessionPlan["thinking"];
       tools?: string[];
@@ -186,6 +199,8 @@ export interface SpawnSessionParams {
   readonly tempDirs: readonly string[];
   readonly childBridgeFactory?: ChildBridgeFactory;
   readonly resolveAgent?: AgentResolver;
+  /** Server-owned, launch-only context for ordinary managed children. */
+  readonly recallChildMemory?: ChildMemoryRecall;
   /** Required durable lifecycle sink for generic managed_subagent/managed_parallel runs. */
   readonly childRuns?: {
     create: (record: SubagentRunRecord) => void;
@@ -543,11 +558,10 @@ const ANONYMOUS_WORKTREE_TOOLS = ["read", "write", "edit"];
 export function resolveChildTools(
   configured: readonly string[] | undefined,
   toolPolicy: ChildToolPolicy | undefined,
-  includeSupervisorBridge: boolean,
+  bridgeToolNames: readonly string[] = [],
 ): string[] | undefined {
-  // No authored allowlist means Pi defaults. Extension tools, including the
-  // supervisor bridge, remain available under those defaults without turning
-  // them into an accidental restrictive `--tools` allowlist.
+  // No authored allowlist means Pi defaults. Generated extension tools remain
+  // available under those defaults without inventing a restrictive allowlist.
   if (configured === undefined && toolPolicy === undefined) return undefined;
   const allowed = configured?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
   const tools =
@@ -556,7 +570,7 @@ export function resolveChildTools(
       : toolPolicy === "readOnly"
         ? (allowed ?? []).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
         : (allowed ?? []);
-  return includeSupervisorBridge ? [...tools, "contact_supervisor"] : tools;
+  return [...new Set([...tools, ...bridgeToolNames])];
 }
 
 function normalizeTitle(raw: string): string {
@@ -1717,6 +1731,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const outputAdvisory = resolved ? managedNamedOutputAdvisory(resolved.output) : "";
     const authoredSystemPrompt = `${boundaryPrompt}${persona}${outcomeContract}${outputAdvisory ? `\n\n${outputAdvisory}` : ""}\n\nTask:\n${task}`;
     let effectiveSystemPrompt = authoredSystemPrompt;
+    let childMemoryContext: ChildMemoryLaunchContext | undefined;
     const cellId = runId;
     const childSessionId = randomUUID();
     // Loop/constrained executions retain their dedicated snapshot ownership.
@@ -1783,6 +1798,20 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
       });
       durableIdentityCreated = true;
       yield* persistChildRun(() => durable.registerTranscript?.(runId));
+      // Artifact evidence receives only authoredSystemPrompt above. Memory is
+      // volatile launch context and is appended afterwards, never persisted.
+      if (params.recallChildMemory) {
+        childMemoryContext = yield* Effect.tryPromise({
+          try: () =>
+            params.recallChildMemory!({
+              projectId: meta.projectId,
+              agentName,
+              agentDescription: resolved?.description,
+              task,
+            }),
+          catch: () => new Error("child memory recall unavailable"),
+        }).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+      }
     }
     let transcriptRegistered = durableIdentityCreated;
     let childTranscript = emptyTranscript();
@@ -1943,12 +1972,16 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           }),
         );
         const promptFile = join(promptDir, "system.md");
-        writeFileSync(promptFile, effectiveSystemPrompt);
+        const launchSystemPrompt =
+          childMemoryContext?.isStillValid() === true
+            ? `${effectiveSystemPrompt}\n\n${childMemoryContext.prompt}`
+            : effectiveSystemPrompt;
+        writeFileSync(promptFile, launchSystemPrompt);
 
         const childTools =
           runOptions?.worktree && !resolved
-            ? ANONYMOUS_WORKTREE_TOOLS
-            : resolveChildTools(resolved?.tools, toolPolicy, Boolean(childBridge));
+            ? [...new Set([...ANONYMOUS_WORKTREE_TOOLS, ...(childBridge?.toolNames ?? [])])]
+            : resolveChildTools(resolved?.tools, toolPolicy, childBridge?.toolNames);
 
         if (runOptions?.worktree) {
           if (!durable?.validateWorktreeForSpawn) {

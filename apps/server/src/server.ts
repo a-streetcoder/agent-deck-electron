@@ -45,6 +45,11 @@ import {
 } from "./bridgeTools.ts";
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
 import { loadSkillEngineNative } from "./skills/skillEngineNative.ts";
+import {
+  makeChildMemoryRecall,
+  registerChildBridgeAccess,
+  resolveMemoryProjectPath,
+} from "./childMemory.ts";
 import { createDiffGateway, sessionDiffBase } from "./diffGateway.ts";
 import { resolveLaunchResources } from "./launchResources.ts";
 import { createEditorLauncher } from "./editorLauncher.ts";
@@ -90,6 +95,11 @@ import { SemanticRecallCoordinator } from "./semanticRecall.ts";
 /** Child-only tools must not leak into a parent agent's launch allowlist.
  * Parent bridge tools remain eligible because their bridge is actually exposed. */
 const BRIDGE_ONLY_TOOLS = new Set(["contact_supervisor"]);
+const CHILD_MEMORY_TOOL_NAMES = new Set([
+  "agent_deck_memory_write",
+  "agent_deck_memory_search",
+  "agent_deck_memory_mark_stale",
+]);
 
 /**
  * The child subagent's supervisor tool. Exposed ONLY through the per-child bridge
@@ -218,6 +228,8 @@ async function initServer(
   // cell its progress flows into. v1 handles non-blocking progress_update only.
   const supervisor = new SupervisorLog();
   const childSupervisors = new Map<string, { parentSessionId: string; cellId: string }>();
+  const childMemoryAuthorizations = new Map<string, { projectId: string; projectPath: string }>();
+  const childAllowedTools = new Map<string, ReadonlySet<string>>();
   // Blocking supervisor requests awaiting an answer: requestId → resolver. The
   // child's contact_supervisor call is suspended on the /bridge request until
   // answerSupervisor() (via POST /supervisor/:id/answer) settles it.
@@ -350,31 +362,48 @@ async function initServer(
       appends.push(blockFile);
       return { appends, cleanupDir };
     },
-    // Child subagent supervisor bridge: registers a child-scoped bridge token +
-    // supervisor route, and generates an extension exposing ONLY contact_supervisor
-    // (never in the parent bridge's specs, so parents never get it). dispose()
-    // tears the whole thing down after the child exits.
+    // Purpose-scoped ordinary-child bridge: contact_supervisor plus the three
+    // memory tools only when master memory is currently effective and the
+    // parent's registered project is authoritative. The token gets an exact
+    // dispatch allowlist; dispose removes every route/project/token mapping.
     (childSessionId, route) => {
       if (!bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
-      // Generate the extension FIRST; only register the token + route if it
-      // succeeds, so a writeBridgeExtension failure can't leak map entries with
-      // no dispose() to clean them (dispose is only returned on success).
+      const parent = sessions.get(route.parentSessionId)?.meta;
+      const project = parent?.projectId
+        ? projects.find((candidate) => candidate.id === parent.projectId)
+        : undefined;
+      const memorySpecs =
+        agentMemoryEnabled() && project
+          ? bridge.specs().filter((spec) => CHILD_MEMORY_TOOL_NAMES.has(spec.name))
+          : [];
+      const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs];
+      const toolNames = tools.map((tool) => tool.name);
+      // Generate first; publish authentication/authorization only on success.
       const extension = writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: childSessionId,
         token,
-        tools: [CONTACT_SUPERVISOR_SPEC],
+        tools,
       });
-      bridgeTokens.set(childSessionId, token);
+      const disposeAccess = registerChildBridgeAccess({
+        sessionId: childSessionId,
+        token,
+        toolNames,
+        ...(parent?.projectId && project
+          ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
+          : {}),
+        tokens: bridgeTokens,
+        allowedTools: childAllowedTools,
+        memoryAuthorizations: childMemoryAuthorizations,
+      });
       childSupervisors.set(childSessionId, route);
       return {
         extension,
+        toolNames,
         dispose: () => {
-          // Release any still-pending blocking supervisor requests so a dead
-          // child's suspended tool call doesn't linger until the timeout.
           cancelChildSupervisorRequests(childSessionId);
-          bridgeTokens.delete(childSessionId);
+          disposeAccess();
           childSupervisors.delete(childSessionId);
           try {
             rmSync(nodePath.dirname(extension), { recursive: true, force: true });
@@ -395,6 +424,7 @@ async function initServer(
       const { agent } = resolved;
       return {
         body: agent.body,
+        description: agent.description,
         model: agent.model,
         thinking: asThinkingLevel(agent.thinking),
         tools: agent.tools,
@@ -491,6 +521,15 @@ async function initServer(
     // its explicit env (native EnvRuntimeEnvironment) — applied at the ONE
     // SessionManager chokepoint so resume/reopen/refresh can't miss it.
     (projectId) => runtimeEnvFiles(rootsFor(projectId)),
+    makeChildMemoryRecall({
+      memoryBaseDir,
+      settings: {
+        enabled: () => agentMemoryEnabled() && settings.get().agentMemorySubagentsEnabled,
+        characterBudget: () => settings.get().agentMemoryInjectionCharacterBudget,
+      },
+      projectPath: (projectId) => projects.find((project) => project.id === projectId)?.path,
+      recall: (store, query, limit) => semanticRecall.recall(store, query, limit),
+    }),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -555,6 +594,7 @@ async function initServer(
       status: "ok",
       agent: {
         body: agent.body,
+        description: agent.description,
         systemPromptMode: agent.systemPromptMode,
         model: agent.model,
         thinking: agent.thinking,
@@ -630,10 +670,23 @@ async function initServer(
     registerMemoryTools(
       bridge,
       memoryBaseDir,
-      (sessionId) => sessions.get(sessionId)?.meta.cwd,
+      (sessionId) =>
+        resolveMemoryProjectPath({
+          sessionId,
+          childAuthorizations: childMemoryAuthorizations,
+          projectPath: (projectId) => projects.find((project) => project.id === projectId)?.path,
+          parentCwd: (id) => {
+            const meta = sessions.get(id)?.meta;
+            if (!meta) return undefined;
+            return meta.projectId
+              ? projects.find((project) => project.id === meta.projectId)?.path
+              : meta.cwd;
+          },
+        }),
       (store, query, limit) => semanticRecall.recall(store, query, limit),
       () => semanticRecall.getStatus(),
       agentMemoryEnabled,
+      () => settings.get().agentMemoryInjectionCharacterBudget,
     );
   }
 
@@ -1039,6 +1092,8 @@ async function initServer(
     askUser,
     supervisor,
     childSupervisors,
+    childMemoryAuthorizations,
+    childAllowedTools,
     pendingSupervisor,
     loopEngine,
     providerLogin,

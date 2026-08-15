@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseMemory, serializeMemory } from "./frontmatter.ts";
+import { truncateGraphemes } from "./graphemes.ts";
 import { isSafeMemoryId, memoryFilePath, projectMemoryDir } from "./paths.ts";
 import { scanForSecrets } from "./secrets.ts";
 import { centeredCosineScores, type Embedder } from "./semantic.ts";
@@ -454,6 +455,10 @@ export function injectableIndex(
   cap: number = DEFAULT_INDEX_CAP,
 ): { lines: string[]; overflow: number } {
   const records = injectable(listMemories(store));
-  const lines = records.slice(0, cap).map((r) => `${r.id} · ${r.type} · ${r.title} — ${r.summary}`);
+  const lines = records.slice(0, cap).map((record) => {
+    const summary = truncateGraphemes(record.summary, 110);
+    const suffix = summary === record.summary ? "" : "…";
+    return `${record.id} · ${record.type} · ${record.title} — ${summary}${suffix}`;
+  });
   return { lines, overflow: Math.max(0, records.length - cap) };
 }

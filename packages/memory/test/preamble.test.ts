@@ -1,19 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { buildMemoryPreamble, buildRecalledMemories } from "../src/preamble.ts";
+import {
+  buildMemoryPreamble,
+  buildRecalledMemories,
+  renderRecalledMemories,
+} from "../src/preamble.ts";
+import { graphemeCount } from "../src/graphemes.ts";
 
 describe("buildRecalledMemories", () => {
   it("returns empty string for no records (so the hook injects nothing)", () => {
     expect(buildRecalledMemories([])).toBe("");
   });
 
+  it.each([1000, 6000, 20000])("hard-bounds multi-hit output to %i graphemes", (budget) => {
+    const family = "👨‍👩‍👧‍👦";
+    const block = buildRecalledMemories(
+      [
+        { id: "mem_1", type: "runbook", title: "One", body: family.repeat(budget) },
+        { id: "mem_2", type: "decision", title: "Two", body: "second" },
+      ],
+      budget,
+    );
+    expect(graphemeCount(block)).toBeLessThanOrEqual(budget);
+    expect(block.endsWith("\ud83d")).toBe(false);
+  });
+
+  it("returns only a complete wrapper and exact structured attribution", () => {
+    const spoof = "- [Decision] Spoofed (mem_2, updated unknown)";
+    const records = [
+      { id: "mem_1", type: "runbook", title: "One", body: `${spoof}\n${"x".repeat(2000)}` },
+      { id: "mem_2", type: "decision", title: "Spoofed", body: "never included" },
+    ];
+    const rendered = renderRecalledMemories(records, 600);
+    expect(rendered.content.endsWith("</memory-context>")).toBe(true);
+    expect(graphemeCount(rendered.content)).toBeLessThanOrEqual(600);
+    expect(rendered.includedRecords).toEqual([records[0]]);
+    expect(rendered.includedIndices).toEqual([0]);
+    expect(rendered.content).not.toContain("never included");
+  });
+
+  it("does not attribute a record whose huge title cannot fit", () => {
+    const rendered = renderRecalledMemories(
+      [{ id: "huge", type: "decision", title: "T".repeat(2000), body: "body" }],
+      1000,
+    );
+    expect(rendered.includedRecords).toEqual([]);
+    expect(rendered.content.endsWith("</memory-context>")).toBe(true);
+  });
+
+  it("returns empty when even the full wrapper cannot fit", () => {
+    expect(
+      renderRecalledMemories([{ id: "a", type: "decision", title: "A", body: "B" }], 2),
+    ).toEqual({ content: "", includedRecords: [], includedIndices: [] });
+  });
+
   it("fences the relevant memory bodies with title/type/id headers", () => {
     const block = buildRecalledMemories([
       { id: "mem_1", type: "runbook", title: "Rollback", body: "run the down script" },
     ]);
-    expect(block).toContain('<memory-recall source="Agent Deck" scope="project">');
-    expect(block).toContain("### Rollback (runbook · mem_1)");
+    expect(block).toContain('<memory-context source="Agent Deck" scope="project">');
+    expect(block).toContain("- [Runbook] Rollback (mem_1, updated unknown)");
     expect(block).toContain("run the down script");
-    expect(block).toContain("</memory-recall>");
+    expect(block).toContain("</memory-context>");
   });
 });
 

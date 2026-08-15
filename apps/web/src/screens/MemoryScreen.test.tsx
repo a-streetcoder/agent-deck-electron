@@ -292,6 +292,10 @@ describe("MemoryScreen project memory preference", () => {
     const toggle = await screen.findByRole("switch", { name: "Memory automation" });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByTestId("agent-memory-state").textContent).toBe("On");
+    expect((screen.getByTestId("agent-memory-budget") as HTMLInputElement).value).toBe("6000");
+    const childToggle = screen.getByRole("switch", { name: "Delegated agent memory context" });
+    expect(childToggle.getAttribute("aria-checked")).toBe("true");
+    expect(childToggle).toHaveProperty("disabled", false);
     expect(document.body.textContent).toContain(
       "Across all projects, pausing stops automatic recall and agent memory tools. Stored memories remain available.",
     );
@@ -300,11 +304,53 @@ describe("MemoryScreen project memory preference", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(toggle).toHaveProperty("disabled", true);
     expect(screen.getByTestId("agent-memory-state").textContent).toBe("Paused");
+    expect(childToggle).toHaveProperty("disabled", true);
+    expect(screen.getByTestId("agent-memory-subagents-state").textContent).toContain(
+      "Inactive while memory automation is paused",
+    );
     patchResolve!(jsonResponse({}, false));
 
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
     expect(screen.getByTestId("agent-memory-save-status").getAttribute("role")).toBe("alert");
   });
+
+  it.each(["", "999", "20001", "1000.5"])(
+    "restores the saved budget and reports invalid blur value %j",
+    async (invalid) => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/settings" && init?.method === "PATCH") {
+          throw new Error("invalid values must not be sent");
+        }
+        if (url === "/settings") {
+          return jsonResponse({
+            settings: {
+              agentMemoryEnabled: true,
+              agentMemoryInjectionCharacterBudget: 6000,
+              agentMemorySubagentsEnabled: false,
+              semanticMemoryEnabled: false,
+            },
+            capabilities: { agentMemory: true },
+          });
+        }
+        if (url === "/memory/semantic-status") {
+          return jsonResponse({ recall: status("not_requested", "lexical") });
+        }
+        throw new Error(`unexpected request: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<MemoryScreen />);
+      const input = (await screen.findByTestId("agent-memory-budget")) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: invalid } });
+      fireEvent.blur(input);
+      expect(input.value).toBe("6000");
+      expect(screen.getByTestId("agent-memory-save-status").getAttribute("role")).toBe("alert");
+      expect(screen.getByTestId("agent-memory-save-status").textContent).toContain(
+        "1,000 to 20,000",
+      );
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
+    },
+  );
 
   it("resyncs external changes without letting its own broadcast strand an in-flight save", async () => {
     let serverEnabled = true;
@@ -377,6 +423,11 @@ describe("MemoryScreen project memory preference", () => {
     expect(toggle).toHaveProperty("disabled", true);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByTestId("agent-memory-state").textContent).toBe("Unavailable");
+    const childToggle = screen.getByRole("switch", { name: "Delegated agent memory context" });
+    expect(childToggle).toHaveProperty("disabled", true);
+    expect(screen.getByTestId("agent-memory-subagents-state").textContent).toContain(
+      "Inactive: memory capability unavailable",
+    );
     expect(document.body.textContent).toContain(
       "Memory automation is unavailable because it is disabled by this server’s configuration.",
     );

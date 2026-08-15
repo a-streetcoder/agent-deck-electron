@@ -19,6 +19,18 @@ describe("memory recall custom entries", () => {
       }),
     ).toBeNull();
     expect(parseMemoryRecallEntryData({ version: 1, memories: [] })).toBeNull();
+    const five = Array.from({ length: 5 }, (_, index) => ({
+      id: `memory-${index}`,
+      title: `Memory ${index}`,
+      type: "decision",
+    }));
+    expect(parseMemoryRecallEntryData({ version: 1, memories: five })?.memories).toHaveLength(5);
+    expect(
+      parseMemoryRecallEntryData({
+        version: 1,
+        memories: [...five, { id: "memory-6", title: "Memory 6", type: "decision" }],
+      }),
+    ).toBeNull();
   });
 
   it("derives project identity externally and upserts replay of the same entry", () => {

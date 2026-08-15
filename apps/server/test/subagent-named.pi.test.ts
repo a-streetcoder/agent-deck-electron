@@ -11,6 +11,7 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import type { SubagentCell } from "@agent-deck/domain";
+import { graphemeCount } from "@agent-deck/memory";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -217,7 +218,22 @@ describe("managed_subagent{agent}: named delegation", () => {
         return typeof fn?.name === "string" ? [fn.name] : [];
       },
     );
-    expect(childToolNames).toEqual(expect.arrayContaining(["read", "write", "edit", "bash"]));
+    expect(childToolNames).toEqual(
+      expect.arrayContaining([
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "contact_supervisor",
+        "agent_deck_memory_write",
+        "agent_deck_memory_search",
+        "agent_deck_memory_mark_stale",
+      ]),
+    );
+    // Native defaults automatic named-child memory context on. With an empty
+    // project library the policy is present and no recall body is fabricated.
+    expect(childSystem).toContain("Agent Deck memory policy:");
+    expect(childSystem).not.toContain('<memory-context source="Agent Deck"');
 
     // The child inherited the agent's TOOLS + SKILL together: pi only injects the
     // skills section when `read` is in the allowlist, so the skill sentinel in the
@@ -245,6 +261,129 @@ describe("managed_subagent{agent}: named delegation", () => {
       deltas.map(({ seq }) => seq).sort((a, b) => a - b),
     );
     expect(deltas.map(({ delta }) => delta).join("")).toBe("CHILD_REVIEW_SENTINEL: looks good.");
+  });
+
+  it("opts a real managed child into bounded policy, index, and task recall", async () => {
+    const title = `Child OAuth memory ${Date.now()}`;
+    const body = "CHILD_OPT_IN_RELEVANT_BODY " + "👨‍👩‍👧‍👦".repeat(1500);
+    const created = await fetch(`http://127.0.0.1:${server.port}/memory`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId,
+        type: "decision",
+        title,
+        summary: "oauth callback review delegated child",
+        body,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const changed = await fetch(`http://127.0.0.1:${server.port}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agentMemorySubagentsEnabled: true,
+        agentMemoryInjectionCharacterBudget: 1000,
+      }),
+    });
+    expect(changed.status).toBe(200);
+    try {
+      const before = mock.requests.length;
+      const id = await startSession();
+      await server.sessions.get(id)!.prompt("delegate a code review");
+      await server.receipts.waitFor("idle", id);
+      const child = mock.requests.slice(before).find(isChildRequest);
+      expect(child).toBeDefined();
+      const system = systemText(child!);
+      expect(system).toContain("Agent Deck memory policy:");
+      expect(system).toContain(title);
+      expect(system).toContain("CHILD_OPT_IN_RELEVANT_BODY");
+      const recall = system.match(/<memory-context[\s\S]*?<\/memory-context>/)?.[0];
+      expect(recall).toBeDefined();
+      expect(graphemeCount(recall!)).toBeLessThanOrEqual(1000);
+      const names = (Array.isArray(child!.tools) ? child!.tools : []).flatMap((tool) => {
+        const fn =
+          tool && typeof tool === "object"
+            ? (tool as { function?: { name?: unknown } }).function
+            : undefined;
+        return typeof fn?.name === "string" ? [fn.name] : [];
+      });
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "agent_deck_memory_write",
+          "agent_deck_memory_search",
+          "agent_deck_memory_mark_stale",
+        ]),
+      );
+    } finally {
+      await fetch(`http://127.0.0.1:${server.port}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agentMemorySubagentsEnabled: true,
+          agentMemoryInjectionCharacterBudget: 6000,
+        }),
+      });
+    }
+  });
+
+  it("keeps child memory tools but omits automatic context when child context is off", async () => {
+    const changed = await fetch(`http://127.0.0.1:${server.port}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentMemorySubagentsEnabled: false }),
+    });
+    expect(changed.status).toBe(200);
+    try {
+      const before = mock.requests.length;
+      const id = await startSession();
+      await server.sessions.get(id)!.prompt("delegate without automatic memory context");
+      await server.receipts.waitFor("idle", id);
+      const child = mock.requests.slice(before).find(isChildRequest);
+      expect(child).toBeDefined();
+      const system = systemText(child!);
+      expect(system).not.toContain("Agent Deck memory policy:");
+      expect(system).not.toContain('<memory-context source="Agent Deck"');
+      const tools = JSON.stringify(child!.tools ?? []);
+      expect(tools).toContain("agent_deck_memory_write");
+      expect(tools).toContain("agent_deck_memory_search");
+      expect(tools).toContain("agent_deck_memory_mark_stale");
+    } finally {
+      await fetch(`http://127.0.0.1:${server.port}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemorySubagentsEnabled: true }),
+      });
+    }
+  });
+
+  it("omits both child context and memory tools when master memory is paused", async () => {
+    const paused = await fetch(`http://127.0.0.1:${server.port}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentMemoryEnabled: false, agentMemorySubagentsEnabled: true }),
+    });
+    expect(paused.status).toBe(200);
+    try {
+      const before = mock.requests.length;
+      const id = await startSession();
+      await server.sessions.get(id)!.prompt("delegate a code review");
+      await server.receipts.waitFor("idle", id);
+      const child = mock.requests.slice(before).find(isChildRequest);
+      expect(child).toBeDefined();
+      const system = systemText(child!);
+      expect(system).not.toContain('<memory-context source="Agent Deck"');
+      expect(system).not.toContain('<memory-recall source="Agent Deck"');
+      const tools = JSON.stringify(child!.tools ?? []);
+      expect(tools).not.toContain("agent_deck_memory_");
+      expect(tools).toContain("contact_supervisor");
+    } finally {
+      await fetch(`http://127.0.0.1:${server.port}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentMemoryEnabled: true, agentMemorySubagentsEnabled: true }),
+      });
+    }
   });
 
   it("reapplies the named output advisory to a continuation prompt", async () => {

@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { graphemeCount } from "@agent-deck/memory";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import { registerMemoryTools } from "../src/memoryTools.ts";
@@ -65,6 +66,51 @@ describe("live agent memory pause guards", () => {
     const restored = await bridge.dispatch(cases[0]!, { token: "token-a" });
     expect(restored.isError).not.toBe(true);
     expect(restored.content).toContain("Stored memory");
+  });
+
+  it("applies the latest total grapheme budget after asynchronous ranking", async () => {
+    const bridge = new BridgeRegistry();
+    let budget = 6000;
+    const search = vi.fn(async () => ({
+      hits: ["One", "Two"].map((title, index) => ({
+        record: {
+          id: `memory-${index}`,
+          type: "decision" as const,
+          scope: "project" as const,
+          status: "active" as const,
+          title,
+          summary: "summary",
+          body: "👨‍👩‍👧‍👦".repeat(2000),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          tags: [],
+        },
+        score: 1,
+        sharedTerms: ["memory"],
+      })),
+      recall: {
+        readiness: "not_requested" as const,
+        mode: "lexical" as const,
+        reason: null,
+        message: "lexical",
+      },
+    }));
+    registerMemoryTools(
+      bridge,
+      mkdtempSync(path.join(tmpdir(), "agent-deck-memory-tools-budget-")),
+      () => "/project",
+      search,
+      undefined,
+      () => true,
+      () => budget,
+    );
+
+    budget = 1000;
+    const result = await bridge.dispatch(call("agent_deck_memory_search", { query: "memory" }), {
+      token: "token-a",
+    });
+    expect(graphemeCount(result.content)).toBeLessThanOrEqual(1000);
+    expect(result.details).toMatchObject({ hits: 2 });
   });
 
   it("discards ranked search hits when a pause lands while ranking is in flight", async () => {
@@ -138,6 +184,42 @@ describe("live agent memory pause guards", () => {
 
     await expect(result).resolves.toEqual({
       content: "Agent Deck memory is paused",
+      isError: true,
+    });
+  });
+
+  it("discards ranked results when project authorization changes in flight", async () => {
+    const bridge = new BridgeRegistry();
+    let projectPath = "/project-a";
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const search = vi.fn(async () => {
+      await gate;
+      return {
+        hits: [],
+        recall: {
+          readiness: "ready" as const,
+          mode: "semantic" as const,
+          reason: null,
+          message: "ready",
+        },
+      };
+    });
+    registerMemoryTools(
+      bridge,
+      mkdtempSync(path.join(tmpdir(), "agent-deck-memory-tools-owner-race-")),
+      () => projectPath,
+      search,
+    );
+
+    const result = bridge.dispatch(call("agent_deck_memory_search", { query: "memory" }), {
+      token: "token-a",
+    });
+    await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    projectPath = "/project-b";
+    release();
+    await expect(result).resolves.toEqual({
+      content: "Memory project access changed; retry the search.",
       isError: true,
     });
   });

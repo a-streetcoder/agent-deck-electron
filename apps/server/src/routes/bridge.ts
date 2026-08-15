@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
-import { buildRecalledMemories, type MemoryStore } from "@agent-deck/memory";
+import { renderRecalledMemories, type MemoryStore } from "@agent-deck/memory";
 import { z } from "zod";
 import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts";
 import type { ServerContext } from "../context.ts";
@@ -54,6 +54,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     askUser,
     supervisor,
     childSupervisors,
+    childAllowedTools,
     pendingSupervisor,
     memoryEnabled,
     agentMemoryEnabled,
@@ -211,7 +212,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   // when opted in) and return the top ones' full bodies as an injectable block
   // (empty → the hook injects nothing). The launch index carries only titles;
   // this surfaces the relevant bodies per turn.
-  const RECALL_LIMIT = 4;
+  const RECALL_LIMIT = 5;
   async function handleRecall(
     sessionId: string,
     params: Record<string, unknown>,
@@ -225,28 +226,41 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     }
     const query = typeof params.query === "string" ? params.query : "";
     const meta = sessions.get(sessionId)?.meta;
+    const projectId = meta?.projectId;
     // A registered project's path is canonical for memory ownership. Session cwd
     // can be a worktree, so a stale authoritative project link fails closed;
     // cwd is only the legacy fallback when no project id was ever recorded.
-    const canonicalProjectPath = meta?.projectId
-      ? ctx.projects.find((project) => project.id === meta.projectId)?.path
+    const canonicalProjectPath = projectId
+      ? ctx.projects.find((project) => project.id === projectId)?.path
       : undefined;
-    const projectPath = meta?.projectId ? canonicalProjectPath : meta?.cwd;
+    const projectPath = projectId ? canonicalProjectPath : meta?.cwd;
     if (!projectPath || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
     const store: MemoryStore = { baseDir: memoryBaseDir, projectPath };
     const result = await semanticRecall.recall(store, query, RECALL_LIMIT);
-    // A pause may land while ranking is in flight. Discard that completed work
-    // rather than injecting content/card metadata admitted under the old state.
-    if (!agentMemoryEnabled()) {
+    // Re-prove every live owner/gate after asynchronous ranking. A project
+    // reassignment/path change must discard both bodies and card metadata.
+    const currentMeta = sessions.get(sessionId)?.meta;
+    const currentProjectPath = currentMeta?.projectId
+      ? ctx.projects.find((project) => project.id === currentMeta.projectId)?.path
+      : undefined;
+    if (
+      !agentMemoryEnabled() ||
+      currentMeta?.projectId !== projectId ||
+      (projectId ? currentProjectPath !== canonicalProjectPath : currentMeta?.cwd !== projectPath)
+    ) {
       return { content: "", recall: semanticRecall.getStatus() };
     }
     const hits = result.hits.slice(0, RECALL_LIMIT);
+    const rendered = renderRecalledMemories(
+      hits.map((hit) => hit.record),
+      ctx.settings?.get().agentMemoryInjectionCharacterBudget ?? 6000,
+    );
     return {
-      content: buildRecalledMemories(hits.map((hit) => hit.record)),
+      content: rendered.content,
       recall: result.recall,
-      ...(meta?.projectId && canonicalProjectPath && hits.length > 0
+      ...(projectId && canonicalProjectPath && rendered.includedRecords.length > 0
         ? {
-            recalled: hits.map(({ record }) => ({
+            recalled: rendered.includedRecords.map((record) => ({
               id: record.id,
               title: record.title,
               type: record.type,
@@ -268,6 +282,10 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     const expected = bridgeTokens.get(parsed.data.sessionId);
     if (!expected || expected !== parsed.data.token) {
       return reply.code(403).send({ error: "invalid bridge token" });
+    }
+    const childTools = childAllowedTools?.get(parsed.data.sessionId);
+    if (childTools && !childTools.has(parsed.data.tool)) {
+      return reply.code(403).send({ error: "tool is not authorized for this child" });
     }
     // A child subagent's contact_supervisor call routes to the supervisor channel
     // (recorded + streamed into the parent's card), NOT the parent bridge registry.

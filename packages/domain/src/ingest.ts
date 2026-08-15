@@ -51,7 +51,7 @@ export function createIngestState(): IngestState {
 
 export const MEMORY_RECALL_ENTRY_TYPE = "agent-deck.memory-recall";
 export const MEMORY_RECALL_ENTRY_VERSION = 1;
-const MAX_RECALLED_MEMORIES = 4;
+export const MAX_RECALLED_MEMORIES = 5;
 const MEMORY_TYPES = new Set<RecalledMemoryReference["type"]>([
   "context",
   "decision",

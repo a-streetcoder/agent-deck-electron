@@ -36,6 +36,7 @@ import {
   runOneShotHelper,
   SessionManagerService,
   type ChildBridgeFactory,
+  type ChildMemoryRecall,
   type ChildToolPolicy,
   type ChildLaunchOverrides,
   type ChildRunOptions,
@@ -676,6 +677,8 @@ export class SessionManager {
      * spread provably misses siblings (Codex found four).
      */
     private readonly envFileLayer: (projectId?: string) => Record<string, string> = () => ({}),
+    /** Volatile launch-only memory context for ordinary managed children. */
+    private readonly recallChildMemory?: ChildMemoryRecall,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1274,6 +1277,7 @@ export class SessionManager {
       tempDirs,
       childBridgeFactory: this.childBridgeFactory,
       resolveAgent: this.resolveAgent,
+      recallChildMemory: this.recallChildMemory,
       ...(this.subagentRuns
         ? {
             childRuns: {

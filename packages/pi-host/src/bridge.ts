@@ -210,7 +210,7 @@ ${
         // filesystem paths and project identity never enter the Pi entry.
         const recalledRaw = data && Array.isArray(data.recalled) ? data.recalled : [];
         const memoryTypes = new Set(["context", "decision", "runbook", "failure", "preference"]);
-        const recalled = recalledRaw.length <= 4 && recalledRaw.every((memory) =>
+        const recalled = recalledRaw.length <= 5 && recalledRaw.every((memory) =>
           memory && typeof memory === "object" &&
           Object.keys(memory).every((key) => key === "id" || key === "title" || key === "type") &&
           typeof memory.id === "string" && memory.id.length > 0 && memory.id.length <= 256 &&

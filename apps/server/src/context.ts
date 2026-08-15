@@ -74,6 +74,7 @@ export function envDefaults(): {
 
 export interface NamedAgentLaunch {
   body: string;
+  description?: string;
   systemPromptMode: "replace" | "append";
   model?: string;
   thinking?: string;
@@ -111,6 +112,10 @@ export interface ServerContext {
   askUser: AskUserCoordinator;
   supervisor: SupervisorLog;
   childSupervisors: Map<string, { parentSessionId: string; cellId: string }>;
+  /** Canonical project ownership for child memory tools; removed with bridge disposal. */
+  childMemoryAuthorizations: Map<string, { projectId: string; projectPath: string }>;
+  /** Exact app bridge tools each child token may dispatch. */
+  childAllowedTools: Map<string, ReadonlySet<string>>;
   pendingSupervisor: Map<
     string,
     {
