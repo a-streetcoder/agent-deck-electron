@@ -35,6 +35,9 @@ interface Issue {
   assignees: string[];
   author: string | null;
   updatedAt: string | null;
+  /** ISS-10 aggregate rows: which repo + registered project owns this row. */
+  repository?: string | null;
+  projectId?: string | null;
 }
 
 interface IssueComment {
@@ -97,6 +100,10 @@ export function IssuesScreen() {
   const [incompleteResults, setIncompleteResults] = useState(false);
   // Native Issues screen's Open / Closed / All segmented filter.
   const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
+  // ISS-10 (native aggregate board): search across every registered project's repo.
+  const [allProjects, setAllProjects] = useState(false);
+  // The project whose routes serve the OPEN detail (a cross-project row's owner).
+  const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   // Native client-side facet filters (AppViewModel.filteredBoardItems): labels
   // are multi-select with OR semantics (an issue passes if it shares ≥1 selected
   // label — native `labels.isDisjoint(with:)`); assignee is single-select. Both
@@ -115,7 +122,7 @@ export function IssuesScreen() {
   // effect for a changed project/state starts. This closes the window where the
   // previous request could otherwise settle after the new query commits but
   // before reqRef bumps, without mutating refs during render.
-  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}`;
+  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}`;
   const queryEpochRef = useRef({ key: renderedQueryKey, epoch: 0 });
   useLayoutEffect(() => {
     if (queryEpochRef.current.key !== renderedQueryKey) {
@@ -134,7 +141,7 @@ export function IssuesScreen() {
   const load = useCallback(
     async (projectId: string): Promise<void> => {
       const req = ++reqRef.current;
-      const requestQueryKey = `${projectId}\u0000${stateFilter}`;
+      const requestQueryKey = `${projectId}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}`;
       const requestQueryEpoch = queryEpochRef.current.epoch;
       const ownsCurrentQuery = (): boolean =>
         reqRef.current === req &&
@@ -147,7 +154,9 @@ export function IssuesScreen() {
       setIncompleteResults(false);
       try {
         const response = await fetch(
-          `/projects/${encodeURIComponent(projectId)}/issues?state=${stateFilter}`,
+          allProjects
+            ? `/issues/search?state=${stateFilter}`
+            : `/projects/${encodeURIComponent(projectId)}/issues?state=${stateFilter}`,
         );
         const data = (await response.json()) as {
           issues?: Issue[];
@@ -168,7 +177,7 @@ export function IssuesScreen() {
         if (ownsCurrentQuery()) setLoading(false);
       }
     },
-    [stateFilter],
+    [stateFilter, allProjects],
   );
 
   useEffect(() => {
@@ -196,6 +205,8 @@ export function IssuesScreen() {
   }, [currentProjectId]);
 
   const start = async (issue: IssueDetail): Promise<void> => {
+    const ownerProject =
+      projects.find((p) => p.id === (detailProjectId ?? currentProjectId)) ?? project;
     setView("chat");
     // Wait for the new session to become active before seeding its composer,
     // so the prompt can't land in the previous session's draft.
@@ -227,8 +238,8 @@ export function IssuesScreen() {
         })),
         relationships: issue.relationships,
       },
-      project?.name ?? "",
-      project?.path ?? "",
+      ownerProject?.name ?? "",
+      ownerProject?.path ?? "",
     );
     setPendingComposerText({
       sessionId: session.id,
@@ -239,16 +250,19 @@ export function IssuesScreen() {
   };
 
   // Load a single issue's detail (title/state/labels/assignees/author/body).
-  const openDetail = async (number: number): Promise<void> => {
+  const openDetail = async (number: number, projectId?: string): Promise<void> => {
     // ISS-01: a reply draft belongs to ONE selection (Codex: leak across issues)
     setReplyDraft("");
-    if (!currentProjectId) return;
+    // ISS-10: an aggregate row opens against ITS project, not the selected one
+    const pid = projectId ?? currentProjectId;
+    if (!pid) return;
     const req = ++detailReq.current;
     setDetailNumber(number);
+    setDetailProjectId(pid);
     setDetail(null);
     setDetailError(null);
     try {
-      const res = await fetch(`/projects/${encodeURIComponent(currentProjectId)}/issues/${number}`);
+      const res = await fetch(`/projects/${encodeURIComponent(pid)}/issues/${number}`);
       if (detailReq.current !== req) return; // a newer open superseded this one
       if (!res.ok) {
         const { error } = (await res.json().catch(() => ({}))) as { error?: string };
@@ -290,7 +304,7 @@ export function IssuesScreen() {
     // e.g. the SAME issue number in a different project after a switch.
     const req = detailReq.current;
     const res = await fetch(
-      `/projects/${encodeURIComponent(currentProjectId)}/issues/${detail.number}/close`,
+      `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/close`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -324,7 +338,7 @@ export function IssuesScreen() {
     if (!currentProjectId || !detail) return;
     const req = detailReq.current;
     const res = await fetch(
-      `/projects/${encodeURIComponent(currentProjectId)}/issues/${detail.number}/reopen`,
+      `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/reopen`,
       { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
     );
     if (detailReq.current !== req) return; // selection changed — ignore this response
@@ -352,7 +366,7 @@ export function IssuesScreen() {
     setReplyBusy(true);
     try {
       const res = await fetch(
-        `/projects/${encodeURIComponent(currentProjectId)}/issues/${detail.number}/comment`,
+        `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/comment`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -368,7 +382,7 @@ export function IssuesScreen() {
       setReplyDraft("");
       // Re-fetch the detail so the new comment shows with server-authoritative
       // author/timestamp instead of a fabricated local echo.
-      await openDetail(detail.number);
+      await openDetail(detail.number, detailProjectId ?? undefined);
     } catch (error) {
       // a network-level rejection must surface too, not vanish from a void handler
       if (detailReq.current === req) {
@@ -413,6 +427,7 @@ export function IssuesScreen() {
           const haystack = [
             issue.title,
             `#${issue.number}`,
+            issue.repository ?? "",
             issue.author ?? "",
             ...issue.assignees,
             ...issue.labels,
@@ -710,6 +725,23 @@ export function IssuesScreen() {
                   ))}
                 </div>
                 <ControlButton
+                  data-testid="issues-scope-all"
+                  aria-pressed={allProjects}
+                  className={cn(
+                    "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                    allProjects
+                      ? "border-border-strong bg-selection text-text-primary"
+                      : "border-border-subtle text-text-muted hover:text-text-primary",
+                  )}
+                  title="Search across every registered project's repository (native aggregate board)"
+                  onClick={() => {
+                    setIncompleteResults(false);
+                    setAllProjects((v) => !v);
+                  }}
+                >
+                  All projects
+                </ControlButton>
+                <ControlButton
                   data-testid="issues-refresh"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
                   disabled={loading}
@@ -851,12 +883,16 @@ export function IssuesScreen() {
               <div className="space-y-1.5" data-testid="issues-list">
                 {visibleIssues.map((issue) => (
                   <ControlButton
-                    key={issue.number}
+                    key={`${issue.repository ?? ""}#${issue.number}`}
                     data-testid={`issue-${issue.number}`}
                     className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
-                    onClick={() => void openDetail(issue.number)}
+                    onClick={() => void openDetail(issue.number, issue.projectId ?? undefined)}
                   >
-                    <span className="font-mono text-xs text-text-muted">#{issue.number}</span>
+                    <span className="font-mono text-xs text-text-muted">
+                      {issue.repository
+                        ? `${issue.repository}#${issue.number}`
+                        : `#${issue.number}`}
+                    </span>
                     <span
                       className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary"
                       style={{ fontStretch: "expanded" }}

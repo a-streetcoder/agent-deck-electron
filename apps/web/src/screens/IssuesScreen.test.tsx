@@ -41,6 +41,73 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("aggregate all-projects search (ISS-10)", () => {
+  it("toggles to the aggregate board, prefixes repos, and opens cross-project details", async () => {
+    const projectB = {
+      id: "project-b",
+      name: "B",
+      path: "/tmp/b",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    useAppStore.setState({
+      currentProjectId: project.id,
+      projects: [project, projectB],
+      error: null,
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/issues/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [
+              { ...issue(5), repository: "acme/one", projectId: project.id },
+              { ...issue(9), repository: "acme/two", projectId: "project-b" },
+            ],
+            incompleteResults: false,
+          }),
+        );
+      }
+      if (url.includes("/projects/project-b/issues/9")) {
+        return Promise.resolve(
+          jsonResponse({
+            issue: {
+              number: 9,
+              title: "Issue 9",
+              body: "Cross-project body",
+              state: "OPEN",
+              url: "https://example.test/issues/9",
+              labels: [],
+              assignees: [],
+              author: null,
+              comments: [],
+            },
+          }),
+        );
+      }
+      if (url.includes("/issues")) {
+        return Promise.resolve(jsonResponse({ issues: [issue(5)], incompleteResults: false }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByTestId("issues-scope-all"));
+    // the aggregate route serves the board, rows carry their repo prefix
+    await screen.findByText("acme/two#9");
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).startsWith("/issues/search?state=open")),
+    ).toBe(true);
+
+    // opening a row from ANOTHER project fetches THAT project's detail
+    fireEvent.click(screen.getByText("Issue 9"));
+    await screen.findByText("Cross-project body");
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes("/projects/project-b/issues/9")),
+    ).toBe(true);
+  });
+});
+
 describe("issue reply (ISS-01)", () => {
   it("posts the drafted comment and re-fetches the detail", async () => {
     let detailComments: Array<{ author: string | null; body: string; createdAt: string | null }> =

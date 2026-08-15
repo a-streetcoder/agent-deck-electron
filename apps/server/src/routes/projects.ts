@@ -489,6 +489,98 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
   });
 
+  // Aggregate cross-repository search (ISS-10, native
+  // GitHubSearchService.fetchAggregateIssues): one `gh search issues` across
+  // every registered project's GitHub origin, each row tagged with the project
+  // that owns its repository so the UI opens details in the right place.
+  fastify.get("/issues/search", async (request, reply) => {
+    const stateParsed = z
+      .enum(["open", "closed", "all"])
+      .default("open")
+      .safeParse((request.query as { state?: string }).state);
+    if (!stateParsed.success) return reply.status(400).send({ error: "invalid state filter" });
+    const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
+    // Each project's GitHub repo from its origin remote (https or ssh form);
+    // projects without one contribute nothing and break nothing.
+    const repoOf = async (projectPath: string): Promise<string | null> => {
+      try {
+        const { stdout } = await execFileAsync(
+          "git",
+          ["-C", projectPath, "remote", "get-url", "origin"],
+          { timeout: 10_000 },
+        );
+        const url = stdout.trim();
+        const match =
+          /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
+          /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+        return match ? `${match[1]}/${match[2]}` : null;
+      } catch {
+        return null;
+      }
+    };
+    const visible = projects.list().filter((p) => !p.hidden);
+    const repoProjects = (
+      await Promise.all(visible.map(async (p) => ({ projectId: p.id, repo: await repoOf(p.path) })))
+    ).filter((entry): entry is { projectId: string; repo: string } => entry.repo !== null);
+    // first project wins a shared repo — one row, one deterministic owner
+    const projectByRepo = new Map<string, string>();
+    for (const { projectId, repo } of repoProjects) {
+      if (!projectByRepo.has(repo.toLowerCase())) projectByRepo.set(repo.toLowerCase(), projectId);
+    }
+    if (projectByRepo.size === 0) {
+      return { issues: [], incompleteResults: false, error: "No GitHub repositories discovered." };
+    }
+    const repoArgs = [...new Set(repoProjects.map(({ repo }) => repo))].flatMap((repo) => [
+      "--repo",
+      repo,
+    ]);
+    try {
+      const { stdout } = await execFileAsync(
+        ghBin,
+        [
+          "search",
+          "issues",
+          ...repoArgs,
+          "--state",
+          stateParsed.data === "all" ? "open" : stateParsed.data,
+          "--sort",
+          "updated",
+          "--json",
+          "number,title,state,url,labels,assignees,author,updatedAt,repository",
+          "--limit",
+          "51",
+        ].filter(
+          // gh search has no state:all — omit the flag entirely for "all"
+          (arg, index, argv) =>
+            stateParsed.data !== "all" || (arg !== "--state" && argv[index - 1] !== "--state"),
+        ),
+        { timeout: 15_000, maxBuffer: 8_000_000 },
+      );
+      const raw = JSON.parse(stdout) as Array<
+        RawGitHubIssueListRow & { repository?: { nameWithOwner?: string } }
+      >;
+      const normalized = normalizeGitHubIssueList(raw);
+      return {
+        issues: normalized.issues.map((issue, index) => {
+          const repository = raw[index]?.repository?.nameWithOwner ?? null;
+          return {
+            ...issue,
+            repository,
+            projectId: repository ? (projectByRepo.get(repository.toLowerCase()) ?? null) : null,
+          };
+        }),
+        incompleteResults: normalized.incompleteResults,
+      };
+    } catch {
+      return {
+        issues: [],
+        incompleteResults: false,
+        error:
+          "Couldn't search issues — needs the gh CLI installed, authenticated, and GitHub remotes.",
+      };
+    }
+  });
+
   // Reopen a closed issue (ISS-02, native Issues reopen): `gh issue reopen <n>`.
   fastify.post("/projects/:id/issues/:number/reopen", async (request, reply) => {
     const { id, number } = request.params as { id: string; number: string };
