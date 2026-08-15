@@ -81,4 +81,45 @@ describe("buildIssueContext (ISS-03)", () => {
     expect(bare).toContain("body:\n(empty)");
     expect(bare).toContain("comments:\n(none)");
   });
+
+  it("renders native relationshipLines when links exist (ISS-04)", () => {
+    const ref = (n: number, kind: string | null) => ({
+      number: n,
+      title: `Ref ${n}`,
+      state: "OPEN",
+      url: `https://github.com/acme/widgets/issues/${n}`,
+      repository: "acme/widgets",
+      type: kind,
+    });
+    const block = buildIssueContext(
+      {
+        number: 7,
+        title: "Parented",
+        body: "b",
+        state: "OPEN",
+        stateReason: null,
+        url: "https://github.com/acme/widgets/issues/7",
+        createdAt: null,
+        updatedAt: null,
+        closedAt: null,
+        labels: [],
+        assignees: [],
+        author: null,
+        comments: [],
+        relationships: {
+          parent: ref(1, "Epic"),
+          subIssues: [ref(8, null)],
+          blockedBy: [ref(2, "Task")],
+          blocking: [],
+        },
+      },
+      "P",
+      "/p",
+    );
+    expect(block).toContain("relationships:");
+    expect(block).toContain("- parent: acme/widgets#1 Ref 1 [Epic] {OPEN}");
+    expect(block).toContain("- sub-issue: acme/widgets#8 Ref 8 {OPEN}");
+    expect(block).toContain("- blocked-by: acme/widgets#2 Ref 2 [Task] {OPEN}");
+    expect(block).not.toContain("- blocking:");
+  });
 });

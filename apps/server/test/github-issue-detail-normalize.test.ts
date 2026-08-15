@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeGitHubIssueDetail } from "../src/githubIssues.ts";
+import { normalizeGitHubIssueDetail, normalizeIssueReference } from "../src/githubIssues.ts";
 
 /**
  * ISS-03: the detail normalizer carries the FULL structured context the native
@@ -69,5 +69,37 @@ describe("normalizeGitHubIssueDetail (ISS-03)", () => {
     expect(bare.createdAt).toBeNull();
     expect(bare.closedAt).toBeNull();
     expect(bare.comments).toEqual([]);
+  });
+});
+
+describe("normalizeIssueReference (ISS-04)", () => {
+  it("maps a REST relationship payload to the native reference shape", () => {
+    expect(
+      normalizeIssueReference({
+        number: 12,
+        title: "Child task",
+        state: "open",
+        html_url: "https://github.com/acme/widgets/issues/12",
+        type: { name: "Task" },
+      }),
+    ).toEqual({
+      number: 12,
+      title: "Child task",
+      state: "open",
+      url: "https://github.com/acme/widgets/issues/12",
+      repository: "acme/widgets",
+      type: "Task",
+    });
+    // absent optionals and a non-derivable repository stay null
+    expect(
+      normalizeIssueReference({ number: 3, title: "X", state: "closed", html_url: "https://x/3" }),
+    ).toEqual({
+      number: 3,
+      title: "X",
+      state: "closed",
+      url: "https://x/3",
+      repository: null,
+      type: null,
+    });
   });
 });

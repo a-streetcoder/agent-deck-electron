@@ -18,7 +18,7 @@ import {
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
-import { buildIssueContext } from "./issueContext.ts";
+import { buildIssueContext, type IssueContextRelationships } from "./issueContext.ts";
 import { newChat } from "../state/wsBridge.ts";
 
 /**
@@ -52,6 +52,7 @@ interface IssueDetail extends Issue {
   createdAt?: string | null;
   closedAt?: string | null;
   comments: IssueComment[];
+  relationships?: IssueContextRelationships;
 }
 
 /** ISO timestamp → a short local date, or "" if absent/unparseable. */
@@ -224,6 +225,7 @@ export function IssuesScreen() {
           createdAt: comment.createdAt,
           updatedAt: comment.updatedAt ?? null,
         })),
+        relationships: issue.relationships,
       },
       project?.name ?? "",
       project?.path ?? "",
@@ -568,6 +570,49 @@ export function IssuesScreen() {
                 >
                   <MarkdownDocument source={detail.body || "_No description provided._"} />
                 </div>
+                {(() => {
+                  const rel = detail.relationships;
+                  const groups: Array<
+                    [
+                      string,
+                      typeof rel extends undefined ? never : NonNullable<typeof rel>["subIssues"],
+                    ]
+                  > = [];
+                  if (rel?.parent) groups.push(["Parent", [rel.parent]]);
+                  if (rel && rel.subIssues.length > 0) groups.push(["Sub-issues", rel.subIssues]);
+                  if (rel && rel.blockedBy.length > 0) groups.push(["Blocked by", rel.blockedBy]);
+                  if (rel && rel.blocking.length > 0) groups.push(["Blocking", rel.blocking]);
+                  if (groups.length === 0) return null;
+                  return (
+                    <div
+                      data-testid="issue-relationships"
+                      className="mt-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                    >
+                      <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                        Relationships
+                      </div>
+                      <div className="space-y-1.5">
+                        {groups.map(([title, refs]) => (
+                          <div key={title} className="text-xs">
+                            <span className="text-text-muted">{title}</span>
+                            {refs.map((ref) => (
+                              <div
+                                key={`${title}-${ref.number}`}
+                                className="truncate pl-2 text-text-secondary"
+                              >
+                                {ref.repository
+                                  ? `${ref.repository}#${ref.number}`
+                                  : `#${ref.number}`}{" "}
+                                {ref.title}{" "}
+                                <span className="text-text-muted">{`{${ref.state}}`}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="mt-5" data-testid="issue-comments">
                   <div className="flex items-center gap-1.5 pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">

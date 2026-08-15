@@ -24,9 +24,17 @@ beforeAll(async () => {
   writeFileSync(
     stub,
     `#!/bin/sh
+if [ "$1" = "api" ]; then
+  case "$2" in
+    */parent) echo '{"number":1,"title":"Epic","state":"open","html_url":"https://github.com/acme/w/issues/1","type":{"name":"Epic"}}' ;;
+    */sub_issues) echo '[{"number":8,"title":"Child","state":"open","html_url":"https://github.com/acme/w/issues/8"}]' ;;
+    *) echo '[]' ;;
+  esac
+  exit 0
+fi
 num="$3"
 cat <<JSON
-{"number":$num,"title":"Flux capacitor","body":"# Steps\\nreproduce","state":"OPEN","stateReason":null,"url":"https://x/$num","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","closedAt":null,"labels":[{"name":"bug"},{"name":"p1"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"comments":[{"id":"IC_1","url":"https://x/$num#c1","author":{"login":"marty"},"body":"I can repro.","createdAt":"2026-01-15T10:00:00Z","updatedAt":"2026-01-15T10:00:00Z"}]}
+{"number":$num,"title":"Flux capacitor","body":"# Steps\\nreproduce","state":"OPEN","stateReason":null,"url":"https://github.com/acme/w/issues/$num","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","closedAt":null,"labels":[{"name":"bug"},{"name":"p1"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"comments":[{"id":"IC_1","url":"https://x/$num#c1","author":{"login":"marty"},"body":"I can repro.","createdAt":"2026-01-15T10:00:00Z","updatedAt":"2026-01-15T10:00:00Z"}]}
 JSON
 `,
   );
@@ -90,6 +98,29 @@ describe.skipIf(isWindows)("GET /projects/:id/issues/:number", () => {
         updatedAt: "2026-01-15T10:00:00Z",
       },
     ]);
+    // ISS-04: relationships ride along via the REST endpoints (stubbed `gh api`);
+    // absent groups stay empty rather than failing the detail
+    const rel = (issue as unknown as { relationships: Record<string, unknown> }).relationships;
+    expect(rel.parent).toEqual({
+      number: 1,
+      title: "Epic",
+      state: "open",
+      url: "https://github.com/acme/w/issues/1",
+      repository: "acme/w",
+      type: "Epic",
+    });
+    expect(rel.subIssues).toEqual([
+      {
+        number: 8,
+        title: "Child",
+        state: "open",
+        url: "https://github.com/acme/w/issues/8",
+        repository: "acme/w",
+        type: null,
+      },
+    ]);
+    expect(rel.blockedBy).toEqual([]);
+    expect(rel.blocking).toEqual([]);
   });
 
   it("400s a non-numeric issue number without invoking gh", async () => {

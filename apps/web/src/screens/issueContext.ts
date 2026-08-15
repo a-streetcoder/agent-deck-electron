@@ -14,6 +14,22 @@ export interface IssueContextComment {
   updatedAt: string | null;
 }
 
+export interface IssueContextReference {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  repository: string | null;
+  type: string | null;
+}
+
+export interface IssueContextRelationships {
+  parent: IssueContextReference | null;
+  subIssues: IssueContextReference[];
+  blockedBy: IssueContextReference[];
+  blocking: IssueContextReference[];
+}
+
 export interface IssueContextDetail {
   number: number;
   title: string;
@@ -28,6 +44,7 @@ export interface IssueContextDetail {
   assignees: string[];
   author: string | null;
   comments: IssueContextComment[];
+  relationships?: IssueContextRelationships;
 }
 
 /** `https://github.com/OWNER/REPO/issues/N` → `OWNER/REPO`, else null. */
@@ -59,6 +76,25 @@ export function buildIssueContext(
   if (issue.closedAt) lines.push(`closed-at: ${issue.closedAt}`);
 
   lines.push("", "body:", issue.body.trim() || "(empty)");
+
+  // ISS-04 (native relationshipLines): emitted only when any link exists.
+  const referenceSummary = (ref: IssueContextReference): string => {
+    const parts = [`${ref.repository ?? ""}#${ref.number}`, ref.title];
+    if (ref.type?.trim()) parts.push(`[${ref.type.trim()}]`);
+    parts.push(`{${ref.state}}`);
+    return parts.join(" ");
+  };
+  const rel = issue.relationships;
+  const relationshipLines: string[] = [];
+  if (rel?.parent) relationshipLines.push(`- parent: ${referenceSummary(rel.parent)}`);
+  for (const r of rel?.subIssues ?? [])
+    relationshipLines.push(`- sub-issue: ${referenceSummary(r)}`);
+  for (const r of rel?.blockedBy ?? [])
+    relationshipLines.push(`- blocked-by: ${referenceSummary(r)}`);
+  for (const r of rel?.blocking ?? []) relationshipLines.push(`- blocking: ${referenceSummary(r)}`);
+  if (relationshipLines.length > 0) {
+    lines.push("", "relationships:", ...relationshipLines);
+  }
 
   lines.push("", "comments:");
   if (issue.comments.length === 0) {

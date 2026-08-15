@@ -22,8 +22,11 @@ import type { ServerContext } from "../context.ts";
 import {
   normalizeGitHubIssueDetail,
   normalizeGitHubIssueList,
+  normalizeIssueReference,
+  type IssueRelationships,
   type RawGitHubIssueDetail,
   type RawGitHubIssueListRow,
+  type RawIssueRelationship,
 } from "../githubIssues.ts";
 import {
   ancestorDirsOf,
@@ -441,7 +444,44 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         { cwd: project.path, timeout: 15_000, maxBuffer: 8_000_000 },
       );
       const raw = JSON.parse(stdout) as RawGitHubIssueDetail;
-      return { issue: normalizeGitHubIssueDetail(raw) };
+      // ISS-04 (native GitHubIssueService): parent / sub-issues / blocked-by /
+      // blocking via the REST endpoints, BEST-EFFORT — relationships are context
+      // enrichment, so any failure (older gh, no GitHub remote, endpoint 404)
+      // degrades to none rather than failing the detail.
+      const repoMatch = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\//i.exec(raw.url);
+      const relationships: IssueRelationships = {
+        parent: null,
+        subIssues: [],
+        blockedBy: [],
+        blocking: [],
+      };
+      if (repoMatch) {
+        const base = `repos/${repoMatch[1]}/${repoMatch[2]}/issues/${number}`;
+        const fetchRefs = async (path: string): Promise<RawIssueRelationship[]> => {
+          try {
+            const out = await execFileAsync(ghBin, ["api", path], {
+              cwd: project.path,
+              timeout: 15_000,
+              maxBuffer: 8_000_000,
+            });
+            const parsed = JSON.parse(out.stdout) as RawIssueRelationship | RawIssueRelationship[];
+            return Array.isArray(parsed) ? parsed : [parsed];
+          } catch {
+            return [];
+          }
+        };
+        const [parents, subIssues, blockedBy, blocking] = await Promise.all([
+          fetchRefs(`${base}/parent`),
+          fetchRefs(`${base}/sub_issues`),
+          fetchRefs(`${base}/dependencies/blocked_by`),
+          fetchRefs(`${base}/dependencies/blocking`),
+        ]);
+        relationships.parent = parents[0] ? normalizeIssueReference(parents[0]) : null;
+        relationships.subIssues = subIssues.map(normalizeIssueReference);
+        relationships.blockedBy = blockedBy.map(normalizeIssueReference);
+        relationships.blocking = blocking.map(normalizeIssueReference);
+      }
+      return { issue: { ...normalizeGitHubIssueDetail(raw), relationships } };
     } catch {
       return reply.status(502).send({
         error: "Couldn't load the issue — needs the gh CLI installed, authenticated, and a remote.",

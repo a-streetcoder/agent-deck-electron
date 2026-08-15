@@ -75,3 +75,35 @@ export function normalizeGitHubIssueDetail(raw: RawGitHubIssueDetail) {
     })),
   };
 }
+
+export interface RawIssueRelationship {
+  number: number;
+  title: string;
+  state: string;
+  html_url?: string;
+  type?: { name?: string } | null;
+}
+
+/** ISS-04: one REST relationship payload (parent/sub_issues/dependencies) to the
+ *  native GitHubIssueReference shape; repository derives from the html_url. */
+export function normalizeIssueReference(raw: RawIssueRelationship) {
+  const url = raw.html_url ?? "";
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\//i.exec(url);
+  return {
+    number: raw.number,
+    title: raw.title,
+    state: raw.state,
+    url,
+    repository: match ? `${match[1]}/${match[2]}` : null,
+    type: raw.type?.name ?? null,
+  };
+}
+
+export type IssueReference = ReturnType<typeof normalizeIssueReference>;
+
+export interface IssueRelationships {
+  parent: IssueReference | null;
+  subIssues: IssueReference[];
+  blockedBy: IssueReference[];
+  blocking: IssueReference[];
+}
