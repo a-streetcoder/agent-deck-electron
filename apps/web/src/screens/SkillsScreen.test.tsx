@@ -949,6 +949,78 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ scope: "global", name: "alpha" });
   });
 
+  it("duplicate copies compare side-by-side (SKL-21)", async () => {
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "global copy",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                body: "Global body text",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skills/visibility") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "global copy",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/alpha/SKILL.md",
+                body: "Global body text",
+              },
+              {
+                name: "alpha",
+                description: "project copy",
+                scope: "project",
+                filePath: "C:/proj/.agents/skills/alpha/SKILL.md",
+                body: "Project body text",
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(jsonResponse({ repos: [] }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+
+    // the selected skill's duplicate diagnostic lists the OTHER copy…
+    const card = await screen.findByTestId("skill-duplicates");
+    expect(card.textContent).toContain("C:/proj/.agents/skills/alpha/SKILL.md");
+    // the selected copy itself is NOT listed — exactly one duplicate row exists
+    expect(within(card).queryByTestId("skill-compare-1")).toBeNull();
+
+    // …and Compare opens the two-pane side-by-side view (native SkillCompareSheet)
+    fireEvent.click(within(card).getByTestId("skill-compare-0"));
+    const dialog = await screen.findByTestId("skill-compare-dialog");
+    expect(dialog.textContent).toContain("C:/home/.agents/skills/alpha/SKILL.md");
+    expect(dialog.textContent).toContain("C:/proj/.agents/skills/alpha/SKILL.md");
+    expect(dialog.textContent).toContain("Global body text");
+    expect(dialog.textContent).toContain("Project body text");
+
+    fireEvent.click(screen.getByTestId("skill-compare-done"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-compare-dialog")).toBeNull();
+    });
+  });
+
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
     stubPreviewFetch([]);
     render(<SkillsScreen />);

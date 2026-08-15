@@ -486,6 +486,8 @@ export function SkillsScreen() {
   useEffect(() => {
     const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
     setSkills([]);
+    setSkillCandidates([]);
+    setCompare(null); // a copy from the previous project/refresh must not linger
     setPackageWarnings([]);
     setPluginRefs([]);
     let cancelled = false;
@@ -513,6 +515,17 @@ export function SkillsScreen() {
             ...(data.codexPluginWarnings ?? []),
           ]);
           setPluginRefs(data.codexPluginRefs ?? []);
+        }
+        try {
+          const vis = await fetch(`/resources/skills/visibility${query}`);
+          if (vis.ok) {
+            const dupes = (await vis.json()) as { skills: SkillInfo[] };
+            if (!cancelled) setSkillCandidates(dupes.skills);
+          } else if (!cancelled) {
+            setSkillCandidates([]);
+          }
+        } catch {
+          if (!cancelled) setSkillCandidates([]);
         }
       } catch (error) {
         if (!cancelled) setGlobalError(String(error));
@@ -635,6 +648,12 @@ export function SkillsScreen() {
   // SKL-03/04: preview-first git import. Inspect discovers what the repository contains (the
   // engine caches the clone), the dialog owns per-skill selection, and the confirmed import
   // materializes exactly what was shown. Cancel discards the cached preview.
+  // SKL-21: the candidates view (shadowed copies included) powers the duplicate
+  // diagnostic + compare sheet. Diagnostic-only, so a failed fetch degrades to
+  // "no duplicates" instead of an error.
+  const [skillCandidates, setSkillCandidates] = useState<SkillInfo[]>([]);
+  const [compare, setCompare] = useState<{ left: SkillInfo; right: SkillInfo } | null>(null);
+
   // SKL-20: on-demand AI summaries (native SkillDescriptionGenerationService),
   // keyed by scope:name; the server caches by content hash so re-clicks are free.
   const [skillSummary, setSkillSummary] = useState<
@@ -1633,6 +1652,56 @@ export function SkillsScreen() {
             </ControlButton>
           </div>
         ) : null}
+        {compare ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+            <div
+              data-testid="skill-compare-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Compare copies of ${compare.left.name}`}
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setCompare(null);
+              }}
+              className="flex max-h-[85vh] w-[900px] max-w-full flex-col rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
+            >
+              <div className="border-b border-border-subtle px-5 py-4">
+                <div className="text-sm font-semibold text-text-primary">Compare skills</div>
+                <div className="text-xs text-text-muted">
+                  Review both copies of &quot;{compare.left.name}&quot; before choosing which one to
+                  keep.
+                </div>
+              </div>
+              <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border-subtle">
+                {[compare.left, compare.right].map((side) => (
+                  <div key={side.filePath} className="flex min-h-0 min-w-0 flex-col">
+                    <div className="border-b border-border-subtle px-4 py-2">
+                      <div
+                        className="truncate font-mono text-micro text-text-secondary"
+                        title={side.filePath}
+                      >
+                        {side.filePath}
+                      </div>
+                      <ScopeChip scope={side.scope} />
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                      <MarkdownDocument source={side.body || "_(empty)_"} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end border-t border-border-subtle px-5 py-3">
+                <ControlButton
+                  data-testid="skill-compare-done"
+                  className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary"
+                  onClick={() => setCompare(null)}
+                >
+                  Done
+                </ControlButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {gitPreview ? (
           <SkillImportPreviewDialog
             sourceLabel={gitPreview.url}
@@ -2336,6 +2405,43 @@ export function SkillsScreen() {
                       Ask the configured model what this skill does and when to reach for it.
                     </div>
                   ) : null}
+                </div>
+              );
+            })()}
+            {(() => {
+              // SKL-21: same-name copies (native duplicate diagnostic + compare sheet)
+              const copies = skillCandidates.filter(
+                (c) => c.name === selected.name && c.filePath !== selected.filePath,
+              );
+              if (copies.length === 0) return null;
+              return (
+                <div
+                  data-testid="skill-duplicates"
+                  className="rounded-xl border border-warning/55 bg-warning/10 px-4 py-3"
+                >
+                  <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    Duplicate copies
+                  </div>
+                  <div className="space-y-1.5">
+                    {copies.map((copy, index) => (
+                      <div key={copy.filePath} className="flex items-center gap-2 text-xs">
+                        <span
+                          className="min-w-0 flex-1 truncate font-mono text-text-secondary"
+                          title={copy.filePath}
+                        >
+                          {copy.filePath}
+                        </span>
+                        <ScopeChip scope={copy.scope} />
+                        <ControlButton
+                          data-testid={`skill-compare-${index}`}
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                          onClick={() => setCompare({ left: selected, right: copy })}
+                        >
+                          Compare
+                        </ControlButton>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               );
             })()}
