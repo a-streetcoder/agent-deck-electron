@@ -243,7 +243,7 @@ export function writePromptFile(
   roots: ResourceRoots,
   scope: WritableScope,
   name: string,
-  edit: { description?: string; body?: string },
+  edit: { description?: string; body?: string; argumentHint?: string },
 ): string {
   const filePath = promptFilePath(roots, scope, name);
 
@@ -258,6 +258,12 @@ export function writePromptFile(
 
   frontmatter.name = name;
   if (edit.description !== undefined) frontmatter.description = edit.description;
+  // PRM-09 (native prompt views): a provided hint SETS the frontmatter, an
+  // explicit empty string CLEARS it, and an absent field preserves what's there.
+  if (edit.argumentHint !== undefined) {
+    if (edit.argumentHint.trim() === "") delete frontmatter["argument-hint"];
+    else frontmatter["argument-hint"] = edit.argumentHint.trim();
+  }
   if (edit.body !== undefined) body = edit.body.trim();
 
   secureWrite(roots, filePath, `---\n${serializeFrontmatter(frontmatter)}\n---\n\n${body}\n`);

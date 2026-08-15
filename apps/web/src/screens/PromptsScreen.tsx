@@ -65,6 +65,7 @@ export function filterPrompts(prompts: PromptInfo[], search: string): PromptInfo
 interface Draft {
   name: string;
   description: string;
+  argumentHint: string;
   body: string;
   scope: "global" | "library";
   /** The project this edit targets, captured when the editor opened. */
@@ -296,6 +297,7 @@ export function PromptsScreen() {
     setDraft({
       name: "",
       description: "",
+      argumentHint: "",
       body: "",
       scope: "library",
       projectId: currentProjectId,
@@ -325,6 +327,7 @@ export function PromptsScreen() {
     setDraft({
       name: target.name,
       description: target.description ?? "",
+      argumentHint: target.argumentHint ?? "",
       body: target.body,
       // a read-only COPY draft always lands in the user's global prompts — an
       // external ref carries library scope, but saving there would overwrite an
@@ -397,7 +400,11 @@ export function PromptsScreen() {
           projectId: draft.projectId ?? undefined,
           scope: draft.scope,
           name: draft.name.trim(),
-          edit: { description: draft.description, body: draft.body },
+          edit: {
+            description: draft.description,
+            body: draft.body,
+            argumentHint: draft.argumentHint,
+          },
         }),
       });
       if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -553,6 +560,13 @@ export function PromptsScreen() {
               placeholder="description"
               value={draft.description}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+            />
+            <ControlInput
+              data-testid="prompt-argument-hint-input"
+              className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent"
+              placeholder="argument hint (e.g. <pr-number>) — shown next to /name"
+              value={draft.argumentHint}
+              onChange={(e) => setDraft({ ...draft, argumentHint: e.target.value })}
             />
             <ControlTextArea
               data-testid="prompt-body"

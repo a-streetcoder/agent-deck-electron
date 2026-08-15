@@ -1155,7 +1155,12 @@ ${content}
     projectId: z.string().optional(),
     scope: writableLibraryScope,
     name: RESOURCE_NAME,
-    edit: z.object({ description: z.string().max(500).optional(), body: z.string().max(100_000) }),
+    edit: z.object({
+      description: z.string().max(500).optional(),
+      body: z.string().max(100_000),
+      // PRM-09: slash-command usage help; empty string clears the hint
+      argumentHint: z.string().max(200).optional(),
+    }),
   });
 
   fastify.put("/resources/prompts", async (request, reply) => {

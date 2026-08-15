@@ -385,6 +385,23 @@ describe("agent/skill file writer", () => {
     );
   });
 
+  it("edits, preserves, and clears the argument-hint frontmatter (PRM-09)", () => {
+    const home = makeHome();
+    // set on write
+    const file = writePromptFile({ home }, "global", "review", {
+      body: "Review #$1.",
+      description: "Review a PR",
+      argumentHint: "<pr-number>",
+    });
+    expect(readFileSync(file, "utf8")).toContain("argument-hint: <pr-number>");
+    // an edit that doesn't mention it PRESERVES it
+    writePromptFile({ home }, "global", "review", { body: "Review #$1 well." });
+    expect(readFileSync(file, "utf8")).toContain("argument-hint: <pr-number>");
+    // an explicit empty string CLEARS it
+    writePromptFile({ home }, "global", "review", { body: "Review.", argumentHint: "" });
+    expect(readFileSync(file, "utf8")).not.toContain("argument-hint");
+  });
+
   it("scans project resources but leaves in-app project writes to the shared engine", () => {
     // Display parity is restored (project skills/agents/prompts are SCANNED — see
     // scanner.test), but in-app WRITES go through the native writable-catalog
