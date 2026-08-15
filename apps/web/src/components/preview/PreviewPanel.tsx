@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
   ExternalLink,
   MousePointerClick,
   Play,
@@ -585,6 +586,10 @@ export function PreviewBrowser(props: {
   const inputRef = useRef<HTMLInputElement>(null);
   // The live Electron <webview> guest (null in the web build / while blocked).
   const guestRef = useRef<ElectronWebviewElement | null>(null);
+  // PRE-04: guest history state + the guest's CURRENT url (in-guest loopback
+  // navigation never remounts, so the prop url is only the entry point).
+  const [guestNav, setGuestNav] = useState({ canGoBack: false, canGoForward: false });
+  const [guestUrl, setGuestUrl] = useState<string | null>(null);
 
   // The embed-boundary guard: whatever the URL's provenance (typed, or a
   // discovered-server frame off the wire), it only ever becomes an iframe src
@@ -614,14 +619,72 @@ export function PreviewBrowser(props: {
   // clear a newer load's overlay, and StrictMode double-invocation stays clean.
   useEffect(() => {
     const guest = guestRef.current;
+    // A fresh guest starts with an empty history and the prop URL.
+    setGuestNav({ canGoBack: false, canGoForward: false });
+    setGuestUrl(null);
     if (!guest) return;
+    // PRE-04: canGoBack/canGoForward re-read after every nav/stop event —
+    // methods are unavailable before attach, so each sync is try/catch
+    // (BrowserPanel's syncNavFlags idiom).
+    const syncNavFlags = (): void => {
+      try {
+        setGuestNav({
+          canGoBack: guest.canGoBack?.() ?? false,
+          canGoForward: guest.canGoForward?.() ?? false,
+        });
+      } catch {
+        // Not attached yet — the next event retries.
+      }
+    };
     const onStop = (): void => {
       setLoading(false);
       setShowHint(false);
+      // A fast guest can navigate BEFORE these listeners attach (Codex):
+      // did-stop-loading always follows, so recover the current URL here.
+      try {
+        const current = guest.getURL?.();
+        const validated = current ? toLoopbackEmbedUrl(current) : null;
+        if (validated !== null) setGuestUrl(validated);
+      } catch {
+        // Not attached yet — the next event retries.
+      }
+      syncNavFlags();
+    };
+    const onNav = (event: Event): void => {
+      // A SUBFRAME's in-page history change must not retarget the URL bar or
+      // invalidate the top-level picker (BrowserPanel's isMainFrame check).
+      const detail = event as unknown as { url?: string; isMainFrame?: boolean };
+      if (detail.isMainFrame === false) return;
+      // The old document is gone the moment the main frame navigates: kill any
+      // in-flight pick SYNCHRONOUSLY (an effect-keyed bump can lose the race
+      // against an already-resolving picker promise — Codex).
+      pickTokenRef.current += 1;
+      setPicking(false);
+      // The guest navigates only within loopback (the PRE-01 main-process
+      // clamp), but the URL bar still validates before displaying (belt).
+      const validated = toLoopbackEmbedUrl(detail.url ?? "");
+      if (validated !== null) setGuestUrl(validated);
+      syncNavFlags();
     };
     guest.addEventListener("did-stop-loading", onStop);
-    return () => guest.removeEventListener("did-stop-loading", onStop);
+    guest.addEventListener("did-navigate", onNav);
+    guest.addEventListener("did-navigate-in-page", onNav);
+    return () => {
+      guest.removeEventListener("did-stop-loading", onStop);
+      guest.removeEventListener("did-navigate", onNav);
+      guest.removeEventListener("did-navigate-in-page", onNav);
+    };
   }, [url, reloadNonce]);
+
+  // Guest-internal navigation re-seeds the URL bar (the prop URL is only the
+  // entry point once the user browses within the loopback app).
+  useEffect(() => {
+    if (guestUrl !== null) setDraft(guestUrl);
+  }, [guestUrl]);
+
+  // The guest's CURRENT page — the prop is only the entry point once the user
+  // navigates within the loopback app (PRE-04).
+  const currentUrl = guestUrl ?? url;
 
   const submit = useCallback(
     (event?: FormEvent) => {
@@ -629,10 +692,14 @@ export function PreviewBrowser(props: {
       const next = toLoopbackEmbedUrl(draft);
       if (next === null) return; // not a loopback http(s) URL — reject the nav
       inputRef.current?.blur();
-      if (next === url) setReloadNonce((n) => n + 1);
+      // Same page as the guest currently shows → hard reload. Re-typing the
+      // ENTRY url after in-guest navigation also remounts (onNavigate with an
+      // unchanged prop would be a silent no-op; history loss is the honest
+      // price of a fresh mount).
+      if (next === currentUrl || next === url) setReloadNonce((n) => n + 1);
       else onNavigate(next);
     },
-    [draft, url, onNavigate],
+    [draft, url, currentUrl, onNavigate],
   );
 
   // PRE-02: the donor's point-and-click inspector against the webview guest.
@@ -670,7 +737,8 @@ export function PreviewBrowser(props: {
         const result = parsePickResult(raw);
         if (!result) return; // Escape / non-element / malformed
         onCaptureElement({
-          pageUrl: url,
+          // The guest's CURRENT page (in-guest nav never changes the prop).
+          pageUrl: currentUrl,
           selector: result.selector,
           tagName: result.tagName,
           note: result.text,
@@ -681,16 +749,17 @@ export function PreviewBrowser(props: {
         if (pickTokenRef.current !== token) return;
         setPicking(false);
       });
-  }, [url, onCaptureElement]);
+  }, [url, guestUrl, onCaptureElement]);
 
-  // A URL change / reload remounts the guest: the old document (and its picker
-  // overlay) is gone, so just invalidate any in-flight pick and disarm.
+  // A URL change / reload remounts the guest — and an IN-GUEST navigation
+  // replaces the document without remounting (PRE-04): either way the old
+  // page's picker is gone, so invalidate any in-flight pick and disarm.
   useEffect(
     () => () => {
       pickTokenRef.current += 1;
       setPicking(false);
     },
-    [url, reloadNonce],
+    [url, reloadNonce, guestUrl],
   );
 
   const toggleInspector = useCallback(() => {
@@ -725,6 +794,34 @@ export function PreviewBrowser(props: {
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </ControlButton>
+        {/* PRE-04: guest history — only the Electron webview exposes it (the
+            web build's sandboxed iframe has no history API access). */}
+        {isElectron() ? (
+          <>
+            <ControlButton
+              type="button"
+              className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              title="Back"
+              aria-label="Back in preview history"
+              data-testid="preview-history-back"
+              disabled={!guestNav.canGoBack}
+              onClick={() => guestRef.current?.goBack()}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </ControlButton>
+            <ControlButton
+              type="button"
+              className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              title="Forward"
+              aria-label="Forward in preview history"
+              data-testid="preview-history-forward"
+              disabled={!guestNav.canGoForward}
+              onClick={() => guestRef.current?.goForward()}
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </ControlButton>
+          </>
+        ) : null}
         <ControlButton
           type="button"
           className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
@@ -742,11 +839,11 @@ export function PreviewBrowser(props: {
           value={draft}
           spellCheck={false}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => setDraft(url)}
+          onBlur={() => setDraft(currentUrl)}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
-              setDraft(url);
+              setDraft(currentUrl);
               inputRef.current?.blur();
             }
           }}
@@ -773,7 +870,7 @@ export function PreviewBrowser(props: {
           title="Open in system browser"
           aria-label="Open in system browser"
           data-testid="preview-open-external"
-          onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+          onClick={() => window.open(currentUrl, "_blank", "noopener,noreferrer")}
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </ControlButton>

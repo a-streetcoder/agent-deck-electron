@@ -261,6 +261,27 @@ const primaryButtonStyle = {
   color: "var(--color-accent-foreground)",
 } as const;
 
+/**
+ * ONB-01 — the final step's smart-routing (native OnboardingFinalView
+ * primaryTarget: "land the user in the one place that fixes what's still
+ * missing"). Precedence: broken pi/node → Doctor; no provider → Providers;
+ * provider connected but NO usable models (native's pi-models row) →
+ * Providers to load models; no project → Projects; green → Start Coding.
+ * Pure and exported for the unit pin.
+ */
+export function finalCtaFor(flags: {
+  piMissing: boolean;
+  providerMissing: boolean;
+  modelsMissing: boolean;
+  projectMissing: boolean;
+}): { label: string; view: AppView } {
+  if (flags.piMissing) return { label: "Review Setup", view: "doctor" };
+  if (flags.providerMissing) return { label: "Connect a Provider", view: "providers" };
+  if (flags.modelsMissing) return { label: "Load AI Models", view: "providers" };
+  if (flags.projectMissing) return { label: "Add a Project", view: "projects" };
+  return { label: "Start Coding", view: "chat" };
+}
+
 export function OnboardingOverlay() {
   const projects = useAppStore((state) => state.projects);
   const projectsLoaded = useAppStore((state) => state.projectsLoaded);
@@ -457,6 +478,12 @@ export function OnboardingOverlay() {
     }
     setPhase(next);
     if (next === "setup" || next === "final") runChecks();
+    // ONB-01 (native's pi-models gate): the final step needs the model catalog
+    // to judge readiness. Re-kick discovery unless a catalog already loaded —
+    // the abort above can strand modelState at "loading" (the aborted fetch's
+    // catch returns without resetting), so gating on "idle" would silently
+    // never re-run and the gate could never fire.
+    if (next === "final" && modelState !== "success") discoverModels(true);
     if (next === "preferences") loadPreferences();
   };
 
@@ -464,8 +491,13 @@ export function OnboardingOverlay() {
   // hard-error → Review Setup; no provider creds → Connect a Provider; no project
   // → Add a Project; otherwise everything's ready → Start Coding.
   const checkById = (id: string): HealthCheck | undefined => checks.find((c) => c.id === id);
-  const piMissing =
-    checkById("pi-binary")?.status === "error" || checkById("node")?.status === "error";
+  // Native's piPassed is STRICT (every runtime row green): any core runtime
+  // check that is not ok routes to Doctor — the CTA is never a disabled dead
+  // end for a state it cannot name (Codex: pi-version/bash used to disable
+  // the button while the route still said Start Coding).
+  const piMissing = ["pi-binary", "pi-version", "node", "bash"].some(
+    (id) => (checkById(id)?.status ?? "warn") !== "ok",
+  );
   const providerMissing = (checkById("auth")?.status ?? "warn") !== "ok";
   const projectMissing = projects.length === 0;
   const requiredSetupIds = ["pi-binary", "pi-version", "node", "bash", "auth"];
@@ -487,13 +519,29 @@ export function OnboardingOverlay() {
       setPhase("setup");
     }
   };
-  const finalCta: { label: string; view: AppView; Icon: typeof Rocket } = piMissing
-    ? { label: "Review Setup", view: "doctor", Icon: Stethoscope }
-    : providerMissing
-      ? { label: "Connect a Provider", view: "providers", Icon: ShieldCheck }
-      : projectMissing
-        ? { label: "Add a Project", view: "projects", Icon: FolderPlus }
-        : { label: "Start Coding", view: "chat", Icon: Rocket };
+  // ONB-01 (native's pi-models setup row): a CONNECTED provider whose catalog
+  // is empty or failed is NOT ready to code. Unknown (idle/still loading) is
+  // not "missing" — the gate only fires on a KNOWN-bad catalog.
+  const modelsMissing =
+    !providerMissing &&
+    (modelState === "error" || (modelState === "success" && models.length === 0));
+  // While the catalog verdict is PENDING for a connected provider, readiness is
+  // unknown — the CTA waits instead of flashing an actionable "Start Coding"
+  // that discovery may immediately contradict (Codex).
+  const modelsPending = !providerMissing && modelState !== "success" && modelState !== "error";
+  const routed = finalCtaFor({ piMissing, providerMissing, modelsMissing, projectMissing });
+  const finalCta: { label: string; view: AppView; Icon: typeof Rocket } = {
+    label: routed.label,
+    view: routed.view,
+    Icon:
+      routed.view === "doctor"
+        ? Stethoscope
+        : routed.view === "providers"
+          ? ShieldCheck
+          : routed.view === "projects"
+            ? FolderPlus
+            : Rocket,
+  };
 
   const tourPage = PAGES[page]!;
 
@@ -967,20 +1015,28 @@ export function OnboardingOverlay() {
               className="text-base font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
-              {piMissing || providerMissing || projectMissing ? "Almost there" : "You're all set"}
+              {routed.view === "chat" && !modelsPending ? "You're all set" : "Almost there"}
             </h2>
             <p className="text-sm leading-relaxed text-text-secondary">
               {piMissing
                 ? "Pi isn't ready yet — review setup to finish installing it."
                 : providerMissing
                   ? "Connect a model provider so Pi has a model to run."
-                  : projectMissing
-                    ? "Add a project folder to start a coding session in it."
-                    : "Your workspace is ready. Jump into a coding session with Pi."}
+                  : modelsMissing
+                    ? "Your provider is connected, but no usable models loaded — load models so Pi can run."
+                    : modelsPending
+                      ? "Checking which models your provider offers…"
+                      : projectMissing
+                        ? "Add a project folder to start a coding session in it."
+                        : "Your workspace is ready. Jump into a coding session with Pi."}
             </p>
             <div className="flex flex-col gap-1.5 py-1">
               <FinalGate label="Pi runtime" ok={!piMissing} />
               <FinalGate label="Model provider" ok={!providerMissing} />
+              <FinalGate
+                label="AI models"
+                ok={!providerMissing && !modelsMissing && !modelsPending}
+              />
               <FinalGate label="A project" ok={!projectMissing} />
             </div>
             <div className="flex items-center justify-between pt-1">
@@ -999,7 +1055,10 @@ export function OnboardingOverlay() {
                   "disabled:cursor-not-allowed disabled:opacity-40",
                 )}
                 style={primaryButtonStyle}
-                disabled={!setupReady || checksLoading}
+                // Never a dead end (native's button always routes somewhere
+                // corrective): disabled ONLY while a verdict is pending —
+                // checks in flight, or a connected provider's catalog unknown.
+                disabled={checksLoading || modelsPending}
                 onClick={() => finishTo(finalCta.view)}
               >
                 <finalCta.Icon size={13} aria-hidden /> {finalCta.label}

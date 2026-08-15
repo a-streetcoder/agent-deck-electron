@@ -100,6 +100,10 @@ export interface NamedAgentLaunch {
  */
 export interface ServerContext {
   fastify: FastifyInstance;
+  /** DOC-01/02 test seam: run a doctor fix command / the pi self-update in the
+   * user's terminal. Omitted in production — the settings routes construct the
+   * real launcher. */
+  fixTerminal?: { run(command: string): Promise<void>; runPiUpdate(): Promise<void> };
   sessions: SessionManager;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;

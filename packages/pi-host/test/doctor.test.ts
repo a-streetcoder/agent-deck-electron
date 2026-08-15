@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +23,7 @@ import {
   parseNodeVersion,
   probeVersion,
   resolveDoctorAgentDir,
+  ghInstallFixCommand,
   runDoctor,
   summarizeSettings,
   webAccessChecks,
@@ -457,5 +466,55 @@ describe("runDoctor fix commands", () => {
     // A fresh home has no auth.json → the check warns with a copyable fix.
     expect(auth.status).toBe("warn");
     expect(auth.fixCommand).toContain("API_KEY");
+  });
+});
+
+describe("pi-version repair fix (DOC-03)", () => {
+  it("a resolving pi whose --version probe fails carries the reinstall fixCommand", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "doctor-doc03-"));
+    const isWindows = process.platform === "win32";
+    const stub = path.join(dir, isWindows ? "pi.cmd" : "pi");
+    writeFileSync(stub, isWindows ? "@echo off\r\nexit /b 1\r\n" : "#!/bin/sh\nexit 1\n");
+    if (!isWindows) chmodSync(stub, 0o755);
+    const previous = process.env.AGENT_DECK_PI_PATH;
+    process.env.AGENT_DECK_PI_PATH = stub;
+    try {
+      const report = await runDoctor(dir);
+      const version = report.checks.find((check) => check.id === "pi-version");
+      expect(version).toBeDefined();
+      expect(version!.status).toBe("warn");
+      // The corrupt-but-resolving runtime's OWN row must carry the guided
+      // repair (reinstall) — "Update pi" alone would run the broken binary.
+      expect(version!.fixCommand).toBe("npm install -g @earendil-works/pi-coding-agent");
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_DECK_PI_PATH;
+      else process.env.AGENT_DECK_PI_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gh install guidance (DOC-07)", () => {
+  it("selects the per-platform install command deterministically for ALL platforms", () => {
+    expect(ghInstallFixCommand("win32")).toBe("winget install --id GitHub.cli");
+    expect(ghInstallFixCommand("darwin")).toBe("brew install gh");
+    expect(ghInstallFixCommand("linux")).toBeUndefined();
+  });
+
+  it("a MISSING gh carries a platform-appropriate runnable install command", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "doctor-doc07-"));
+    const previous = process.env.AGENT_DECK_GH_BIN;
+    process.env.AGENT_DECK_GH_BIN = path.join(dir, "definitely-not-gh");
+    try {
+      const report = await runDoctor(dir);
+      const github = report.checks.find((check) => check.id === "github");
+      expect(github).toBeDefined();
+      expect(github!.status).toBe("warn");
+      expect(github!.fixCommand).toBe(ghInstallFixCommand(process.platform));
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_DECK_GH_BIN;
+      else process.env.AGENT_DECK_GH_BIN = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -72,8 +72,8 @@ describe("planExternalTerminalLaunch", () => {
     expect(script).toContain(String.raw`"C:\pi.cmd" --session "C:\s.jsonl" || pause`);
     const nl = String.fromCharCode(10);
     const quote = String.fromCharCode(34);
-    expect(() => buildWindowsResumeScript("C:" + nl + "del x", "p", "s")).toThrow(/paths/i);
-    expect(() => buildWindowsResumeScript("C:", "p", "s" + quote + "t")).toThrow(/paths/i);
+    expect(() => buildWindowsResumeScript("C:" + nl + "del x", "p", "s")).toThrow(/path/i);
+    expect(() => buildWindowsResumeScript("C:", "p", "s" + quote + "t")).toThrow(/path/i);
   });
 
   it("darwin plans a one-shot .command script opened with open(1)", () => {
