@@ -596,6 +596,15 @@ export class RpcTransport {
   }
 
   /**
+   * Continue this session's pi conversation in the user's own terminal app
+   * (TER-01). Resolves on ack; rejects when the session has no resumable pi
+   * session file yet or no supported terminal application is installed.
+   */
+  async openExternalTerminal(request: { sessionId: string }): Promise<void> {
+    await this.sendRequest({ type: "terminal_open_external", ...request });
+  }
+
+  /**
    * List one directory within the session's project (Slice 13b) — omit `path`
    * (or pass "") for the project root. Resolves with the bounded entry set;
    * rejects on a server failure reply (unknown session, path escapes the cwd,

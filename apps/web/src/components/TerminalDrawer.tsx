@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ChevronDown, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, Trash2 } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -15,6 +15,7 @@ import { createXtermTheme, getTerminalFontFamily } from "../design-system/themes
 import { useAppStore } from "../state/store.ts";
 import {
   closeSessionTerminal,
+  openSessionInExternalTerminal,
   openSessionTerminal,
   sendTerminalInput,
   sendTerminalResize,
@@ -61,6 +62,7 @@ export function TerminalDrawer() {
   const setTerminalOpen = useAppStore((state) => state.setTerminalOpen);
   const sessionId = useAppStore((state) => state.session?.id ?? null);
   const connection = useAppStore((state) => state.connection);
+  const pushToast = useAppStore((state) => state.pushToast);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(DEFAULT_DRAWER_HEIGHT);
@@ -223,6 +225,23 @@ export function TerminalDrawer() {
           Terminal
         </span>
         <div className="flex items-center gap-1">
+          <ControlButton
+            type="button"
+            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
+            title="Continue in external terminal"
+            aria-label="Continue in external terminal"
+            data-testid="terminal-open-external"
+            onClick={() => {
+              openSessionInExternalTerminal(sessionId).catch((error: unknown) => {
+                pushToast({
+                  kind: "error",
+                  message: error instanceof Error ? error.message : String(error),
+                });
+              });
+            }}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </ControlButton>
           <ControlButton
             type="button"
             className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"

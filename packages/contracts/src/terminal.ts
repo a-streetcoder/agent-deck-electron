@@ -91,6 +91,13 @@ export const TerminalClientRequest = Schema.Union(
     type: Schema.Literal("terminal_close"),
     terminalId: TerminalId,
   }),
+  Schema.Struct({
+    /** TER-01: continue this session's pi conversation in the user's OWN
+     * terminal app — the server launches it in the session's cwd running
+     * `pi --session <session-file>` (every reference is server-side meta). */
+    type: Schema.Literal("terminal_open_external"),
+    sessionId: Schema.String,
+  }),
 );
 export type TerminalClientRequest = typeof TerminalClientRequest.Type;
 

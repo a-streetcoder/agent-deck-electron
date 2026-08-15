@@ -9,6 +9,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
 import { sessionDiffBase, type DiffGateway } from "./diffGateway.ts";
 import type { EditorLauncher } from "./editorLauncher.ts";
+import {
+  createExternalTerminalLauncher,
+  type ExternalTerminalLauncher,
+} from "./terminalLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
@@ -69,6 +73,7 @@ export function createRpcConnection(deps: {
   terminals: TerminalGateway;
   diffs: DiffGateway;
   editors: EditorLauncher;
+  externalTerminal?: ExternalTerminalLauncher;
   files: FileService;
   scripts: ScriptRunnerGateway;
   checkpoints: CheckpointServiceShape;
@@ -92,6 +97,7 @@ export function createRpcConnection(deps: {
     sessionPastes,
     send,
   } = deps;
+  const externalTerminal = deps.externalTerminal ?? createExternalTerminalLauncher();
   const bufferedAmount = deps.bufferedAmount ?? ((): number => 0);
   const push = (message: ServerMessage): void => send({ kind: "push", message });
 
@@ -345,6 +351,26 @@ export function createRpcConnection(deps: {
       return;
     }
 
+    // TER-01: hand this session's conversation to the user's OWN terminal app.
+    // Everything data-bearing (cwd, pi session file) is server-side meta; the
+    // launcher composes argv per platform and never shell-interpolates it.
+    if (request.type === "terminal_open_external") {
+      const session = sessions.get(request.sessionId);
+      if (!session) {
+        replyError("unknown session");
+        return;
+      }
+      try {
+        await externalTerminal.open({
+          cwd: session.meta.cwd,
+          piSessionFile: session.meta.piSessionFile,
+        });
+        replyOk();
+      } catch (error) {
+        replyError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
     // Terminal ops (Slice 8a) — handled ahead of the session dispatch because
     // input/resize/close address a terminalId, not a sessionId.
     if (request.type === "terminal_open") {
@@ -840,6 +866,7 @@ export function setupRpcEndpoint(deps: {
   terminals: TerminalGateway;
   diffs: DiffGateway;
   editors: EditorLauncher;
+  externalTerminal?: ExternalTerminalLauncher;
   files: FileService;
   scripts: ScriptRunnerGateway;
   checkpoints: CheckpointServiceShape;
@@ -882,6 +909,7 @@ export function setupRpcEndpoint(deps: {
     }
     clients.add(socket);
     const connection = createRpcConnection({
+      externalTerminal: deps.externalTerminal,
       sessions,
       terminals,
       diffs,

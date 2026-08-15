@@ -94,6 +94,8 @@ export interface ClientTransport {
     line?: number;
     editor: EditorId;
   }): Promise<void>;
+  /** Continue the session in the user's own terminal app (TER-01); rejects offline. */
+  openExternalTerminal(request: { sessionId: string }): Promise<void>;
   /** List one directory of the session's project (Slice 13b); rejects offline. */
   fileList(sessionId: string, path?: string): Promise<FileListResult>;
   /** Read one file of the session's project, bounded (Slice 13b); rejects offline. */
@@ -299,6 +301,14 @@ export class RpcClientTransport implements ClientTransport {
       return Promise.reject(new Error("transport not connected"));
     }
     return transport.openInEditor(request);
+  }
+
+  openExternalTerminal(request: { sessionId: string }): Promise<void> {
+    const transport = this.transport;
+    if (!transport || transport.getState() !== "connected") {
+      return Promise.reject(new Error("transport not connected"));
+    }
+    return transport.openExternalTerminal(request);
   }
 
   fileList(sessionId: string, path?: string): Promise<FileListResult> {

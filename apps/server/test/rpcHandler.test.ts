@@ -1587,3 +1587,64 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     expect(run.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("createRpcConnection external terminal (TER-01)", () => {
+  const build = (manager: SessionManager, open: (input: unknown) => Promise<void>) => {
+    const openCalls: unknown[] = [];
+    const frames: Frame[] = [];
+    const conn = createRpcConnection({
+      sessions: manager,
+      terminals: makeTerminalGateway().gateway,
+      diffs: makeDiffGateway().gateway,
+      editors: makeEditorLauncher().launcher,
+      files: makeFileService().service,
+      scripts: makeScriptGateway().gateway,
+      checkpoints: makeCheckpointService().service,
+      rollback: makeRollbackGateway().gateway,
+      externalTerminal: {
+        open: (input) => {
+          openCalls.push(input);
+          return open(input);
+        },
+      },
+      send: (outbound) => frames.push(outbound),
+    });
+    return { conn, frames, openCalls };
+  };
+
+  it("terminal_open_external launches from SERVER-side meta and acks", async () => {
+    const { session } = makeSession("s1");
+    const { conn, frames, openCalls } = build(makeManager({ s1: session }), () =>
+      Promise.resolve(),
+    );
+    await conn.handleMessage(frame(1, { type: "terminal_open_external", sessionId: "s1" }));
+    expect(frames).toEqual([{ kind: "reply", id: 1, ok: true }]);
+    // The wire carried ONLY the session id; cwd + session file are meta.
+    expect(openCalls).toEqual([
+      { cwd: session.meta.cwd, piSessionFile: session.meta.piSessionFile },
+    ]);
+  });
+
+  it("terminal_open_external on an unknown session replies a uniform error", async () => {
+    const { conn, frames, openCalls } = build(makeManager({}), () => Promise.resolve());
+    await conn.handleMessage(frame(2, { type: "terminal_open_external", sessionId: "nope" }));
+    expect(frames).toEqual([{ kind: "reply", id: 2, ok: false, error: "unknown session" }]);
+    expect(openCalls).toEqual([]);
+  });
+
+  it("a launcher failure surfaces its stable message in the reply", async () => {
+    const { session } = makeSession("s1");
+    const { conn, frames } = build(makeManager({ s1: session }), () =>
+      Promise.reject(new Error("No supported terminal application was found on this machine.")),
+    );
+    await conn.handleMessage(frame(3, { type: "terminal_open_external", sessionId: "s1" }));
+    expect(frames).toEqual([
+      {
+        kind: "reply",
+        id: 3,
+        ok: false,
+        error: "No supported terminal application was found on this machine.",
+      },
+    ]);
+  });
+});

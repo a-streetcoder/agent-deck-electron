@@ -176,6 +176,13 @@ export function sendTerminalResize(terminalId: string, cols: number, rows: numbe
   transport.sendTerminal({ type: "terminal_resize", terminalId, cols, rows });
 }
 
+/** Continue this session's pi conversation in the user's own terminal app
+ * (TER-01). Rejects with the server's message when nothing is resumable or no
+ * supported terminal is installed — the caller surfaces it as a toast. */
+export function openSessionInExternalTerminal(sessionId: string): Promise<void> {
+  return transport.openExternalTerminal({ sessionId });
+}
+
 /** Kill the current session's terminal (the PTY dies; the next open is fresh). */
 export function closeSessionTerminal(sessionId: string): void {
   const terminalId = sessionTerminals.get(sessionId);
