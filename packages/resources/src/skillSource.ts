@@ -14,8 +14,20 @@ export interface RemoteSkillSource {
   subdir?: string;
 }
 
-// skills.sh first path segments that are site pages, not owners (native).
-const SKILLS_SH_RESERVED = new Set(["docs", "topics", "agents", "leaderboard", "about", "search"]);
+// skills.sh first path segments that are site pages, not owners (the native
+// resolver's full set, plus "about" which the site also serves).
+const SKILLS_SH_RESERVED = new Set([
+  "docs",
+  "topics",
+  "agents",
+  "leaderboard",
+  "trending",
+  "hot",
+  "official",
+  "new",
+  "search",
+  "about",
+]);
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 
 function stripGitSuffix(s: string): string {
@@ -53,6 +65,9 @@ function parseWebUrl(input: string): RemoteSkillSource | null {
   } catch {
     return null;
   }
+  // The directory site is never a git host (native parseWebURL refuses it), so a
+  // reserved skills.sh page that fell through cannot become a skills.sh clone URL.
+  if (url.host.toLowerCase().includes("skills.sh")) return null;
   const segments = url.pathname.split("/").filter(Boolean);
   if (segments.length < 2) return null;
   const [owner, repo, ...rest] = segments;
@@ -67,11 +82,14 @@ function parseWebUrl(input: string): RemoteSkillSource | null {
   return { cloneUrl };
 }
 
-/** `skills.sh/<owner>/<repo>[/<slug>]` → GitHub clone URL (+ the slug as subdir). */
+/** `skills.sh/<owner>/<repo>[/<slug>]` → GitHub clone URL (+ the slug as subdir).
+ *  Native matches the `skills.sh/` marker case-insensitively anywhere in the input
+ *  (so `www.skills.sh` and scheme-less forms resolve) and strips the query string. */
 function parseSkillsSh(input: string): RemoteSkillSource | null {
-  const match = /^(?:https?:\/\/)?skills\.sh\/(.+)$/i.exec(input.trim());
-  if (!match) return null;
-  const segments = match[1]!.split("/").filter(Boolean);
+  const marker = /skills\.sh\//i.exec(input);
+  if (!marker) return null;
+  const pathPart = input.slice(marker.index + marker[0].length);
+  const segments = pathPart.split("?", 1)[0]!.split("/").filter(Boolean);
   if (segments.length < 2) return null;
   const [owner, repo, slug] = segments;
   if (SKILLS_SH_RESERVED.has(owner!.toLowerCase())) return null;
@@ -108,8 +126,12 @@ export function resolveSkillSource(input: string): RemoteSkillSource | null {
   const raw = input.trim();
   if (!raw) return null;
   if (isDirectSource(raw)) return { cloneUrl: raw };
+  // Native order: skills.sh first (its own marker detection), then SSH, then web.
+  // A reserved skills.sh page returns null here and falls through to parseWebUrl,
+  // whose skills.sh-host refusal keeps the overall answer a fail-closed null.
+  const skillsSh = parseSkillsSh(raw);
+  if (skillsSh) return skillsSh;
   if (raw.startsWith("git@")) return parseSshRemote(raw);
-  if (/^(?:https?:\/\/)?skills\.sh\//i.test(raw)) return parseSkillsSh(raw);
   // A dotted first segment (github.com/…) or an explicit scheme is a web URL.
   const firstSegment = raw.replace(/^https?:\/\//i, "").split("/")[0] ?? "";
   if (/^https?:\/\//i.test(raw) || firstSegment.includes(".")) return parseWebUrl(raw);
