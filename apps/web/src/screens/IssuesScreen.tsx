@@ -603,6 +603,18 @@ export function IssuesScreen() {
                 >
                   <MarkdownDocument source={detail.body || "_No description provided._"} />
                 </div>
+                <div
+                  data-testid="issue-detail-timestamps"
+                  className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 px-1 text-detail text-text-muted"
+                >
+                  {detail.createdAt ? (
+                    <span>Created {formatRelative(detail.createdAt)}</span>
+                  ) : null}
+                  {detail.updatedAt ? (
+                    <span>Updated {formatRelative(detail.updatedAt)}</span>
+                  ) : null}
+                  {detail.closedAt ? <span>Closed {formatRelative(detail.closedAt)}</span> : null}
+                </div>
                 {(() => {
                   const rel = detail.relationships;
                   const groups: Array<
@@ -666,10 +678,41 @@ export function IssuesScreen() {
                         >
                           <div className="flex items-center gap-2 pb-1 text-detail text-text-muted">
                             <span className="flex items-center gap-1 font-medium text-text-secondary">
-                              <User size={11} /> {comment.author ?? "unknown"}
+                              <User size={11} />{" "}
+                              {comment.author && detail.url.startsWith("https://github.com/") ? (
+                                <a
+                                  data-testid="issue-comment-author-link"
+                                  href={`https://github.com/${comment.author}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="hover:underline"
+                                  title={`Open ${comment.author}'s GitHub profile`}
+                                >
+                                  {comment.author}
+                                </a>
+                              ) : (
+                                (comment.author ?? "unknown")
+                              )}
                             </span>
                             {formatDate(comment.createdAt) ? (
                               <span>{formatDate(comment.createdAt)}</span>
+                            ) : null}
+                            {comment.updatedAt && comment.updatedAt !== comment.createdAt ? (
+                              <span data-testid="issue-comment-edited">
+                                edited {formatRelative(comment.updatedAt)}
+                              </span>
+                            ) : null}
+                            {comment.url ? (
+                              <a
+                                data-testid="issue-comment-link"
+                                href={comment.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="ml-auto text-text-muted underline hover:text-text-primary"
+                                title="Open this comment on GitHub"
+                              >
+                                permalink
+                              </a>
                             ) : null}
                           </div>
                           <MarkdownDocument source={comment.body || "_(empty)_"} />

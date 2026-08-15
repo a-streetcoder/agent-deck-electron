@@ -182,10 +182,22 @@ describe("issue reopen (ISS-02)", () => {
               stateReason: "NOT_PLANNED",
               type: "Bug",
               url: "https://example.test/issues/9",
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-02-01T00:00:00Z",
+              closedAt: "2026-03-01T00:00:00Z",
               labels: [],
               assignees: [],
               author: null,
-              comments: [],
+              comments: [
+                {
+                  id: "IC_9",
+                  url: "https://example.test/issues/9#issuecomment-1",
+                  author: "marty",
+                  body: "Old note.",
+                  createdAt: "2026-01-10T00:00:00Z",
+                  updatedAt: "2026-01-12T00:00:00Z",
+                },
+              ],
             },
           }),
         );
@@ -210,6 +222,14 @@ describe("issue reopen (ISS-02)", () => {
     // ISS-05: native-equivalent triage metadata is visible
     expect(screen.getByTestId("issue-detail-state-reason").textContent).toBe("not planned");
     expect(screen.getByTestId("issue-detail-type").textContent).toBe("Bug");
+    // ISS-06: native's Created/Updated/Closed rows + comment permalink & edited stamp
+    const stamps = screen.getByTestId("issue-detail-timestamps");
+    expect(stamps.textContent).toContain("Created");
+    expect(stamps.textContent).toContain("Updated");
+    expect(stamps.textContent).toContain("Closed");
+    const link = screen.getByTestId("issue-comment-link") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://example.test/issues/9#issuecomment-1");
+    expect(screen.getByTestId("issue-comment-edited").textContent).toContain("edited");
     fireEvent.click(reopen);
     await waitFor(() => {
       expect(reopened).toBe(true);
