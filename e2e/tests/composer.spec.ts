@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -17,11 +18,26 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("thinking picker does not speculate while the model catalog is loading", async ({ page }) => {
-  await page.route("**/sessions/*/models", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 750));
+/** Hold a route open until the test releases it. A fixed sleep made both
+ * loading-state tests a race — the assertions describe a TRANSIENT state, and
+ * on a slower machine the window closed before they ran (Windows CI, and this
+ * machine, saw both halves fail: "still busy" on one, "already settled" on the
+ * other). Holding the request makes the window last exactly as long as the
+ * assertions need. */
+function holdRoute(page: Page, pattern: string): () => void {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  void page.route(pattern, async (route) => {
+    await held;
     await route.continue();
   });
+  return release;
+}
+
+test("thinking picker does not speculate while the model catalog is loading", async ({ page }) => {
+  const releaseCatalog = holdRoute(page, "**/sessions/*/models");
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("thinking-chip-label")).not.toContainText("unavailable");
   await expect(page.getByTestId("thinking-chip")).toHaveAttribute("aria-disabled", "true");
@@ -30,14 +46,12 @@ test("thinking picker does not speculate while the model catalog is loading", as
   await expect(page.getByTestId("thinking-chip")).toBeFocused();
   await page.getByTestId("thinking-chip").press("ArrowDown");
   await expect(page.getByTestId("thinking-menu")).toHaveCount(0);
+  releaseCatalog();
   await expect(page.getByTestId("thinking-chip")).toHaveAttribute("aria-disabled", "false");
 });
 
 test("catalog-first loading does not mark an unknown Pi model unavailable", async ({ page }) => {
-  await page.route("**/sessions/*/state", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    await route.continue();
-  });
+  const releaseState = holdRoute(page, "**/sessions/*/state");
   const catalogResponse = page.waitForResponse(
     (response) => response.url().includes("/sessions/") && response.url().endsWith("/models"),
   );
@@ -49,6 +63,7 @@ test("catalog-first loading does not mark an unknown Pi model unavailable", asyn
   await expect(page.getByTestId("thinking-chip")).toHaveAttribute("aria-busy", "true");
   await page.getByTestId("thinking-chip").press("ArrowDown");
   await expect(page.getByTestId("thinking-menu")).toHaveCount(0);
+  releaseState();
   await expect(page.getByTestId("thinking-chip")).toHaveAttribute("aria-disabled", "false");
 });
 
