@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import type * as GitModule from "../src/git.ts";
-import { fingerprintLaunchResources } from "../src/launchResources.ts";
+import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
 import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
 const resourceMocks = vi.hoisted(() => ({
@@ -208,7 +208,7 @@ function makeRoute(
     dropDiffCache: state.dropDiffCache,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
-  return { fastify, state, sessions, index };
+  return { fastify, state, sessions, index, ctx };
 }
 
 function makeState() {
@@ -633,6 +633,44 @@ describe("POST /sessions worktree transaction", () => {
         bridgePolicy,
       ),
     );
+    await fastify.close();
+  });
+
+  it("persists a fingerprint the refresh resolver reproduces for a plain (non-worktree) session", async () => {
+    const { fastify, sessions, ctx } = makeRoute();
+    // The broken shape is a chat with NO project and NO explicit cwd — the
+    // route falls back to the default cwd, but only the request object reached
+    // the resolver, so it resolved as if there were no cwd at all.
+    const previousDefaultCwd = process.env.AGENT_DECK_DEFAULT_CWD;
+    process.env.AGENT_DECK_DEFAULT_CWD = PROJECT_PATH;
+
+    const response = await fastify.inject({ method: "POST", url: "/sessions", payload: {} });
+
+    if (previousDefaultCwd === undefined) delete process.env.AGENT_DECK_DEFAULT_CWD;
+    else process.env.AGENT_DECK_DEFAULT_CWD = previousDefaultCwd;
+    expect(response.statusCode).toBe(201);
+    const createOptions = sessions.create.mock.calls[0]![0] as {
+      plan: Parameters<typeof fingerprintLaunchResources>[0];
+      launchResourceFingerprint: string;
+      cwd: string;
+      launchResourceConfig: Parameters<typeof resolveLaunchResources>[3];
+    };
+    // SessionManager's resource refresh always resolves with meta.cwd, so the
+    // digest stored at creation must include the same cwd-derived instruction
+    // candidates. Resolving creation WITHOUT the cwd (only the worktree branch
+    // re-resolved with it) made the two permanently unequal: every session
+    // carrying a launchResourceConfig was then parked and relaunched at each
+    // idle, chasing a digest it could never reach.
+    // Recompute the way SessionManager.configureResourceRefresh does — through
+    // the resolver itself with the stored meta's inputs — so this pin still
+    // holds if the digest's ingredients change (Codex).
+    const asRefreshWouldResolve = resolveLaunchResources(
+      ctx as unknown as Parameters<typeof resolveLaunchResources>[0],
+      { cwd: createOptions.cwd },
+      {},
+      createOptions.launchResourceConfig,
+    );
+    expect(createOptions.launchResourceFingerprint).toBe(asRefreshWouldResolve.fingerprint);
     await fastify.close();
   });
 
