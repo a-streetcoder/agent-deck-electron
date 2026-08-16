@@ -122,7 +122,7 @@ rather than left to mislead. What the evidence actually showed, in order:
   same test is paced at 10–20s. Widening only that wait turns the file green,
   7/7, twice.
 
-So the fix is the assertion's budget (`3f74b2a`), not the runtime: the
+So the fix is the assertion's budget (`1aea7e7`), not the runtime: the
 transcript was always rebuilt correctly, just later than one second. The
 original "cells `[]` while the session file holds both roles" observation was
 real but was a snapshot taken too early, not evidence of loss.
