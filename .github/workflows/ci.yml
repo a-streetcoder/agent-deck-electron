@@ -1,7 +1,8 @@
 name: CI
 
-# Fast static checks fail first; then the real-pi + unit matrix;
-# then the Playwright e2e (UI streaming + the Electron shell) under xvfb.
+# Fast static checks fail first; then the unit matrix and the real-pi
+# integration matrix as INDEPENDENT jobs (a unit failure must never skip the Pi
+# suite); then the Playwright e2e (UI streaming + the Electron shell) under xvfb.
 on:
   push:
     branches: [main]
@@ -115,14 +116,15 @@ jobs:
           ${{ matrix.package }}
           node scripts/smoke-packaged-loop-catalog.mjs release "${{ matrix.platform }}" "${{ matrix.arch }}"
 
-  # Units + real-pi integration (the pinned pi binary provides deterministic,
-  # keyless runs). Linux + Windows are the ship targets and BLOCK. macOS is
-  # ADVISORY (continue-on-error): it is not a ship target for the cross-plat
-  # port, and its runner keeps producing environment-specific real-pi/native
-  # flakes (node-pty spawn-helper perms, managed_subagent bridge-registration
-  # timing) that would otherwise mask genuine regressions on the platforms we
-  # actually ship. It still runs and reports, so portability bugs it catches
-  # (e.g. the /var→/private/var realpath test fix) stay visible.
+  # Unit suites. Real-pi integration is the separate `test-pi` job below.
+  # Linux + Windows are the ship targets and BLOCK. macOS is ADVISORY
+  # (continue-on-error): it is not a ship target for the cross-plat port, and
+  # its runner keeps producing environment-specific real-pi/native flakes
+  # (node-pty spawn-helper perms, managed_subagent bridge-registration timing)
+  # that would otherwise mask genuine regressions on the platforms we actually
+  # ship. It still runs and reports, so portability bugs it catches (e.g. the
+  # /var→/private/var realpath test fix) stay visible. `test-pi` inherits the
+  # same matrix and the same macOS-advisory rule.
   test:
     needs: lint
     strategy:
@@ -153,9 +155,45 @@ jobs:
           shared-key: loop-catalog-native-tests-${{ runner.os }}
       - run: pnpm build:native
       - run: pnpm test
+
+  # Real-pi vitest integration (pi-host + server), in its OWN job deliberately.
+  # It used to be the last step of `test`, so ANY unit failure skipped it
+  # silently: between 2026-08-03 and 2026-08-16, while main was red, the whole
+  # Pi suite never ran, and the first thing it reported when it finally did was
+  # a stale assertion nobody could have seen. A separate job reports its own
+  # result regardless of what the unit matrix does.
+  test-pi:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          shared-key: loop-catalog-native-test-pi-${{ runner.os }}
+      - run: pnpm build:native
       - run: pnpm --filter @agent-deck/web build
-      # Real-pi vitest integration (pi-host + server). The e2e package's
-      # Playwright suite runs in the dedicated e2e job, so exclude it here.
+      # The e2e package's Playwright suite runs in the dedicated e2e job, so
+      # exclude it here.
       - run: pnpm -r --filter '!@agent-deck/e2e' test:pi
 
   # Playwright e2e — the streaming UI and the Electron desktop shell. Runs on
