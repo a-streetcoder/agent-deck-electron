@@ -125,17 +125,22 @@ describe("final system prompt audit against pinned real Pi", () => {
     const requestsAfterFirstTurn = mock.requests.length;
     await session.prompt("explain the beta rollback database procedure");
     const activityAtSecondPrompt = session.meta.updatedAt;
-    const deadline = Date.now() + 30_000;
-    while (
-      session.meta.finalSystemPromptAudit?.capturedAt === firstCapturedAt &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    // Each wait gets its OWN 30s budget. They used to share a single absolute
+    // deadline computed before the first one, so a slow real-pi turn could
+    // spend the whole budget waiting for the audit and leave the next wait
+    // with none — it then fell straight through to "expected 1 to be greater
+    // than 1" (Windows CI), which reads like a missing provider request but is
+    // just an exhausted clock.
+    const waitFor = async (settled: () => boolean | Promise<boolean>): Promise<void> => {
+      const deadline = Date.now() + 30_000;
+      while (!(await settled()) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+
+    await waitFor(() => session.meta.finalSystemPromptAudit?.capturedAt !== firstCapturedAt);
     expect(session.meta.finalSystemPromptAudit?.capturedAt).not.toBe(firstCapturedAt);
-    while (mock.requests.length === requestsAfterFirstTurn && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(() => mock.requests.length !== requestsAfterFirstTurn);
     expect(mock.requests.length).toBeGreaterThan(requestsAfterFirstTurn);
     const secondProviderPrompt = systemText(mock.requests.at(-1)!);
     expect(session.meta.finalSystemPromptAudit?.text).toBe(secondProviderPrompt);
@@ -145,9 +150,7 @@ describe("final system prompt audit against pinned real Pi", () => {
     expect(activityAtSecondPrompt).not.toBe(activityAfterFirstTurn);
     const expected = { ...session.meta.finalSystemPromptAudit };
     await new Promise((resolve) => setTimeout(resolve, 25));
-    while ((await session.getState()).isStreaming && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(async () => !(await session.getState()).isStreaming);
     unsubscribe();
 
     await server.close();
