@@ -24,9 +24,9 @@ test.beforeAll(async () => {
     stub,
     `#!/bin/sh
 cat <<'JSON'
-[{"number":1,"title":"Fix login crash","state":"OPEN","url":"https://x/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"author":{"login":"alice"}},
- {"number":2,"title":"Add dark mode","state":"OPEN","url":"https://x/2","labels":[{"name":"feature"}],"assignees":[{"login":"doc"}],"author":{"login":"bob"}},
- {"number":3,"title":"Flaky retry logic","state":"OPEN","url":"https://x/3","labels":[{"name":"bug"},{"name":"flaky"}],"assignees":[{"login":"doc"}],"author":{"login":"alice"}}]
+[{"number":1,"title":"Fix login crash","state":"open","html_url":"https://github.com/x/y/issues/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"user":{"login":"alice"},"updated_at":"2026-02-01T09:30:00Z"},
+ {"number":2,"title":"Add dark mode","state":"open","html_url":"https://github.com/x/y/issues/2","labels":[{"name":"feature"}],"assignees":[{"login":"doc"}],"user":{"login":"bob"},"updated_at":"2026-02-01T09:30:00Z"},
+ {"number":3,"title":"Flaky retry logic","state":"open","html_url":"https://github.com/x/y/issues/3","labels":[{"name":"bug"},{"name":"flaky"}],"assignees":[{"login":"doc"}],"user":{"login":"alice"},"updated_at":"2026-02-01T09:30:00Z"}]
 JSON
 `,
   );

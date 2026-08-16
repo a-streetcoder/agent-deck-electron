@@ -20,40 +20,56 @@ const project = mkdtempSync(path.join(tmpdir(), "proj-issues-"));
 test.beforeAll(async () => {
   // Stub gh so the test needs no network or real repo.
   const stub = path.join(mkdtempSync(path.join(tmpdir(), "gh-stub-")), "gh");
-  // Branches on the subcommand: `issue view <n>` returns one issue's detail;
-  // `issue list` varies by the --state the server forwards (proves the filter
-  // re-queries gh).
+  // Branches on the invocation: `gh api repos/O/R/issues?state=…` backs the
+  // board (varying by the state the server forwards, which proves the filter
+  // re-queries), `gh issue view <n>` returns one issue's detail.
   writeFileSync(
     stub,
     `#!/bin/sh
+# ISS-08 moved the BOARD to the REST transport (\`gh api repos/O/R/issues?...\`),
+# while the detail pane still uses \`gh issue view --json\`. Branch on the first
+# arg so each half gets the payload shape its parser actually expects: raw REST
+# rows (html_url / user / updated_at / lowercase state) for the list, gh's
+# --json wrapper for the detail.
+verb="$1"
 sub="$2"
 num="$3"
-state=open
-while [ $# -gt 0 ]; do case "$1" in --state) shift; state="$1" ;; esac; shift; done
-if [ "$sub" = "close" ]; then
-exit 0
+if [ "$verb" = "api" ]; then
+  case "$sub" in
+    *"/issues?"*"state=closed"*)
+cat <<'JSON'
+[{"number":9,"title":"Old flux leak (fixed)","state":"closed","html_url":"https://github.com/x/y/issues/9","labels":[],"updated_at":"2026-02-01T09:30:00Z"}]
+JSON
+      ;;
+    *"/issues?"*"state=all"*)
+      # Sentinel fixture: 51 rows let the server prove truncation while exposing 50.
+      printf '['
+      i=1
+      while [ "$i" -le 51 ]; do
+        [ "$i" -gt 1 ] && printf ','
+        printf '{"number":%s,"title":"Issue %s with a deliberately long title for narrow layouts","state":"open","html_url":"https://github.com/x/y/issues/%s","labels":[],"updated_at":"2026-02-01T09:30:00Z"}' "$i" "$i" "$i"
+        i=$((i + 1))
+      done
+      printf ']'
+      ;;
+    *"/issues?"*)
+cat <<'JSON'
+[{"number":7,"title":"Fix the flux capacitor","state":"open","html_url":"https://github.com/x/y/issues/7","labels":[{"name":"bug"}],"user":{"login":"doc"},"updated_at":"2026-02-01T09:30:00Z"}]
+JSON
+      ;;
+    *)
+      # Relationship endpoints (sub-issues, dependencies) are best-effort.
+      printf '[]'
+      ;;
+  esac
+elif [ "$sub" = "close" ]; then
+  exit 0
 elif [ "$sub" = "view" ]; then
 cat <<JSON
 {"number":$num,"title":"Fix the flux capacitor","body":"Steps to reproduce the flux leak.","state":"OPEN","url":"https://github.com/x/y/issues/$num","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"author":{"login":"doc"},"comments":[{"author":{"login":"marty"},"body":"Confirmed on my machine too.","createdAt":"2026-02-01T09:30:00Z"}]}
 JSON
-elif [ "$state" = "closed" ]; then
-cat <<'JSON'
-[{"number":9,"title":"Old flux leak (fixed)","state":"CLOSED","url":"https://github.com/x/y/issues/9","labels":[]}]
-JSON
-elif [ "$state" = "all" ]; then
-# Sentinel fixture: 51 rows let the server prove truncation while exposing 50.
-printf '['
-i=1
-while [ "$i" -le 51 ]; do
-  [ "$i" -gt 1 ] && printf ','
-  printf '{"number":%s,"title":"Issue %s with a deliberately long title for narrow layouts","state":"OPEN","url":"https://github.com/x/y/issues/%s","labels":[]}' "$i" "$i" "$i"
-  i=$((i + 1))
-done
-printf ']'
 else
-cat <<'JSON'
-[{"number":7,"title":"Fix the flux capacitor","state":"OPEN","url":"https://github.com/x/y/issues/7","labels":[{"name":"bug"}],"author":{"login":"doc"},"updatedAt":"2026-02-01T09:30:00Z"}]
-JSON
+  printf '[]'
 fi
 `,
   );
