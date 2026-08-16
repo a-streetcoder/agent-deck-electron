@@ -72,6 +72,36 @@ test("adds a remote HTTP server from the MCP form", async ({ page }) => {
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 
+test("edits a remote HTTP server URL from the MCP form", async ({ page }) => {
+  const created = await fetch(`${harness.baseUrl}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "remote-edit", url: "http://127.0.0.1:9/mcp" }),
+  });
+  expect(created.ok).toBe(true);
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await expect(page.getByTestId("mcp-remote-edit")).toBeVisible();
+  await page.getByTestId("mcp-edit-remote-edit").click();
+  await expect(page.getByTestId("mcp-edit-form")).toBeVisible();
+  await expect(page.getByTestId("mcp-name")).toBeDisabled();
+  await page.getByTestId("mcp-url").fill("http://127.0.0.1:9/v2");
+  await page.getByTestId("mcp-edit-confirm").click();
+  await expect(page.getByTestId("mcp-edit-form")).toHaveCount(0);
+  await expect(page.getByTestId("mcp-remote-edit")).toBeVisible();
+  await expect(page.getByTestId("mcp-remote-edit")).toContainText("http");
+
+  await page.getByTestId("mcp-reload").click();
+  await expect(page.getByTestId("mcp-remote-edit")).toBeVisible();
+  await page.getByTestId("mcp-edit-remote-edit").click();
+  await expect(page.getByTestId("mcp-url")).toHaveValue("http://127.0.0.1:9/v2");
+  await page.keyboard.press("Escape");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByTestId("mcp-remove-remote-edit").click();
+  await expect(page.getByTestId("mcp-remote-edit")).toHaveCount(0);
+});
+
 test("lists a configured MCP server as connected and removes it", async ({ page }) => {
   // Add a stdio MCP server over REST (the mock echo server subprocess).
   const launch = mockMcpServerLaunch("mock");

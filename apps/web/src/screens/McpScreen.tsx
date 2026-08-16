@@ -1,7 +1,7 @@
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LogIn, LogOut, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
@@ -38,6 +38,9 @@ interface McpServer {
   auth?: McpAuth;
   source?: "global" | "project" | "environment";
   editable?: boolean;
+  command?: string;
+  args?: string[];
+  url?: string;
 }
 
 /** Client-side check matching the backend `isValidHttpMcpUrl` contract without
@@ -49,6 +52,43 @@ function isValidHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function needsArgQuoting(arg: string): boolean {
+  return arg === "" || /\s/.test(arg) || /^["']/.test(arg) || arg.includes("\\");
+}
+
+function argsLineFrom(args: readonly string[] | undefined): string {
+  return (args ?? []).map((arg) => (needsArgQuoting(arg) ? JSON.stringify(arg) : arg)).join(" ");
+}
+
+function unescapeQuotedArg(inner: string, quote: '"' | "'"): string {
+  const escaped = quote === '"' ? /\\(["\\])/g : /\\(['\\])/g;
+  return inner.replace(escaped, "$1");
+}
+
+function parseArgLine(value: string): string[] {
+  const args: string[] = [];
+  const token = /"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)'|(\S+)/g;
+  for (const match of value.matchAll(token)) {
+    if (match[1] !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(match[0]);
+        if (typeof parsed === "string") {
+          args.push(parsed);
+          continue;
+        }
+      } catch {
+        // Invalid user quotes must not crash the form.
+      }
+      args.push(unescapeQuotedArg(match[1], '"'));
+    } else if (match[2] !== undefined) {
+      args.push(unescapeQuotedArg(match[2], "'"));
+    } else if (match[3] !== undefined) {
+      args.push(match[3]);
+    }
+  }
+  return args;
 }
 
 /** In-progress sign-in: the server + the authorization URL to open, and the
@@ -89,11 +129,13 @@ export function McpScreen() {
   const [loading, setLoading] = useState(true);
   const [savingAssignments, setSavingAssignments] = useState<Set<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [transport, setTransport] = useState<McpTransport>("stdio");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
+  const [argsText, setArgsText] = useState("");
   const [url, setUrl] = useState("");
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [code, setCode] = useState("");
@@ -102,6 +144,13 @@ export function McpScreen() {
   const assignmentSaving = useRef(false);
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
   const addToggleRef = useRef<HTMLButtonElement>(null);
+  const editToggleRefs = useRef(new Map<string, HTMLButtonElement>());
+  const editSnapshot = useRef<{
+    transport: McpTransport;
+    command: string;
+    argsText: string;
+    url: string;
+  } | null>(null);
   const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
   // server can't clobber a newer flow the user has since started for another.
@@ -150,29 +199,46 @@ export function McpScreen() {
 
   useEffect(() => {
     const preserveRows = loadedProject.current === currentProjectId;
+    if (loadedProject.current !== currentProjectId) {
+      setAdding(false);
+      setEditingId(null);
+      editSnapshot.current = null;
+    }
     loadedProject.current = currentProjectId;
     void load(preserveRows);
   }, [currentProjectId, load, resourcesVersion]);
 
   const trimmedName = name.trim();
+  const trimmedCommand = command.trim();
+  const parsedArgs = parseArgLine(argsText);
   const trimmedUrl = url.trim();
-  const commandParts = command.trim().split(/\s+/).filter(Boolean);
-  const duplicateName = servers.some((server) => server.id === trimmedName);
-  const canAdd =
+  const editing = editingId !== null;
+  const formOpen = adding || editing;
+  const duplicateName = !editing && servers.some((server) => server.id === trimmedName);
+  const canSubmit =
     Boolean(trimmedName) &&
     !saving &&
     !duplicateName &&
-    (transport === "stdio" ? commandParts.length > 0 : isValidHttpUrl(trimmedUrl));
+    (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl));
+
+  const resetDraft = (): void => {
+    setName("");
+    setCommand("");
+    setArgsText("");
+    setUrl("");
+    setTransport("stdio");
+    editSnapshot.current = null;
+  };
 
   const add = async (): Promise<void> => {
-    if (!canAdd) return;
+    if (!canSubmit || editing) return;
     const body =
       transport === "http"
         ? { name: trimmedName, url: trimmedUrl }
         : {
             name: trimmedName,
-            command: commandParts[0],
-            args: commandParts.slice(1),
+            command: trimmedCommand,
+            args: parsedArgs,
           };
     setSaving(true);
     try {
@@ -182,12 +248,91 @@ export function McpScreen() {
         body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error(await responseErrorMessage(response));
-      setName("");
-      setCommand("");
-      setUrl("");
-      setTransport("stdio");
+      resetDraft();
       setAdding(false);
       await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const closeEditor = (restore = false): void => {
+    const id = editingId;
+    if (restore && editSnapshot.current) {
+      setTransport(editSnapshot.current.transport);
+      setCommand(editSnapshot.current.command);
+      setArgsText(editSnapshot.current.argsText);
+      setUrl(editSnapshot.current.url);
+    }
+    setEditingId(null);
+    editSnapshot.current = null;
+    requestAnimationFrame(() => {
+      if (id) editToggleRefs.current.get(id)?.focus();
+    });
+  };
+
+  const startAdd = (): void => {
+    if (saving) return;
+    if (adding) {
+      setAdding(false);
+      return;
+    }
+    setEditingId(null);
+    editSnapshot.current = null;
+    resetDraft();
+    setAdding(true);
+  };
+
+  const startEdit = (server: McpServer): void => {
+    if (saving) return;
+    if (editingId === server.id) {
+      closeEditor();
+      return;
+    }
+    const nextCommand = server.command ?? "";
+    const nextArgs = argsLineFrom(server.args);
+    const nextUrl = server.url ?? "";
+    const nextTransport = server.transport;
+    setAdding(false);
+    setEditingId(server.id);
+    setName(server.id);
+    setTransport(nextTransport);
+    setCommand(nextCommand);
+    setArgsText(nextArgs);
+    setUrl(nextUrl);
+    editSnapshot.current = {
+      transport: nextTransport,
+      command: nextCommand,
+      argsText: nextArgs,
+      url: nextUrl,
+    };
+  };
+
+  const saveEdit = async (): Promise<void> => {
+    if (!editingId || !canSubmit) return;
+    const savedProjectId = currentProjectId;
+    const body =
+      transport === "http" ? { url: trimmedUrl } : { command: trimmedCommand, args: parsedArgs };
+    setSaving(true);
+    try {
+      const response = await fetch(`/mcp/${encodeURIComponent(editingId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const id = editingId;
+      setEditingId(null);
+      resetDraft();
+      // A project switch while PATCH was in flight already owns catalog + focus.
+      if (loadedProject.current !== savedProjectId) return;
+      await load();
+      if (loadedProject.current !== savedProjectId) return;
+      requestAnimationFrame(() => {
+        if (loadedProject.current === savedProjectId) editToggleRefs.current.get(id)?.focus();
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -374,7 +519,8 @@ export function McpScreen() {
                 color: "var(--color-accent-foreground)",
               }}
               aria-label={adding ? "Close add MCP server form" : "Add MCP server"}
-              onClick={() => setAdding((v) => !v)}
+              disabled={saving}
+              onClick={startAdd}
             >
               <Plus size={13} /> Add server
             </ControlButton>
@@ -386,83 +532,117 @@ export function McpScreen() {
             : "Select a project to assign servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog; project definitions stay read-only."}
         </p>
 
-        {adding ? (
+        {formOpen ? (
           <form
             className="mb-3 flex flex-col gap-2"
-            data-testid="mcp-add-form"
+            data-testid={editing ? "mcp-edit-form" : "mcp-add-form"}
+            aria-label={editing ? `Edit MCP server ${editingId}` : "Add MCP server"}
+            aria-busy={saving}
             onSubmit={(event) => {
               event.preventDefault();
-              void add();
+              if (editing) void saveEdit();
+              else void add();
             }}
             onKeyDown={(event) => {
               if (event.key !== "Escape") return;
               event.preventDefault();
+              if (saving) return;
+              if (editing) {
+                closeEditor(true);
+                return;
+              }
               setAdding(false);
               requestAnimationFrame(() => addToggleRef.current?.focus());
             }}
           >
+            {editing ? (
+              <p className="text-xs text-text-muted" data-testid="mcp-editing-label">
+                Editing {editingId}
+              </p>
+            ) : null}
             <div data-testid="mcp-transport">
               <AppSegmentedPicker
                 aria-label="MCP server type"
                 size="sm"
                 value={transport}
                 onChange={(next) => setTransport(next)}
+                disabled={saving}
                 options={MCP_TRANSPORT_OPTIONS}
               />
             </div>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-text-secondary">Name</span>
               <ControlInput
-                autoFocus
+                autoFocus={!editing}
                 data-testid="mcp-name"
-                className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-55"
                 placeholder="filesystem"
                 aria-invalid={duplicateName || undefined}
                 aria-describedby={duplicateName ? "mcp-add-hint" : undefined}
                 value={name}
+                disabled={editing || saving}
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <div className="flex items-end gap-2">
+            <div className="flex flex-col gap-2">
               {transport === "stdio" ? (
-                <label className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="text-xs font-medium text-text-secondary">Command</span>
-                  <ControlInput
-                    data-testid="mcp-command"
-                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                    placeholder="npx -y @modelcontextprotocol/server-filesystem /tmp"
-                    value={command}
-                    onChange={(e) => setCommand(e.target.value)}
-                  />
-                </label>
+                <>
+                  <label className="flex min-w-0 flex-col gap-1">
+                    <span className="text-xs font-medium text-text-secondary">Command</span>
+                    <ControlInput
+                      autoFocus={editing}
+                      data-testid="mcp-command"
+                      className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                      placeholder="npx"
+                      value={command}
+                      disabled={saving}
+                      onChange={(e) => setCommand(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex min-w-0 flex-col gap-1">
+                    <span className="text-xs font-medium text-text-secondary">Arguments</span>
+                    <ControlInput
+                      data-testid="mcp-args"
+                      className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                      placeholder='-y server-fs "/path with spaces"'
+                      value={argsText}
+                      disabled={saving}
+                      onChange={(e) => setArgsText(e.target.value)}
+                    />
+                  </label>
+                </>
               ) : (
                 <label className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className="text-xs font-medium text-text-secondary">URL</span>
                   <ControlInput
+                    autoFocus={editing}
                     data-testid="mcp-url"
-                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
                     placeholder="https://mcp.example.com/mcp"
                     aria-invalid={(Boolean(trimmedUrl) && !isValidHttpUrl(trimmedUrl)) || undefined}
                     aria-describedby={
                       trimmedUrl && !isValidHttpUrl(trimmedUrl) ? "mcp-add-hint" : undefined
                     }
                     value={url}
+                    disabled={saving}
                     onChange={(e) => setUrl(e.target.value)}
                   />
                 </label>
               )}
+            </div>
+            <div className="flex items-center justify-end">
               <ControlButton
                 type="submit"
-                data-testid="mcp-add-confirm"
+                data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
                 className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                   color: "var(--color-accent-foreground)",
                 }}
-                disabled={!canAdd}
+                disabled={!canSubmit}
               >
-                {saving ? "Adding…" : "Add"}
+                {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
               </ControlButton>
             </div>
             {duplicateName ? (
@@ -624,6 +804,27 @@ export function McpScreen() {
                   >
                     <RefreshCw size={13} />
                   </ControlButton>
+                  {server.editable === true ? (
+                    <ControlButton
+                      ref={(element) => {
+                        if (element) editToggleRefs.current.set(server.id, element);
+                        else editToggleRefs.current.delete(server.id);
+                      }}
+                      data-testid={`mcp-edit-${server.id}`}
+                      className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      title={editingId === server.id ? "Close editor" : "Edit global definition"}
+                      aria-label={
+                        editingId === server.id
+                          ? `Close MCP editor for ${server.id}`
+                          : `Edit global MCP definition ${server.id}`
+                      }
+                      aria-expanded={editingId === server.id}
+                      disabled={saving}
+                      onClick={() => startEdit(server)}
+                    >
+                      <Pencil size={13} />
+                    </ControlButton>
+                  ) : null}
                   {server.editable !== false ? (
                     <ControlButton
                       data-testid={`mcp-remove-${server.id}`}

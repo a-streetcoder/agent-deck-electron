@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   deleteMcpServer,
+  hasMcpServer,
   isValidMcpServerName,
   mcpConfigPath,
   McpConfigError,
@@ -115,10 +116,105 @@ describe("writeMcpServer / deleteMcpServer", () => {
     expect(db?.command).toBe("new");
   });
 
+  it("keeps env and cwd when fixing a stdio command typo", () => {
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          files: {
+            command: "npxx",
+            args: ["-y", "server-fs"],
+            env: { TOKEN: "secret" },
+            cwd: "/tmp/work",
+            extra: true,
+          },
+        },
+      }),
+    );
+    writeMcpServer(roots, "global", "files", { command: "npx", args: ["-y", "server-fs"] });
+    const doc = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(doc.mcpServers.files).toEqual({
+      command: "npx",
+      args: ["-y", "server-fs"],
+      env: { TOKEN: "secret" },
+      cwd: "/tmp/work",
+      extra: true,
+    });
+  });
+
+  it("keeps headers when fixing an http url typo", () => {
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          remote: {
+            url: "https://exampel.com/mcp",
+            headers: { Authorization: "Bearer secret" },
+            extra: 1,
+          },
+        },
+      }),
+    );
+    writeMcpServer(roots, "global", "remote", { url: "https://example.com/mcp" });
+    const doc = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(doc.mcpServers.remote).toEqual({
+      url: "https://example.com/mcp",
+      headers: { Authorization: "Bearer secret" },
+      extra: 1,
+    });
+  });
+
+  it("strips opposite-transport keys when switching transports", () => {
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        leftover: true,
+        mcpServers: {
+          svc: {
+            command: "npx",
+            args: ["-y", "old"],
+            env: { TOKEN: "secret" },
+            cwd: "/tmp/work",
+            extra: "keep",
+          },
+          keep: { command: "keep" },
+        },
+      }),
+    );
+    writeMcpServer(roots, "global", "svc", { url: "https://example.com/mcp" });
+    let doc = JSON.parse(readFileSync(file, "utf8")) as {
+      leftover: unknown;
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(doc.leftover).toBe(true);
+    expect(doc.mcpServers.keep).toEqual({ command: "keep" });
+    expect(doc.mcpServers.svc).toEqual({ url: "https://example.com/mcp", extra: "keep" });
+
+    writeMcpServer(roots, "global", "svc", { command: "uvx", args: ["svc"] });
+    doc = JSON.parse(readFileSync(file, "utf8")) as {
+      leftover: unknown;
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(doc.mcpServers.svc).toEqual({ command: "uvx", args: ["svc"], extra: "keep" });
+    expect(doc.mcpServers.keep).toEqual({ command: "keep" });
+  });
+
   it("deletes a server (and reports whether it existed)", () => {
     writeMcpServer(roots, "global", "gone", { command: "x" });
+    expect(hasMcpServer(roots, "global", "gone")).toBe(true);
     expect(deleteMcpServer(roots, "global", "gone")).toBe(true);
     expect(readMcpServers(roots)).toEqual([]);
+    expect(hasMcpServer(roots, "global", "gone")).toBe(false);
     expect(deleteMcpServer(roots, "global", "gone")).toBe(false);
   });
 

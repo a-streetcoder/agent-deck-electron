@@ -188,7 +188,40 @@ function requireScopePath(roots: ResourceRoots, scope: McpConfigScope): string {
   return file;
 }
 
-/** Add or replace a server in the scope's mcp.json (preserving other keys). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Overlay submitted transport fields onto an existing mcpServers entry. */
+function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<string, unknown> {
+  const next: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
+  if ("command" in config) {
+    next.command = config.command;
+    if (config.args !== undefined) next.args = config.args;
+    else delete next.args;
+    if (config.env !== undefined) next.env = config.env;
+    delete next.url;
+    delete next.headers;
+  } else {
+    next.url = config.url;
+    delete next.command;
+    delete next.args;
+    delete next.env;
+    delete next.cwd;
+  }
+  return next;
+}
+
+/** True when `name` is present as a key in the scope's mcp.json (even if unusable). */
+export function hasMcpServer(roots: ResourceRoots, scope: McpConfigScope, name: string): boolean {
+  if (!isValidMcpServerName(name)) return false;
+  const file = mcpConfigPath(roots, scope);
+  if (!file) return false;
+  const doc = readMcpDocument(file);
+  return Object.prototype.hasOwnProperty.call(doc.mcpServers, name);
+}
+
+/** Add or merge a server in the scope's mcp.json (preserving other keys). */
 export function writeMcpServer(
   roots: ResourceRoots,
   scope: McpConfigScope,
@@ -203,7 +236,7 @@ export function writeMcpServer(
   }
   const file = requireScopePath(roots, scope);
   const doc = readMcpDocument(file);
-  doc.mcpServers[name] = config;
+  doc.mcpServers[name] = mergeMcpServerEntry(doc.mcpServers[name], config);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
 }

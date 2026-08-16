@@ -1,9 +1,11 @@
 import {
   deleteMcpServer,
+  hasMcpServer,
   isValidHttpMcpUrl,
   McpConfigError,
   readMcpServerCatalog,
   writeMcpServer,
+  type McpServerEntry,
 } from "@agent-deck/resources";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
@@ -38,6 +40,28 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }),
   ]);
 
+  const mcpEditBody = z.union([
+    z.object({
+      name: z.string().min(1).optional(),
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+    }),
+    z.object({
+      name: z.string().min(1).optional(),
+      url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+    }),
+  ]);
+
+  const definitionFields = (entry: McpServerEntry | undefined) => {
+    if (!entry) return {};
+    if (entry.transport === "stdio") {
+      return entry.args !== undefined
+        ? { command: entry.command, args: entry.args }
+        : { command: entry.command };
+    }
+    return { url: entry.url };
+  };
+
   const projectScope = (raw: unknown): string | undefined => {
     if (typeof raw !== "string") return undefined;
     return projects.find((project) => project.id === raw) ? raw : undefined;
@@ -67,6 +91,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             : globalById.has(config.id)
               ? "global"
               : "environment";
+          const editable = source === "global";
           return {
             ...config,
             source,
@@ -74,8 +99,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             // live connectivity or tool inventory.
             connected: false,
             toolNames: [] as string[],
-            editable: source === "global",
+            editable,
             auth: { status: "none" as const },
+            ...(editable ? definitionFields(globalById.get(config.id)) : {}),
           };
         }),
       };
@@ -97,17 +123,22 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         const status = statuses.get(config.id);
         const transport = "url" in config ? "http" : "stdio";
         const authId = oauthKey(scope, config.id);
+        const source = isMcpEnvOverride(config.id)
+          ? "environment"
+          : (sourceById.get(config.id) ?? "environment");
+        const editable = source === "global";
         return {
           id: config.id,
           transport,
-          source: isMcpEnvOverride(config.id)
-            ? "environment"
-            : (sourceById.get(config.id) ?? "environment"),
+          source,
           connected: status?.connected ?? false,
           toolNames: status?.toolNames ?? [],
           error: status?.error,
-          editable: !isMcpEnvOverride(config.id) && sourceById.get(config.id) === "global",
+          editable,
           auth: transport === "http" ? mcpOAuth.state(authId) : { status: "none" as const },
+          ...(editable
+            ? definitionFields(catalog.servers.find((entry) => entry.id === config.id))
+            : {}),
         };
       }),
     };
@@ -194,6 +225,58 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         toolNames: [] as string[],
       },
     });
+  });
+
+  fastify.patch("/mcp/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = mcpEditBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
+    if (parsed.data.name !== undefined && parsed.data.name !== id) {
+      return reply.code(400).send({
+        error: "MCP server identity is the path id; rename is not supported",
+      });
+    }
+    const roots = rootsFor();
+    if (isMcpEnvOverride(id)) {
+      return reply.code(403).send({
+        error: "Environment MCP definitions are not editable in-app.",
+      });
+    }
+    try {
+      // hasMcpServer throws on a malformed file (400). Usability matches GET:
+      // only catalog-listed global entries are editable; leftover keys 404.
+      const exists = hasMcpServer(roots, "global", id);
+      const usable = readMcpServerCatalog(roots).servers.some(
+        (entry) => entry.id === id && entry.scope === "global",
+      );
+      if (!exists || !usable) {
+        return reply.code(404).send({ error: "unknown global MCP server" });
+      }
+    } catch (error) {
+      const message = error instanceof McpConfigError ? error.message : String(error);
+      return reply.code(400).send({ error: message });
+    }
+    const input =
+      "url" in parsed.data
+        ? { url: parsed.data.url }
+        : { command: parsed.data.command, args: parsed.data.args };
+    try {
+      writeMcpServer(roots, "global", id, input);
+    } catch (error) {
+      const message = error instanceof McpConfigError ? error.message : String(error);
+      return reply.code(400).send({ error: message });
+    }
+    for (const project of projects.list()) await reconcileProjectMcp(project.id);
+    broadcast({ type: "resources_changed" });
+    return {
+      ok: true,
+      server: {
+        id,
+        transport: "url" in parsed.data ? "http" : "stdio",
+        connected: false,
+        toolNames: [] as string[],
+      },
+    };
   });
 
   fastify.delete("/mcp/:id", async (request, reply) => {

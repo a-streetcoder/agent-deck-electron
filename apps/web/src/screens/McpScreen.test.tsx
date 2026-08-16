@@ -489,7 +489,10 @@ describe("MCP add form", () => {
     fireEvent.click(screen.getByTestId("mcp-add"));
     fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "filesystem" } });
     fireEvent.change(screen.getByTestId("mcp-command"), {
-      target: { value: "npx -y @modelcontextprotocol/server-filesystem /tmp" },
+      target: { value: "npx" },
+    });
+    fireEvent.change(screen.getByTestId("mcp-args"), {
+      target: { value: "-y @modelcontextprotocol/server-filesystem /tmp" },
     });
     fireEvent.click(screen.getByTestId("mcp-add-confirm"));
 
@@ -578,7 +581,8 @@ describe("MCP add form", () => {
     await screen.findByTestId("mcp-empty");
     fireEvent.click(screen.getByTestId("mcp-add"));
     fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "draft" } });
-    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx echo" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx" } });
+    fireEvent.change(screen.getByTestId("mcp-args"), { target: { value: "echo" } });
     fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
     expect(screen.queryByTestId("mcp-command")).toBeNull();
     expect(screen.getByTestId("mcp-url")).toBeTruthy();
@@ -587,7 +591,8 @@ describe("MCP add form", () => {
     });
     fireEvent.click(screen.getByRole("radio", { name: "Local (stdio)" }));
     expect(screen.queryByTestId("mcp-url")).toBeNull();
-    expect((screen.getByTestId("mcp-command") as HTMLInputElement).value).toBe("npx echo");
+    expect((screen.getByTestId("mcp-command") as HTMLInputElement).value).toBe("npx");
+    expect((screen.getByTestId("mcp-args") as HTMLInputElement).value).toBe("echo");
     fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
     expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
       "https://mcp.example.com/mcp",
@@ -601,7 +606,8 @@ describe("MCP add form", () => {
     await screen.findByTestId("mcp-filesystem");
     fireEvent.click(screen.getByTestId("mcp-add"));
     fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "filesystem" } });
-    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx echo" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx" } });
+    fireEvent.change(screen.getByTestId("mcp-args"), { target: { value: "echo" } });
     expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
     fireEvent.change(screen.getByTestId("mcp-url"), {
@@ -643,6 +649,236 @@ describe("MCP add form", () => {
     expect((screen.getByTestId("mcp-name") as HTMLInputElement).value).toBe("remote");
     expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
       "https://mcp.example.com/mcp",
+    );
+  });
+});
+
+describe("MCP edit form", () => {
+  function mockCatalog(
+    servers: Array<Partial<Record<string, unknown>>> = [{ id: "remote" }],
+    options: { patchError?: string } = {},
+  ) {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith("/mcp/") && init?.method === "PATCH") {
+        return options.patchError
+          ? Promise.resolve(jsonResponse({ error: options.patchError }, 400))
+          : Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url === "/mcp") {
+        return Promise.resolve(
+          jsonResponse({
+            servers: servers.map((server) => ({
+              id: "remote",
+              transport: "http",
+              connected: false,
+              toolNames: [],
+              editable: true,
+              url: "https://mcp.example.com/old",
+              ...server,
+            })),
+          }),
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+  }
+
+  it("shows Edit only for editable global rows", async () => {
+    mockCatalog([
+      { id: "remote", editable: true },
+      { id: "projectdb", transport: "stdio", editable: false, source: "project" },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    const edit = screen.getByTestId("mcp-edit-remote");
+    expect(edit).toBeTruthy();
+    expect(screen.queryByTestId("mcp-edit-projectdb")).toBeNull();
+    fireEvent.click(edit);
+    expect(edit.getAttribute("aria-expanded")).toBe("true");
+    expect(edit.getAttribute("aria-label")).toBe("Close MCP editor for remote");
+    fireEvent.click(edit);
+    expect(screen.queryByTestId("mcp-edit-form")).toBeNull();
+    expect(edit.getAttribute("aria-expanded")).toBe("false");
+    expect(edit.getAttribute("aria-label")).toBe("Edit global MCP definition remote");
+  });
+
+  it("seeds the locked name and existing URL, then PATCHes only the URL", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    fireEvent.click(screen.getByTestId("mcp-edit-remote"));
+    expect(screen.getByTestId("mcp-edit-form")).toBeTruthy();
+    expect((screen.getByTestId("mcp-name") as HTMLInputElement).value).toBe("remote");
+    expect((screen.getByTestId("mcp-name") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/old",
+    );
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/new" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => {
+      const patch = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp/remote" && init?.method === "PATCH";
+      });
+      expect(patch).toBeTruthy();
+      expect(JSON.parse(String(patch![1]?.body))).toEqual({
+        url: "https://mcp.example.com/new",
+      });
+    });
+  });
+
+  it("seeds a stdio command line and PATCHes command/args", async () => {
+    mockCatalog([
+      {
+        id: "files",
+        transport: "stdio",
+        command: "npx",
+        args: ["-y", "server-fs"],
+        url: undefined,
+      },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-files");
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+    expect((screen.getByTestId("mcp-command") as HTMLInputElement).value).toBe("npx");
+    expect((screen.getByTestId("mcp-args") as HTMLInputElement).value).toBe("-y server-fs");
+    fireEvent.change(screen.getByTestId("mcp-command"), {
+      target: { value: "uvx" },
+    });
+    fireEvent.change(screen.getByTestId("mcp-args"), {
+      target: { value: 'server-fs "/tmp/hello world"' },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => {
+      const patch = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp/files" && init?.method === "PATCH";
+      });
+      expect(JSON.parse(String(patch![1]?.body))).toEqual({
+        command: "uvx",
+        args: ["server-fs", "/tmp/hello world"],
+      });
+    });
+  });
+
+  it("round-trips literal quotes, empty args, and spaced args", async () => {
+    mockCatalog([
+      {
+        id: "quoted",
+        transport: "stdio",
+        command: "runner",
+        args: ['"foo"', "", "hello world", "line\tbreak"],
+        url: undefined,
+      },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-quoted");
+    fireEvent.click(screen.getByTestId("mcp-edit-quoted"));
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => {
+      const patch = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp/quoted" && init?.method === "PATCH";
+      });
+      expect(JSON.parse(String(patch![1]?.body))).toEqual({
+        command: "runner",
+        args: ['"foo"', "", "hello world", "line\tbreak"],
+      });
+    });
+  });
+
+  it("does not PATCH an invalid URL and restores the snapshot on Escape", async () => {
+    mockCatalog();
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    fireEvent.click(screen.getByTestId("mcp-edit-remote"));
+    fireEvent.change(screen.getByTestId("mcp-url"), { target: { value: "not-a-url" } });
+    expect((screen.getByTestId("mcp-edit-confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/draft" },
+    });
+    fireEvent.keyDown(screen.getByTestId("mcp-edit-form"), { key: "Escape" });
+    expect(screen.queryByTestId("mcp-edit-form")).toBeNull();
+    fireEvent.click(screen.getByTestId("mcp-edit-remote"));
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/old",
+    );
+  });
+
+  it("locks add and other edit actions while a save is in flight", async () => {
+    let resolvePatch: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp/remote" && init?.method === "PATCH") {
+        return new Promise<Response>((resolve) => {
+          resolvePatch = resolve;
+        });
+      }
+      if (url === "/mcp") {
+        return Promise.resolve(
+          jsonResponse({
+            servers: [
+              {
+                id: "remote",
+                transport: "http",
+                connected: false,
+                toolNames: [],
+                editable: true,
+                url: "https://mcp.example.com/old",
+              },
+              {
+                id: "files",
+                transport: "stdio",
+                connected: false,
+                toolNames: [],
+                editable: true,
+                command: "npx",
+                args: ["echo"],
+              },
+            ],
+          }),
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    fireEvent.click(screen.getByTestId("mcp-edit-remote"));
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/new" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => expect(resolvePatch).toBeTruthy());
+    expect((screen.getByTestId("mcp-add") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId("mcp-edit-files") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId("mcp-edit-confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+    expect(screen.getByTestId("mcp-edit-form")).toBeTruthy();
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/new",
+    );
+    resolvePatch?.(jsonResponse({ ok: true }));
+    await waitFor(() => expect(screen.queryByTestId("mcp-edit-form")).toBeNull());
+  });
+
+  it("keeps the edit form open after a save error", async () => {
+    mockCatalog([{ id: "remote" }], { patchError: "http server needs a valid http(s) url" });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    fireEvent.click(screen.getByTestId("mcp-edit-remote"));
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://mcp.example.com/new" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("http server needs a valid http(s) url"),
+    );
+    expect(screen.getByTestId("mcp-edit-form")).toBeTruthy();
+    expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
+      "https://mcp.example.com/new",
     );
   });
 });
