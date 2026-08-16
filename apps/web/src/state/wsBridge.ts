@@ -759,9 +759,23 @@ function handleMessage(message: ServerMessage): void {
       // A same-id history re-run replaced the process and ordered bus. This is
       // server-driven so every renderer subscribed to the id drops stale seq
       // ancestry and requests the replacement runtime's full snapshot.
+      //
+      // Over the EXISTING socket: the rebind is emitted while the request that
+      // caused it (checkpoint rollback, a prompt that woke a parked session)
+      // is still in flight, and its reply comes back on this socket. Tearing
+      // the socket down here rejected that request with "transport closed"
+      // even though it had succeeded — the rollback confirm dialog then never
+      // closed (the e2e gate that caught this).
       store.resetTranscript();
       store.setError(null);
-      connect(message.sessionId);
+      // The dead runtime's sideband belongs to it: drop it and mark the
+      // subscription unsettled, so a failed resubscribe/refetch shows nothing
+      // rather than stale-but-plausible data (Codex). onSessionSubscribed
+      // refills both once the replacement runtime answers.
+      store.resetDiffState();
+      store.setCheckpoints([]);
+      store.setSessionSubscriptionSettled(false);
+      transport.resubscribe(message.sessionId);
       break;
     case "session_removed":
       store.removeSession(message.sessionId);
