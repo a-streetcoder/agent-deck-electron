@@ -171,7 +171,9 @@ test("discloses a truncated list accessibly without disrupting narrow-layout sea
   await expect(notice).toContainText(
     "Search and label, assignee, author, type, and close-reason filters apply only to these results",
   );
-  await expect(page.locator('[data-testid^="issue-"]')).toHaveCount(50);
+  // Rows only: the prefix selector also matched each row's own `issue-updated`
+  // / `issue-author` children once ISS-06 added them, doubling the count.
+  await expect(page.getByTestId(/^issue-\d+$/)).toHaveCount(50);
   const noticeBox = await notice.boundingBox();
   expect(noticeBox).not.toBeNull();
   expect(noticeBox!.x).toBeGreaterThanOrEqual(0);
