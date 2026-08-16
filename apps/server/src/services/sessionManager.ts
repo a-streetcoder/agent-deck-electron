@@ -246,6 +246,14 @@ export interface SpawnSessionParams {
    * catch); it is fire-and-forget so it never perturbs the idle receipt timing.
    */
   readonly captureCheckpoint?: (label: string) => Effect.Effect<void>;
+  /**
+   * This runtime REPLACES one that was idle (the resource-refresh park +
+   * relaunch), so seeding from history restores the authoritative-idle edge the
+   * replacement process never emits — re-arming idle parking and the title
+   * helper the park interrupted. Never set for an ordinary launch, where only a
+   * real idle event may mark the session stoppable.
+   */
+  readonly resumedIdle?: boolean;
   /** Replace a Pi user message's image bytes with session-scoped opaque refs. */
   readonly decorateUserCell?: (
     cell: Extract<TranscriptState["cells"][number], { kind: "user" }>,
@@ -1265,6 +1273,40 @@ export const makeManagedSessionRuntime = (
         params.reconcileImages?.(historyUsers);
         if (meta.providerRetries?.length) persistProviderRetries();
       });
+      // A relaunch rebuilt a session that was IDLE when its previous runtime
+      // went away: the resource refresh parks and relaunches transparently.
+      // The replacement process emits no agent_status idle of its own, so
+      // without this every idle-edge consumer stays disarmed for the rest of
+      // the session's life:
+      //   - idle parking never becomes eligible again (parkingEligible requires
+      //     authoritativeIdle), so a refreshed session can never park; and
+      //   - the title helper, forked into the OLD session scope, was
+      //     interrupted by the park and never retried.
+      // Both e2e gates (session-parking, polish's generated title) caught this.
+      // DEFERRED and re-checked: yielding first lets pi events already queued on
+      // the stream ingest ahead of this, and an agent_start among them keeps
+      // authoritativeIdle false. Claiming the inherited idle synchronously could
+      // mark a BUSY replacement runtime stoppable (Codex). Forked into the
+      // SESSION scope like the idle-edge fork, so closing the session
+      // interrupts an in-flight helper — never an orphan pi.
+      if (params.resumedIdle) {
+        yield* Effect.sync(() =>
+          Effect.runFork(
+            Effect.forkIn(
+              Effect.yieldNow().pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    if (transcript.agentStatus !== "idle" || pendingUserTurn) return;
+                    authoritativeIdle = true;
+                    if (autoTitle()) Effect.runFork(Effect.forkIn(generateTitle, sessionScope));
+                  }),
+                ),
+              ),
+              sessionScope,
+            ),
+          ),
+        );
+      }
     });
 
     const runtime: ManagedSessionRuntime = {

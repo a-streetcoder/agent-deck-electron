@@ -270,7 +270,12 @@ export class ManagedSession {
       await this.runtime.runPromise(Scope.close(this.scope, Exit.void));
       await runPromiseUnwrapped(this.runtime, this.rt.ensureExitHandled);
       this.lifecycle = "parked";
-      this.meta.parkedAt = new Date().toISOString();
+      // Only IDLE parking advertises a parked session. A resource-refresh park
+      // is a transparent internal restart — the relaunch follows immediately —
+      // so stamping parkedAt here published a session as
+      // "Parked · resumes on next command" that was never parked, and the
+      // listing disagreed the moment the replacement runtime took over.
+      if (eligibility === "parking") this.meta.parkedAt = new Date().toISOString();
       onParked(this.meta);
     } catch (error) {
       // A failed close must not advertise a parked process or leave later real
@@ -877,6 +882,13 @@ export class SessionManager {
       this.publishResourceMeta(replacement.meta);
     } catch (error) {
       const owner = this.sessions.get(meta.id);
+      // The refresh park is only "transparent" while the relaunch succeeds. If
+      // it failed, the session really IS stopped and waiting for its next
+      // command, so it must advertise that — otherwise listings and a restart's
+      // rehydration would show a live session whose pi is gone (Codex).
+      if (owner?.isParked && !owner.meta.parkedAt) {
+        owner.meta.parkedAt = new Date().toISOString();
+      }
       this.setResourceRefreshError(owner?.meta ?? meta, error);
       this.resourceRefreshDirty.delete(meta.id);
     } finally {
@@ -1042,7 +1054,19 @@ export class SessionManager {
       };
       let session: ManagedSession | undefined;
       try {
-        session = this.launch(revived, plan, effectiveEnv, true, preserveActivity);
+        // A prepared candidate means the RESOURCE REFRESH parked an idle
+        // session and is relaunching it transparently, so the replacement
+        // runtime inherits that idle edge — re-arming idle parking and the
+        // title helper the park interrupted. An ordinary wake is
+        // command-driven: its idle edge must come from the turn about to run.
+        session = this.launch(
+          revived,
+          plan,
+          effectiveEnv,
+          true,
+          preserveActivity,
+          preparedCandidate !== undefined,
+        );
         await session.seedFromHistory();
         session.seedSyntheticCells([
           ...(this.loopSnapshots?.get(revived.id) ?? []),
@@ -1120,6 +1144,7 @@ export class SessionManager {
     env?: Record<string, string | undefined>,
     deferAnnouncement = false,
     preserveActivity = false,
+    resumedIdle = false,
   ): ManagedSession {
     if (this.sessions.has(meta.id)) {
       throw new Error(`session already has an authoritative runtime owner: ${meta.id}`);
@@ -1142,6 +1167,7 @@ export class SessionManager {
         { ...this.envFileLayer(meta.projectId), ...env },
         tempDirs,
         publishMeta,
+        resumedIdle,
       );
       const scope = this.runtime.runSync(Scope.make());
       let rt: ManagedSessionRuntime;
@@ -1217,6 +1243,7 @@ export class SessionManager {
     env: Record<string, string | undefined> | undefined,
     tempDirs: string[],
     onMetaChange: (meta: SessionMeta) => void = this.onMetaChange,
+    resumedIdle = false,
   ): SpawnSessionParams {
     const bridgeExtension = this.bridgeExtensionFactory(meta);
     let launchPlan: LaunchPlan = bridgeExtension
@@ -1333,6 +1360,7 @@ export class SessionManager {
             }),
           }
         : {}),
+      ...(resumedIdle ? { resumedIdle: true } : {}),
       // Slice 18a checkpoint capture as a never-failing per-label Effect (forked
       // fire-and-forget after the session-file flush at each idle).
       ...(this.onCheckpointCapture !== undefined
