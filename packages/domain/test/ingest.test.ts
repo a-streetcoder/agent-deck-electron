@@ -5,7 +5,12 @@ import {
   ingestPiEvent,
   type PiInboundEvent,
 } from "../src/ingest.ts";
-import { emptyTranscript, reduceTranscript, type TranscriptState } from "../src/transcript.ts";
+import {
+  emptyTranscript,
+  isAnswerableUiRequest,
+  reduceTranscript,
+  type TranscriptState,
+} from "../src/transcript.ts";
 
 function assistantMessage(content: unknown[]): unknown {
   return {
@@ -525,5 +530,34 @@ describe("ingest → reduce pipeline", () => {
     // A compaction_start (no-op) doesn't bump it.
     const start = ingestPiEvent(ingest, { type: "compaction_start" } as unknown as PiInboundEvent);
     expect(start).toEqual([]);
+  });
+});
+
+describe("answerable UI requests (the pending/attention chokepoint)", () => {
+  it("accepts only the methods anything can answer", () => {
+    for (const method of ["select", "confirm", "input", "editor"]) {
+      expect(isAnswerableUiRequest(method)).toBe(true);
+    }
+    // pi's context-usage meter ticks through this same channel several times a
+    // turn. Nothing can answer it, so the server must not record it as pending:
+    // it would keep the needs-attention badge on and, via pendingExtensionUi,
+    // pin idle parking and resource refresh OFF for the session's whole life.
+    // Real-pi evidence: session-failure/session-attention failed exactly this
+    // way on a developer machine where pi emits the meter.
+    for (const method of ["setStatus", "notify", "widget", ""]) {
+      expect(isAnswerableUiRequest(method)).toBe(false);
+    }
+  });
+
+  it("keeps a passive setStatus out of the transcript entirely", () => {
+    const ingest = createIngestState();
+    const events = ingestPiEvent(ingest, {
+      type: "extension_ui_request",
+      id: "status-1",
+      method: "setStatus",
+      statusKey: "context-progress",
+      statusText: "ctx 7/100k",
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([]);
   });
 });

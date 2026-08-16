@@ -415,6 +415,26 @@ export function deckRunDetail(state: TranscriptState, runId: string): DeckRunDet
 }
 
 /**
+ * The `extension_ui_request` methods that BLOCK on a user answer — the only
+ * ones anything can resolve (`respondToUiRequest` accepts cancelled /
+ * confirmed / value). Everything else pi sends on that channel is
+ * fire-and-forget decoration; `setStatus` (the context-usage meter) arrives
+ * repeatedly during an ordinary turn and is never answerable.
+ *
+ * A CHOKEPOINT on purpose. Treating a passive notification as a pending
+ * question is not cosmetic: the server counts open UI requests for the
+ * needs-attention badge AND for `pendingExtensionUi`, which gates idle parking
+ * and resource refresh. Nothing can ever answer a `setStatus`, so a single tick
+ * pinned both OFF for the rest of a session's life — invisible on CI, where pi
+ * never emits the meter, and permanent on a real user's machine.
+ */
+const ANSWERABLE_UI_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
+export function isAnswerableUiRequest(method: string): boolean {
+  return ANSWERABLE_UI_METHODS.has(method);
+}
+
+/**
  * The single open (unanswered) extension_ui_request question, if any. pi emits
  * one `extension_ui_request` at a time, so this returns the first unanswered
  * `question` cell in transcript order — the one the composer-anchored pending

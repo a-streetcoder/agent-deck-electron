@@ -9,6 +9,7 @@ import {
   finalizeOpenProviderRetry,
   ingestMemoryRecallEntry,
   ingestPiEvent,
+  isAnswerableUiRequest,
   normalizeAgentOutput,
   reduceTranscript,
   type AskUserAnswer,
@@ -1019,8 +1020,18 @@ export const makeManagedSessionRuntime = (
       }
       if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
-        pendingUiRequests.set(e.id, e.method);
-        markNeedsAttention();
+        // Only a request that BLOCKS on an answer is pending work. pi also
+        // sends fire-and-forget decoration here — `setStatus`, the
+        // context-usage meter, ticks several times per turn — and nothing can
+        // ever answer those, so recording one left an entry `respondToUiRequest`
+        // could never clear: a permanent needs-attention badge and, through
+        // `pendingExtensionUi`, idle parking and resource refresh pinned OFF for
+        // the session's remaining life. The domain ingest already filtered to
+        // answerable methods; this was its unguarded sibling.
+        if (isAnswerableUiRequest(e.method)) {
+          pendingUiRequests.set(e.id, e.method);
+          markNeedsAttention();
+        }
       }
       let retryChanged = false;
       const customEntry =

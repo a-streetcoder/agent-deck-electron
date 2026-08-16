@@ -127,6 +127,33 @@ transcript was always rebuilt correctly, just later than one second. The
 original "cells `[]` while the session file holds both roles" observation was
 real but was a snapshot taken too early, not evidence of loss.
 
+### DEF-02 — FIXED: a passive `setStatus` counted as a pending user question
+
+Found by running the Pi suite on a REAL user machine (a clean CI runner never
+sees it). pi sends its context-usage meter through the same channel as
+questions — `extension_ui_request` with `method: "setStatus"`, ticking several
+times per turn. The server counted EVERY request on that channel as pending
+work, so each tick:
+
+- set the needs-attention badge on a session nobody had to look at, and
+- landed in `pendingUiRequests`, which is drained ONLY by `respondToUiRequest`
+  (cancelled / confirmed / value). Nothing can answer a status tick, so the
+  entry was permanent — and through `pendingExtensionUi` it pinned BOTH idle
+  parking and resource refresh OFF for the rest of that session's life.
+
+The domain ingest already filtered to answerable methods
+(`select|confirm|input|editor`) with the rationale in a comment; the session
+manager's attention/parking bookkeeping was its unguarded sibling — the
+dominant defect shape in this codebase. The predicate is now one exported
+chokepoint, `isAnswerableUiRequest`, used by both.
+
+Evidence: caught by stack-tracing `markNeedsAttention` on a failing real-pi
+run, which named the `extension_ui_request` branch, then dumping the raw event
+(`method: "setStatus"`, `statusKey: "context-progress"`). Two of the three
+real-pi tests that had been failing on this machine — `session-failure` and
+`session-attention` — pass with the fix. `memory-inject` still fails here and
+is NOT claimed fixed.
+
 ## Analytics decision — blocked
 
 <!-- prettier-ignore -->
