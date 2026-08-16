@@ -166,8 +166,10 @@ test("discloses a truncated list accessibly without disrupting narrow-layout sea
   await expect(notice).toBeVisible();
   await expect(notice).toHaveAttribute("role", "status");
   await expect(notice).toContainText("first 50 issues returned by GitHub");
+  // ISS-08/ISS-09 added the type and close-reason facets, and the disclosure
+  // names every filter the truncated set applies to — so it grew with them.
   await expect(notice).toContainText(
-    "Search and label, assignee, and author filters apply only to these results",
+    "Search and label, assignee, author, type, and close-reason filters apply only to these results",
   );
   await expect(page.locator('[data-testid^="issue-"]')).toHaveCount(50);
   const noticeBox = await notice.boundingBox();
