@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 8 active P1/P2/P3 rows in this register (7 parity gaps plus DEF-01, a defect found while restoring CI), including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 7 active P1/P2/P3 rows in this register (ANA-01, blocked on an operator decision, and DST-01..06, blocked on release credentials — every implementable parity gap is closed), including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -104,12 +104,28 @@ release-sync quartet, the 1 MiB avatar body).
 **Process note:** `pnpm test:pi` runs in the same CI job AFTER `pnpm test`, so
 it was skipped on every run while the unit step was failing — roughly two
 weeks with no Pi-integration coverage at all. It executed again once the unit
-step went green, which is how DEF-01 below surfaced.
+step went green, which is how DEF-01 surfaced. Splitting `test:pi` into its own
+job would stop a unit failure from silently hiding the Pi suite again.
 
-<!-- prettier-ignore -->
-| ID     | Priority | Status | Difference                                      | Plain English                                                                                                                                       | Why it matters                                                                                             | Evidence                                                                                                                                                                          |
-| ------ | -------- | ------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DEF-01 | **P1**   | Open   | Transcript rebuilds EMPTY after a resource refresh | A resource refresh parks and relaunches the session; the rebuilt transcript then has NO cells, so the conversation disappears from the view.        | Looks like data loss to the user. The history is intact on disk, so a reopen recovers it — but nothing says so. | **E:** `test/extensions-discovery.pi.test.ts` "defers a streamed resource edit … rebinds once with history" fails on ubuntu + macOS. Instrumented: rebuilt cells `[]` while the pi session file holds 1185 bytes with BOTH `"role":"user"` and `"role":"assistant"` — so seeding after the relaunch yields nothing; NOT a flush race. Pre-existing: fails identically with `8cfb6d8`/`a5b438d`/`f61ffe0` reverted. |
+### DEF-01 — CLOSED as a record correction, not a product defect
+
+DEF-01 was filed as "the transcript rebuilds EMPTY after a resource refresh …
+looks like data loss". **That premise was wrong**, and the row is removed
+rather than left to mislead. What the evidence actually showed, in order:
+
+- Instrumenting the seed proved every relaunch DOES rebuild the transcript —
+  4 active history entries in, 2 cells out, on every refresh.
+- Instrumenting the ingest loop for a transition from cells to none proved
+  nothing wipes it afterwards: no such transition ever fired.
+- The failing assertion used vitest's `waitFor` DEFAULT (1s) while the rebind
+  spawns a real pi and reseeds from history. Every neighbouring wait in the
+  same test is paced at 10–20s. Widening only that wait turns the file green,
+  7/7, twice.
+
+So the fix is the assertion's budget (`3f74b2a`), not the runtime: the
+transcript was always rebuilt correctly, just later than one second. The
+original "cells `[]` while the session file holds both roles" observation was
+real but was a snapshot taken too early, not evidence of loss.
 
 ## Analytics decision — blocked
 
