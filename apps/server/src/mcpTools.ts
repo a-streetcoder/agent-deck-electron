@@ -196,19 +196,31 @@ export class McpManager {
   /** Once shutdown starts, no route or queued reload may create another client. */
   private closing = false;
   /** Supplies the OAuth provider for an authed http server (undefined → none). */
-  private readonly httpAuthProvider?: (scope: string, id: string) => McpOAuthProvider | undefined;
+  private readonly httpAuthProvider?: (
+    scope: string,
+    id: string,
+    serverUrl: string,
+  ) => McpOAuthProvider | undefined;
+  /** Prevents the SDK from starting another OAuth flow on an interactive provider. */
+  private readonly isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
   private readonly scopeForSession?: (sessionId: string) => string | undefined;
   private readonly allowServerForSession?: (sessionId: string, serverId: string) => boolean;
 
   constructor(
     private readonly bridge: BridgeRegistry,
     options: {
-      httpAuthProvider?: (scope: string, id: string) => McpOAuthProvider | undefined;
+      httpAuthProvider?: (
+        scope: string,
+        id: string,
+        serverUrl: string,
+      ) => McpOAuthProvider | undefined;
+      isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
       scopeForSession?: (sessionId: string) => string | undefined;
       allowServerForSession?: (sessionId: string, serverId: string) => boolean;
     } = {},
   ) {
     this.httpAuthProvider = options.httpAuthProvider;
+    this.isHttpAuthorizationActive = options.isHttpAuthorizationActive;
     this.scopeForSession = options.scopeForSession;
     this.allowServerForSession = options.allowServerForSession;
   }
@@ -297,6 +309,20 @@ export class McpManager {
 
   private async connectInner(config: McpServerConfig, scope: string): Promise<McpServerStatus> {
     if (this.closing) throw new Error("MCP manager is closing");
+    if (isHttpConfig(config) && this.isHttpAuthorizationActive?.(scope, config.id)) {
+      // Reusing the interactive provider here lets the SDK call redirectToAuthorization
+      // again, replacing the PKCE verifier/state that the browser is currently using.
+      // Preserve both the attempt and any existing client until it completes/cancels.
+      const current = this.status(scope).find((state) => state.id === config.id);
+      if (current) return current;
+      return {
+        id: config.id,
+        transport: "http",
+        connected: false,
+        toolNames: [],
+        error: "OAuth authorization is already in progress",
+      };
+    }
     await this.teardown(config.id, scope);
     if (this.closing) throw new Error("MCP manager is closing");
     const operationController = new AbortController();
@@ -311,7 +337,9 @@ export class McpManager {
           return isHttpConfig(config)
             ? McpClient.connectHttp(config, {
                 ...connectOptions,
-                authProvider: this.httpAuthProvider?.(scope, config.id),
+                // Bind persisted credentials to the exact effective URL before
+                // the SDK can read tokens or attach a bearer header.
+                authProvider: this.httpAuthProvider?.(scope, config.id, config.url),
               })
             : McpClient.connectStdio(config, connectOptions);
         },

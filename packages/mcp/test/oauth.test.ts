@@ -24,7 +24,7 @@ const CLIENT_METADATA: OAuthClientMetadata = {
 };
 
 function makeProvider(store: McpOAuthStore, redirects: URL[]) {
-  return new McpOAuthProvider({
+  const provider = new McpOAuthProvider({
     serverKey: "https://mcp.example.test/sse",
     store,
     redirectUrl: "http://127.0.0.1:8976/callback",
@@ -34,6 +34,8 @@ function makeProvider(store: McpOAuthStore, redirects: URL[]) {
     },
     makeState: () => "fixed-state",
   });
+  provider.bindServerUrl("https://mcp.example.test/sse");
+  return provider;
 }
 
 describe("McpOAuthProvider", () => {
@@ -73,7 +75,7 @@ describe("McpOAuthProvider", () => {
     provider.saveClientInformation({
       client_id: "dyn-client",
       client_secret: "shh",
-      redirect_uris: CLIENT_METADATA.redirect_uris,
+      redirect_uris: [String(provider.redirectUrl)],
     });
     expect(provider.clientInformation()?.client_id).toBe("dyn-client");
 
@@ -88,6 +90,48 @@ describe("McpOAuthProvider", () => {
       clientInformation: { client_id: "dyn-client" },
       tokens: { access_token: "at-1" },
     });
+  });
+
+  it("clears credentials before reads when the exact server URL changes", () => {
+    provider.saveClientInformation({
+      client_id: "url-a-client",
+      redirect_uris: [String(provider.redirectUrl)],
+    });
+    provider.saveTokens({ access_token: "url-a-token", token_type: "Bearer" });
+    provider.bindServerUrl("https://mcp.example.test/other");
+    expect(provider.tokens()).toBeUndefined();
+    expect(provider.clientInformation()).toBeUndefined();
+    expect(store.load("https://mcp.example.test/sse")).toEqual({
+      serverUrl: "https://mcp.example.test/other",
+    });
+  });
+
+  it("retains client registration and refresh tokens across restart for the same URL and redirect", () => {
+    provider.saveClientInformation({
+      client_id: "stable-client",
+      redirect_uris: [String(provider.redirectUrl)],
+    });
+    provider.saveTokens({
+      access_token: "access",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+    });
+    const restarted = makeProvider(store, []);
+    expect(restarted.clientInformation()?.client_id).toBe("stable-client");
+    expect(restarted.tokens()?.refresh_token).toBe("refresh");
+  });
+
+  it("does not reuse a dynamic registration created for a different redirect URI", () => {
+    provider.saveClientInformation({
+      client_id: "stale-client",
+      redirect_uris: ["http://127.0.0.1:1111/callback"],
+    });
+    expect(provider.clientInformation()).toBeUndefined();
+    provider.saveClientInformation({
+      client_id: "current-client",
+      redirect_uris: [String(provider.redirectUrl)],
+    });
+    expect(provider.clientInformation()?.client_id).toBe("current-client");
   });
 
   it("hands the authorization URL to the injected relay", async () => {

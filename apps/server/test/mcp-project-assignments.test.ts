@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -66,6 +67,12 @@ describe("project MCP assignment persistence", () => {
       projects.projects.find((project) => project.id === projectId)?.assignedMcpServers,
     ).toEqual(["not-configured"]);
 
+    const oauthStore = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
+    const oauthKey = `v2:${JSON.stringify([projectId, "not-configured"])}`;
+    oauthStore.save(oauthKey, {
+      serverUrl: "https://mcp.example/sse",
+      tokens: { access_token: "must-be-cleared", token_type: "Bearer" },
+    });
     expect(
       (
         await api("PATCH", `/projects/${projectId}`, {
@@ -73,6 +80,7 @@ describe("project MCP assignment persistence", () => {
         })
       ).status,
     ).toBe(200);
+    expect(oauthStore.load(oauthKey)).toBeUndefined();
     const persisted = JSON.parse(
       readFileSync(path.join(dataDir, "projects.json"), "utf8"),
     ) as Array<{
@@ -80,6 +88,24 @@ describe("project MCP assignment persistence", () => {
       assignedMcpServers?: string[];
     }>;
     expect(persisted.find((project) => project.id === projectId)?.assignedMcpServers).toEqual([]);
+  });
+
+  it("clears project-scoped credentials when a project is hidden", async () => {
+    expect(
+      (
+        await api("PATCH", `/projects/${projectId}`, {
+          assignedMcpServers: ["hidden-server"],
+        })
+      ).status,
+    ).toBe(200);
+    const oauthStore = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
+    const oauthKey = `v2:${JSON.stringify([projectId, "hidden-server"])}`;
+    oauthStore.save(oauthKey, {
+      serverUrl: "https://mcp.example/sse",
+      tokens: { access_token: "must-be-cleared", token_type: "Bearer" },
+    });
+    expect((await api("DELETE", `/projects/${projectId}`)).status).toBe(200);
+    expect(oauthStore.load(oauthKey)).toBeUndefined();
   });
 
   it("fails closed on malformed project config while preserving the assignment", async () => {

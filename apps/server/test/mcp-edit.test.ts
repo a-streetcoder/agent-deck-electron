@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -57,6 +58,41 @@ afterEach(async () => {
   else process.env.AGENT_DECK_PI_ENV = originalPiEnv;
   if (originalMcpEnv === undefined) delete process.env.AGENT_DECK_MCP_SERVERS;
   else process.env.AGENT_DECK_MCP_SERVERS = originalMcpEnv;
+});
+
+describe("MCP config mutation credential lifecycle", () => {
+  it("clears only removed server credentials on disk reload", async () => {
+    writeGlobalMcp({
+      mcpServers: {
+        removed: { url: "http://127.0.0.1:1/mcp" },
+        retained: { url: "http://127.0.0.1:2/mcp" },
+      },
+    });
+    expect(
+      (
+        await api("PATCH", `/projects/${projectId}`, {
+          assignedMcpServers: ["removed", "retained"],
+        })
+      ).status,
+    ).toBe(200);
+    const store = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
+    const removedKey = `v2:${JSON.stringify([projectId, "removed"])}`;
+    const retainedKey = `v2:${JSON.stringify([projectId, "retained"])}`;
+    store.save(removedKey, {
+      serverUrl: "http://127.0.0.1:1/mcp",
+      tokens: { access_token: "removed-token", token_type: "Bearer" },
+    });
+    store.save(retainedKey, {
+      serverUrl: "http://127.0.0.1:2/mcp",
+      tokens: { access_token: "retained-token", token_type: "Bearer" },
+    });
+    writeGlobalMcp({
+      mcpServers: { retained: { url: "http://127.0.0.1:2/mcp" } },
+    });
+    expect((await api("POST", `/mcp/reload?projectId=${projectId}`)).status).toBe(200);
+    expect(store.load(removedKey)).toBeUndefined();
+    expect(store.load(retainedKey)?.tokens?.access_token).toBe("retained-token");
+  });
 });
 
 describe("PATCH /mcp/:id", () => {

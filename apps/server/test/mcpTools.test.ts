@@ -172,6 +172,27 @@ describe("McpManager reconciliation", () => {
     expect(restored.close).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reconnect an HTTP provider while interactive OAuth is active", async () => {
+    const client = fakeClient();
+    vi.mocked(McpClient.connectHttp).mockResolvedValue(client as unknown as McpClient);
+    let authorizing = false;
+    const manager = new McpManager(new BridgeRegistry(), {
+      httpAuthProvider: () => ({}) as never,
+      isHttpAuthorizationActive: (_scope, id) => authorizing && id === "remote",
+    });
+    const config = { id: "remote", url: "https://mcp.example.test/sse" };
+
+    await manager.connect(config, "project-a");
+    authorizing = true;
+    await manager.refresh("remote", "project-a");
+    await manager.reconcile([{ ...config, url: "https://mcp.example.test/changed" }], "project-a");
+
+    expect(McpClient.connectHttp).toHaveBeenCalledTimes(1);
+    expect(client.close).not.toHaveBeenCalled();
+    expect(manager.status("project-a")).toMatchObject([{ id: "remote", connected: true }]);
+    await manager.close();
+  });
+
   it("routes same-id tools by authenticated session scope and cleans only the owning scope", async () => {
     const first = fakeClient();
     const second = fakeClient();

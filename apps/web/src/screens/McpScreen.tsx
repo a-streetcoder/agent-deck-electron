@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
+import { openExternal } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
 
@@ -12,8 +13,8 @@ import { updateProject } from "../state/wsBridge.ts";
  * proxied into pi sessions over the bridge. Each row shows live connection
  * status + the tools that connected; add a stdio or HTTP server, refresh, or
  * remove it. An http server behind OAuth also gets a Sign-in flow (native
- * MCPOAuthService): begin → open the authorization link → paste the redirect's
- * code → connected.
+ * MCPOAuthService): begin → open the browser → capture the hardened loopback
+ * callback automatically, with progressive manual code/URL fallback.
  */
 
 type McpTransport = "stdio" | "http";
@@ -27,6 +28,8 @@ interface McpAuth {
   status: "none" | "unauthenticated" | "authorizing" | "authorized" | "error";
   authUrl?: string;
   error?: string;
+  notice?: string;
+  automatic?: boolean;
 }
 
 interface McpServer {
@@ -95,8 +98,11 @@ function parseArgLine(value: string): string[] {
  *  OAuth `state` parsed from it (echoed back on the callback for CSRF). */
 interface LoginFlow {
   id: string;
+  projectId: string;
   authUrl: string;
   state: string;
+  automatic: boolean;
+  manual: boolean;
 }
 
 type CatalogLoadResult = "applied" | "failed" | "superseded";
@@ -138,6 +144,8 @@ export function McpScreen() {
   const [argsText, setArgsText] = useState("");
   const [url, setUrl] = useState("");
   const [login, setLogin] = useState<LoginFlow | null>(null);
+  const [loginPendingId, setLoginPendingId] = useState<string | null>(null);
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
   const loadedProject = useRef<string | null | undefined>(undefined);
@@ -145,6 +153,11 @@ export function McpScreen() {
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
   const addToggleRef = useRef<HTMLButtonElement>(null);
   const editToggleRefs = useRef(new Map<string, HTMLButtonElement>());
+  const loginButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const loginRef = useRef<LoginFlow | null>(null);
+  const loginRequestRef = useRef<{ seq: number; id: string; projectId: string } | null>(null);
+  const pendingLoginRef = useRef<string | null>(null);
+  const loginSubmittingRef = useRef(false);
   const editSnapshot = useRef<{
     transport: McpTransport;
     command: string;
@@ -198,8 +211,45 @@ export function McpScreen() {
   );
 
   useEffect(() => {
+    loginRef.current = login;
+  }, [login]);
+
+  useEffect(() => {
+    return () => {
+      const flow = loginRef.current;
+      ++loginSeq.current;
+      loginRequestRef.current = null;
+      pendingLoginRef.current = null;
+      loginSubmittingRef.current = false;
+      loginRef.current = null;
+      setLoginPendingId(null);
+      setLoginSubmitting(false);
+      if (!flow) return;
+      void fetch(
+        `/mcp/${encodeURIComponent(flow.id)}/login?projectId=${encodeURIComponent(flow.projectId)}`,
+        { method: "DELETE" },
+      );
+    };
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (!login) return;
+    const server = servers.find((item) => item.id === login.id);
+    if (server?.auth?.status !== "authorized") return;
+    ++loginSeq.current;
+    pushToast({ kind: "success", message: `Signed in to ${login.id}` });
+    loginSubmittingRef.current = false;
+    setLoginSubmitting(false);
+    setLogin(null);
+    setCode("");
+  }, [login, pushToast, servers]);
+
+  useEffect(() => {
     const preserveRows = loadedProject.current === currentProjectId;
     if (loadedProject.current !== currentProjectId) {
+      ++loginSeq.current;
+      setLogin(null);
+      setCode("");
       setAdding(false);
       setEditingId(null);
       editSnapshot.current = null;
@@ -419,36 +469,92 @@ export function McpScreen() {
     await load();
   };
 
-  // Begin OAuth: ask the server for the authorization URL, then show the
-  // open-link + paste-code panel. The `state` is parsed from the URL and echoed
-  // back on the callback for CSRF verification.
+  // Begin OAuth: the backend starts its callback owner before returning the
+  // authorization URL. The renderer opens it and shows waiting/manual fallback;
+  // state parsed here is used only by that explicit manual completion path.
   const beginLogin = async (id: string): Promise<void> => {
+    if (pendingLoginRef.current === id) return;
+    const projectId = currentProjectId ?? "";
     const seq = ++loginSeq.current;
+    loginRequestRef.current = { seq, id, projectId };
+    pendingLoginRef.current = id;
+    setLoginPendingId(id);
+    const previous = loginRef.current;
+    loginRef.current = null;
+    setLogin(null);
     setCode("");
     try {
+      if (previous) {
+        await fetch(
+          `/mcp/${encodeURIComponent(previous.id)}/login?projectId=${encodeURIComponent(previous.projectId)}`,
+          { method: "DELETE" },
+        );
+      }
+      if (seq !== loginSeq.current) return;
       const response = await fetch(
-        `/mcp/${encodeURIComponent(id)}/login?projectId=${encodeURIComponent(currentProjectId ?? "")}`,
+        `/mcp/${encodeURIComponent(id)}/login?projectId=${encodeURIComponent(projectId)}`,
         { method: "POST" },
       );
       if (!response.ok) throw new Error(await response.text());
       const { auth } = (await response.json()) as { auth: McpAuth };
       if (!auth.authUrl) throw new Error("no authorization URL returned");
       const state = new URL(auth.authUrl).searchParams.get("state") ?? "";
-      // Ignore a stale response if the user has since started another flow.
-      if (seq === loginSeq.current) setLogin({ id, authUrl: auth.authUrl, state });
+      // A stale cross-server response owns a backend attempt that is no longer
+      // represented in the UI, so explicitly revoke it. For a repeated same-id
+      // request, the backend generation reservation already superseded it and a
+      // DELETE here would incorrectly cancel the newer generation.
+      if (seq !== loginSeq.current) {
+        const latest = loginRequestRef.current;
+        if (!latest || latest.id !== id || latest.projectId !== projectId) {
+          await fetch(
+            `/mcp/${encodeURIComponent(id)}/login?projectId=${encodeURIComponent(projectId)}`,
+            { method: "DELETE" },
+          );
+        }
+        return;
+      }
+      {
+        const flow = {
+          id,
+          projectId: currentProjectId ?? "",
+          authUrl: auth.authUrl,
+          state,
+          automatic: auth.automatic === true,
+          manual: auth.automatic !== true,
+        };
+        setServers((current) =>
+          current.map((server) => (server.id === id ? { ...server, auth } : server)),
+        );
+        loginRef.current = flow;
+        setLogin(flow);
+        // Purpose-built bridge validates http(s); the visible link remains the
+        // fallback if the OS refuses to open a browser.
+        void openExternal(auth.authUrl);
+      }
     } catch (err) {
       if (seq === loginSeq.current) setError(String(err));
+    } finally {
+      if (seq === loginSeq.current) {
+        pendingLoginRef.current = null;
+        setLoginPendingId(null);
+      }
     }
   };
 
   // Complete OAuth with the pasted code (or redirect URL) → the server exchanges
   // it and reconnects, so the server's tools register.
+  const showManualLogin = (): void => {
+    setLogin((flow) => (flow ? { ...flow, manual: true } : flow));
+  };
+
   const submitCode = async (): Promise<void> => {
     const flow = login;
-    if (!flow) return;
+    if (!flow || loginSubmittingRef.current) return;
     const seq = loginSeq.current;
     const { code: parsedCode, state } = parseCallback(code, flow.state);
     if (!parsedCode) return;
+    loginSubmittingRef.current = true;
+    setLoginSubmitting(true);
     try {
       const response = await fetch(
         `/mcp/${encodeURIComponent(flow.id)}/login/callback?projectId=${encodeURIComponent(currentProjectId ?? "")}`,
@@ -467,7 +573,30 @@ export function McpScreen() {
       }
       await load();
     } catch (err) {
-      setError(String(err));
+      if (seq === loginSeq.current) setError(String(err));
+    } finally {
+      if (seq === loginSeq.current) {
+        loginSubmittingRef.current = false;
+        setLoginSubmitting(false);
+      }
+    }
+  };
+
+  const cancelLogin = async (): Promise<void> => {
+    const flow = login;
+    if (!flow) return;
+    ++loginSeq.current;
+    loginSubmittingRef.current = false;
+    setLoginSubmitting(false);
+    setLogin(null);
+    setCode("");
+    try {
+      await fetch(
+        `/mcp/${encodeURIComponent(flow.id)}/login?projectId=${encodeURIComponent(flow.projectId)}`,
+        { method: "DELETE" },
+      );
+    } finally {
+      requestAnimationFrame(() => loginButtonRefs.current.get(flow.id)?.focus());
     }
   };
 
@@ -785,13 +914,20 @@ export function McpScreen() {
                       </ControlButton>
                     ) : (
                       <ControlButton
+                        ref={(element) => {
+                          if (element) loginButtonRefs.current.set(server.id, element);
+                          else loginButtonRefs.current.delete(server.id);
+                        }}
                         data-testid={`mcp-login-${server.id}`}
                         className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                         title="Sign in"
                         aria-label={`Sign in to ${server.id}`}
+                        aria-busy={loginPendingId === server.id}
+                        disabled={loginPendingId === server.id}
                         onClick={() => void beginLogin(server.id)}
                       >
-                        <LogIn size={12} /> Sign in
+                        <LogIn size={12} />
+                        {loginPendingId === server.id ? "Starting…" : "Sign in"}
                       </ControlButton>
                     )
                   ) : null}
@@ -800,6 +936,8 @@ export function McpScreen() {
                     className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     title="Reconnect"
                     aria-label={`Reconnect ${server.id}`}
+                    aria-busy={loginPendingId === server.id || login?.id === server.id}
+                    disabled={loginPendingId === server.id || login?.id === server.id}
                     onClick={() => void refresh(server.id)}
                   >
                     <RefreshCw size={13} />
@@ -848,10 +986,17 @@ export function McpScreen() {
                 {login?.id === server.id ? (
                   <div
                     data-testid={`mcp-login-panel-${server.id}`}
+                    aria-busy={loginSubmitting}
                     className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
                   >
-                    <div className="text-detail text-text-muted">
-                      1. Open the authorization page and approve access:
+                    <div className="text-detail text-text-muted" role="status" aria-live="polite">
+                      {loginSubmitting
+                        ? "Submitting authorization code…"
+                        : server.auth?.status === "error"
+                          ? "Sign-in stopped."
+                          : login.automatic
+                            ? "Waiting for authorization in your browser…"
+                            : "Open the authorization page and approve access:"}
                     </div>
                     <a
                       data-testid={`mcp-login-url-${server.id}`}
@@ -862,43 +1007,84 @@ export function McpScreen() {
                     >
                       {login.authUrl}
                     </a>
-                    <div className="text-detail text-text-muted">
-                      2. Paste the code you were shown (or the full redirect URL):
-                    </div>
-                    <div className="flex gap-2">
-                      <ControlInput
-                        autoFocus
-                        data-testid={`mcp-login-code-${server.id}`}
-                        className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                        placeholder="authorization code"
-                        value={code}
-                        onChange={(e) => setCode(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void submitCode();
-                          if (e.key === "Escape") setLogin(null);
-                        }}
-                      />
-                      <ControlButton
-                        data-testid={`mcp-login-submit-${server.id}`}
-                        className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-                        style={{
-                          background:
-                            "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                          color: "var(--color-accent-foreground)",
-                        }}
-                        disabled={!code.trim()}
-                        onClick={() => void submitCode()}
-                      >
-                        Connect
-                      </ControlButton>
-                      <ControlButton
-                        data-testid={`mcp-login-cancel-${server.id}`}
-                        className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary"
-                        onClick={() => setLogin(null)}
-                      >
-                        Cancel
-                      </ControlButton>
-                    </div>
+                    {server.auth?.notice ? (
+                      <div className="text-detail text-warning" role="status">
+                        {server.auth.notice}
+                      </div>
+                    ) : null}
+                    {server.auth?.status === "error" && server.auth.error ? (
+                      <div className="flex flex-col items-start gap-2">
+                        <div className="text-detail text-danger" role="alert">
+                          {server.auth.error}
+                        </div>
+                        <ControlButton
+                          data-testid={`mcp-login-restart-${server.id}`}
+                          className="rounded-capsule px-3 py-1.5 text-xs font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          onClick={() => void beginLogin(server.id)}
+                        >
+                          Restart sign in
+                        </ControlButton>
+                      </div>
+                    ) : login.manual ? (
+                      <>
+                        <div className="text-detail text-text-muted">
+                          Paste the code you were shown (or the full redirect URL):
+                        </div>
+                        <div className="flex gap-2">
+                          <ControlInput
+                            autoFocus
+                            data-testid={`mcp-login-code-${server.id}`}
+                            className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                            placeholder="authorization code"
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void submitCode();
+                              if (e.key === "Escape") void cancelLogin();
+                            }}
+                          />
+                          <ControlButton
+                            data-testid={`mcp-login-submit-${server.id}`}
+                            className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                            style={{
+                              background:
+                                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                              color: "var(--color-accent-foreground)",
+                            }}
+                            disabled={!code.trim() || loginSubmitting}
+                            onClick={() => void submitCode()}
+                          >
+                            Connect
+                          </ControlButton>
+                          <ControlButton
+                            data-testid={`mcp-login-cancel-${server.id}`}
+                            className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            disabled={loginSubmitting}
+                            onClick={() => void cancelLogin()}
+                          >
+                            Cancel
+                          </ControlButton>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex gap-2">
+                        <ControlButton
+                          data-testid={`mcp-login-manual-${server.id}`}
+                          className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          disabled={loginSubmitting}
+                          onClick={showManualLogin}
+                        >
+                          Enter code manually
+                        </ControlButton>
+                        <ControlButton
+                          data-testid={`mcp-login-cancel-${server.id}`}
+                          className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          onClick={() => void cancelLogin()}
+                        >
+                          Cancel
+                        </ControlButton>
+                      </div>
+                    )}
                   </div>
                 ) : null}
               </div>

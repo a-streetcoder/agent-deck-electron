@@ -22,9 +22,9 @@ export type { OAuthClientMetadata, OAuthTokens };
  * OAuthClientProvider interface (discovery, dynamic client registration, PKCE,
  * token exchange + refresh); this module is the durable, testable half of that:
  * a per-server token store and a provider that reads/writes it, with the
- * interactive redirect surfaced through an injected relay (the same shape as
- * provider-login's ProviderLoginManager). The real browser round-trip is wired
- * in a later slice; here everything is hermetic (injected onRedirect + state).
+ * interactive redirect surfaced through an injected relay. The server
+ * coordinator owns the hardened loopback/manual browser round-trip; this package
+ * owns its URL-bound durable credential/provider contract.
  */
 
 /** Persisted OAuth state for ONE MCP server. */
@@ -35,6 +35,8 @@ export interface McpOAuthRecord {
   codeVerifier?: string;
   /** The most recently minted OAuth2 `state`, to verify against the callback. */
   state?: string;
+  /** Exact normalized MCP resource URL these credentials were issued for. */
+  serverUrl?: string;
 }
 
 /**
@@ -122,6 +124,8 @@ export interface McpOAuthProviderOptions {
   onRedirect: (url: URL) => void | Promise<void>;
   /** OAuth2 `state` factory; injectable so tests are deterministic. */
   makeState?: () => string;
+  /** Attempt-ownership guard. Stale generations may read, but never persist secrets. */
+  canPersist?: () => boolean;
 }
 
 /**
@@ -136,6 +140,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private readonly _clientMetadata: OAuthClientMetadata;
   private readonly onRedirect: (url: URL) => void | Promise<void>;
   private readonly makeState: () => string;
+  private readonly canPersist: () => boolean;
+  private boundServerUrl?: string;
 
   constructor(options: McpOAuthProviderOptions) {
     this.serverKey = options.serverKey;
@@ -144,14 +150,38 @@ export class McpOAuthProvider implements OAuthClientProvider {
     this._clientMetadata = options.clientMetadata;
     this.onRedirect = options.onRedirect;
     this.makeState = options.makeState ?? (() => randomUUID());
+    this.canPersist = options.canPersist ?? (() => true);
   }
 
   private record(): McpOAuthRecord {
     return this.store.load(this.serverKey) ?? {};
   }
 
+  /** Bind all credential reads/writes to one exact normalized MCP resource URL. */
+  bindServerUrl(serverUrl: string | URL): void {
+    const normalized = new URL(String(serverUrl)).toString();
+    const record = this.record();
+    if (record.serverUrl !== normalized) {
+      // Includes legacy unbound records: bearer tokens and client secrets must
+      // never survive a URL change or same-id delete/recreate.
+      if (this.canPersist()) this.store.save(this.serverKey, { serverUrl: normalized });
+    }
+    this.boundServerUrl = normalized;
+  }
+
+  private boundRecord(): McpOAuthRecord {
+    const record = this.record();
+    return this.boundServerUrl && record.serverUrl === this.boundServerUrl ? record : {};
+  }
+
   private update(patch: Partial<McpOAuthRecord>): void {
-    this.store.save(this.serverKey, { ...this.record(), ...patch });
+    if (!this.canPersist()) return;
+    if (!this.boundServerUrl) return;
+    this.store.save(this.serverKey, {
+      ...this.boundRecord(),
+      ...patch,
+      serverUrl: this.boundServerUrl,
+    });
   }
 
   get redirectUrl(): string | URL {
@@ -172,11 +202,19 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** The most recently minted state, for verifying an incoming callback. */
   expectedState(): string | undefined {
-    return this.record().state;
+    return this.boundRecord().state;
   }
 
   clientInformation(): OAuthClientInformationFull | undefined {
-    return this.record().clientInformation;
+    const information = this.boundRecord().clientInformation;
+    if (!information) return undefined;
+    // Dynamic registrations are valid only for the redirect URI they were
+    // created with. A random loopback port therefore needs a fresh registration;
+    // reusing a cached client id would make authorization or token exchange fail.
+    const redirects = information.redirect_uris;
+    return Array.isArray(redirects) && redirects.includes(String(this._redirectUrl))
+      ? information
+      : undefined;
   }
 
   saveClientInformation(clientInformation: OAuthClientInformationFull): void {
@@ -184,7 +222,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   tokens(): OAuthTokens | undefined {
-    return this.record().tokens;
+    return this.boundRecord().tokens;
   }
 
   saveTokens(tokens: OAuthTokens): void {
@@ -200,7 +238,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   codeVerifier(): string {
-    const verifier = this.record().codeVerifier;
+    const verifier = this.boundRecord().codeVerifier;
     if (!verifier)
       throw new Error(`No PKCE code verifier stored for MCP server "${this.serverKey}"`);
     return verifier;
@@ -208,6 +246,6 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Has this server completed authorization (has an access token)? */
   isAuthorized(): boolean {
-    return typeof this.record().tokens?.access_token === "string";
+    return typeof this.boundRecord().tokens?.access_token === "string";
   }
 }

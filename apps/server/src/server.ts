@@ -65,7 +65,7 @@ import {
   scopeMcpBridgeSpecs,
   type McpServerConfig,
 } from "./mcpTools.ts";
-import { McpOAuthCoordinator } from "./mcpOAuth.ts";
+import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
 import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import { InjectedCommandStore } from "./injectedCommands.ts";
@@ -740,17 +740,20 @@ async function initServer(
   // assigns their id. Per-project catalogs merge global < project < environment.
   const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS);
   // MCP OAuth (native MCPOAuthService): authed http servers get a per-server
-  // OAuth provider whose tokens persist under the app data dir. The redirect
-  // target is where the browser lands after authorization; the loopback capture
-  // of that redirect is finalized in the UI slice (env-overridable meanwhile).
+  // OAuth provider whose URL-bound credentials persist under app data. A stable
+  // env-overridable loopback callback is captured automatically; external
+  // redirects and loopback bind failures retain the manual-code fallback.
+  const mcpOAuthRedirect = resolveMcpOAuthRedirectMode(process.env.AGENT_DECK_MCP_OAUTH_REDIRECT);
   const mcpOAuth = new McpOAuthCoordinator({
     store: new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
-    redirectUrl:
-      process.env.AGENT_DECK_MCP_OAUTH_REDIRECT ?? "http://127.0.0.1:33418/mcp/oauth/callback",
+    ...mcpOAuthRedirect,
   });
-  const oauthKey = (scope: string, id: string): string => `${scope}::${id}`;
+  const oauthKey = (scope: string, id: string): string => `v2:${JSON.stringify([scope, id])}`;
   const mcp: McpManager = new McpManager(bridge, {
-    httpAuthProvider: (scope, id) => mcpOAuth.providerFor(oauthKey(scope, id)),
+    httpAuthProvider: (scope, id, serverUrl) =>
+      mcpOAuth.providerFor(oauthKey(scope, id), serverUrl, { projectId: scope, serverId: id }),
+    isHttpAuthorizationActive: (scope, id) =>
+      mcpOAuth.state(oauthKey(scope, id)).status === "authorizing",
     scopeForSession: (sessionId) => sessions.get(sessionId)?.meta.projectId,
     allowServerForSession: (sessionId, serverId) => {
       const meta = sessions.get(sessionId)?.meta;
@@ -861,8 +864,18 @@ async function initServer(
     const targets = projectId ? [projectId] : projects.list().map((project) => project.id);
     const errors: string[] = [];
     for (const id of targets) {
+      const previouslyOwned = mcpOAuth.ownedServerIds(id);
       const result = await reconcileProjectMcp(id);
-      if (!result.ok) errors.push(result.error);
+      if (!result.ok) {
+        errors.push(result.error);
+        continue;
+      }
+      const retained = new Set(effectiveMcpConfigs(id).configs.map((config) => config.id));
+      await Promise.all(
+        previouslyOwned
+          .filter((serverId) => !retained.has(serverId))
+          .map((serverId) => mcpOAuth.clear(oauthKey(id, serverId))),
+      );
     }
     return errors.length > 0 ? { ok: false, error: [...new Set(errors)].join(" ") } : { ok: true };
   };
@@ -1216,6 +1229,9 @@ async function initServer(
         await step(() => Promise.all([drainHttpRequests(), drainWebSocketOperations()]));
         // Catch a resume/rebind published after the first stopAll snapshot.
         await step(() => sessions.stopAll());
+        // OAuth callbacks can refresh MCP, so revoke/settle every attempt before
+        // tearing down the clients they would otherwise reconnect.
+        await step(() => mcpOAuth.close());
         await step(() => mcp.close());
         await step(() => closeWebSockets());
         // Deterministic terminal teardown (the sessions.stopAll() analogue):

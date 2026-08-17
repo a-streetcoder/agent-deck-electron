@@ -166,8 +166,16 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!target) return reply.code(400).send({ error: "projectId is required" });
     const serverUrl = mcp.httpUrlFor(target.id, target.scope);
     if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
-    const state = await mcpOAuth.beginAuth(target.authId, serverUrl);
-    if (state.status === "error") return reply.code(502).send({ error: state.error });
+    const state = await mcpOAuth.beginAuth(
+      target.authId,
+      serverUrl,
+      async (completed) => {
+        if (completed.status === "authorized") await mcp.refresh(target.id, target.scope);
+        broadcast({ type: "resources_changed" });
+      },
+      { projectId: target.scope, serverId: target.id },
+    );
+    if (state.status === "error") return reply.code(502).send({ error: state.error, auth: state });
     return { auth: state };
   });
 
@@ -179,14 +187,25 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
     const parsed = mcpCallbackBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
-    if (!mcpOAuth.verifyState(target.authId, parsed.data.state))
-      return reply.code(400).send({ error: "state mismatch (possible CSRF) — restart sign-in" });
-    const state = await mcpOAuth.submitCode(target.authId, serverUrl, parsed.data.code);
-    if (state.status !== "authorized")
-      return reply.code(502).send({ error: state.error, auth: state });
-    const server = await mcp.refresh(target.id, target.scope);
+    const state = await mcpOAuth.submitCode(
+      target.authId,
+      serverUrl,
+      parsed.data.code,
+      parsed.data.state,
+    );
+    if (state.status !== "authorized") {
+      const status = state.error?.includes("state mismatch") ? 400 : 502;
+      return reply.code(status).send({ error: state.error, auth: state });
+    }
+    return { auth: state, server: mcp.status(target.scope).find((item) => item.id === target.id) };
+  });
+
+  fastify.delete("/mcp/:id/login", async (request, reply) => {
+    const target = requireScopedHttp(request);
+    if (!target) return reply.code(400).send({ error: "projectId is required" });
+    await mcpOAuth.cancel(target.authId);
     broadcast({ type: "resources_changed" });
-    return { auth: state, server };
+    return { ok: true };
   });
 
   fastify.post("/mcp/:id/logout", async (request, reply) => {
@@ -194,7 +213,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!target) return reply.code(400).send({ error: "projectId is required" });
     if (!mcp.has(target.id, target.scope))
       return reply.code(404).send({ error: "unknown assigned MCP server" });
-    mcpOAuth.clear(target.authId);
+    await mcpOAuth.clear(target.authId);
     await mcp.refresh(target.id, target.scope);
     broadcast({ type: "resources_changed" });
     return { ok: true };
@@ -266,6 +285,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       const message = error instanceof McpConfigError ? error.message : String(error);
       return reply.code(400).send({ error: message });
     }
+    await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
     for (const project of projects.list()) await reconcileProjectMcp(project.id);
     broadcast({ type: "resources_changed" });
     return {
@@ -289,6 +309,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       return reply.code(400).send({ error: message });
     }
     if (!deletedConfig) return reply.code(404).send({ error: "unknown global MCP server" });
+    await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
     for (const project of projects.list()) await reconcileProjectMcp(project.id);
     broadcast({ type: "resources_changed" });
     return { ok: true };

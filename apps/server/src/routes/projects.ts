@@ -64,6 +64,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     settings,
     watchProject,
     reconcileProjectMcp,
+    mcpOAuth,
     broadcast,
     rootsFor,
   } = ctx;
@@ -201,6 +202,12 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
     projects.upsert(next);
     if (parsed.data.assignedMcpServers !== undefined) {
+      const retained = new Set(next.assignedMcpServers ?? []);
+      await Promise.all(
+        (project.assignedMcpServers ?? [])
+          .filter((serverId) => !retained.has(serverId))
+          .map((serverId) => mcpOAuth.clear(ctx.oauthKey(id, serverId))),
+      );
       const reconciled = await reconcileProjectMcp(id);
       if (!reconciled.ok) {
         // The assignment is still safely persisted; malformed config preserves
@@ -225,6 +232,12 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       return reply.status(409).send({ error: "project has a live session" });
     }
     projects.upsert({ ...project, hidden: true });
+    await Promise.all(
+      (project.assignedMcpServers ?? []).map((serverId) =>
+        mcpOAuth.clear(ctx.oauthKey(id, serverId)),
+      ),
+    );
+    await mcpOAuth.clearProject(id);
     await ctx.mcp.reconcile([], id);
     return { ok: true };
   });
