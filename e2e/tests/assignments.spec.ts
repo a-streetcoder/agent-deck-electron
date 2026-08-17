@@ -63,7 +63,7 @@ test("project MCP assignment is explicit, accessible, persisted, and removable",
   await expect(page.getByTestId("mcp-trust-copy")).toContainText("repository-controlled commands");
   await expect(page.getByText("project config · read only")).toBeVisible();
   const assignment = page.getByRole("checkbox", {
-    name: /assign repository-tools-with-a-long-name/i,
+    name: `Assign repository-tools-with-a-long-name to ${path.basename(project)}`,
   });
   await expect(assignment).not.toBeChecked();
   await assignment.focus();
@@ -83,6 +83,23 @@ test("project MCP assignment is explicit, accessible, persisted, and removable",
   // that catalog refresh without losing keyboard focus.
   await expect(assignment).toBeFocused();
 
+  const allProjects = page.getByRole("checkbox", {
+    name: "All Projects MCP assignment for repository-tools-with-a-long-name",
+  });
+  await allProjects.check();
+  await expect(allProjects).toBeChecked();
+  const inheritedAssignment = page.getByRole("checkbox", {
+    name: /inherited from All Projects.*explicit project assignment is retained/i,
+  });
+  await expect(inheritedAssignment).toBeChecked();
+  await expect(inheritedAssignment).toBeDisabled();
+  await expect(inheritedAssignment).toHaveAccessibleDescription(
+    /explicit project assignment is preserved/i,
+  );
+
+  await allProjects.uncheck();
+  await expect(assignment).toBeEnabled();
+  await expect(assignment).toBeChecked();
   await assignment.press("Space");
   await expect(assignment).not.toBeChecked();
 });

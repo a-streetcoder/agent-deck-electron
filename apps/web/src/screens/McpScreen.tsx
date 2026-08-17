@@ -131,8 +131,13 @@ export function McpScreen() {
   const selectedProject = projects.find((project) => project.id === currentProjectId);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [assignedServerIds, setAssignedServerIds] = useState<string[]>([]);
+  const [defaultAssignedServerIds, setDefaultAssignedServerIds] = useState<string[]>([]);
   const [missingAssignedServerIds, setMissingAssignedServerIds] = useState<string[]>([]);
+  const [missingDefaultAssignedServerIds, setMissingDefaultAssignedServerIds] = useState<string[]>(
+    [],
+  );
   const [loading, setLoading] = useState(true);
+  const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
   const [savingAssignments, setSavingAssignments] = useState<Set<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -151,6 +156,7 @@ export function McpScreen() {
   const loadedProject = useRef<string | null | undefined>(undefined);
   const assignmentSaving = useRef(false);
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
+  const defaultAssignmentInputs = useRef(new Map<string, HTMLInputElement>());
   const addToggleRef = useRef<HTMLButtonElement>(null);
   const editToggleRefs = useRef(new Map<string, HTMLButtonElement>());
   const loginButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -183,19 +189,30 @@ export function McpScreen() {
           const data = (await response.json()) as {
             servers: McpServer[];
             assignedServerIds?: string[];
+            defaultAssignedServerIds?: string[];
             missingAssignedServerIds?: string[];
+            missingDefaultAssignedServerIds?: string[];
           };
           if (seq !== loadSeq.current) return "superseded";
+          setCatalogLoadFailed(false);
           setServers((current) => {
             if (!preserveRows) return data.servers;
             const incoming = new Map(data.servers.map((server) => [server.id, server]));
             return current.map((server) => incoming.get(server.id) ?? server);
           });
           setAssignedServerIds(data.assignedServerIds ?? []);
+          setDefaultAssignedServerIds(data.defaultAssignedServerIds ?? []);
           setMissingAssignedServerIds(data.missingAssignedServerIds ?? []);
+          setMissingDefaultAssignedServerIds(data.missingDefaultAssignedServerIds ?? []);
           return "applied";
         } catch (err) {
           if (seq !== loadSeq.current) return "superseded";
+          setCatalogLoadFailed(true);
+          setServers([]);
+          setAssignedServerIds([]);
+          setDefaultAssignedServerIds([]);
+          setMissingAssignedServerIds([]);
+          setMissingDefaultAssignedServerIds([]);
           setError(String(err));
           return "failed";
         } finally {
@@ -430,6 +447,7 @@ export function McpScreen() {
 
   const assign = async (id: string, enabled: boolean): Promise<void> => {
     if (!currentProjectId || assignmentSaving.current) return;
+    const requestProjectId = currentProjectId;
     assignmentSaving.current = true;
     const restoreFocus = assignmentInputs.current.get(id) === document.activeElement;
     const next = new Set(assignedServerIds);
@@ -439,10 +457,11 @@ export function McpScreen() {
     setAssignedServerIds([...next]);
     setSavingAssignments((current) => new Set(current).add(id));
     try {
-      await updateProject(currentProjectId, { assignedMcpServers: [...next] });
+      await updateProject(requestProjectId, { assignedMcpServers: [...next] });
+      if (loadedProject.current !== requestProjectId) return;
       const authoritative = useAppStore
         .getState()
-        .projects.find((project) => project.id === currentProjectId)?.assignedMcpServers;
+        .projects.find((project) => project.id === requestProjectId)?.assignedMcpServers;
       setAssignedServerIds(authoritative ?? []);
       // Refresh connection/error state without unmounting rows or stealing focus.
       await load(true);
@@ -453,8 +472,53 @@ export function McpScreen() {
         updated.delete(id);
         return updated;
       });
-      if (restoreFocus) {
-        setTimeout(() => assignmentInputs.current.get(id)?.focus(), 0);
+      if (restoreFocus && loadedProject.current === requestProjectId) {
+        setTimeout(() => {
+          if (loadedProject.current === requestProjectId) assignmentInputs.current.get(id)?.focus();
+        }, 0);
+      }
+    }
+  };
+
+  const assignDefault = async (id: string, enabled: boolean): Promise<void> => {
+    if (assignmentSaving.current) return;
+    const requestProjectId = currentProjectId;
+    assignmentSaving.current = true;
+    const savingKey = `default:${id}`;
+    const restoreFocus = defaultAssignmentInputs.current.get(id) === document.activeElement;
+    const previous = defaultAssignedServerIds;
+    const next = new Set(previous);
+    if (enabled) next.add(id);
+    else next.delete(id);
+    setDefaultAssignedServerIds([...next]);
+    setSavingAssignments((current) => new Set(current).add(savingKey));
+    try {
+      const response = await fetch(`/mcp/${encodeURIComponent(id)}/default-assignment`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      if (loadedProject.current === requestProjectId) await load(true);
+    } catch (error) {
+      if (loadedProject.current === requestProjectId) {
+        setDefaultAssignedServerIds(previous);
+        setError(error instanceof Error ? error.message : String(error));
+        await load(true);
+      }
+    } finally {
+      assignmentSaving.current = false;
+      setSavingAssignments((current) => {
+        const updated = new Set(current);
+        updated.delete(savingKey);
+        return updated;
+      });
+      if (restoreFocus && loadedProject.current === requestProjectId) {
+        setTimeout(() => {
+          if (loadedProject.current === requestProjectId) {
+            defaultAssignmentInputs.current.get(id)?.focus();
+          }
+        }, 0);
       }
     }
   };
@@ -657,8 +721,8 @@ export function McpScreen() {
         </div>
         <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
           {selectedProject
-            ? `Only servers you assign here are connected for ordinary ${selectedProject.name} sessions. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
-            : "Select a project to assign servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog; project definitions stay read-only."}
+            ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
+            : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
         </p>
 
         {formOpen ? (
@@ -796,40 +860,109 @@ export function McpScreen() {
               Loading MCP servers…
             </div>
           ) : null}
+          {!loading && catalogLoadFailed ? (
+            <div
+              className="py-8 text-center text-sm text-danger"
+              data-testid="mcp-load-error"
+              role="alert"
+            >
+              MCP servers could not be loaded. Reload the catalog to try again.
+            </div>
+          ) : null}
           {!loading &&
+            !catalogLoadFailed &&
             servers.map((server) => (
               <div key={server.id}>
                 <div
                   data-testid={`mcp-${server.id}`}
                   data-connected={server.connected ? "true" : "false"}
-                  data-assigned={assignedServerIds.includes(server.id) ? "true" : "false"}
-                  className="flex min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
-                  aria-busy={savingAssignments.has(server.id)}
+                  data-assigned={
+                    defaultAssignedServerIds.includes(server.id) ||
+                    assignedServerIds.includes(server.id)
+                      ? "true"
+                      : "false"
+                  }
+                  className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+                  aria-busy={
+                    savingAssignments.has(server.id) ||
+                    savingAssignments.has(`default:${server.id}`)
+                  }
                 >
-                  {currentProjectId ? (
-                    <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                  <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+                    <label className="flex items-center gap-1.5 text-detail text-text-muted">
                       <ControlInput
                         type="checkbox"
                         className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                         ref={(element) => {
-                          if (element) assignmentInputs.current.set(server.id, element);
-                          else assignmentInputs.current.delete(server.id);
+                          if (element) defaultAssignmentInputs.current.set(server.id, element);
+                          else defaultAssignmentInputs.current.delete(server.id);
                         }}
-                        data-testid={`mcp-assign-${server.id}`}
-                        aria-label={`Assign ${server.id} to ${selectedProject?.name ?? "project"}`}
-                        checked={assignedServerIds.includes(server.id)}
+                        data-testid={`mcp-assign-all-${server.id}`}
+                        aria-label={`All Projects MCP assignment for ${server.id}`}
+                        aria-busy={savingAssignments.has(`default:${server.id}`)}
+                        checked={defaultAssignedServerIds.includes(server.id)}
                         disabled={savingAssignments.size > 0}
-                        onChange={(event) => void assign(server.id, event.target.checked)}
+                        onChange={(event) => void assignDefault(server.id, event.target.checked)}
                       />
-                      <span>
-                        {savingAssignments.has(server.id)
-                          ? "Saving…"
-                          : assignedServerIds.includes(server.id)
-                            ? "Assigned"
-                            : "Assign"}
+                      <span aria-live="polite">
+                        {savingAssignments.has(`default:${server.id}`)
+                          ? "Saving All Projects…"
+                          : "All Projects"}
                       </span>
                     </label>
-                  ) : null}
+                    {currentProjectId ? (
+                      <label className="flex items-center gap-1.5 text-detail text-text-muted">
+                        <ControlInput
+                          type="checkbox"
+                          className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          ref={(element) => {
+                            if (element) assignmentInputs.current.set(server.id, element);
+                            else assignmentInputs.current.delete(server.id);
+                          }}
+                          data-testid={`mcp-assign-${server.id}`}
+                          aria-busy={savingAssignments.has(server.id)}
+                          aria-label={
+                            defaultAssignedServerIds.includes(server.id)
+                              ? `${server.id} is inherited from All Projects for ${selectedProject?.name ?? "project"}; explicit project assignment is ${assignedServerIds.includes(server.id) ? "retained" : "not set"}`
+                              : `Assign ${server.id} to ${selectedProject?.name ?? "project"}`
+                          }
+                          aria-describedby={
+                            defaultAssignedServerIds.includes(server.id)
+                              ? `mcp-inherited-${server.id}`
+                              : undefined
+                          }
+                          checked={
+                            defaultAssignedServerIds.includes(server.id) ||
+                            assignedServerIds.includes(server.id)
+                          }
+                          disabled={
+                            defaultAssignedServerIds.includes(server.id) ||
+                            savingAssignments.size > 0
+                          }
+                          onChange={(event) => void assign(server.id, event.target.checked)}
+                        />
+                        <span aria-live="polite">
+                          {defaultAssignedServerIds.includes(server.id)
+                            ? assignedServerIds.includes(server.id)
+                              ? "Inherited · explicit assignment preserved"
+                              : "Inherited · no explicit assignment"
+                            : savingAssignments.has(server.id)
+                              ? "Saving this project…"
+                              : assignedServerIds.includes(server.id)
+                                ? "Assigned"
+                                : "This project"}
+                        </span>
+                        {defaultAssignedServerIds.includes(server.id) ? (
+                          <span id={`mcp-inherited-${server.id}`} className="sr-only">
+                            The project control is disabled while All Projects is enabled.
+                            {assignedServerIds.includes(server.id)
+                              ? " Its explicit project assignment is preserved."
+                              : " It has no explicit project assignment."}
+                          </span>
+                        ) : null}
+                      </label>
+                    ) : null}
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                       <span
@@ -844,14 +977,18 @@ export function McpScreen() {
                           "rounded-capsule border px-1.5 text-micro",
                           server.connected
                             ? "border-success text-success"
-                            : currentProjectId && !assignedServerIds.includes(server.id)
+                            : currentProjectId &&
+                                !defaultAssignedServerIds.includes(server.id) &&
+                                !assignedServerIds.includes(server.id)
                               ? "border-border-subtle text-text-muted"
                               : "border-danger text-danger",
                         )}
                       >
                         {server.connected
                           ? "connected"
-                          : currentProjectId && !assignedServerIds.includes(server.id)
+                          : currentProjectId &&
+                              !defaultAssignedServerIds.includes(server.id) &&
+                              !assignedServerIds.includes(server.id)
                             ? "available"
                             : "disconnected"}
                       </span>
@@ -1090,6 +1227,42 @@ export function McpScreen() {
               </div>
             ))}
           {!loading &&
+            !catalogLoadFailed &&
+            missingDefaultAssignedServerIds.map((id) => (
+              <div
+                key={`missing-default-${id}`}
+                className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
+                data-testid={`mcp-missing-default-${id}`}
+                aria-busy={savingAssignments.has(`default:${id}`)}
+              >
+                <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                  <ControlInput
+                    type="checkbox"
+                    checked
+                    ref={(element) => {
+                      if (element) defaultAssignmentInputs.current.set(id, element);
+                      else defaultAssignmentInputs.current.delete(id);
+                    }}
+                    disabled={savingAssignments.size > 0}
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    aria-label={`Remove missing All Projects MCP assignment ${id}`}
+                    onChange={() => void assignDefault(id, false)}
+                  />
+                  <span>{savingAssignments.has(`default:${id}`) ? "Saving…" : "All Projects"}</span>
+                </label>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                    {id}
+                  </div>
+                  <div className="break-words text-detail text-danger">
+                    Default assignment is missing a configured definition and grants no tools. Add
+                    the definition or remove this All Projects assignment.
+                  </div>
+                </div>
+              </div>
+            ))}
+          {!loading &&
+            !catalogLoadFailed &&
             missingAssignedServerIds.map((id) => (
               <div
                 key={`missing-${id}`}
@@ -1105,12 +1278,22 @@ export function McpScreen() {
                       if (element) assignmentInputs.current.set(id, element);
                       else assignmentInputs.current.delete(id);
                     }}
-                    disabled={savingAssignments.size > 0}
+                    disabled={defaultAssignedServerIds.includes(id) || savingAssignments.size > 0}
                     className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    aria-label={`Remove missing MCP assignment ${id}`}
+                    aria-label={
+                      defaultAssignedServerIds.includes(id)
+                        ? `${id} is inherited from All Projects; its missing explicit project assignment is retained`
+                        : `Remove missing MCP assignment ${id}`
+                    }
                     onChange={() => void assign(id, false)}
                   />
-                  <span>{savingAssignments.has(id) ? "Saving…" : "Assigned"}</span>
+                  <span>
+                    {defaultAssignedServerIds.includes(id)
+                      ? "Inherited · explicit assignment preserved"
+                      : savingAssignments.has(id)
+                        ? "Saving…"
+                        : "This project"}
+                  </span>
                 </label>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-text-primary" title={id}>
@@ -1123,11 +1306,16 @@ export function McpScreen() {
                 </div>
               </div>
             ))}
-          {!loading && servers.length === 0 && missingAssignedServerIds.length === 0 && !adding ? (
+          {!loading &&
+          !catalogLoadFailed &&
+          servers.length === 0 &&
+          missingAssignedServerIds.length === 0 &&
+          missingDefaultAssignedServerIds.length === 0 &&
+          !adding ? (
             <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-empty">
               {currentProjectId
                 ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
-                : "No global MCP servers. Add one to make it available for explicit project assignment."}
+                : "No global MCP servers. Add one to assign it to All Projects or specific projects."}
             </div>
           ) : null}
         </div>

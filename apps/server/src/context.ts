@@ -13,6 +13,7 @@ import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager, McpServerConfig } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
+import type { McpAssignmentStore } from "./mcpAssignments.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
@@ -132,6 +133,7 @@ export interface ServerContext {
   providerLogin: ProviderLoginManager;
   mcp: McpManager;
   mcpOAuth: McpOAuthCoordinator;
+  mcpAssignments: McpAssignmentStore;
   reloadMcpConfig(projectId?: string): Promise<{ ok: true } | { ok: false; error: string }>;
   reconcileProjectMcp(
     projectId: string,
@@ -148,6 +150,7 @@ export interface ServerContext {
   globalMcpConfigs(): { configs: McpServerConfig[]; valid: boolean };
   isMcpEnvOverride(id: string): boolean;
   oauthKey(scope: string, id: string): string;
+  projectHasEffectiveMcpGrant(projectId: string, serverId: string): boolean;
   /** Hard server capability controlled by AGENT_DECK_MEMORY=0. */
   memoryEnabled: boolean;
   /** Live effective parent-agent automation preference (capability && setting). */

@@ -17,6 +17,11 @@ export { makeServerRuntime, serverLayers, type ServerRuntime } from "./runtime.t
 export { ReceiptBus, type ReceiptName } from "./receipts.ts";
 export { SessionIndex, defaultDataDir } from "./persistence.ts";
 export {
+  FileMcpAssignmentStore,
+  McpAssignmentStoreError,
+  type McpAssignmentStore,
+} from "./mcpAssignments.ts";
+export {
   FileAgentAvatarStore,
   agentAvatarIdentityKey,
   normalizeAgentAvatarName,

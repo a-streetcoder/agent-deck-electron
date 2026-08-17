@@ -231,6 +231,135 @@ describe("project MCP assignments", () => {
     await waitFor(() => expect((checkbox as HTMLInputElement).checked).toBe(true));
   });
 
+  it("keeps an explicit project value while All Projects is inherited, then restores its control", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/tmp/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: ["server"],
+        },
+      ],
+    });
+    let inherited = true;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp?projectId=project-1")
+        return Promise.resolve(
+          jsonResponse({
+            defaultAssignedServerIds: inherited ? ["server"] : [],
+            assignedServerIds: ["server"],
+            servers: [{ id: "server", transport: "stdio", connected: true, toolNames: [] }],
+          }),
+        );
+      if (url === "/mcp/server/default-assignment" && init?.method === "PATCH") {
+        inherited = false;
+        return Promise.resolve(jsonResponse({ defaultAssignedServerIds: [] }));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    render(<McpScreen />);
+    const projectToggle = await screen.findByRole("checkbox", {
+      name: /server is inherited from All Projects.*explicit project assignment is retained/i,
+    });
+    const allToggle = screen.getByRole("checkbox", {
+      name: "All Projects MCP assignment for server",
+    });
+    expect((projectToggle as HTMLInputElement).checked).toBe(true);
+    expect((projectToggle as HTMLInputElement).disabled).toBe(true);
+    expect(projectToggle.getAttribute("aria-label")).toContain(
+      "explicit project assignment is retained",
+    );
+    fireEvent.click(allToggle);
+    await waitFor(() => expect((projectToggle as HTMLInputElement).disabled).toBe(false));
+    expect((projectToggle as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("announces All Projects saving state on its focused checkbox", async () => {
+    let resolvePatch!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp")
+        return Promise.resolve(
+          jsonResponse({
+            defaultAssignedServerIds: [],
+            servers: [{ id: "server", transport: "stdio", connected: false, toolNames: [] }],
+          }),
+        );
+      if (url === "/mcp/server/default-assignment" && init?.method === "PATCH")
+        return new Promise<Response>((resolve) => (resolvePatch = resolve));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    const toggle = await screen.findByRole("checkbox", {
+      name: "All Projects MCP assignment for server",
+    });
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("Saving All Projects…")).toBeTruthy();
+    expect(document.activeElement).toBe(toggle);
+    resolvePatch(jsonResponse({ defaultAssignedServerIds: ["server"] }));
+    await waitFor(() => expect(toggle.getAttribute("aria-busy")).toBe("false"));
+  });
+
+  it("rolls back a failed All Projects save and keeps keyboard focus", async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp")
+        return Promise.resolve(
+          jsonResponse({
+            defaultAssignedServerIds: [],
+            servers: [{ id: "server", transport: "stdio", connected: false, toolNames: [] }],
+          }),
+        );
+      if (url === "/mcp/server/default-assignment" && init?.method === "PATCH")
+        return Promise.resolve(jsonResponse({ error: "Default write failed" }, 500));
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    render(<McpScreen />);
+    const toggle = await screen.findByTestId("mcp-assign-all-server");
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
+    expect(useAppStore.getState().error).toBe("Default write failed");
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
+  });
+
+  it("visibly distinguishes inherited state with no explicit project assignment", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/tmp/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: [],
+        },
+      ],
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        defaultAssignedServerIds: ["server"],
+        assignedServerIds: [],
+        servers: [{ id: "server", transport: "stdio", connected: true, toolNames: [] }],
+      }),
+    );
+    render(<McpScreen />);
+    const projectToggle = await screen.findByRole("checkbox", {
+      name: /inherited from All Projects.*explicit project assignment is not set/i,
+    });
+    expect((projectToggle as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("Inherited · no explicit assignment")).toBeTruthy();
+  });
+
   it("renders a keyboard-removable missing assignment and project empty state", async () => {
     useAppStore.setState({
       currentProjectId: "project-1",
@@ -333,7 +462,8 @@ describe("project MCP assignment saving state", () => {
     expect((checkbox as HTMLInputElement).checked).toBe(true);
     expect((checkbox as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByTestId("mcp-server").getAttribute("aria-busy")).toBe("true");
-    expect(screen.getByText("Saving…")).toBeTruthy();
+    expect(checkbox.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("Saving this project…")).toBeTruthy();
     fireEvent.click(checkbox);
     expect(patchCount).toBe(1);
     expect(screen.getByTestId("mcp-server")).toBeTruthy();
@@ -349,6 +479,50 @@ describe("project MCP assignment saving state", () => {
     await waitFor(() => expect(catalogLoads).toBeGreaterThan(beforeBroadcastLoads));
     expect(screen.getByTestId("mcp-assign-server")).toBe(checkbox);
     expect(document.activeElement).toBe(checkbox);
+  });
+
+  it("does not apply an old-project assignment refresh or focus after switching projects", async () => {
+    const second = { ...project, id: "project-next", name: "Next project" };
+    useAppStore.setState({ currentProjectId: project.id, projects: [project, second] });
+    let resolvePatch!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === `/mcp?projectId=${project.id}`)
+        return Promise.resolve(
+          jsonResponse({
+            assignedServerIds: [],
+            servers: [{ id: "old", transport: "stdio", connected: false, toolNames: [] }],
+          }),
+        );
+      if (url === `/projects/${project.id}` && init?.method === "PATCH")
+        return new Promise<Response>((resolve) => (resolvePatch = resolve));
+      if (url === `/mcp?projectId=${second.id}`)
+        return Promise.resolve(
+          jsonResponse({
+            assignedServerIds: [],
+            servers: [{ id: "new", transport: "stdio", connected: false, toolNames: [] }],
+          }),
+        );
+      if (url === "/projects")
+        return Promise.resolve(jsonResponse({ projects: [project, second] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    render(<McpScreen />);
+    const oldToggle = await screen.findByTestId("mcp-assign-old");
+    oldToggle.focus();
+    fireEvent.click(oldToggle);
+    useAppStore.setState({ currentProjectId: second.id });
+    expect(await screen.findByTestId("mcp-new")).toBeTruthy();
+    resolvePatch(jsonResponse({ project: {} }));
+    await waitFor(() => expect(screen.queryByTestId("mcp-old")).toBeNull());
+    expect(screen.getByTestId("mcp-new")).toBeTruthy();
+    expect(document.activeElement).not.toBe(oldToggle);
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input) === `/mcp?projectId=${project.id}`),
+    ).toHaveLength(1);
   });
 
   it("serializes different server assignments without losing the first", async () => {
@@ -435,6 +609,40 @@ describe("project MCP assignment saving state", () => {
     await waitFor(() => expect((checkbox as HTMLInputElement).checked).toBe(false));
     expect(useAppStore.getState().error).toContain("Assignment refused");
     expect(screen.getByTestId("mcp-server")).toBeTruthy();
+  });
+
+  it("shows an honest initial catalog failure instead of a successful empty state", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("catalog unavailable", { status: 503 }));
+    render(<McpScreen />);
+    expect(await screen.findByTestId("mcp-load-error")).toHaveProperty(
+      "textContent",
+      "MCP servers could not be loaded. Reload the catalog to try again.",
+    );
+    expect(screen.queryByTestId("mcp-empty")).toBeNull();
+  });
+
+  it("clears old rows when a project-switch catalog load fails", async () => {
+    const first = { ...project, id: "first", name: "First" };
+    const second = { ...project, id: "second", name: "Second" };
+    useAppStore.setState({ currentProjectId: first.id, projects: [first, second] });
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/mcp?projectId=first")
+        return Promise.resolve(
+          jsonResponse({
+            servers: [{ id: "old-row", transport: "stdio", connected: false, toolNames: [] }],
+          }),
+        );
+      if (url === "/mcp?projectId=second")
+        return Promise.resolve(new Response("project catalog unavailable", { status: 503 }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    expect(await screen.findByTestId("mcp-old-row")).toBeTruthy();
+    useAppStore.setState({ currentProjectId: second.id });
+    expect(await screen.findByTestId("mcp-load-error")).toBeTruthy();
+    expect(screen.queryByTestId("mcp-old-row")).toBeNull();
+    expect(screen.queryByTestId("mcp-empty")).toBeNull();
   });
 
   it("shows loading and no-project catalog semantics without assignment controls", async () => {

@@ -319,6 +319,26 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(reloaded.defaultModel).toBe("anthropic:claude-opus");
   });
 
+  it("validates, dedupes, and restart-round-trips default MCP assignments", () => {
+    const dir = freshCopy();
+    const file = path.join(dir, "app-settings.json");
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    raw.defaultMcpServers = "files";
+    writeFileSync(file, JSON.stringify(raw, null, 2));
+    expect(new SettingsStore(dir).get().defaultMcpServers).toEqual([]);
+
+    raw.defaultMcpServers = ["files", "files", "../escape", 42, "remote-http"];
+    writeFileSync(file, JSON.stringify(raw, null, 2));
+    const loaded = new SettingsStore(dir);
+    expect(loaded.get().defaultMcpServers).toEqual(["files", "remote-http"]);
+    loaded.setDefaultMcpServer("database", true);
+    expect(new SettingsStore(dir).get().defaultMcpServers).toEqual([
+      "files",
+      "remote-http",
+      "database",
+    ]);
+  });
+
   it("tolerates and drops legacy repo keys from an old settings file (SKL-19)", () => {
     const dir = freshCopy();
     const file = path.join(dir, "app-settings.json");

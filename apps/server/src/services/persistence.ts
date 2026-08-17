@@ -94,6 +94,8 @@ export type ProjectIndexHandle = JsonArrayStoreHandle<ProjectMeta>;
 export interface AppSettings {
   /** Skills injected into EVERY project's parent sessions ("All Projects"). */
   defaultSkills: string[];
+  /** MCP servers granted to ordinary sessions in every real project. */
+  defaultMcpServers: string[];
   /**
    * Prompt templates made available in EVERY project's parent sessions as
    * `--prompt-template` flags ("All Projects"). Native defaultPromptTemplateNames.
@@ -198,6 +200,18 @@ function coerceCommandIds(value: unknown, pattern: RegExp): string[] {
   ].slice(0, MAX_INJECTED_COMMAND_IDS);
 }
 
+const MCP_ASSIGNMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function coerceMcpAssignmentNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter(
+        (name): name is string => typeof name === "string" && MCP_ASSIGNMENT_NAME.test(name),
+      ),
+    ),
+  ].slice(0, 256);
+}
+
 /** Keep only well-formed plugin refs — a stored blob is re-validated on load (fail closed). */
 function coerceCodexPluginRefs(value: unknown): CodexPluginSkillRef[] {
   if (!Array.isArray(value)) return [];
@@ -237,6 +251,7 @@ export interface SettingsStoreHandle {
   readonly get: Effect.Effect<AppSettings>;
   readonly update: (patch: Partial<AppSettings>) => Effect.Effect<AppSettings>;
   readonly setDefaultSkill: (name: string, enabled: boolean) => Effect.Effect<AppSettings>;
+  readonly setDefaultMcpServer: (name: string, enabled: boolean) => Effect.Effect<AppSettings>;
   readonly setDefaultPromptTemplate: (name: string, enabled: boolean) => Effect.Effect<AppSettings>;
   readonly renameDefaultPromptTemplate: (
     oldName: string,
@@ -293,9 +308,9 @@ export const makeJsonArrayStoreHandle = <T extends { id: string }>(
       // Missing or corrupt index — start fresh.
     }
 
-    const flush = (): void => {
+    const flush = (nextItems: readonly T[]): void => {
       const tmp = `${file}.tmp`;
-      writeFileSync(tmp, JSON.stringify(items, null, 2));
+      writeFileSync(tmp, JSON.stringify(nextItems, null, 2));
       renameSync(tmp, file);
     };
 
@@ -304,17 +319,21 @@ export const makeJsonArrayStoreHandle = <T extends { id: string }>(
       find: (predicate) => Effect.sync(() => Option.fromNullable(items.find(predicate))),
       upsert: (item) =>
         Effect.sync(() => {
-          const index = items.findIndex((existing) => existing.id === item.id);
-          if (index === -1) items.push(item);
-          else items[index] = item;
-          flush();
+          const nextItems = [...items];
+          const index = nextItems.findIndex((existing) => existing.id === item.id);
+          if (index === -1) nextItems.push(item);
+          else nextItems[index] = item;
+          // Commit in-memory authorization only after the atomic disk write wins.
+          flush(nextItems);
+          items = nextItems;
         }),
       remove: (id) =>
         Effect.sync(() => {
           const index = items.findIndex((existing) => existing.id === id);
           if (index === -1) return false;
-          items.splice(index, 1);
-          flush();
+          const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
+          flush(nextItems);
+          items = nextItems;
           return true;
         }),
     } satisfies JsonArrayStoreHandle<T>;
@@ -414,6 +433,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
     let persistLegacySemanticSeed = legacySemanticSeedRequested && !settingsFileExists;
     let settings: AppSettings = {
       defaultSkills: [],
+      defaultMcpServers: [],
       defaultPromptTemplates: [],
       disabledSkills: [],
       projectRoots: [],
@@ -458,6 +478,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           defaultSkills: Array.isArray(record.defaultSkills)
             ? record.defaultSkills.map(String)
             : [],
+          // Missing and malformed legacy fields safely grant no MCP capability.
+          defaultMcpServers: coerceMcpAssignmentNames(record.defaultMcpServers),
           defaultPromptTemplates: Array.isArray(record.defaultPromptTemplates)
             ? record.defaultPromptTemplates.map(String)
             : [],
@@ -562,11 +584,14 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       }
     }
 
+    let committedSettings = settings;
+    let committedSemanticPreferenceWasPersisted = semanticMemoryPreferenceWasPersisted;
     const flush = (value: AppSettings = settings): void => {
       const tmp = `${file}.tmp`;
       // Fields newer than the oldest settings files stay absent when empty, keeping
       // untouched files byte-stable across load/save cycles.
       const persisted: Partial<AppSettings> = { ...value };
+      if (value.defaultMcpServers.length === 0) delete persisted.defaultMcpServers;
       if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
       if (value.externalPromptPaths.length === 0) delete persisted.externalPromptPaths;
       if (value.disabledBuiltinPromptNames.length === 0)
@@ -591,8 +616,20 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       if (!semanticMemoryPreferenceWasPersisted && value.semanticMemoryEnabled === false) {
         delete persisted.semanticMemoryEnabled;
       }
-      writeFileSync(tmp, JSON.stringify(persisted, null, 2));
-      renameSync(tmp, file);
+      try {
+        writeFileSync(tmp, JSON.stringify(persisted, null, 2));
+        renameSync(tmp, file);
+      } catch (error) {
+        // Mutators historically assign their candidate before calling flush.
+        // Restore the last durable snapshot so a failed write cannot change live
+        // authorization/preferences while the route reports failure.
+        settings = committedSettings;
+        semanticMemoryPreferenceWasPersisted = committedSemanticPreferenceWasPersisted;
+        throw error;
+      }
+      settings = value;
+      committedSettings = value;
+      committedSemanticPreferenceWasPersisted = semanticMemoryPreferenceWasPersisted;
     };
 
     if (persistLegacySemanticSeed) {
@@ -621,6 +658,17 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           else next.delete(name);
           settings = { ...settings, defaultSkills: [...next] };
           flush();
+          return settings;
+        }),
+      setDefaultMcpServer: (name, enabled) =>
+        Effect.sync(() => {
+          const next = new Set(settings.defaultMcpServers);
+          if (enabled) next.add(name);
+          else next.delete(name);
+          const nextSettings = { ...settings, defaultMcpServers: [...next] };
+          // The live authorization snapshot changes only after persistence succeeds.
+          flush(nextSettings);
+          settings = nextSettings;
           return settings;
         }),
       setDefaultPromptTemplate: (name, enabled) =>

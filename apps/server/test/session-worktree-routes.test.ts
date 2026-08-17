@@ -6,6 +6,7 @@ import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import type * as GitModule from "../src/git.ts";
+import type { McpAssignmentStore } from "../src/mcpAssignments.ts";
 import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
 import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
@@ -202,6 +203,16 @@ function makeRoute(
     // This route harness does not configure the memory subsystem. Model
     // automation is therefore truthfully unavailable rather than undefined.
     agentMemoryEnabled: () => false,
+    mcpAssignments: {
+      defaultServerNames: () => [],
+      projectServerNames: () => [],
+      setDefaultServer: () => {
+        throw new Error("MCP assignment writes are not available in this route fixture");
+      },
+      setProjectServers: () => {
+        throw new Error("MCP assignment writes are not available in this route fixture");
+      },
+    } satisfies McpAssignmentStore,
     prepareProjectMcpSession: state.prepareProjectMcpSession,
     sessionImages: { deleteSession: state.deleteSessionImages },
     sessionPastes: { deleteSession: state.deleteSessionPastes },

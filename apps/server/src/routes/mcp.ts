@@ -25,6 +25,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     broadcast,
     rootsFor,
     projects,
+    mcpAssignments,
   } = ctx;
 
   const mcpAddBody = z.union([
@@ -51,6 +52,16 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
     }),
   ]);
+
+  const reconcileAllProjectsAndBroadcast = async (): Promise<string[]> => {
+    const errors: string[] = [];
+    for (const project of projects.list()) {
+      const result = await reconcileProjectMcp(project.id);
+      if (!result.ok) errors.push(result.error);
+    }
+    broadcast({ type: "resources_changed" });
+    return [...new Set(errors)];
+  };
 
   const definitionFields = (entry: McpServerEntry | undefined) => {
     if (!entry) return {};
@@ -80,9 +91,13 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       const configs = new Map<string, { id: string; transport: "stdio" | "http" }>();
       for (const config of globalSnapshot.configs)
         configs.set(config.id, { id: config.id, transport: "url" in config ? "http" : "stdio" });
+      const defaults = [...new Set(mcpAssignments.defaultServerNames())];
+      const configured = new Set(configs.keys());
       return {
         valid: catalog.valid && globalSnapshot.valid,
         projectId: null,
+        defaultAssignedServerIds: defaults,
+        missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
         assignedServerIds: [] as string[],
         missingAssignedServerIds: [] as string[],
         servers: [...configs.values()].map((config) => {
@@ -107,16 +122,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       };
     }
 
-    const project = projects.find((item) => item.id === scope)!;
     const snapshot = effectiveMcpConfigs(scope);
     const statuses = new Map(mcp.status(scope).map((status) => [status.id, status]));
     const catalog = readMcpServerCatalog(rootsFor(scope));
     const sourceById = new Map(catalog.servers.map((entry) => [entry.id, entry.scope]));
-    const assigned = [...new Set(project.assignedMcpServers ?? [])];
+    const assigned = [...new Set(mcpAssignments.projectServerNames(scope))];
     const configured = new Set(snapshot.configs.map((config) => config.id));
+    const defaults = [...new Set(mcpAssignments.defaultServerNames())];
     return {
       valid: snapshot.valid,
       projectId: scope,
+      defaultAssignedServerIds: defaults,
+      missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
       assignedServerIds: assigned,
       missingAssignedServerIds: assigned.filter((id) => !configured.has(id)),
       servers: snapshot.configs.map((config) => {
@@ -142,6 +159,56 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         };
       }),
     };
+  });
+
+  fastify.patch("/mcp/:id/default-assignment", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const parsed = z.object({ enabled: z.boolean() }).strict().safeParse(request.body);
+    if (!parsed.success || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
+      return reply.code(400).send({ error: "invalid MCP default assignment" });
+    }
+    let defaultAssignedServerIds: string[];
+    try {
+      // Durable assignment is authoritative and must land before runtime changes.
+      defaultAssignedServerIds = mcpAssignments.setDefaultServer(id, parsed.data.enabled);
+    } catch (error) {
+      return reply.code(500).send({
+        code: "RESOURCE_WRITE_FAILED",
+        error:
+          error instanceof Error
+            ? error.message
+            : "The All Projects MCP assignment could not be saved.",
+      });
+    }
+    let credentialCleanupFailed = false;
+    if (!parsed.data.enabled) {
+      try {
+        await Promise.all(
+          projects
+            .list()
+            .filter((project) => !ctx.projectHasEffectiveMcpGrant(project.id, id))
+            .map((project) => mcpOAuth.clear(oauthKey(project.id, id))),
+        );
+      } catch {
+        credentialCleanupFailed = true;
+      }
+    }
+    // Durable assignment truth has already changed. Runtime convergence and
+    // refresh notification must happen even when device-local cleanup fails.
+    const errors = await reconcileAllProjectsAndBroadcast();
+    if (credentialCleanupFailed) {
+      return reply.code(500).send({
+        code: "CREDENTIAL_CLEANUP_FAILED",
+        error:
+          "The All Projects assignment was saved, but device-local MCP credentials could not be removed. Retry this unassignment to finish cleanup.",
+        defaultAssignedServerIds,
+        ...(errors.length > 0 ? { reconciliationError: errors.join(" ") } : {}),
+      });
+    }
+    if (errors.length > 0) {
+      return reply.code(422).send({ error: errors.join(" "), defaultAssignedServerIds });
+    }
+    return { defaultAssignedServerIds };
   });
 
   fastify.post("/mcp/reload", async (request, reply) => {
@@ -301,17 +368,79 @@ export function registerMcpRoutes(ctx: ServerContext): void {
 
   fastify.delete("/mcp/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    let exists: boolean;
+    try {
+      exists = hasMcpServer(rootsFor(), "global", id);
+    } catch (error) {
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (!exists) return reply.code(404).send({ error: "unknown global MCP server" });
+    let assignmentsChanged = false;
+    try {
+      // Clear durable assignment references before deleting the definition. A
+      // partial cleanup is fail-closed; the definition remains if any write fails.
+      const hadDefaultAssignment = mcpAssignments.defaultServerNames().includes(id);
+      mcpAssignments.setDefaultServer(id, false);
+      assignmentsChanged = hadDefaultAssignment;
+      for (const project of projects.list()) {
+        const assigned = mcpAssignments.projectServerNames(project.id);
+        const retained = assigned.filter((name) => name !== id);
+        if (retained.length !== assigned.length) {
+          mcpAssignments.setProjectServers(project.id, retained);
+          assignmentsChanged = true;
+        }
+      }
+    } catch (error) {
+      // Earlier clears remain authoritative even if a later assignment write
+      // fails. Converge runtime once before reporting the partial durable result.
+      if (assignmentsChanged) await reconcileAllProjectsAndBroadcast();
+      return reply.code(500).send({
+        code: "RESOURCE_WRITE_FAILED",
+        error: assignmentsChanged
+          ? "Some MCP assignments were cleared, but another assignment could not be saved. Retry deletion to finish cleanup."
+          : error instanceof Error
+            ? error.message
+            : "The MCP assignments could not be cleared.",
+        assignmentsPartiallyCleared: assignmentsChanged,
+      });
+    }
     let deletedConfig = false;
     try {
       deletedConfig = deleteMcpServer(rootsFor(), "global", id);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.code(400).send({ error: message });
+      // The durable clear already won. Apply it to live scopes even though the
+      // definition remains, so a deletion I/O failure cannot retain capability.
+      await reconcileAllProjectsAndBroadcast();
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
     }
-    if (!deletedConfig) return reply.code(404).send({ error: "unknown global MCP server" });
-    await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
-    for (const project of projects.list()) await reconcileProjectMcp(project.id);
-    broadcast({ type: "resources_changed" });
+    if (!deletedConfig) {
+      await reconcileAllProjectsAndBroadcast();
+      return reply.code(404).send({ error: "unknown global MCP server" });
+    }
+    let credentialCleanupFailed = false;
+    try {
+      await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
+    } catch {
+      credentialCleanupFailed = true;
+    }
+    const reconciliationErrors = await reconcileAllProjectsAndBroadcast();
+    if (credentialCleanupFailed) {
+      return reply.code(500).send({
+        code: "CREDENTIAL_CLEANUP_FAILED",
+        error:
+          "The MCP server and assignments were removed, but device-local credentials could not be removed. Recreate the same server ID, then delete it again to retry cleanup.",
+        ...(reconciliationErrors.length > 0
+          ? { reconciliationError: reconciliationErrors.join(" ") }
+          : {}),
+      });
+    }
+    if (reconciliationErrors.length > 0) {
+      return reply.code(422).send({ error: reconciliationErrors.join(" ") });
+    }
     return { ok: true };
   });
 

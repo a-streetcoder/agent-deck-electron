@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Runtime } from "effect";
 import { describe, expect, it } from "vitest";
-import { SessionIndex, SettingsStore } from "../src/persistence.ts";
+import { ProjectIndex, SessionIndex, SettingsStore } from "../src/persistence.ts";
 
 /**
  * Slice 6 facade contract: a filesystem error thrown while opening a store or
@@ -43,5 +43,44 @@ describe("persistence facade — fs errors keep their legacy identity", () => {
     // writeFileSync(tmp) throws ENOENT out of the mutator's Effect.sync body.
     rmSync(dir, { recursive: true, force: true });
     expectRawFsError(() => store.setDefaultSkill("x", true));
+  });
+
+  it("does not commit default MCP authorization in memory or on disk when flush fails", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "persist-mcp-err-"));
+    const store = new SettingsStore(dir);
+    store.setDefaultMcpServer("kept", true);
+    const file = path.join(dir, "app-settings.json");
+    const before = readFileSync(file, "utf8");
+    mkdirSync(`${file}.tmp`);
+
+    expectRawFsError(() => store.setDefaultMcpServer("must-not-commit", true));
+    expect(store.get().defaultMcpServers).toEqual(["kept"]);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(new SettingsStore(dir).get().defaultMcpServers).toEqual(["kept"]);
+  });
+
+  it("does not commit project MCP authorization in memory or on disk when flush fails", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "persist-project-err-"));
+    const store = new ProjectIndex(dir);
+    const project = {
+      id: "project",
+      path: "/tmp/project",
+      name: "Project",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      assignedMcpServers: ["kept"],
+    };
+    store.upsert(project);
+    const file = path.join(dir, "projects.json");
+    const before = readFileSync(file, "utf8");
+    mkdirSync(`${file}.tmp`);
+
+    expectRawFsError(() =>
+      store.upsert({ ...project, assignedMcpServers: ["kept", "must-not-commit"] }),
+    );
+    expect(store.find((item) => item.id === project.id)?.assignedMcpServers).toEqual(["kept"]);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(
+      new ProjectIndex(dir).find((item) => item.id === project.id)?.assignedMcpServers,
+    ).toEqual(["kept"]);
   });
 });

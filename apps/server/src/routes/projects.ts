@@ -65,12 +65,19 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     watchProject,
     reconcileProjectMcp,
     mcpOAuth,
+    mcpAssignments,
     broadcast,
     rootsFor,
   } = ctx;
 
   fastify.get("/projects", async () => ({
-    projects: projects.list().filter((p) => !p.hidden),
+    projects: projects
+      .list()
+      .filter((p) => !p.hidden)
+      .map((project) => ({
+        ...project,
+        assignedMcpServers: [...mcpAssignments.projectServerNames(project.id)],
+      })),
   }));
 
   // Root folders that are too broad to scan (filesystem/system roots) — a
@@ -164,6 +171,14 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     };
     projects.upsert(project);
     watchProject(project.path);
+    const reconciled = await reconcileProjectMcp(project.id);
+    if (!reconciled.ok) {
+      // Project creation remains successful; malformed repository MCP config is
+      // diagnosable and still fails closed without silently discarding the result.
+      console.warn(
+        `[mcp] project ${project.id} was created without MCP reconciliation: ${reconciled.error}`,
+      );
+    }
     return reply.status(201).send({ project });
   });
 
@@ -173,7 +188,8 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const project = projects.find((p) => p.id === id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
-    const next: ProjectMeta = { ...project };
+    const previousAssignedMcpServers = [...mcpAssignments.projectServerNames(id)];
+    const next: ProjectMeta = { ...project, assignedMcpServers: previousAssignedMcpServers };
     if (parsed.data.assignedAgentNames !== undefined) {
       next.assignedAgentNames = [...new Set(parsed.data.assignedAgentNames)];
     }
@@ -200,21 +216,64 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         next.defaultAgentName = undefined;
       }
     }
-    projects.upsert(next);
+    let projectFieldsSaved = false;
+    try {
+      if (parsed.data.assignedMcpServers !== undefined) {
+        // Persist route-owned metadata first while retaining the authoritative
+        // prior assignment. The assignment-only seam then reads that current
+        // metadata and changes only its own field.
+        projects.upsert({ ...next, assignedMcpServers: previousAssignedMcpServers });
+        projectFieldsSaved = true;
+        next.assignedMcpServers = mcpAssignments.setProjectServers(
+          id,
+          next.assignedMcpServers ?? [],
+        );
+      } else {
+        projects.upsert(next);
+      }
+    } catch (error) {
+      return reply.status(500).send({
+        code: "RESOURCE_WRITE_FAILED",
+        error:
+          projectFieldsSaved && parsed.data.assignedMcpServers !== undefined
+            ? "The project fields were saved, but the MCP assignment could not be saved. Retry the assignment."
+            : error instanceof Error
+              ? error.message
+              : "The project could not be saved.",
+        ...(projectFieldsSaved ? { projectFieldsSaved: true } : {}),
+      });
+    }
     if (parsed.data.assignedMcpServers !== undefined) {
       const retained = new Set(next.assignedMcpServers ?? []);
-      await Promise.all(
-        (project.assignedMcpServers ?? [])
-          .filter((serverId) => !retained.has(serverId))
-          .map((serverId) => mcpOAuth.clear(ctx.oauthKey(id, serverId))),
+      const credentialCleanupIds = previousAssignedMcpServers
+        .filter((serverId) => !retained.has(serverId))
+        .filter((serverId) => !ctx.projectHasEffectiveMcpGrant(id, serverId));
+      const cleanupResults = await Promise.allSettled(
+        credentialCleanupIds.map((serverId) => mcpOAuth.clear(ctx.oauthKey(id, serverId))),
       );
+      const failedCredentialCleanupIds = credentialCleanupIds.filter(
+        (_, index) => cleanupResults[index]?.status === "rejected",
+      );
+      // Durable assignment truth has already changed. Runtime convergence and
+      // refresh notification must happen even when device-local cleanup fails.
       const reconciled = await reconcileProjectMcp(id);
+      broadcast({ type: "resources_changed" });
+      if (failedCredentialCleanupIds.length > 0) {
+        return reply.status(500).send({
+          code: "CREDENTIAL_CLEANUP_FAILED",
+          error:
+            "The project assignment was saved, but device-local MCP credentials could not be removed. Reassign the reported servers, then unassign them again to retry cleanup.",
+          credentialCleanupServerIds: failedCredentialCleanupIds,
+          project: next,
+          ...(!reconciled.ok ? { reconciliationError: reconciled.error } : {}),
+        });
+      }
       if (!reconciled.ok) {
         // The assignment is still safely persisted; malformed config preserves
         // already-live clients and the response gives the user an actionable state.
-        broadcast({ type: "resources_changed" });
         return reply.status(422).send({ error: reconciled.error, project: next });
       }
+      return { project: next };
     }
     broadcast({ type: "resources_changed" });
     return { project: next };
@@ -232,13 +291,29 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       return reply.status(409).send({ error: "project has a live session" });
     }
     projects.upsert({ ...project, hidden: true });
-    await Promise.all(
-      (project.assignedMcpServers ?? []).map((serverId) =>
-        mcpOAuth.clear(ctx.oauthKey(id, serverId)),
-      ),
-    );
-    await mcpOAuth.clearProject(id);
+    let credentialCleanupFailed = false;
+    try {
+      await Promise.all(
+        mcpAssignments
+          .projectServerNames(id)
+          .map((serverId) => mcpOAuth.clear(ctx.oauthKey(id, serverId))),
+      );
+      await mcpOAuth.clearProject(id);
+    } catch {
+      credentialCleanupFailed = true;
+    }
+    // Hidden project truth is already durable; revoke runtime ownership and
+    // notify resource consumers even if credential removal needs a retry.
     await ctx.mcp.reconcile([], id);
+    broadcast({ type: "resources_changed" });
+    if (credentialCleanupFailed) {
+      return reply.status(500).send({
+        code: "CREDENTIAL_CLEANUP_FAILED",
+        error:
+          "The project was hidden, but device-local MCP credentials could not be removed. Restore and hide the project again to finish cleanup.",
+        projectHidden: true,
+      });
+    }
     return { ok: true };
   });
 

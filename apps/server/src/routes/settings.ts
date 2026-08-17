@@ -56,6 +56,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     resourceHome,
     rootsFor,
     enabledExtensionPaths,
+    mcpAssignments,
   } = ctx;
 
   // Browser-CSRF guard for the terminal-launching POSTs (Codex): a hostile
@@ -286,8 +287,13 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
+  const publicSettings = (value: AppSettings = settings.get()): AppSettings => ({
+    ...value,
+    defaultMcpServers: [...mcpAssignments.defaultServerNames()],
+  });
+
   fastify.get("/settings", async () => ({
-    settings: settings.get(),
+    settings: publicSettings(),
     capabilities: { agentMemory: ctx.memoryEnabled },
   }));
 
@@ -359,25 +365,25 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       const { name, enabled } = parsed.data.setDefaultSkill;
       const result = settings.setDefaultSkill(name, enabled);
       broadcast({ type: "resources_changed" });
-      return { settings: result };
+      return { settings: publicSettings(result) };
     }
     if (parsed.data.setDefaultPromptTemplate) {
       const { name, enabled } = parsed.data.setDefaultPromptTemplate;
       const result = settings.setDefaultPromptTemplate(name, enabled);
       broadcast({ type: "resources_changed" });
-      return { settings: result };
+      return { settings: publicSettings(result) };
     }
     if (parsed.data.setBuiltinPromptDisabled) {
       const { name, disabled } = parsed.data.setBuiltinPromptDisabled;
       const result = settings.setBuiltinPromptDisabled(name, disabled);
       broadcast({ type: "resources_changed" });
-      return { settings: result };
+      return { settings: publicSettings(result) };
     }
     if (parsed.data.setDisabledSkill) {
       const { name, disabled } = parsed.data.setDisabledSkill;
       const result = settings.setDisabledSkill(name, disabled);
       broadcast({ type: "resources_changed" }); // dims the row, updates assignment
-      return { settings: result };
+      return { settings: publicSettings(result) };
     }
     // Build a patch of ONLY the provided AppSettings fields — never spread
     // parsed.data directly (its undefined atomic-op keys would clobber existing
@@ -443,7 +449,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       );
     }
     return {
-      settings: updated,
+      settings: publicSettings(updated),
       capabilities: { agentMemory: ctx.memoryEnabled },
     };
   });

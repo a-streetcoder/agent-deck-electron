@@ -177,6 +177,10 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.setDefaultSkill(name, enabled));
   }
 
+  setDefaultMcpServer(name: string, enabled: boolean): AppSettings {
+    return runSyncUnwrapped(this.handle.setDefaultMcpServer(name, enabled));
+  }
+
   setDefaultPromptTemplate(name: string, enabled: boolean): AppSettings {
     return runSyncUnwrapped(this.handle.setDefaultPromptTemplate(name, enabled));
   }

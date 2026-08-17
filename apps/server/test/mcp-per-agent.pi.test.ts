@@ -10,14 +10,14 @@ import {
   type ChatCompletionRequest,
   type MockProviderServer,
 } from "@agent-deck/testkit";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * Per-session MCP scoping (native explicit-assignment model): an agent that
  * DECLARES mcpServers exposes only those servers' MCP tools to its sessions; an
- * agent that declares none (opt-in default) gets no MCP tools; a PLAIN session
- * (no agent) is unrestricted. End-to-end against real pi with a configured stdio
+ * agent that declares none (opt-in default) gets no MCP tools; a PLAIN project
+ * session receives the configured All Projects/default union explicit assignment. End-to-end against real pi with a configured stdio
  * MCP server "mock" (tool mcp__mock__echo).
  */
 
@@ -102,7 +102,7 @@ beforeAll(async () => {
             name: lastUser.includes("project-only") ? "mcp__projectonly__echo" : "mcp__mock__echo",
             arguments: { message: "scoped" },
           },
-    reply: () => "done",
+    reply: () => "streamed answer has several ordered deltas",
   });
   mockExt = writeMockProviderExtension(mock.baseUrl);
   server = await startServer({ dataDir });
@@ -112,10 +112,10 @@ beforeAll(async () => {
     body: JSON.stringify({ path: cwd, name: "MCP project" }),
   });
   projectId = ((await added.json()) as { project: { id: string } }).project.id;
-  const assigned = await fetch(`http://127.0.0.1:${server.port}/projects/${projectId}`, {
+  const assigned = await fetch(`http://127.0.0.1:${server.port}/mcp/mock/default-assignment`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ assignedMcpServers: ["mock"] }),
+    body: JSON.stringify({ enabled: true }),
   });
   expect(assigned.status).toBe(200);
   const unassigned = await fetch(`http://127.0.0.1:${server.port}/projects`, {
@@ -148,38 +148,146 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     expect(toolResults(reqs)).not.toContain("mcp stdio echo");
   });
 
-  it("exposes only the project's explicit assignment to a plain session", async () => {
+  it("exposes an All Projects default to an ordinary project session", async () => {
     const reqs = await runSession();
-    // No agent → the project's explicit assignment is available.
+    // No agent → the configured All Projects default is available.
     expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
   });
 
+  it("does not expose All Projects defaults to a no-project chat", async () => {
+    const start = mock.requests.length;
+    const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        extensions: [mockExt],
+        env,
+      }),
+    });
+    expect(response.status).toBe(201);
+    const { session } = (await response.json()) as { session: { id: string } };
+    await server.sessions.get(session.id)!.prompt("use the mcp echo tool in no-project chat");
+    await server.receipts.waitFor("idle", session.id);
+    expect(toolResults(mock.requests.slice(start))).not.toContain("mcp stdio echo");
+  });
+
   it.each(["project-local-mcp", "global-project-only"])(
-    "does not let agent %s grant execution trust for an unassigned project override",
+    "lets bound agent %s use exactly its configured project-local declaration",
     async (agentName) => {
       const catalog = (await (
         await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${unassignedProjectId}`)
       ).json()) as {
         servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
       };
-      expect(catalog.servers.find((entry) => entry.id === "projectonly")).toMatchObject({
-        connected: false,
-        toolNames: [],
-      });
+      expect(catalog.servers.find((entry) => entry.id === "projectonly")?.id).toBe("projectonly");
       const reqs = await runSession(agentName, {
         projectId: unassignedProjectId,
         prompt: "use the project-only MCP echo tool",
       });
-      expect(toolResults(reqs)).not.toContain("mcp stdio echo");
+      expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
       const after = (await (
         await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${unassignedProjectId}`)
       ).json()) as {
         servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
       };
       expect(after.servers.find((entry) => entry.id === "projectonly")).toMatchObject({
-        connected: false,
-        toolNames: [],
+        connected: true,
       });
     },
   );
+
+  it("rebinds a running ordinary session after default removal while named and no-project scopes stay stable", async () => {
+    const create = async (options: { projectId?: string; agentName?: string }) => {
+      const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...options,
+          provider: MOCK_PROVIDER_ID,
+          model: MOCK_MODEL_ID,
+          extensions: [mockExt],
+          env,
+        }),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { session: { id: string } }).session.id;
+    };
+    const ordinaryId = await create({ projectId });
+    const namedId = await create({ projectId, agentName: "mcp-yes" });
+    const noProjectId = await create({});
+    const ordinary = server.sessions.get(ordinaryId)!;
+    const named = server.sessions.get(namedId)!;
+    const noProject = server.sessions.get(noProjectId)!;
+    const ordinaryFingerprint = ordinary.meta.launchResourceFingerprint;
+    const namedFingerprint = named.meta.launchResourceFingerprint;
+    const noProjectFingerprint = noProject.meta.launchResourceFingerprint;
+
+    await ordinary.prompt("res12-before ordinary tool");
+    await server.receipts.waitFor("idle", ordinaryId);
+    expect(
+      toolResults(
+        mock.requests.filter((request) => JSON.stringify(request).includes("res12-before")),
+      ),
+    ).toContain("mcp stdio echo: scoped");
+
+    const removed = await fetch(`http://127.0.0.1:${server.port}/mcp/mock/default-assignment`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(removed.status).toBe(200);
+    await vi.waitFor(
+      () =>
+        expect(server.sessions.get(ordinaryId)?.meta.launchResourceFingerprint).not.toBe(
+          ordinaryFingerprint,
+        ),
+      { timeout: 15_000, interval: 25 },
+    );
+    expect(server.sessions.get(namedId)?.meta.launchResourceFingerprint).toBe(namedFingerprint);
+    expect(server.sessions.get(noProjectId)?.meta.launchResourceFingerprint).toBe(
+      noProjectFingerprint,
+    );
+
+    let orderedDeltas = 0;
+    let settleIdle!: () => void;
+    const nextIdle = new Promise<void>((resolve) => (settleIdle = resolve));
+    const unsubscribe = server.sessions.get(ordinaryId)!.bus.subscribe((item) => {
+      if (item.event.type === "cell_delta") orderedDeltas += 1;
+      if (item.event.type === "agent_status" && item.event.status === "idle") settleIdle();
+    });
+    await server.sessions.get(ordinaryId)!.prompt("res12-after ordinary tool removed");
+    await nextIdle;
+    unsubscribe();
+    await named.prompt("res12-named tool remains");
+    await server.receipts.waitFor("idle", namedId);
+    await noProject.prompt("res12-no-project tool remains absent");
+    await server.receipts.waitFor("idle", noProjectId);
+
+    const requests = (marker: string) =>
+      mock.requests.filter((request) => JSON.stringify(request).includes(marker));
+    const toolMessageCount = (marker: string) =>
+      Math.max(
+        0,
+        ...requests(marker).map(
+          (request) => request.messages.filter((message) => message.role === "tool").length,
+        ),
+      );
+    // The ordinary transcript retains its one historical tool result, but the
+    // post-refresh turn must not add another one.
+    expect(toolMessageCount("res12-after")).toBe(1);
+    expect(JSON.stringify(requests("res12-after").at(-1)?.tools ?? [])).not.toContain(
+      "mcp__mock__echo",
+    );
+    expect(toolResults(requests("res12-named"))).toContain("mcp stdio echo: scoped");
+    expect(JSON.stringify(requests("res12-named").at(-1)?.tools ?? [])).toContain(
+      "mcp__mock__echo",
+    );
+    expect(toolResults(requests("res12-no-project"))).not.toContain("mcp stdio echo");
+    expect(JSON.stringify(requests("res12-no-project").at(-1)?.tools ?? [])).not.toContain(
+      "mcp__mock__echo",
+    );
+    expect(orderedDeltas).toBeGreaterThan(1);
+  });
 });

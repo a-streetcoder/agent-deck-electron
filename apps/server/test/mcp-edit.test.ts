@@ -95,6 +95,29 @@ describe("MCP config mutation credential lifecycle", () => {
   });
 });
 
+describe("DELETE /mcp/:id assignment cleanup", () => {
+  it("clears the durable All Projects reference when an app-owned definition is removed", async () => {
+    writeGlobalMcp({ mcpServers: { files: { url: "http://127.0.0.1:1/mcp" } } });
+    expect((await api("PATCH", "/mcp/files/default-assignment", { enabled: true })).status).toBe(
+      200,
+    );
+    expect(
+      (await api("PATCH", `/projects/${projectId}`, { assignedMcpServers: ["files"] })).status,
+    ).toBe(200);
+    expect((await api("DELETE", "/mcp/files")).status).toBe(200);
+    const settings = (await (await api("GET", "/settings")).json()) as {
+      settings: { defaultMcpServers: string[] };
+    };
+    expect(settings.settings.defaultMcpServers).toEqual([]);
+    const projects = (await (await api("GET", "/projects")).json()) as {
+      projects: Array<{ id: string; assignedMcpServers?: string[] }>;
+    };
+    expect(
+      projects.projects.find((project) => project.id === projectId)?.assignedMcpServers,
+    ).toEqual([]);
+  });
+});
+
 describe("PATCH /mcp/:id", () => {
   it("updates a global mcp.json entry and survives process restart", async () => {
     writeGlobalMcp({

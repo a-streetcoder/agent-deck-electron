@@ -46,6 +46,10 @@ describe("injected command launch matrix", () => {
       resourceHome: () => root,
       agentMemoryEnabled: () => false,
       memoryBaseDir: path.join(root, "memory"),
+      mcpAssignments: {
+        defaultServerNames: () => [],
+        projectServerNames: () => [],
+      },
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
     const plain = resolveLaunchResources(context, { projectId: project.id }, {});
@@ -198,6 +202,10 @@ describe("agent memory launch resources", () => {
       resourceHome: () => root,
       agentMemoryEnabled: () => enabled,
       memoryBaseDir: path.join(root, "memory"),
+      mcpAssignments: {
+        defaultServerNames: () => [],
+        projectServerNames: () => [],
+      },
     } as unknown as Parameters<typeof resolveLaunchResources>[0];
 
     const active = resolveLaunchResources(context, { projectId: project.id }, {});
@@ -213,12 +221,77 @@ describe("agent memory launch resources", () => {
         resolveInstructionsFile(projectPath),
         projectMemoryDir(path.join(root, "memory"), projectPath),
       ],
-      { memoryEnabled: true, assignedMcpServers: [] },
+      {
+        memoryEnabled: true,
+        defaultMcpServers: [],
+        assignedMcpServers: [],
+        effectiveMcpServerIds: [],
+      },
     );
     expect(active.fingerprint).toBe(compatibilityFingerprint);
     expect(paused.fingerprint).not.toBe(active.fingerprint);
     expect(resumed.fingerprint).toBe(active.fingerprint);
     expect(paused.plan).toEqual(active.plan);
+  });
+});
+
+describe("MCP launch resource policy", () => {
+  it("fingerprints configured default union explicit assignment, while named agents use only their list", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-mcp-launch-"));
+    const project = { id: "project", path: root, assignedMcpServers: ["explicit", "stale"] };
+    let defaults = ["default", "stale"];
+    const context = {
+      projects: { find: () => project },
+      settings: {
+        get: () => ({
+          defaultSkills: [],
+          defaultMcpServers: defaults,
+          defaultPromptTemplates: [],
+          disabledSkills: [],
+          defaultThinking: null,
+        }),
+      },
+      resolveNamedAgent: () => ({
+        status: "ok" as const,
+        agent: {
+          body: "named",
+          systemPromptMode: "replace" as const,
+          skillDirs: [],
+          extensions: [],
+          mcpServers: ["named", "stale"],
+        },
+      }),
+      effectiveMcpConfigs: () => ({
+        valid: true,
+        configs: ["default", "explicit", "named"].map((id) => ({ id, command: "mock" })),
+      }),
+      enabledExtensionPaths: () => [],
+      injectedCommands: { enabledExtensionPaths: () => [] },
+      scanSkillCandidatesFor: () => [],
+      rootsFor: () => ({ home: root, projectPath: root }),
+      resourceHome: () => root,
+      agentMemoryEnabled: () => false,
+      memoryBaseDir: path.join(root, "memory"),
+      mcpAssignments: {
+        defaultServerNames: () => defaults,
+        projectServerNames: () => project.assignedMcpServers,
+      },
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+
+    const ordinary = resolveLaunchResources(context, { projectId: project.id }, {});
+    expect(ordinary.mcpServerIds).toEqual(["default", "explicit"]);
+    const named = resolveLaunchResources(
+      context,
+      { projectId: project.id, agentName: "agent" },
+      {},
+    );
+    expect(named.mcpServerIds).toEqual(["named"]);
+    expect(named.fingerprint).not.toBe(ordinary.fingerprint);
+    const before = ordinary.fingerprint;
+    defaults = [];
+    expect(resolveLaunchResources(context, { projectId: project.id }, {}).fingerprint).not.toBe(
+      before,
+    );
   });
 });
 

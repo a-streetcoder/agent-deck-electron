@@ -25,7 +25,7 @@ import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host"
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
-import { FileMcpOAuthStore } from "@agent-deck/mcp";
+import { FileMcpOAuthStore, type McpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
@@ -66,6 +66,7 @@ import {
   type McpServerConfig,
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
+import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
 import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import { InjectedCommandStore } from "./injectedCommands.ts";
@@ -172,6 +173,10 @@ export interface StartServerOptions {
    * not enable semantic recall; the live persisted preference owns enablement.
    */
   memoryEmbedder?: Embedder;
+  /** Narrow durable MCP-assignment seam for tests and future synced storage. */
+  mcpAssignmentStore?: McpAssignmentStore;
+  /** Device-local OAuth persistence seam for credential lifecycle tests. */
+  mcpOAuthStore?: McpOAuthStore;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -540,6 +545,8 @@ async function initServer(
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager();
   const projects = new ProjectIndex(dataDir);
+  const mcpAssignments =
+    options.mcpAssignmentStore ?? new FileMcpAssignmentStore(settings, projects);
   // App-owned command files are materialized under trusted app data at startup.
   // The store remains the sole scanner/mutator and supplies explicit extension
   // paths only to ordinary project parent sessions through launchResources.
@@ -745,7 +752,7 @@ async function initServer(
   // redirects and loopback bind failures retain the manual-code fallback.
   const mcpOAuthRedirect = resolveMcpOAuthRedirectMode(process.env.AGENT_DECK_MCP_OAUTH_REDIRECT);
   const mcpOAuth = new McpOAuthCoordinator({
-    store: new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
+    store: options.mcpOAuthStore ?? new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
     ...mcpOAuthRedirect,
   });
   const oauthKey = (scope: string, id: string): string => `v2:${JSON.stringify([scope, id])}`;
@@ -789,6 +796,12 @@ async function initServer(
   };
 
   const pendingMcpSessionStarts = new Map<string, Map<string, number>>();
+  const namedMcpIdsForProject = (projectId: string): string[] => {
+    const project = projects.find((item) => item.id === projectId);
+    return scanAgents(rootsFor(projectId))
+      .filter((agent) => !agent.shadowed && !agent.disabled && projectAllowsAgent(project, agent))
+      .flatMap((agent) => agent.mcpServers ?? []);
+  };
   const namedMcpIdsForLiveProject = (projectId: string): string[] => [
     ...sessions
       .list()
@@ -802,12 +815,13 @@ async function initServer(
     extraIds: readonly string[] = [],
   ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }> => {
     const project = projects.find((item) => item.id === projectId);
-    if (!project) {
+    if (!project || project.hidden) {
       await mcp.reconcile([], projectId);
       return { ok: true, missing: [] };
     }
     const wanted = new Set([
-      ...(project.assignedMcpServers ?? []),
+      ...mcpAssignments.defaultServerNames(),
+      ...mcpAssignments.projectServerNames(projectId),
       ...namedMcpIdsForLiveProject(projectId),
       ...extraIds,
     ]);
@@ -854,8 +868,9 @@ async function initServer(
     return { result: await reconcileProjectMcp(projectId), release };
   };
 
-  // Missing assignment fields intentionally mean no servers. Repository config
-  // is parsed but never connected until an explicit project/agent assignment exists.
+  // Missing assignment fields intentionally mean no servers. Defaults, explicit
+  // project assignments, and named-agent declarations are intersected with each
+  // project's configured catalog before any process is connected.
   for (const project of projects.list()) await reconcileProjectMcp(project.id);
 
   const reloadMcpConfig = async (
@@ -981,21 +996,27 @@ async function initServer(
       .send(image.data);
   });
 
-  // The MCP-server allowlist for a session: project assignment grants execution.
-  // A plain session gets that assignment set; a named agent intersects its declared
-  // mcpServers with the same set and can therefore narrow, never widen, trust.
-  // Function declaration lets the earlier bridge-extension factory call it.
+  // The MCP-server allowlist for a session. No-project chats receive none.
+  // Ordinary project chats use All Projects union explicit project assignment;
+  // a bound named agent instead uses exactly its own mcpServers declaration.
+  // Both paths fail closed against the currently configured catalog.
   function mcpAllowlistForSession(meta: SessionMeta): string[] {
     if (!meta.projectId) return [];
-    const assigned = new Set(
-      projects.find((project) => project.id === meta.projectId)?.assignedMcpServers ?? [],
-    );
-    if (!meta.agentName) return [...assigned];
-    const agent = scanAgents(rootsFor(meta.projectId)).find(
-      (a) => a.name === meta.agentName && !a.shadowed,
-    );
-    // Agent policy can narrow project-granted MCP capability, never grant it.
-    return (agent?.mcpServers ?? []).filter((id) => assigned.has(id));
+    const snapshot = effectiveMcpConfigs(meta.projectId);
+    if (!snapshot.valid) return [];
+    const configured = new Set(snapshot.configs.map((config) => config.id));
+    if (meta.agentName) {
+      const agent = scanAgents(rootsFor(meta.projectId)).find(
+        (candidate) => candidate.name === meta.agentName && !candidate.shadowed,
+      );
+      return [...new Set(agent?.mcpServers ?? [])].filter((id) => configured.has(id));
+    }
+    return [
+      ...new Set([
+        ...mcpAssignments.defaultServerNames(),
+        ...mcpAssignments.projectServerNames(meta.projectId),
+      ]),
+    ].filter((id) => configured.has(id));
   }
 
   // WebSocket layer (wsHandler.ts): socket accept, subscribe/replay,
@@ -1112,6 +1133,7 @@ async function initServer(
     providerLogin,
     mcp,
     mcpOAuth,
+    mcpAssignments,
     reloadMcpConfig,
     reconcileProjectMcp,
     prepareProjectMcpSession,
@@ -1119,6 +1141,16 @@ async function initServer(
     globalMcpConfigs,
     isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
     oauthKey,
+    projectHasEffectiveMcpGrant: (projectId, serverId) => {
+      const snapshot = effectiveMcpConfigs(projectId);
+      if (!snapshot.valid || !snapshot.configs.some((config) => config.id === serverId))
+        return false;
+      return (
+        mcpAssignments.defaultServerNames().includes(serverId) ||
+        mcpAssignments.projectServerNames(projectId).includes(serverId) ||
+        namedMcpIdsForProject(projectId).includes(serverId)
+      );
+    },
     memoryEnabled,
     agentMemoryEnabled,
     memoryBaseDir,

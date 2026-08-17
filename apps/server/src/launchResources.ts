@@ -61,7 +61,10 @@ type ResolverContext = Pick<
   | "resourceHome"
   | "agentMemoryEnabled"
   | "memoryBaseDir"
->;
+  | "mcpAssignments"
+> & {
+  effectiveMcpConfigs?: ServerContext["effectiveMcpConfigs"];
+};
 
 const MAX_FINGERPRINT_DEPTH = 16;
 const MAX_FINGERPRINT_FILES = 2_000;
@@ -288,12 +291,23 @@ export function resolveLaunchResources(
       ? [projectMemoryDir(ctx.memoryBaseDir, effectiveCwd)]
       : []),
   ];
-  const projectMcp = new Set(project?.assignedMcpServers ?? []);
-  const mcpServerIds = request.agentName
-    ? ((namedBridgePolicy as { mcpServers?: string[] } | undefined)?.mcpServers ?? []).filter(
-        (id) => projectMcp.has(id),
-      )
+  const mcpSnapshot = project ? ctx.effectiveMcpConfigs?.(project.id) : undefined;
+  const requestedMcp = project
+    ? request.agentName
+      ? ((namedBridgePolicy as { mcpServers?: string[] } | undefined)?.mcpServers ?? [])
+      : [
+          ...ctx.mcpAssignments.defaultServerNames(),
+          ...ctx.mcpAssignments.projectServerNames(project.id),
+        ]
     : [];
+  const configuredMcp = new Set(
+    mcpSnapshot
+      ? mcpSnapshot.valid
+        ? mcpSnapshot.configs.map((config) => config.id)
+        : []
+      : requestedMcp,
+  );
+  const mcpServerIds = [...new Set(requestedMcp)].filter((id) => configuredMcp.has(id));
   return {
     plan,
     config,
@@ -303,7 +317,13 @@ export function resolveLaunchResources(
       // `memoryEnabled`. Keep that semantic field name while feeding it the
       // new effective capability && preference value, so only a pause changes it.
       memoryEnabled: ctx.agentMemoryEnabled(),
-      assignedMcpServers: project?.assignedMcpServers ?? [],
+      ...(project && !request.agentName
+        ? {
+            defaultMcpServers: ctx.mcpAssignments.defaultServerNames(),
+            assignedMcpServers: ctx.mcpAssignments.projectServerNames(project.id),
+          }
+        : {}),
+      effectiveMcpServerIds: mcpServerIds,
       named: namedBridgePolicy,
     }),
   };
