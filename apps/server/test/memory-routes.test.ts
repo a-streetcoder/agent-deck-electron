@@ -61,6 +61,35 @@ describe("memory inspection routes", () => {
     expect((await api("GET", "/memory?projectId=nope")).status).toBe(400);
   });
 
+  it("reports each memory's file, as native's detail pane does", async () => {
+    // Native's detail shows a "File" metadata row (AgentMemoryViews.swift:470)
+    // so a reviewer can open the memory on disk. The path is derived from the
+    // store, never stored in the file, so the routes must attach it — and the
+    // search route feeds the same list, so it must attach it too.
+    const listed = (await (await api("GET", `/memory?projectId=${projectId}`)).json()) as {
+      memories: (MemoryRecord & { filePath?: string })[];
+    };
+    for (const memory of listed.memories) {
+      expect(memory.filePath!.startsWith(path.join(dataDir, "memory"))).toBe(true);
+      expect(memory.filePath!.endsWith(`${memory.id}.md`)).toBe(true);
+    }
+
+    // The single-record routes feed the same detail panel, so they carry it too.
+    const first = listed.memories[0]!;
+    const one = (await (await api("GET", `/memory/${first.id}?projectId=${projectId}`)).json()) as {
+      memory: MemoryRecord & { filePath?: string };
+    };
+    expect(one.memory.filePath).toBe(first.filePath);
+
+    const searched = (await (
+      await api("GET", `/memory/search?projectId=${projectId}&q=pnpm`)
+    ).json()) as { memories: (MemoryRecord & { filePath?: string })[] };
+    expect(searched.memories.length).toBeGreaterThan(0);
+    for (const memory of searched.memories) {
+      expect(memory.filePath!.endsWith(`${memory.id}.md`)).toBe(true);
+    }
+  });
+
   it("lists a project's memories", async () => {
     const { memories } = (await (await api("GET", `/memory?projectId=${projectId}`)).json()) as {
       memories: MemoryRecord[];

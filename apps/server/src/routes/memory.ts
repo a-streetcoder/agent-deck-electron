@@ -3,6 +3,7 @@ import {
   deleteMemoryIfStale,
   getMemory,
   listMemories,
+  memoryFilePath,
   setMemoryStatus,
   writeMemory,
   type MemoryStore,
@@ -26,6 +27,18 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === projectId);
     return project ? { baseDir: memoryBaseDir, projectPath: project.path } : null;
   };
+
+  /** Attach each record's on-disk file, which native's detail pane shows as its
+   * "File" row (AgentMemoryViews.swift:470). The path is derived from the store
+   * rather than stored in the file, so every route that hands records to the UI
+   * has to add it — list and search both feed the same list, so both go through
+   * here. */
+  const withFilePath = <T extends { id: string }>(store: MemoryStore, record: T) => ({
+    ...record,
+    filePath: memoryFilePath(store.baseDir, store.projectPath, record.id),
+  });
+  const withFilePaths = <T extends { id: string }>(store: MemoryStore, records: T[]) =>
+    records.map((record) => withFilePath(store, record));
 
   const memoryPatchBody = z
     .object({
@@ -58,7 +71,7 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
   fastify.get("/memory", async (request, reply) => {
     const store = memoryStoreFor((request.query as { projectId?: string }).projectId);
     if (!store) return reply.code(400).send({ error: "memory requires a known project" });
-    return { memories: listMemories(store) };
+    return { memories: withFilePaths(store, listMemories(store)) };
   });
 
   // Passive by contract: opening Memory or refreshing status must never load a
@@ -82,7 +95,13 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     const query = (q ?? "").trim();
     if (!query) return { memories: [], recall: semanticRecall.getStatus() };
     const result = await semanticRecall.recall(store, query);
-    return { memories: result.hits.map((hit) => hit.record), recall: result.recall };
+    return {
+      memories: withFilePaths(
+        store,
+        result.hits.map((hit) => hit.record),
+      ),
+      recall: result.recall,
+    };
   });
 
   fastify.post("/memory", async (request, reply) => {
@@ -98,7 +117,7 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     });
     if (!result.ok) return reply.code(400).send({ error: result.message });
     broadcast({ type: "resources_changed" });
-    return reply.code(201).send({ memory: result.record });
+    return reply.code(201).send({ memory: withFilePath(store, result.record) });
   });
 
   fastify.get("/memory/:id", async (request, reply) => {
@@ -106,7 +125,7 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     if (!store) return reply.code(400).send({ error: "memory requires a known project" });
     const memory = getMemory(store, (request.params as { id: string }).id);
     if (!memory) return reply.code(404).send({ error: "unknown memory" });
-    return { memory };
+    return { memory: withFilePath(store, memory) };
   });
 
   fastify.patch("/memory/:id", async (request, reply) => {
@@ -123,7 +142,7 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
       return reply.code(result.reason === "not_found" ? 404 : 400).send({ error: result.message });
     }
     broadcast({ type: "resources_changed" });
-    return { memory: result.record };
+    return { memory: withFilePath(store, result.record) };
   });
 
   // MEM-14 (native AgentMemoryViews.deleteStaleMemories): retire a whole visible

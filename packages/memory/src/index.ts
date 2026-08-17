@@ -27,7 +27,12 @@ export {
 } from "./store.ts";
 export { centeredCosineScores, cosineSimilarity, meanCenter, type Embedder } from "./semantic.ts";
 export { createOnDeviceEmbedder, EmbedderUnavailableError } from "./embedder.ts";
-export { projectMemoryDir, projectMemoryId, standardizeProjectPath } from "./paths.ts";
+export {
+  memoryFilePath,
+  projectMemoryDir,
+  projectMemoryId,
+  standardizeProjectPath,
+} from "./paths.ts";
 export {
   buildMemoryPreamble,
   buildRecalledMemories,

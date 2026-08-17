@@ -983,3 +983,164 @@ describe("bulk stale delete (MEM-14)", () => {
     expect(screen.queryByTestId("memory-delete-stale")).toBeNull();
   });
 });
+
+describe("memory detail metadata (MEM-13)", () => {
+  it("shows the metadata rows native's detail pane shows", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/settings") {
+          return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+        }
+        if (url === "/memory/semantic-status") {
+          return jsonResponse({ recall: status("not_requested", "lexical") });
+        }
+        if (url.startsWith("/memory?projectId=")) {
+          return jsonResponse({
+            memories: [
+              {
+                ...memory("mem-detail", "Detailed memory"),
+                createdAt: "2026-03-04T09:30:00.000Z",
+                updatedAt: "2026-05-06T14:45:00.000Z",
+                sourceAgentName: "reviewer",
+                filePath: "/data/memory/proj/mem-detail.md",
+              },
+            ],
+          });
+        }
+        throw new Error(`unexpected request: ${url}`);
+      }),
+    );
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Detailed memory"));
+    // Native lists Type, Scope, Created, Updated, Source (when attributed) and
+    // File (AgentMemoryViews.swift:461-471), so reviewing a memory does not
+    // mean opening the file to find out when it was written or by what.
+    const meta = screen.getByTestId("memory-meta");
+    const labels = [...meta.querySelectorAll("dt")].map((node) => node.textContent);
+    expect(labels).toEqual(["Type", "Scope", "Created", "Updated", "Source", "File"]);
+    const values = [...meta.querySelectorAll("dd")].map((node) => node.textContent);
+    expect(values[0]).toBe("decision");
+    expect(values[1]).toBe("project");
+    expect(values[2]).toContain("2026");
+    expect(values[4]).toBe("reviewer");
+    expect(values[5]).toBe("/data/memory/proj/mem-detail.md");
+  });
+
+  it("omits the Source row when nothing authored it, and the block entirely for a new memory", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/settings") {
+          return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+        }
+        if (url === "/memory/semantic-status") {
+          return jsonResponse({ recall: status("not_requested", "lexical") });
+        }
+        if (url.startsWith("/memory?projectId=")) {
+          return jsonResponse({ memories: [memory("mem-plain", "Plain memory")] });
+        }
+        throw new Error(`unexpected request: ${url}`);
+      }),
+    );
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Plain memory"));
+    const labels = [...screen.getByTestId("memory-meta").querySelectorAll("dt")].map(
+      (node) => node.textContent,
+    );
+    expect(labels).not.toContain("Source");
+
+    // A memory being composed has no created/updated/file yet — native only
+    // renders a detail pane for a record that exists.
+    fireEvent.click(screen.getByTestId("memory-new"));
+    expect(screen.queryByTestId("memory-meta")).toBeNull();
+  });
+});
+
+describe("open editor follows the record (MEM-13)", () => {
+  const listing = (memories: unknown[]) =>
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE") return jsonResponse({ deleted: true });
+      if (url === "/settings") return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      if (url.startsWith("/memory?projectId=")) return jsonResponse({ memories: memories.shift() });
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+  it("closes when the open memory is deleted from under it", async () => {
+    const record = memory("mem-open", "Open memory");
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    vi.stubGlobal("fetch", listing([[record], []]));
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Open memory"));
+    expect(screen.getByTestId("memory-editor")).toBeTruthy();
+
+    // Native clears its selection when the selected record is deleted
+    // (AgentMemoryViews.swift:298); an editor left open on a deleted memory
+    // only fails at save time, and its File row points at nothing.
+    fireEvent.click(screen.getByTestId("memory-delete-mem-open"));
+    await waitFor(() => expect(screen.queryByTestId("memory-editor")).toBeNull());
+  });
+
+  it("refreshes the metadata rows when the record changes, without discarding typing", async () => {
+    const before = { ...memory("mem-open", "Open memory"), updatedAt: "2026-01-01T00:00:00.000Z" };
+    const after = {
+      ...before,
+      updatedAt: "2026-09-09T18:00:00.000Z",
+      sourceAgentName: "reviewer",
+    };
+    vi.stubGlobal("fetch", listing([[before], [after]]));
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+      resourcesVersion: 0,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Open memory"));
+    fireEvent.change(screen.getByTestId("memory-body"), { target: { value: "half-typed" } });
+
+    // An agent rewriting the memory mid-edit is the ordinary case here, and
+    // native's detail pane is bound to the record, so the read-only rows follow
+    // it while the edit sheet keeps what the user typed.
+    act(() => useAppStore.setState({ resourcesVersion: 1 }));
+    await waitFor(() =>
+      expect(
+        [...screen.getByTestId("memory-meta").querySelectorAll("dt")].map((n) => n.textContent),
+      ).toContain("Source"),
+    );
+    const values = [...screen.getByTestId("memory-meta").querySelectorAll("dd")].map(
+      (n) => n.textContent,
+    );
+    expect(values[3]).toContain("2026");
+    expect(values[3]).not.toBe("—");
+    expect((screen.getByTestId("memory-body") as HTMLTextAreaElement).value).toBe("half-typed");
+  });
+});

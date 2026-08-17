@@ -4,7 +4,7 @@ import {
   ControlTextArea,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Archive, Brain, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
@@ -19,6 +19,32 @@ import { useAppStore } from "../state/store.ts";
  * memory.
  */
 
+/** Native's detail rows read abbreviated date + short time
+ * (AgentMemoryViews.swift:464-465). A record written before the routes reported
+ * a field — or an unparseable one — shows a dash rather than "Invalid Date". */
+function formatMemoryTime(iso: string | undefined): string {
+  if (!iso) return "—";
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime())
+    ? "—"
+    : at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** The read-only half of a record, lifted onto a draft in one place so the two
+ * paths that open an existing memory (the list and memory navigation) cannot
+ * disagree about what the detail rows show. */
+function recordMetadata(
+  memory: MemoryItem,
+): Pick<Draft, "createdAt" | "updatedAt" | "scope" | "filePath" | "sourceAgentName"> {
+  return {
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt,
+    scope: memory.scope,
+    filePath: memory.filePath,
+    sourceAgentName: memory.sourceAgentName,
+  };
+}
+
 const MEMORY_TYPES = ["context", "decision", "runbook", "failure", "preference"] as const;
 type MemoryType = (typeof MEMORY_TYPES)[number];
 
@@ -30,7 +56,13 @@ interface MemoryItem {
   summary: string;
   body: string;
   tags: string[];
+  createdAt?: string;
   updatedAt: string;
+  /** Only project scope exists today (memory/types.ts), but the record carries
+   * it, so the detail row reports what the server said rather than a guess. */
+  scope?: string;
+  /** Where the memory lives on disk; derived by the routes, not stored. */
+  filePath?: string;
   /** The delegated agent that authored it, when a child run did (MEM-11). */
   sourceAgentName?: string;
 }
@@ -51,6 +83,13 @@ interface Draft {
    * that contains a comma, which this flat representation cannot express
    * (Codex). An untouched save omits tags and the store preserves them. */
   tagsInitial: string;
+  /** Read-only record metadata, shown as native's detail rows (MEM-13). Carried
+   * on the draft rather than in a second state so it cannot drift from the
+   * record being edited: every draft constructor sets it in one go. */
+  createdAt?: string;
+  updatedAt?: string;
+  scope?: string;
+  filePath?: string;
   /** Read-only provenance shown while editing (MEM-11): native surfaces a
    * "Source" row in the memory detail, and it is set once at creation, so the
    * editor displays it rather than offering it as a field. */
@@ -840,6 +879,7 @@ export function MemoryScreen() {
           summary: memory.summary,
           body: memory.body,
           projectId,
+          ...recordMetadata(memory),
         });
       })
       .catch((cause: unknown) => {
@@ -875,6 +915,33 @@ export function MemoryScreen() {
       setError(String(err));
     }
   };
+
+  // Native's detail pane is bound to the stored record (AgentMemoryViews.swift:274),
+  // so its rows follow the record and its selection clears when the record is
+  // deleted (:298). Electron reloads the list after every write, which is the
+  // same moment: refresh the read-only rows from the reloaded record, and close
+  // an editor whose record has gone — whichever path deleted it, the row button
+  // or the stale sweep. The "was it ever there" guard is what keeps a deep-linked
+  // memory open while the list for its project is still loading.
+  const openRecordSeen = useRef<string | null>(null);
+  useEffect(() => {
+    const open = draft;
+    if (!open || open.id === undefined) {
+      openRecordSeen.current = null;
+      return;
+    }
+    const record = memories.find((memory) => memory.id === open.id);
+    if (!record) {
+      if (openRecordSeen.current === open.id) setDraft(null);
+      return;
+    }
+    openRecordSeen.current = open.id;
+    const fresh = recordMetadata(record);
+    const changed = (Object.keys(fresh) as (keyof typeof fresh)[]).some(
+      (key) => open[key] !== fresh[key],
+    );
+    if (changed) setDraft({ ...open, ...fresh });
+  }, [memories, draft]);
 
   const remove = async (id: string): Promise<void> => {
     if (!currentProjectId) return;
@@ -1027,7 +1094,7 @@ export function MemoryScreen() {
       projectId: currentProjectId,
       tags: memory.tags.join(", "),
       tagsInitial: memory.tags.join(", "),
-      ...(memory.sourceAgentName ? { sourceAgentName: memory.sourceAgentName } : {}),
+      ...recordMetadata(memory),
     });
 
   return (
@@ -1145,10 +1212,30 @@ export function MemoryScreen() {
               value={draft.tags}
               onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
             />
-            {draft.sourceAgentName ? (
-              <p className="text-xs text-text-muted" data-testid="memory-editor-source">
-                Source: {draft.sourceAgentName}
-              </p>
+            {draft.id !== undefined ? (
+              <dl
+                data-testid="memory-meta"
+                className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-muted"
+              >
+                {[
+                  // Native's detail rows, in its order (AgentMemoryViews.swift:461-471).
+                  // Type mirrors the select above rather than a stored snapshot, so the
+                  // row can never contradict what a save would write.
+                  ["Type", draft.type],
+                  ["Scope", draft.scope ?? "project"],
+                  ["Created", formatMemoryTime(draft.createdAt)],
+                  ["Updated", formatMemoryTime(draft.updatedAt)],
+                  ...(draft.sourceAgentName ? [["Source", draft.sourceAgentName]] : []),
+                  ["File", draft.filePath ?? "—"],
+                ].map(([label, value]) => (
+                  <Fragment key={label}>
+                    <dt className="font-medium text-text-secondary">{label}</dt>
+                    <dd className="truncate" title={value}>
+                      {value}
+                    </dd>
+                  </Fragment>
+                ))}
+              </dl>
             ) : null}
             <ControlTextArea
               data-testid="memory-body"
