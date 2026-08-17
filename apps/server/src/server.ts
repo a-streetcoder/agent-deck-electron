@@ -711,6 +711,15 @@ async function initServer(
       // the same coordinator recall uses so one preference and one embedder
       // lifecycle govern both.
       (store, candidate) => semanticRecall.findDuplicate(store, candidate),
+      // MEM-20: the launch-recall snapshot, so on-demand search adds to a
+      // session's memory context instead of repeating it.
+      {
+        ids: (sessionId) => sessions.get(sessionId)?.meta.memoryRecall?.ids ?? [],
+        add: (sessionId, ids) => {
+          const meta = sessions.appendMemoryRecallIds(sessionId, ids);
+          if (meta) index.upsert(meta);
+        },
+      },
     );
   }
 

@@ -249,9 +249,22 @@ describe("semantic memory opt-in via /memory/search", () => {
 
     const sessionId = "semantic-metadata-session";
     const liveSessions = (
-      server!.sessions as unknown as { sessions: Map<string, { meta: { cwd: string } }> }
+      server!.sessions as unknown as {
+        sessions: Map<
+          string,
+          { meta: { cwd: string }; captureMemoryRecall(snapshot: unknown): boolean }
+        >;
+      }
     ).sessions;
-    liveSessions.set(sessionId, { meta: { cwd: projectPath } });
+    liveSessions.set(sessionId, {
+      meta: { cwd: projectPath },
+      // MEM-20: search records what it put in context on the session, so the
+      // double has to be able to hold a recall snapshot like a real session.
+      captureMemoryRecall(snapshot: unknown) {
+        (this as { meta: Record<string, unknown> }).meta.memoryRecall = snapshot;
+        return true;
+      },
+    });
     try {
       const tool = await server!.bridge.dispatch(
         {
@@ -334,9 +347,22 @@ describe("semantic memory opt-in via /memory/search", () => {
     // this exercises the real registered tool and shared recall closure without a
     // Pi subprocess or a test-only production option.
     const liveSessions = (
-      server!.sessions as unknown as { sessions: Map<string, { meta: { cwd: string } }> }
+      server!.sessions as unknown as {
+        sessions: Map<
+          string,
+          { meta: { cwd: string }; captureMemoryRecall(snapshot: unknown): boolean }
+        >;
+      }
     ).sessions;
-    liveSessions.set(sessionId, { meta: { cwd: projectPath } });
+    liveSessions.set(sessionId, {
+      meta: { cwd: projectPath },
+      // MEM-20: search records what it put in context on the session, so the
+      // double has to be able to hold a recall snapshot like a real session.
+      captureMemoryRecall(snapshot: unknown) {
+        (this as { meta: Record<string, unknown> }).meta.memoryRecall = snapshot;
+        return true;
+      },
+    });
     const dispatchSearch = () =>
       server!.bridge.dispatch(
         {

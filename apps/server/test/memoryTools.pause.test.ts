@@ -421,3 +421,89 @@ describe("near-duplicate write guard, embedding signal wired to the tool (MEM-19
     expect(findDuplicate).not.toHaveBeenCalled();
   });
 });
+
+describe("on-demand search knows what recall already injected (MEM-20)", () => {
+  const hit = (id: string, title: string) => ({
+    record: {
+      id,
+      type: "context" as const,
+      status: "active" as const,
+      title,
+      summary: `${title} summary`,
+      body: `${title} body`,
+      tags: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      useCount: 0,
+      scope: "project" as const,
+    },
+    score: 1,
+    sharedTerms: [],
+  });
+  const recallStatus = {
+    readiness: "not_requested" as const,
+    mode: "lexical" as const,
+    reason: null,
+    message: "lexical",
+  };
+
+  it("drops hits already in context and remembers the new ones", async () => {
+    const bridge = new BridgeRegistry();
+    const injected = ["mem-a"];
+    const search = vi.fn(async () => ({
+      hits: [hit("mem-a", "Already injected"), hit("mem-b", "Genuinely new")],
+      recall: recallStatus,
+    }));
+    registerMemoryTools(
+      bridge,
+      mkdtempSync(path.join(tmpdir(), "agent-deck-memory-dedupe-")),
+      () => "/project",
+      search,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      undefined,
+      {
+        ids: () => injected,
+        add: (_sessionId: string, ids: readonly string[]) => injected.push(...ids),
+      },
+    );
+
+    // Native dedupes on-demand search against the session's recall snapshot and
+    // appends what it surfaces, so an agent is never re-handed memory it is
+    // already holding (AppViewModel.swift:6437-6449).
+    const result = await bridge.dispatch(call("agent_deck_memory_search", { query: "anything" }), {
+      token: "token-a",
+    });
+    expect(String(result.content)).toContain("Genuinely new");
+    expect(String(result.content)).not.toContain("Already injected");
+    expect(injected).toEqual(["mem-a", "mem-b"]);
+  });
+
+  it("says so plainly when everything found is already in context", async () => {
+    const bridge = new BridgeRegistry();
+    const search = vi.fn(async () => ({
+      hits: [hit("mem-a", "Already injected")],
+      recall: recallStatus,
+    }));
+    registerMemoryTools(
+      bridge,
+      mkdtempSync(path.join(tmpdir(), "agent-deck-memory-dedupe-all-")),
+      () => "/project",
+      search,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      undefined,
+      { ids: () => ["mem-a"], add: () => {} },
+    );
+
+    const result = await bridge.dispatch(call("agent_deck_memory_search", { query: "anything" }), {
+      token: "token-a",
+    });
+    expect(String(result.content)).toContain("already in context");
+    expect(result.isError).toBeFalsy();
+  });
+});

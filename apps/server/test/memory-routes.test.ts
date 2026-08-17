@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -69,9 +69,13 @@ describe("memory inspection routes", () => {
     const listed = (await (await api("GET", `/memory?projectId=${projectId}`)).json()) as {
       memories: (MemoryRecord & { filePath?: string })[];
     };
+    // Resolve both sides before comparing: macOS hands out /var/folders and
+    // resolves it to /private/var, and Windows can return a short 8.3 name, so a
+    // raw prefix check passes locally and fails on CI.
+    const memoryRoot = realpathSync(path.join(dataDir, "memory"));
     for (const memory of listed.memories) {
-      expect(memory.filePath!.startsWith(path.join(dataDir, "memory"))).toBe(true);
-      expect(memory.filePath!.endsWith(`${memory.id}.md`)).toBe(true);
+      expect(realpathSync(memory.filePath!).startsWith(memoryRoot)).toBe(true);
+      expect(path.basename(memory.filePath!)).toBe(`${memory.id}.md`);
     }
 
     // The single-record routes feed the same detail panel, so they carry it too.
@@ -86,7 +90,7 @@ describe("memory inspection routes", () => {
     ).json()) as { memories: (MemoryRecord & { filePath?: string })[] };
     expect(searched.memories.length).toBeGreaterThan(0);
     for (const memory of searched.memories) {
-      expect(memory.filePath!.endsWith(`${memory.id}.md`)).toBe(true);
+      expect(path.basename(memory.filePath!)).toBe(`${memory.id}.md`);
     }
   });
 

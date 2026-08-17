@@ -236,7 +236,28 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       ? ctx.projects.find((project) => project.id === projectId)?.path
       : undefined;
     const projectPath = projectId ? canonicalProjectPath : meta?.cwd;
-    if (!projectPath || !query.trim()) return { content: "", recall: semanticRecall.getStatus() };
+    if (!projectPath) return { content: "", recall: semanticRecall.getStatus() };
+    // MEM-20: recall runs ONCE per session. Native captures what the opening
+    // turn recalled and replays that snapshot for the rest of the conversation,
+    // deliberately — a session should not be handed memory mid-flight that was
+    // not there when it started, and a topic change is what
+    // agent_deck_memory_search exists for (AppViewModel.swift:6216-6221). The
+    // snapshot's presence is the "already recalled" mark, so an empty one
+    // (recall ran, found nothing) also stops a later turn from backfilling.
+    if (meta?.memoryRecall) {
+      return { content: meta.memoryRecall.prompt, recall: semanticRecall.getStatus() };
+    }
+    // No snapshot and the conversation has already run a turn: recall's moment
+    // has passed. Without this, a session that opened while memory was paused
+    // would be handed memory on the next turn after the user re-enables it —
+    // precisely the mid-conversation arrival this lifecycle exists to prevent
+    // (Codex). piSessionFile is pi's resume handle, recorded after the first
+    // turn, so its absence is what "still the opening turn" means. Native would
+    // recall such a session at its next LAUNCH; failing closed here costs that
+    // session memory until it is started fresh, which is the safer half of the
+    // trade.
+    if (meta?.piSessionFile) return { content: "", recall: semanticRecall.getStatus() };
+    if (!query.trim()) return { content: "", recall: semanticRecall.getStatus() };
     const store: MemoryStore = { baseDir: memoryBaseDir, projectPath };
     const result = await semanticRecall.recall(store, query, RECALL_LIMIT);
     // Re-prove every live owner/gate after asynchronous ranking. A project
@@ -257,6 +278,27 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       hits.map((hit) => hit.record),
       ctx.settings?.get().agentMemoryInjectionCharacterBudget ?? 6000,
     );
+    // Capture before crediting usage: the snapshot is what this conversation
+    // opened with, and every later turn replays it. Recorded even when nothing
+    // matched, which is how native marks recall done (:6236-6239). Persisted,
+    // not broadcast — no surface renders it, and it must survive a restart so a
+    // resumed session replays rather than re-ranks.
+    const captured = sessions.captureMemoryRecall(sessionId, {
+      prompt: rendered.content,
+      ids: rendered.includedRecords.map((record) => record.id),
+    });
+    if (captured) ctx.index?.upsert(captured);
+    // Two hook calls can rank concurrently; capture is first-write-wins. The
+    // loser returns exactly what a later turn will: the winning snapshot, with
+    // the replay path's status and no card metadata — the winner already carded
+    // those memories. Returning its own ranking would put memory in the turn
+    // that no resume replays and no recorded id describes, and pairing the
+    // winner's content with the loser's status/descriptors would describe two
+    // different executions at once (Codex).
+    const winner = sessions.get(sessionId)?.meta.memoryRecall;
+    if (!captured && winner) {
+      return { content: winner.prompt, recall: semanticRecall.getStatus() };
+    }
     // MEM-10 (native AgentMemoryStore.markUsed, called from the retrieval sites
     // in AppViewModel): a memory whose BODY actually reached the turn has been
     // used. Marked from includedRecords, not from every hit — the character

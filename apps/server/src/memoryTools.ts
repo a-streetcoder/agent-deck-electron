@@ -92,6 +92,15 @@ export function registerMemoryTools(
     store: MemoryStore,
     candidate: { title: string; summary: string; body: string; tags?: string[] },
   ) => Promise<MemoryRecord | null> = async () => null,
+  /** MEM-20: what launch-time recall already put into this session's context.
+   * Native dedupes on-demand search against that snapshot and appends what it
+   * surfaces, so an agent is never re-handed memory it is already holding
+   * (AppViewModel.swift:6437-6449). Default: nothing recalled, nothing to
+   * record — search then behaves exactly as it did before. */
+  recallSnapshot: {
+    ids: (sessionId: string) => readonly string[];
+    add: (sessionId: string, ids: readonly string[]) => void;
+  } = { ids: () => [], add: () => {} },
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -236,11 +245,27 @@ export function registerMemoryTools(
           content: "No matching project memory.",
           details: { hits: 0, recall: result.recall },
         };
+      // Recall put memories into this session's context at launch; handing them
+      // back would spend the agent's budget on what it already has.
+      const alreadyInContext = new Set(recallSnapshot.ids(ctx.sessionId));
+      const fresh = result.hits.filter((hit) => !alreadyInContext.has(hit.record.id));
+      if (fresh.length === 0)
+        return {
+          content: `No additional project memory for "${parsed.data.query}"; the relevant memories are already in context.`,
+          details: { hits: 0, recall: result.recall },
+        };
       // Read after async ranking so the next call and an in-flight call both
       // honor the latest preference without replacing Pi or refreshing resources.
       const rendered = renderRecalledMemories(
-        result.hits.map((hit) => hit.record),
+        fresh.map((hit) => hit.record),
         characterBudget(),
+      );
+      // Only what actually reached the turn joins the snapshot — the character
+      // budget can drop a ranked hit, and an un-injected memory is not in
+      // context, so a later search must still be able to find it.
+      recallSnapshot.add(
+        ctx.sessionId,
+        rendered.includedRecords.map((record) => record.id),
       );
       return {
         content: rendered.content,

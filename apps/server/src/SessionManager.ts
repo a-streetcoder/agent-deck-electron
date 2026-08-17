@@ -336,6 +336,18 @@ export class ManagedSession {
     return true;
   }
 
+  /** MEM-20: record what launch-time recall put into this conversation. FIRST
+   * capture wins — native marks `memoryRecallCompleted` on the opening turn and
+   * never recalls again for the session, so a later turn (or a resume) replays
+   * this instead of ranking against a prompt the conversation has moved on to
+   * (AppViewModel.swift:6216-6247). Returns false when a snapshot already
+   * exists, so the caller knows not to persist again. */
+  captureMemoryRecall(snapshot: NonNullable<SessionMeta["memoryRecall"]>): boolean {
+    if (this.meta.memoryRecall) return false;
+    this.meta.memoryRecall = snapshot;
+    return true;
+  }
+
   appendSubagentProgress(cellId: string, message: string): void {
     runSyncUnwrapped(this.rt.appendSubagentProgress(cellId, message));
   }
@@ -1483,6 +1495,41 @@ export class SessionManager {
   /** Apply the internal Pi prompt-audit callback to the authoritative live
    * metadata object. This synchronous, narrow mutation is the ownership edge:
    * route-level shallow snapshots must re-read this object before persisting. */
+  /** MEM-20: record ids an on-demand search added to this session's context, so
+   * the next search does not hand them back. Only a session that already has a
+   * snapshot can grow one — before launch recall has run there is nothing to
+   * append to. Returns the live meta when something was actually added. */
+  appendMemoryRecallIds(id: string, ids: readonly string[]): SessionMeta | undefined {
+    const session = this.sessions.get(id);
+    if (!session || ids.length === 0) return undefined;
+    const snapshot = session.meta.memoryRecall;
+    if (!snapshot) {
+      // A session with no launch recall of its own — a delegated child, whose
+      // memory is assembled at child launch rather than by the parent's hook —
+      // still needs somewhere to record what its searches put in context, or it
+      // is handed the same memory every time it asks (Codex). Recording an
+      // empty prompt is accurate: nothing was injected at launch. Safe for a
+      // parent too, since its recall hook runs before any tool call in a turn.
+      session.captureMemoryRecall({ prompt: "", ids: [...ids] });
+      return session.meta;
+    }
+    const added = ids.filter((memoryId) => !snapshot.ids.includes(memoryId));
+    if (added.length === 0) return undefined;
+    snapshot.ids = [...snapshot.ids, ...added];
+    return session.meta;
+  }
+
+  /** MEM-20: see PiSession.captureMemoryRecall. Returns the live meta when the
+   * snapshot was newly recorded, so the caller persists exactly once. */
+  captureMemoryRecall(
+    id: string,
+    snapshot: NonNullable<SessionMeta["memoryRecall"]>,
+  ): SessionMeta | undefined {
+    const session = this.sessions.get(id);
+    if (!session) return undefined;
+    return session.captureMemoryRecall(snapshot) ? session.meta : undefined;
+  }
+
   captureFinalSystemPromptAudit(
     id: string,
     audit: NonNullable<SessionMeta["finalSystemPromptAudit"]>,

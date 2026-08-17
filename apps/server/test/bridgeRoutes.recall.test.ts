@@ -29,18 +29,24 @@ function harness(
   const recall = vi.fn();
   let liveProject = project;
   let liveSessionProjectId = sessionProjectId;
+  // One meta object per harness, as a live session has: the recall snapshot the
+  // route writes on the first turn has to still be there on the second.
+  const meta: Record<string, unknown> = { cwd };
+  const upsert = vi.fn();
   registerBridgeRoutes({
     fastify,
+    index: { upsert },
     sessions: {
-      get: () =>
-        cwd
-          ? {
-              meta: {
-                cwd,
-                ...(liveSessionProjectId ? { projectId: liveSessionProjectId } : {}),
-              },
-            }
-          : undefined,
+      get: () => {
+        if (!cwd) return undefined;
+        if (liveSessionProjectId) meta.projectId = liveSessionProjectId;
+        else delete meta.projectId;
+        return { meta };
+      },
+      captureMemoryRecall: (_id: string, snapshot: unknown) => {
+        meta.memoryRecall = snapshot;
+        return meta;
+      },
     },
     projects: {
       find: (predicate: (value: { id: string; path: string }) => boolean) =>
@@ -75,6 +81,8 @@ function harness(
     invoke,
     invokeTool,
     recall,
+    meta,
+    upsert,
     setAgentMemoryPreference: (enabled: boolean) => {
       agentMemoryPreference = enabled;
     },
@@ -273,5 +281,83 @@ describe("__recall__ bridge metadata", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ content: "", recall: recallStatus });
     expect(recall).not.toHaveBeenCalled();
+  });
+});
+
+describe("recall lifecycle (MEM-20)", () => {
+  const hit = (id: string, title: string, body: string) => ({
+    record: { id, title, type: "decision", body },
+  });
+
+  it("recalls once per session and replays that snapshot on later turns", async () => {
+    const { invoke, recall, meta, upsert } = harness(true, "/project", {
+      id: "project-a",
+      path: "/project",
+    });
+    recall.mockResolvedValue({
+      recall: recallStatus,
+      hits: [hit("m1", "OAuth callback", "first")],
+    });
+
+    const first = await invoke({ query: "how does oauth work" });
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(first.json().content).toContain("first");
+    expect(upsert).toHaveBeenCalled();
+
+    // Native recalls once at session start and REPLAYS the captured snapshot on
+    // every resume, deliberately so a conversation is not handed memory
+    // mid-flight that was not there when it started (AppViewModel.swift:6216-6221);
+    // a topic change is served by agent_deck_memory_search instead.
+    recall.mockResolvedValue({ recall: recallStatus, hits: [hit("m2", "Deploys", "second")] });
+    const second = await invoke({ query: "something completely different" });
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(second.json().content).toBe(first.json().content);
+    expect(second.json().content).not.toContain("second");
+    expect((meta.memoryRecall as { ids: string[] }).ids).toEqual(["m1"]);
+  });
+
+  it("does not backfill a conversation that opened while memory was paused", async () => {
+    const { invoke, recall, meta, setAgentMemoryPreference } = harness(
+      true,
+      "/project",
+      { id: "project-a", path: "/project" },
+      "project-a",
+      false,
+    );
+    recall.mockResolvedValue({ recall: recallStatus, hits: [hit("m1", "Late memory", "late")] });
+
+    const paused = await invoke({ query: "opening message" });
+    expect(paused.json().content).toBe("");
+    expect(recall).not.toHaveBeenCalled();
+
+    // The session has since run a turn (pi recorded its resume handle), so
+    // re-enabling memory must not drop memory into the middle of a conversation
+    // that never opened with it. Native's equivalent window is the next launch.
+    meta.piSessionFile = "/sessions/session-a.json";
+    setAgentMemoryPreference(true);
+    const afterResume = await invoke({ query: "second message" });
+    expect(recall).not.toHaveBeenCalled();
+    expect(afterResume.json().content).toBe("");
+    expect(meta.memoryRecall).toBeUndefined();
+  });
+
+  it("marks recall done even when nothing matched, so a later turn cannot backfill", async () => {
+    const { invoke, recall, meta } = harness(true, "/project", {
+      id: "project-a",
+      path: "/project",
+    });
+    recall.mockResolvedValue({ recall: recallStatus, hits: [] });
+
+    const first = await invoke({ query: "nothing matches this" });
+    expect(first.json().content).toBe("");
+    // Native marks the session recalled even on an empty result, so a resume
+    // does not retry and surface memory the conversation never opened with
+    // (AppViewModel.swift:6236-6239).
+    expect(meta.memoryRecall).toEqual({ prompt: "", ids: [] });
+
+    recall.mockResolvedValue({ recall: recallStatus, hits: [hit("m9", "Late", "late body")] });
+    const second = await invoke({ query: "now something matches" });
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(second.json().content).toBe("");
   });
 });

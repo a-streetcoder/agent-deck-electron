@@ -361,6 +361,16 @@ export const FinalSystemPromptAudit = Schema.mutable(
 );
 export type FinalSystemPromptAudit = typeof FinalSystemPromptAudit.Type;
 
+/** The launch-time recall a session opened with: the rendered block Pi received
+ * and the memories it carried. Captured once, replayed on every later turn. */
+export const MemoryRecallSnapshot = Schema.mutable(
+  Schema.Struct({
+    prompt: Schema.String,
+    ids: Schema.mutable(Schema.Array(Schema.String)),
+  }),
+);
+export type MemoryRecallSnapshot = typeof MemoryRecallSnapshot.Type;
+
 /** Future producers may add live statuses, but this version acts only on failed. */
 const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
   (_input: unknown): _input is "failed" => true,
@@ -402,6 +412,12 @@ export const SessionMeta = Schema.mutable(
     /** Latest exact runtime system prompt captured after all earlier Pi
      * before_agent_start augmenters. Sensitive device-local state; never sync. */
     finalSystemPromptAudit: Schema.optional(FinalSystemPromptAudit),
+    /** What launch-time memory recall put into this conversation, captured on the
+     * FIRST turn and replayed afterwards (native `memoryRecallCompleted` +
+     * `recalledMemoryPrompt` + `recalledMemoryIDs`). Its presence is what marks
+     * recall done — an empty prompt records "ran, found nothing", so a later turn
+     * cannot backfill memory the conversation never opened with. Device-local. */
+    memoryRecall: Schema.optional(MemoryRecallSnapshot),
     /**
      * The LaunchPlan this session was created with (opaque here — typed in
      * pi-host). Persisted so resume relaunches with the same shape: agent
