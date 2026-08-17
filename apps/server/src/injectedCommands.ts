@@ -200,14 +200,31 @@ function atomicWrite(file: string, content: string): void {
 }
 
 function readRegularFile(file: string): string {
+  // O_NOFOLLOW does not exist on Windows — fs.constants.O_NOFOLLOW is undefined
+  // there, confirmed by running it — so `O_RDONLY | 0` FOLLOWS a planted symlink
+  // and fstat then reports the target as a regular file. A library entry replaced
+  // by a link would therefore be read and, since these files become enabled pi
+  // commands, executed. lstat first and prove the descriptor is the same entry,
+  // which is exactly what the delete path in this file already does.
+  const before = lstatSync(file);
+  if (before.isSymbolicLink() || !before.isFile())
+    throw new InjectedCommandError("linked", "A command file is not a regular file.");
   const noFollow = constants.O_NOFOLLOW ?? 0;
   const fd = openSync(file, constants.O_RDONLY | noFollow);
   try {
-    if (!fstatSync(fd).isFile())
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino)
       throw new InjectedCommandError("linked", "A command file is not a regular file.");
     const bytes = readFileSync(fd);
     if (bytes.length > MAX_COMMAND_BYTES)
       throw new InjectedCommandError("too_large", "Command files cannot exceed 256 KB.");
+    // Identity proves the descriptor is the entry we lstat'ed; it says nothing
+    // about the BYTES, which another handle can rewrite mid-read (Codex). A
+    // changed size or mtime means we may be parsing a torn file, so fail closed —
+    // the same post-read check skillTreeFingerprint makes.
+    const after = fstatSync(fd);
+    if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs)
+      throw new InjectedCommandError("linked", "A command file changed while being read.");
     return bytes.toString("utf8");
   } finally {
     closeSync(fd);

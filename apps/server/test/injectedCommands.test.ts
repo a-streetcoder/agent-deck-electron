@@ -174,6 +174,12 @@ describe("InjectedCommandStore", () => {
     ).toThrow("privileged runtime access");
   });
 
+  // The ONLY honest pin for the read-side containment: a directory stand-in is
+  // refused even without the lstat gate (opening one throws anyway), so it cannot
+  // fail and was deleted. This case is skipped where symlinks cannot be built —
+  // including this developer machine — and it is CI's Windows job that proved the
+  // gap: it failed here with "expected true to be false" before the fix, because
+  // O_NOFOLLOW does not exist on Windows and the open followed the link.
   it.skipIf(!canCreateSymlink)("never lists or deletes through a linked library entry", () => {
     const { store } = setup();
     const imported = store.import("safe.ts", commandSource("safe-command"));

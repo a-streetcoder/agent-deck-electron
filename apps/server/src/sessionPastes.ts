@@ -153,6 +153,20 @@ function atomicManifest(file: string, data: string): void {
 }
 
 function readBoundedFile(file: string): string | undefined {
+  // Windows has no O_NOFOLLOW (the constant is undefined), so the open follows a
+  // symlink and fstat reports its target as a regular file. lstat first, then
+  // prove the descriptor is the same entry, so a manifest path replaced by a link
+  // is refused on every platform rather than read through.
+  let before;
+  try {
+    before = lstatSync(file);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw new Error("unsafe session paste manifest");
+  }
   const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
   let fd: number;
   try {
@@ -163,7 +177,12 @@ function readBoundedFile(file: string): string | undefined {
   }
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_SESSION_PASTE_MANIFEST_BYTES) {
+    if (
+      !stat.isFile() ||
+      stat.dev !== before.dev ||
+      stat.ino !== before.ino ||
+      stat.size > MAX_SESSION_PASTE_MANIFEST_BYTES
+    ) {
       throw new Error("unsafe session paste manifest");
     }
     const data = Buffer.alloc(stat.size);
