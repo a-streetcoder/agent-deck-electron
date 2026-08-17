@@ -96,6 +96,8 @@ export interface AppSettings {
   defaultSkills: string[];
   /** MCP servers granted to ordinary sessions in every real project. */
   defaultMcpServers: string[];
+  /** Global model/runtime MCP capability. Missing or malformed values default enabled. */
+  mcpEnabled: boolean;
   /**
    * Prompt templates made available in EVERY project's parent sessions as
    * `--prompt-template` flags ("All Projects"). Native defaultPromptTemplateNames.
@@ -434,6 +436,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
     let settings: AppSettings = {
       defaultSkills: [],
       defaultMcpServers: [],
+      mcpEnabled: true,
       defaultPromptTemplates: [],
       disabledSkills: [],
       projectRoots: [],
@@ -478,8 +481,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           defaultSkills: Array.isArray(record.defaultSkills)
             ? record.defaultSkills.map(String)
             : [],
-          // Missing and malformed legacy fields safely grant no MCP capability.
+          // Missing and malformed assignment fields safely grant no server.
           defaultMcpServers: coerceMcpAssignmentNames(record.defaultMcpServers),
+          // The master policy is opt-out for both fresh and upgraded installs.
+          mcpEnabled: typeof record.mcpEnabled === "boolean" ? record.mcpEnabled : true,
           defaultPromptTemplates: Array.isArray(record.defaultPromptTemplates)
             ? record.defaultPromptTemplates.map(String)
             : [],
@@ -592,6 +597,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // untouched files byte-stable across load/save cycles.
       const persisted: Partial<AppSettings> = { ...value };
       if (value.defaultMcpServers.length === 0) delete persisted.defaultMcpServers;
+      // Preserve untouched legacy bytes: absence is the enabled default.
+      if (value.mcpEnabled === true) delete persisted.mcpEnabled;
       if (value.codexPluginSkillRefs.length === 0) delete persisted.codexPluginSkillRefs;
       if (value.externalPromptPaths.length === 0) delete persisted.externalPromptPaths;
       if (value.disabledBuiltinPromptNames.length === 0)

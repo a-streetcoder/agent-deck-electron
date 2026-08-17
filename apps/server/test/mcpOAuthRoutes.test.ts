@@ -57,6 +57,12 @@ describe("MCP OAuth routes", () => {
       mcpOAuth: oauth,
       projects,
       oauthKey: (scope: string, id: string) => `${scope}::${id}`,
+      effectiveMcpConfigs: () => ({
+        valid: true,
+        configs: [{ id: "srv", url: "https://mcp.example/sse" }],
+      }),
+      projectHasEffectiveMcpGrant: (projectId: string, id: string) =>
+        projectId === "project-a" && id === "srv",
       broadcast: (message: { type: string }) => broadcasts.push(message.type),
     } as unknown as ServerContext);
 

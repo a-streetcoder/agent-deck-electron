@@ -130,6 +130,9 @@ export function McpScreen() {
   const projects = useAppStore((state) => state.projects);
   const selectedProject = projects.find((project) => project.id === currentProjectId);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [mcpEnabled, setMcpEnabled] = useState<boolean | null>(null);
+  const [policySaving, setPolicySaving] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
   const [assignedServerIds, setAssignedServerIds] = useState<string[]>([]);
   const [defaultAssignedServerIds, setDefaultAssignedServerIds] = useState<string[]>([]);
   const [missingAssignedServerIds, setMissingAssignedServerIds] = useState<string[]>([]);
@@ -153,6 +156,8 @@ export function McpScreen() {
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
+  const policySeq = useRef(0);
+  const policySwitchRef = useRef<HTMLInputElement>(null);
   const loadedProject = useRef<string | null | undefined>(undefined);
   const assignmentSaving = useRef(false);
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
@@ -188,6 +193,7 @@ export function McpScreen() {
           if (!response.ok) throw new Error(await response.text());
           const data = (await response.json()) as {
             servers: McpServer[];
+            mcpEnabled?: boolean;
             assignedServerIds?: string[];
             defaultAssignedServerIds?: string[];
             missingAssignedServerIds?: string[];
@@ -195,6 +201,7 @@ export function McpScreen() {
           };
           if (seq !== loadSeq.current) return "superseded";
           setCatalogLoadFailed(false);
+          setMcpEnabled(data.mcpEnabled !== false);
           setServers((current) => {
             if (!preserveRows) return data.servers;
             const incoming = new Map(data.servers.map((server) => [server.id, server]));
@@ -404,6 +411,51 @@ export function McpScreen() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const awaitAuthoritativeLoad = async (
+    pending: Promise<CatalogLoadResult>,
+  ): Promise<CatalogLoadResult> => {
+    for (;;) {
+      const result = await pending;
+      if (result !== "superseded") return result;
+      const winner = latestLoad.current;
+      if (!winner || winner === pending) return result;
+      pending = winner;
+    }
+  };
+
+  const togglePolicy = async (): Promise<void> => {
+    if (policySaving || mcpEnabled === null) return;
+    const seq = ++policySeq.current;
+    const next = !mcpEnabled;
+    const restoreFocus = document.activeElement === policySwitchRef.current;
+    setPolicySaving(true);
+    setPolicyError(null);
+    try {
+      const response = await fetch("/mcp/policy", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const result = (await response.json()) as { mcpEnabled: boolean; warning?: string };
+      if (seq !== policySeq.current) return;
+      setMcpEnabled(result.mcpEnabled);
+      if (result.warning) setPolicyError(result.warning);
+      await awaitAuthoritativeLoad(load(true));
+    } catch (error) {
+      if (seq !== policySeq.current) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setPolicyError(message);
+      setError(message);
+      await awaitAuthoritativeLoad(load(true));
+    } finally {
+      if (seq === policySeq.current) {
+        setPolicySaving(false);
+        if (restoreFocus) requestAnimationFrame(() => policySwitchRef.current?.focus());
+      }
     }
   };
 
@@ -680,7 +732,7 @@ export function McpScreen() {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="mcp-screen">
       <div className="mx-auto max-w-3xl">
-        <div className="flex items-center justify-between pb-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
           <div className="flex items-center gap-2">
             <Server size={16} className="text-text-secondary" aria-hidden />
             <h2
@@ -690,7 +742,31 @@ export function McpScreen() {
               MCP servers
             </h2>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-border-subtle px-2.5 py-1 text-xs text-text-secondary">
+              <ControlInput
+                ref={policySwitchRef}
+                type="checkbox"
+                role="switch"
+                data-testid="mcp-policy-switch"
+                aria-label="MCP runtime availability"
+                aria-describedby="mcp-policy-help mcp-policy-status"
+                aria-busy={policySaving}
+                checked={mcpEnabled === true}
+                disabled={mcpEnabled === null || policySaving || loading || catalogLoadFailed}
+                onChange={() => void togglePolicy()}
+                className="h-4 w-4 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              />
+              <span className="inline-block min-w-[3.25rem] text-center">
+                {policySaving
+                  ? "Saving…"
+                  : mcpEnabled === null
+                    ? "Loading…"
+                    : mcpEnabled
+                      ? "On"
+                      : "Paused"}
+              </span>
+            </label>
             <ControlButton
               data-testid="mcp-reload"
               className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40"
@@ -718,6 +794,28 @@ export function McpScreen() {
               <Plus size={13} /> Add server
             </ControlButton>
           </div>
+        </div>
+        <p id="mcp-policy-help" className="break-words text-xs text-text-muted">
+          Pausing removes MCP from model runtimes while keeping servers, All Projects/project/agent
+          assignments, and sign-ins unchanged.
+        </p>
+        <div
+          id="mcp-policy-status"
+          data-testid="mcp-policy-status"
+          aria-live="polite"
+          className={cn(
+            "min-h-4 pb-1 text-xs",
+            policyError ? "text-text-primary" : "text-text-muted",
+          )}
+        >
+          {policyError ??
+            (policySaving
+              ? "Saving MCP availability…"
+              : mcpEnabled === null
+                ? "Loading MCP availability…"
+                : mcpEnabled
+                  ? "MCP is on."
+                  : "MCP is paused.")}
         </div>
         <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
           {selectedProject
@@ -975,22 +1073,26 @@ export function McpScreen() {
                         data-testid={`mcp-status-${server.id}`}
                         className={cn(
                           "rounded-capsule border px-1.5 text-micro",
-                          server.connected
-                            ? "border-success text-success"
+                          !mcpEnabled
+                            ? "border-border-subtle text-text-muted"
+                            : server.connected
+                              ? "border-success text-success"
+                              : currentProjectId &&
+                                  !defaultAssignedServerIds.includes(server.id) &&
+                                  !assignedServerIds.includes(server.id)
+                                ? "border-border-subtle text-text-muted"
+                                : "border-danger text-danger",
+                        )}
+                      >
+                        {!mcpEnabled
+                          ? "paused"
+                          : server.connected
+                            ? "connected"
                             : currentProjectId &&
                                 !defaultAssignedServerIds.includes(server.id) &&
                                 !assignedServerIds.includes(server.id)
-                              ? "border-border-subtle text-text-muted"
-                              : "border-danger text-danger",
-                        )}
-                      >
-                        {server.connected
-                          ? "connected"
-                          : currentProjectId &&
-                              !defaultAssignedServerIds.includes(server.id) &&
-                              !assignedServerIds.includes(server.id)
-                            ? "available"
-                            : "disconnected"}
+                              ? "available"
+                              : "disconnected"}
                       </span>
                       <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                         {server.transport}
@@ -1025,7 +1127,11 @@ export function McpScreen() {
                         {server.toolNames.length} tool{server.toolNames.length === 1 ? "" : "s"}
                       </span>
                     </div>
-                    {server.error ? (
+                    {!mcpEnabled ? (
+                      <div className="truncate text-detail text-text-muted">
+                        Paused globally; configuration and sign-ins are preserved.
+                      </div>
+                    ) : server.error ? (
                       <div
                         className="truncate text-detail text-danger"
                         title="Connection failed. Review this server definition and reconnect."
@@ -1071,10 +1177,16 @@ export function McpScreen() {
                   <ControlButton
                     data-testid={`mcp-refresh-${server.id}`}
                     className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    title="Reconnect"
-                    aria-label={`Reconnect ${server.id}`}
+                    title={mcpEnabled ? "Reconnect" : "MCP is paused; turn it on to reconnect"}
+                    aria-label={
+                      mcpEnabled
+                        ? `Reconnect ${server.id}`
+                        : `Reconnect ${server.id} unavailable while MCP is paused`
+                    }
                     aria-busy={loginPendingId === server.id || login?.id === server.id}
-                    disabled={loginPendingId === server.id || login?.id === server.id}
+                    disabled={
+                      !mcpEnabled || loginPendingId === server.id || login?.id === server.id
+                    }
                     onClick={() => void refresh(server.id)}
                   >
                     <RefreshCw size={13} />

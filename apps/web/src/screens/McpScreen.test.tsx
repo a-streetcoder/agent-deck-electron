@@ -29,6 +29,135 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("MCP master policy", () => {
+  it("reports unknown initial policy as loading rather than falsely on", async () => {
+    let resolveCatalog!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveCatalog = resolve;
+      }),
+    );
+    render(<McpScreen />);
+    const toggle = screen.getByRole("switch", { name: "MCP runtime availability" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect((toggle as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("Loading…")).toBeTruthy();
+    expect(screen.getByTestId("mcp-policy-status").textContent).toBe("Loading MCP availability…");
+    resolveCatalog(jsonResponse({ mcpEnabled: true, servers: [] }));
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+  });
+
+  it("exposes an accessible non-optimistic switch and renders paused rows without disabling management", async () => {
+    let enabled = true;
+    let resolveToggle!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp")
+        return Promise.resolve(
+          jsonResponse({
+            mcpEnabled: enabled,
+            servers: [
+              {
+                id: "server",
+                transport: "http",
+                connected: enabled,
+                toolNames: enabled ? ["mcp__server__echo"] : [],
+                editable: true,
+                auth: { status: "unauthenticated" },
+              },
+            ],
+          }),
+        );
+      if (url === "/mcp/policy" && init?.method === "PATCH") {
+        expect(JSON.parse(String(init.body))).toEqual({ enabled: false });
+        return new Promise<Response>((resolve) => {
+          resolveToggle = (response) => {
+            enabled = false;
+            resolve(response);
+          };
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    render(<McpScreen />);
+    const toggle = await screen.findByRole("switch", { name: "MCP runtime availability" });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    toggle.focus();
+    fireEvent.click(toggle);
+    // Capability truth does not change optimistically while persistence is pending.
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(toggle.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("Saving MCP availability…")).toBeTruthy();
+    resolveToggle(jsonResponse({ mcpEnabled: false }));
+
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
+    expect(screen.getByTestId("mcp-status-server").textContent).toBe("paused");
+    expect((screen.getByTestId("mcp-refresh-server") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mcp-edit-server")).toBeTruthy();
+    expect(screen.getByTestId("mcp-remove-server")).toBeTruthy();
+    expect(screen.getByTestId("mcp-add")).toBeTruthy();
+    expect(screen.getByTestId("mcp-reload")).toBeTruthy();
+    expect((screen.getByTestId("mcp-login-server") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByTestId("mcp-assign-all-server")).toBeTruthy();
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("settles saving/focus from a broadcast-superseding authoritative load", async () => {
+    let catalogLoads = 0;
+    let resolveExplicit!: (response: Response) => void;
+    let resolveWinner!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp/policy" && init?.method === "PATCH")
+        return Promise.resolve(jsonResponse({ mcpEnabled: false }));
+      if (url === "/mcp") {
+        catalogLoads += 1;
+        if (catalogLoads === 1)
+          return Promise.resolve(jsonResponse({ mcpEnabled: true, servers: [] }));
+        if (catalogLoads === 2)
+          return new Promise<Response>((resolve) => (resolveExplicit = resolve));
+        return new Promise<Response>((resolve) => (resolveWinner = resolve));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    const toggle = await screen.findByRole("switch", { name: "MCP runtime availability" });
+    toggle.focus();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(catalogLoads).toBe(2));
+    useAppStore.setState({ resourcesVersion: 1 });
+    await waitFor(() => expect(catalogLoads).toBe(3));
+    expect(toggle.getAttribute("aria-busy")).toBe("true");
+    resolveExplicit(jsonResponse({ mcpEnabled: true, servers: [] }));
+    await Promise.resolve();
+    expect(toggle.getAttribute("aria-busy")).toBe("true");
+    resolveWinner(jsonResponse({ mcpEnabled: false, servers: [] }));
+    await waitFor(() => expect(toggle.getAttribute("aria-busy")).toBe("false"));
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("retains authoritative truth and announces a persistence failure", async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ mcpEnabled: true, servers: [] }));
+      if (url === "/mcp/policy" && init?.method === "PATCH")
+        return Promise.resolve(jsonResponse({ error: "Policy write failed" }, 500));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    const toggle = await screen.findByRole("switch", { name: "MCP runtime availability" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(useAppStore.getState().error).toBe("Policy write failed"));
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    const status = screen.getByTestId("mcp-policy-status");
+    expect(status.textContent).toContain("Policy write failed");
+    expect(status.className).toContain("text-text-primary");
+    expect(status.className).not.toContain("text-warning");
+  });
+});
+
 describe("MCP configuration reload", () => {
   it("explicitly reloads disk configuration and replaces the visible catalog", async () => {
     let reloaded = false;

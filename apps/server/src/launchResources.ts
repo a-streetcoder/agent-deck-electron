@@ -64,6 +64,7 @@ type ResolverContext = Pick<
   | "mcpAssignments"
 > & {
   effectiveMcpConfigs?: ServerContext["effectiveMcpConfigs"];
+  mcpPolicy?: Pick<ServerContext["mcpPolicy"], "enabled">;
 };
 
 const MAX_FINGERPRINT_DEPTH = 16;
@@ -194,6 +195,7 @@ export function resolveLaunchResources(
     ...injectedCommands,
   ]);
 
+  const mcpEnabled = ctx.mcpPolicy?.enabled() ?? true;
   let plan: LaunchPlan;
   let namedBridgePolicy: unknown;
   if (request.agentName) {
@@ -207,8 +209,8 @@ export function resolveLaunchResources(
     }
     const agent = resolved.agent;
     namedBridgePolicy = {
-      mcpServers: agent.mcpServers ?? [],
-      mcpDirectTools: agent.mcpDirectTools ?? [],
+      mcpServers: mcpEnabled ? (agent.mcpServers ?? []) : [],
+      mcpDirectTools: mcpEnabled ? (agent.mcpDirectTools ?? []) : [],
     };
     plan = {
       kind: "agent",
@@ -292,14 +294,15 @@ export function resolveLaunchResources(
       : []),
   ];
   const mcpSnapshot = project ? ctx.effectiveMcpConfigs?.(project.id) : undefined;
-  const requestedMcp = project
-    ? request.agentName
-      ? ((namedBridgePolicy as { mcpServers?: string[] } | undefined)?.mcpServers ?? [])
-      : [
-          ...ctx.mcpAssignments.defaultServerNames(),
-          ...ctx.mcpAssignments.projectServerNames(project.id),
-        ]
-    : [];
+  const requestedMcp =
+    mcpEnabled && project
+      ? request.agentName
+        ? ((namedBridgePolicy as { mcpServers?: string[] } | undefined)?.mcpServers ?? [])
+        : [
+            ...ctx.mcpAssignments.defaultServerNames(),
+            ...ctx.mcpAssignments.projectServerNames(project.id),
+          ]
+      : [];
   const configuredMcp = new Set(
     mcpSnapshot
       ? mcpSnapshot.valid
@@ -317,6 +320,8 @@ export function resolveLaunchResources(
       // `memoryEnabled`. Keep that semantic field name while feeding it the
       // new effective capability && preference value, so only a pause changes it.
       memoryEnabled: ctx.agentMemoryEnabled(),
+      // Included even for no-project sessions so every runtime adopts a policy toggle.
+      mcpEnabled,
       ...(project && !request.agentName
         ? {
             defaultMcpServers: ctx.mcpAssignments.defaultServerNames(),

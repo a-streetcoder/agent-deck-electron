@@ -67,6 +67,7 @@ import {
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
+import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
 import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import { InjectedCommandStore } from "./injectedCommands.ts";
@@ -175,6 +176,8 @@ export interface StartServerOptions {
   memoryEmbedder?: Embedder;
   /** Narrow durable MCP-assignment seam for tests and future synced storage. */
   mcpAssignmentStore?: McpAssignmentStore;
+  /** Narrow authoritative global MCP policy seam. */
+  mcpPolicyStore?: McpPolicyStore;
   /** Device-local OAuth persistence seam for credential lifecycle tests. */
   mcpOAuthStore?: McpOAuthStore;
 }
@@ -214,6 +217,7 @@ async function initServer(
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const settings = new SettingsStore(dataDir);
+  const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
   const sessionImages = new SessionImageStore(dataDir);
   const agentAvatars = new FileAgentAvatarStore(dataDir);
   const sessionPastes = new SessionPasteStore(dataDir);
@@ -433,7 +437,7 @@ async function initServer(
         model: agent.model,
         thinking: asThinkingLevel(agent.thinking),
         tools: agent.tools,
-        mcpDirectTools: agent.mcpDirectTools,
+        mcpDirectTools: mcpPolicy.enabled() ? agent.mcpDirectTools : [],
         skillDirs: agent.skillDirs,
         defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
@@ -535,6 +539,7 @@ async function initServer(
       projectPath: (projectId) => projects.find((project) => project.id === projectId)?.path,
       recall: (store, query, limit) => semanticRecall.recall(store, query, limit),
     }),
+    () => mcpPolicy.enabled(),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -606,7 +611,7 @@ async function initServer(
         model: agent.model,
         thinking: agent.thinking,
         tools: agent.tools?.filter((tool) => !BRIDGE_ONLY_TOOLS.has(tool)),
-        mcpDirectTools: agent.mcpDirectTools,
+        mcpDirectTools: mcpPolicy.enabled() ? agent.mcpDirectTools : [],
         skillDirs: skills.skillDirs,
         extensions: enabledExtensionPaths(projectId, agent.extensions),
         mcpServers: agent.mcpServers ?? [],
@@ -766,6 +771,7 @@ async function initServer(
       const meta = sessions.get(sessionId)?.meta;
       return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
     },
+    isEnabled: () => mcpPolicy.enabled(),
   });
 
   const globalMcpConfigs = (): { configs: McpServerConfig[]; valid: boolean } => {
@@ -814,6 +820,10 @@ async function initServer(
     projectId: string,
     extraIds: readonly string[] = [],
   ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }> => {
+    if (!mcpPolicy.enabled()) {
+      await mcp.reconcile([], projectId);
+      return { ok: true, missing: [] };
+    }
     const project = projects.find((item) => item.id === projectId);
     if (!project || project.hidden) {
       await mcp.reconcile([], projectId);
@@ -1001,7 +1011,7 @@ async function initServer(
   // a bound named agent instead uses exactly its own mcpServers declaration.
   // Both paths fail closed against the currently configured catalog.
   function mcpAllowlistForSession(meta: SessionMeta): string[] {
-    if (!meta.projectId) return [];
+    if (!mcpPolicy.enabled() || !meta.projectId) return [];
     const snapshot = effectiveMcpConfigs(meta.projectId);
     if (!snapshot.valid) return [];
     const configured = new Set(snapshot.configs.map((config) => config.id));
@@ -1134,6 +1144,7 @@ async function initServer(
     mcp,
     mcpOAuth,
     mcpAssignments,
+    mcpPolicy,
     reloadMcpConfig,
     reconcileProjectMcp,
     prepareProjectMcpSession,

@@ -14,6 +14,7 @@ import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager, McpServerConfig } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import type { McpAssignmentStore } from "./mcpAssignments.ts";
+import type { McpPolicyStore } from "./mcpPolicy.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
@@ -134,6 +135,7 @@ export interface ServerContext {
   mcp: McpManager;
   mcpOAuth: McpOAuthCoordinator;
   mcpAssignments: McpAssignmentStore;
+  mcpPolicy: McpPolicyStore;
   reloadMcpConfig(projectId?: string): Promise<{ ok: true } | { ok: false; error: string }>;
   reconcileProjectMcp(
     projectId: string,

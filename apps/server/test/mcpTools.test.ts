@@ -244,6 +244,88 @@ describe("McpManager reconciliation", () => {
     expect(second.close).toHaveBeenCalledTimes(1);
   });
 
+  it("tears down tools, denies dispatch immediately, fences a late connection, and is reusable", async () => {
+    let enabled = true;
+    const late = fakeClient();
+    late.listTools.mockResolvedValue([
+      { name: "echo", description: "echo", inputSchema: { type: "object" } },
+    ]);
+    const restored = fakeClient();
+    restored.listTools.mockResolvedValue([
+      { name: "echo", description: "echo", inputSchema: { type: "object" } },
+    ]);
+    let resolveLate!: (client: McpClient) => void;
+    vi.mocked(McpClient.connectStdio)
+      .mockReturnValueOnce(new Promise<McpClient>((resolve) => (resolveLate = resolve)))
+      .mockResolvedValueOnce(restored as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      isEnabled: () => enabled,
+      scopeForSession: () => "project",
+      allowServerForSession: () => true,
+    });
+
+    const connecting = manager.connect({ id: "slow", command: "node" }, "project");
+    await vi.waitFor(() => expect(McpClient.connectStdio).toHaveBeenCalledTimes(1));
+    enabled = false;
+    const paused = manager.pause();
+    resolveLate(late as unknown as McpClient);
+    await paused;
+    await connecting;
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(manager.status("project")).toEqual([]);
+    expect(bridge.specs()).toEqual([]);
+    await expect(manager.connect({ id: "blocked", command: "node" }, "project")).rejects.toThrow(
+      "MCP is paused",
+    );
+
+    enabled = true;
+    await manager.connect({ id: "slow", command: "node" }, "project");
+    expect(manager.specs("project").map((spec) => spec.name)).toEqual(["mcp__slow__echo"]);
+    enabled = false;
+    await expect(
+      bridge.dispatch(
+        {
+          sessionId: "session",
+          toolCallId: "call",
+          tool: "mcp__slow__echo",
+          params: {},
+          token: "t",
+        },
+        { token: "t" },
+      ),
+    ).resolves.toMatchObject({ isError: true });
+    await manager.pause();
+    await manager.close();
+  });
+
+  it("fails closed and reports aggregate client-close failures after attempting every pause cleanup", async () => {
+    let enabled = true;
+    const failing = fakeClient();
+    const healthy = fakeClient();
+    failing.listTools.mockResolvedValue([{ name: "one", inputSchema: { type: "object" } }]);
+    healthy.listTools.mockResolvedValue([{ name: "two", inputSchema: { type: "object" } }]);
+    failing.close.mockRejectedValue(new Error("child process did not close"));
+    vi.mocked(McpClient.connectStdio)
+      .mockResolvedValueOnce(failing as unknown as McpClient)
+      .mockResolvedValueOnce(healthy as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, { isEnabled: () => enabled });
+    await manager.connect({ id: "failing", command: "one" }, "project");
+    await manager.connect({ id: "healthy", command: "two" }, "project");
+
+    enabled = false;
+    await expect(manager.pause()).rejects.toThrow(
+      "one or more MCP clients could not be closed while pausing",
+    );
+    expect(failing.close).toHaveBeenCalledOnce();
+    expect(healthy.close).toHaveBeenCalledOnce();
+    expect(manager.status("project")).toEqual([]);
+    expect(bridge.specs().filter((spec) => spec.name.startsWith("mcp__"))).toEqual([]);
+    // Shutdown remains best-effort and does not replay or surface the pause failure.
+    await expect(manager.close()).resolves.toBeUndefined();
+  });
+
   it("cancels an in-flight connection immediately and closes a late client during shutdown", async () => {
     const client = fakeClient();
     let resolveConnect!: (value: McpClient) => void;

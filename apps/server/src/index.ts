@@ -21,6 +21,7 @@ export {
   McpAssignmentStoreError,
   type McpAssignmentStore,
 } from "./mcpAssignments.ts";
+export { FileMcpPolicyStore, McpPolicyStoreError, type McpPolicyStore } from "./mcpPolicy.ts";
 export {
   FileAgentAvatarStore,
   agentAvatarIdentityKey,

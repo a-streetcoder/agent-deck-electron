@@ -778,6 +778,19 @@ describe("child tool capability policy", () => {
           yield* configured.runChildAgent("finish normally", "configured");
           yield* configured.runChildAgent("inspect only", "direct-read-only");
           yield* configured.runChildAgent("finish normally");
+          const paused = yield* makeManagedSessionRuntime(
+            capturingHost,
+            buses,
+            makeParams({
+              helperContext: { env: { MCP_DIRECT_TOOLS: "inherited", KEEP: "yes" } },
+              mcpPolicyEnabled: () => false,
+              resolveAgent: () => ({
+                body: "Configured persona",
+                mcpDirectTools: ["search"],
+              }),
+            }),
+          );
+          yield* paused.runChildAgent("paused launch", "configured");
         }),
       ),
     );
@@ -792,6 +805,7 @@ describe("child tool capability policy", () => {
     expect(spawns[2]!.args.join(" ")).not.toContain("write");
     expect(spawns[2]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
     expect(spawns[3]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
+    expect(spawns[5]!.env).toMatchObject({ KEEP: "yes", MCP_DIRECT_TOOLS: "__none__" });
   });
 
   const dangerous = [

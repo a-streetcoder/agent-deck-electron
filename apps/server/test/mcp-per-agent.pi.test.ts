@@ -34,6 +34,8 @@ let server: AgentDeckServer;
 let mockExt: string;
 let projectId: string;
 let unassignedProjectId: string;
+let activeResponseGate: Promise<void> | undefined;
+let activeResponseReached: (() => void) | undefined;
 const unassignedCwd = mkdtempSync(path.join(tmpdir(), "pi-unassigned-agent-mcp-"));
 const env = { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" };
 
@@ -95,13 +97,21 @@ beforeAll(async () => {
     "---\nname: project-local-mcp\nmcpServers: projectonly\n---\n\nUse project-only MCP.\n",
   );
   mock = await startMockProvider({
-    toolCall: (lastUser, body) =>
-      body.messages.some((m) => m.role === "tool")
+    beforeResponse: async (lastUser) => {
+      if (!lastUser.includes("policy-active boundary") || !activeResponseGate) return;
+      activeResponseReached?.();
+      await activeResponseGate;
+      activeResponseGate = undefined;
+    },
+    toolCall: (lastUser, body) => {
+      const lastUserIndex = body.messages.findLastIndex((message) => message.role === "user");
+      return body.messages.slice(lastUserIndex + 1).some((message) => message.role === "tool")
         ? null
         : {
             name: lastUser.includes("project-only") ? "mcp__projectonly__echo" : "mcp__mock__echo",
             arguments: { message: "scoped" },
-          },
+          };
+    },
     reply: () => "streamed answer has several ordered deltas",
   });
   mockExt = writeMockProviderExtension(mock.baseUrl);
@@ -198,6 +208,170 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     },
   );
 
+  it("rebinds ordinary, named, and no-project runtimes across a global on-off-on policy at safe boundaries", async () => {
+    const ensureDefault = await fetch(
+      `http://127.0.0.1:${server.port}/mcp/mock/default-assignment`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      },
+    );
+    expect(ensureDefault.status).toBe(200);
+    const create = async (options: { projectId?: string; agentName?: string }) => {
+      const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...options,
+          provider: MOCK_PROVIDER_ID,
+          model: MOCK_MODEL_ID,
+          extensions: [mockExt],
+          env,
+        }),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { session: { id: string } }).session.id;
+    };
+    const ordinaryId = await create({ projectId });
+    const namedId = await create({ projectId, agentName: "mcp-yes" });
+    const noProjectId = await create({});
+    const promptTurn = async (id: string, prompt: string): Promise<number> => {
+      const managed = server.sessions.get(id)!;
+      let deltas = 0;
+      let settle!: () => void;
+      const idle = new Promise<void>((resolve) => (settle = resolve));
+      const unsubscribe = managed.bus.subscribe((item) => {
+        if (item.event.type === "cell_delta") deltas += 1;
+        if (item.event.type === "agent_status" && item.event.status === "idle") settle();
+      });
+      await managed.prompt(prompt);
+      await idle;
+      unsubscribe();
+      return deltas;
+    };
+    const original = {
+      ordinary: server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint,
+      named: server.sessions.get(namedId)!.meta.launchResourceFingerprint,
+      noProject: server.sessions.get(noProjectId)!.meta.launchResourceFingerprint,
+    };
+
+    await promptTurn(ordinaryId, "policy-on ordinary echo");
+    await promptTurn(namedId, "policy-on named echo");
+    await promptTurn(noProjectId, "policy-on no-project boundary");
+    expect(
+      toolResults(mock.requests.filter((r) => JSON.stringify(r).includes("policy-on ordinary"))),
+    ).toContain("mcp stdio echo: scoped");
+    expect(
+      toolResults(mock.requests.filter((r) => JSON.stringify(r).includes("policy-on named"))),
+    ).toContain("mcp stdio echo: scoped");
+
+    // Pause during an active streamed turn. RES-12 must retain the current owner
+    // until authoritative idle rather than cancelling or replacing mid-stream.
+    const active = server.sessions.get(ordinaryId)!;
+    let releaseActiveResponse!: () => void;
+    let markActiveResponseReached!: () => void;
+    const responseReached = new Promise<void>((resolve) => (markActiveResponseReached = resolve));
+    activeResponseReached = markActiveResponseReached;
+    activeResponseGate = new Promise<void>((resolve) => (releaseActiveResponse = resolve));
+    let settleActiveIdle!: () => void;
+    const activeIdle = new Promise<void>((resolve) => (settleActiveIdle = resolve));
+    const unsubscribeActive = active.bus.subscribe((item) => {
+      if (item.event.type === "agent_status" && item.event.status === "idle") settleActiveIdle();
+    });
+    await active.prompt("policy-active boundary");
+    await responseReached;
+    expect(active.snapshot().state.agentStatus).not.toBe("idle");
+    const paused = await fetch(`http://127.0.0.1:${server.port}/mcp/policy`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(paused.status).toBe(200);
+    expect(active.meta.launchResourceFingerprint).toBe(original.ordinary);
+    releaseActiveResponse();
+    activeResponseReached = undefined;
+    await activeIdle;
+    unsubscribeActive();
+    // The in-flight turn is allowed to finish; pausing does not cancel it. Its
+    // already-advertised MCP call may be denied immediately, so text deltas are
+    // asserted on the restored streamed turn below rather than fabricated here.
+
+    await vi.waitFor(
+      () => {
+        expect(server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint).not.toBe(
+          original.ordinary,
+        );
+        expect(server.sessions.get(namedId)!.meta.launchResourceFingerprint).not.toBe(
+          original.named,
+        );
+        expect(server.sessions.get(noProjectId)!.meta.launchResourceFingerprint).not.toBe(
+          original.noProject,
+        );
+      },
+      { timeout: 15_000, interval: 25 },
+    );
+    expect(server.bridge.specs().some((spec) => spec.name === "mcp__mock__echo")).toBe(false);
+
+    await promptTurn(ordinaryId, "policy-off ordinary echo");
+    await promptTurn(namedId, "policy-off named echo");
+    const offRequests = (marker: string) =>
+      mock.requests.filter((request) => JSON.stringify(request).includes(marker));
+    const successfulEchoes = (requests: ChatCompletionRequest[]) =>
+      Math.max(
+        0,
+        ...requests.map(
+          (request) =>
+            request.messages.filter(
+              (message) =>
+                message.role === "tool" &&
+                typeof message.content === "string" &&
+                message.content.includes("mcp stdio echo: scoped"),
+            ).length,
+        ),
+      );
+    for (const marker of ["policy-off ordinary", "policy-off named"]) {
+      const requests = offRequests(marker);
+      expect(JSON.stringify(requests.at(-1)?.tools ?? [])).not.toContain("mcp__mock__echo");
+      // One successful result is historical from the on turn; pause adds none.
+      expect(successfulEchoes(requests)).toBe(1);
+    }
+
+    const enabled = await fetch(`http://127.0.0.1:${server.port}/mcp/policy`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(enabled.status).toBe(200);
+    await vi.waitFor(
+      () =>
+        expect(server.bridge.specs().some((spec) => spec.name === "mcp__mock__echo")).toBe(true),
+      { timeout: 15_000, interval: 25 },
+    );
+    await vi.waitFor(
+      () => {
+        expect(server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint).toBe(
+          original.ordinary,
+        );
+        expect(server.sessions.get(namedId)!.meta.launchResourceFingerprint).toBe(original.named);
+        expect(server.sessions.get(noProjectId)!.meta.launchResourceFingerprint).toBe(
+          original.noProject,
+        );
+      },
+      { timeout: 15_000, interval: 25 },
+    );
+
+    const restoredStart = mock.requests.length;
+    await promptTurn(ordinaryId, "policy-restored ordinary echo");
+    const restoredDeltas = await promptTurn(namedId, "policy-restored named echo");
+    const restoredRequests = mock.requests.slice(restoredStart);
+    expect(JSON.stringify(restoredRequests.flatMap((request) => request.tools ?? []))).toContain(
+      "mcp__mock__echo",
+    );
+    expect(toolResults(restoredRequests)).toContain("mcp stdio echo: scoped");
+    expect(restoredDeltas).toBeGreaterThan(1);
+  });
+
   it("rebinds a running ordinary session after default removal while named and no-project scopes stay stable", async () => {
     const create = async (options: { projectId?: string; agentName?: string }) => {
       const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
@@ -267,16 +441,22 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
 
     const requests = (marker: string) =>
       mock.requests.filter((request) => JSON.stringify(request).includes(marker));
-    const toolMessageCount = (marker: string) =>
+    const successfulToolMessageCount = (marker: string) =>
       Math.max(
         0,
         ...requests(marker).map(
-          (request) => request.messages.filter((message) => message.role === "tool").length,
+          (request) =>
+            request.messages.filter(
+              (message) =>
+                message.role === "tool" &&
+                typeof message.content === "string" &&
+                message.content.includes("mcp stdio echo: scoped"),
+            ).length,
         ),
       );
     // The ordinary transcript retains its one historical tool result, but the
     // post-refresh turn must not add another one.
-    expect(toolMessageCount("res12-after")).toBe(1);
+    expect(successfulToolMessageCount("res12-after")).toBe(1);
     expect(JSON.stringify(requests("res12-after").at(-1)?.tools ?? [])).not.toContain(
       "mcp__mock__echo",
     );

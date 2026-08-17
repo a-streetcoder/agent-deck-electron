@@ -202,6 +202,8 @@ export interface SpawnSessionParams {
   readonly resolveAgent?: AgentResolver;
   /** Server-owned, launch-only context for ordinary managed children. */
   readonly recallChildMemory?: ChildMemoryRecall;
+  /** Live global MCP policy, re-read immediately before delegated child spawn. */
+  readonly mcpPolicyEnabled?: () => boolean;
   /** Required durable lifecycle sink for generic managed_subagent/managed_parallel runs. */
   readonly childRuns?: {
     create: (record: SubagentRunRecord) => void;
@@ -2099,7 +2101,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           env: {
             ...helperContext.env,
             MCP_DIRECT_TOOLS:
-              resolved?.mcpDirectTools && resolved.mcpDirectTools.length > 0
+              (params.mcpPolicyEnabled?.() ?? true) &&
+              resolved?.mcpDirectTools &&
+              resolved.mcpDirectTools.length > 0
                 ? resolved.mcpDirectTools.join(",")
                 : "__none__",
           },

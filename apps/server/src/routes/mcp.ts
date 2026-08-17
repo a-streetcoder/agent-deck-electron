@@ -26,6 +26,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     rootsFor,
     projects,
     mcpAssignments,
+    mcpPolicy,
   } = ctx;
 
   const mcpAddBody = z.union([
@@ -95,6 +96,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       const configured = new Set(configs.keys());
       return {
         valid: catalog.valid && globalSnapshot.valid,
+        mcpEnabled: mcpPolicy.enabled(),
         projectId: null,
         defaultAssignedServerIds: defaults,
         missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
@@ -131,6 +133,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     const defaults = [...new Set(mcpAssignments.defaultServerNames())];
     return {
       valid: snapshot.valid,
+      mcpEnabled: mcpPolicy.enabled(),
       projectId: scope,
       defaultAssignedServerIds: defaults,
       missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
@@ -159,6 +162,62 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         };
       }),
     };
+  });
+
+  // One global mutation chain prevents two clients from persisting/reconciling out of order.
+  let policyToggleTail: Promise<void> = Promise.resolve();
+  fastify.patch("/mcp/policy", async (request, reply) => {
+    const parsed = z.object({ enabled: z.boolean() }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid MCP policy" });
+    const run = async (): Promise<{ status: number; body: Record<string, unknown> }> => {
+      let authoritativeEnabled: boolean;
+      try {
+        authoritativeEnabled = mcpPolicy.setEnabled(parsed.data.enabled);
+      } catch (error) {
+        return {
+          status: 500,
+          body: {
+            code: "RESOURCE_WRITE_FAILED",
+            error:
+              error instanceof Error
+                ? error.message
+                : "The MCP availability preference could not be saved.",
+          },
+        };
+      }
+      const warnings: string[] = [];
+      if (!authoritativeEnabled) {
+        try {
+          await mcp.pause();
+        } catch {
+          warnings.push("Some live MCP connections could not be closed cleanly.");
+        }
+      } else {
+        for (const project of projects.list()) {
+          try {
+            const result = await reconcileProjectMcp(project.id);
+            if (!result.ok) warnings.push(result.error);
+          } catch {
+            warnings.push(`MCP could not reconnect for ${project.name}.`);
+          }
+        }
+      }
+      broadcast({ type: "resources_changed" });
+      return {
+        status: 200,
+        body: {
+          mcpEnabled: mcpPolicy.enabled(),
+          ...(warnings.length > 0 ? { warning: [...new Set(warnings)].join(" ") } : {}),
+        },
+      };
+    };
+    const resultPromise = policyToggleTail.then(run, run);
+    policyToggleTail = resultPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+    const result = await resultPromise;
+    return reply.code(result.status).send(result.body);
   });
 
   fastify.patch("/mcp/:id/default-assignment", async (request, reply) => {
@@ -228,10 +287,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return scope ? { scope, id, authId: oauthKey(scope, id) } : undefined;
   };
 
+  const configuredGrantedHttpUrl = (scope: string, id: string): string | undefined => {
+    const project = projects.find((candidate) => candidate.id === scope);
+    // Match reconcileProjectMcp: hidden projects own no executable trust grant.
+    if (!project || project.hidden || !ctx.projectHasEffectiveMcpGrant(scope, id)) return undefined;
+    const config = effectiveMcpConfigs(scope).configs.find((entry) => entry.id === id);
+    return config && "url" in config ? config.url : undefined;
+  };
+
   fastify.post("/mcp/:id/login", async (request, reply) => {
     const target = requireScopedHttp(request);
     if (!target) return reply.code(400).send({ error: "projectId is required" });
-    const serverUrl = mcp.httpUrlFor(target.id, target.scope);
+    const serverUrl = configuredGrantedHttpUrl(target.scope, target.id);
     if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
     const state = await mcpOAuth.beginAuth(
       target.authId,
@@ -250,7 +317,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   fastify.post("/mcp/:id/login/callback", async (request, reply) => {
     const target = requireScopedHttp(request);
     if (!target) return reply.code(400).send({ error: "projectId is required" });
-    const serverUrl = mcp.httpUrlFor(target.id, target.scope);
+    const serverUrl = configuredGrantedHttpUrl(target.scope, target.id);
     if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
     const parsed = mcpCallbackBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
@@ -261,7 +328,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       parsed.data.state,
     );
     if (state.status !== "authorized") {
-      const status = state.error?.includes("state mismatch") ? 400 : 502;
+      const callbackAdmissionError =
+        state.error?.includes("state mismatch") ||
+        state.error?.includes("no longer active") ||
+        state.error?.includes("already completed") ||
+        state.error?.includes("superseded");
+      const status = callbackAdmissionError ? 400 : 502;
       return reply.code(status).send({ error: state.error, auth: state });
     }
     return { auth: state, server: mcp.status(target.scope).find((item) => item.id === target.id) };
@@ -278,7 +350,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   fastify.post("/mcp/:id/logout", async (request, reply) => {
     const target = requireScopedHttp(request);
     if (!target) return reply.code(400).send({ error: "projectId is required" });
-    if (!mcp.has(target.id, target.scope))
+    if (!ctx.projectHasEffectiveMcpGrant(target.scope, target.id))
       return reply.code(404).send({ error: "unknown assigned MCP server" });
     await mcpOAuth.clear(target.authId);
     await mcp.refresh(target.id, target.scope);
@@ -445,6 +517,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   });
 
   fastify.post("/mcp/:id/refresh", async (request, reply) => {
+    if (!mcpPolicy.enabled()) {
+      return reply.code(409).send({ error: "MCP is paused. Turn MCP on before reconnecting." });
+    }
     const id = (request.params as { id: string }).id;
     const requested = (request.query as { projectId?: unknown }).projectId;
     const scope = projectScope(requested);

@@ -685,6 +685,8 @@ export class SessionManager {
     private readonly envFileLayer: (projectId?: string) => Record<string, string> = () => ({}),
     /** Volatile launch-only memory context for ordinary managed children. */
     private readonly recallChildMemory?: ChildMemoryRecall,
+    /** Live master MCP policy, checked at delegated direct-adapter spawn. */
+    private readonly mcpPolicyEnabled: () => boolean = () => true,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1306,6 +1308,7 @@ export class SessionManager {
       childBridgeFactory: this.childBridgeFactory,
       resolveAgent: this.resolveAgent,
       recallChildMemory: this.recallChildMemory,
+      mcpPolicyEnabled: this.mcpPolicyEnabled,
       ...(this.subagentRuns
         ? {
             childRuns: {

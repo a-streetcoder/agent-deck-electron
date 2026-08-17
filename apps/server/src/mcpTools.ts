@@ -205,6 +205,8 @@ export class McpManager {
   private readonly isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
   private readonly scopeForSession?: (sessionId: string) => string | undefined;
   private readonly allowServerForSession?: (sessionId: string, serverId: string) => boolean;
+  /** Live master policy; checked at admission, publication, and dispatch. */
+  private readonly isEnabled: () => boolean;
 
   constructor(
     private readonly bridge: BridgeRegistry,
@@ -217,12 +219,14 @@ export class McpManager {
       isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
       scopeForSession?: (sessionId: string) => string | undefined;
       allowServerForSession?: (sessionId: string, serverId: string) => boolean;
+      isEnabled?: () => boolean;
     } = {},
   ) {
     this.httpAuthProvider = options.httpAuthProvider;
     this.isHttpAuthorizationActive = options.isHttpAuthorizationActive;
     this.scopeForSession = options.scopeForSession;
     this.allowServerForSession = options.allowServerForSession;
+    this.isEnabled = options.isEnabled ?? (() => true);
   }
 
   private key(scope: string, id: string): string {
@@ -281,7 +285,7 @@ export class McpManager {
   }
 
   /** Unregister a server's tools, close its client, and drop it. */
-  private async teardown(id: string, scope = "global"): Promise<void> {
+  private async teardown(id: string, scope = "global", surfaceCloseError = false): Promise<void> {
     const key = this.key(scope, id);
     const state = this.servers.get(key);
     if (!state) return;
@@ -293,8 +297,13 @@ export class McpManager {
         this.bridge.unregister(name);
       }
     }
-    await state.client?.close().catch(() => {});
+    // Fail closed before potentially fallible process cleanup.
     this.servers.delete(key);
+    try {
+      await state.client?.close();
+    } catch (error) {
+      if (surfaceCloseError) throw error;
+    }
   }
 
   /**
@@ -304,11 +313,13 @@ export class McpManager {
    */
   connect(config: McpServerConfig, scope = "global"): Promise<McpServerStatus> {
     if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
+    if (!this.isEnabled()) return Promise.reject(new Error("MCP is paused"));
     return this.serialize(this.key(scope, config.id), () => this.connectInner(config, scope));
   }
 
   private async connectInner(config: McpServerConfig, scope: string): Promise<McpServerStatus> {
     if (this.closing) throw new Error("MCP manager is closing");
+    if (!this.isEnabled()) throw new Error("MCP is paused");
     if (isHttpConfig(config) && this.isHttpAuthorizationActive?.(scope, config.id)) {
       // Reusing the interactive provider here lets the SDK call redirectToAuthorization
       // again, replacing the PKCE verifier/state that the browser is currently using.
@@ -356,8 +367,10 @@ export class McpManager {
         `MCP listTools "${config.id}"`,
         operationController.signal,
       );
+      if (!this.isEnabled()) throw new Error("MCP was paused while connecting");
       const safeId = sanitize(config.id);
       for (const tool of tools) {
+        if (!this.isEnabled()) throw new Error("MCP was paused while publishing tools");
         const name = bridgeToolName(config.id, tool.name);
         // Skip empty-segment or already-claimed names (memory tools, other
         // servers) rather than silently clobber the bridge registry.
@@ -388,6 +401,7 @@ export class McpManager {
           const callScope = this.scopeForSession?.(ctx.sessionId) ?? "global";
           const owner = this.servers.get(this.key(callScope, config.id));
           if (
+            !this.isEnabled() ||
             !this.allowServerForSession?.(ctx.sessionId, config.id) ||
             !owner?.client ||
             !owner.toolNames.includes(name)
@@ -435,7 +449,7 @@ export class McpManager {
   /** Apply an authoritative config snapshot without disturbing unchanged live clients. */
   reconcile(configs: McpServerConfig[], scope = "global"): Promise<void> {
     if (this.closing) return Promise.reject(new Error("MCP manager is closing"));
-    const snapshot = configs.map((config) => ({ ...config }));
+    const snapshot = (this.isEnabled() ? configs : []).map((config) => ({ ...config }));
     const next = this.reconcileTail.then(
       () => this.reconcileSnapshot(snapshot, scope),
       () => this.reconcileSnapshot(snapshot, scope),
@@ -472,7 +486,7 @@ export class McpManager {
 
   /** Reconnect a known server using its stored config. */
   refresh(id: string, scope = "global"): Promise<McpServerStatus | null> {
-    if (this.closing) return Promise.resolve(null);
+    if (this.closing || !this.isEnabled()) return Promise.resolve(null);
     return this.serialize(this.key(scope, id), async () => {
       const config = this.servers.get(this.key(scope, id))?.config;
       // connectInner (not connect) — we already hold this id's lock.
@@ -488,6 +502,27 @@ export class McpManager {
       await this.teardown(id, scope);
       return true;
     });
+  }
+
+  /** Pause execution without making the manager unusable for a later enable. */
+  async pause(): Promise<void> {
+    for (const state of this.servers.values()) {
+      state.operationController?.abort(new Error("MCP is paused"));
+    }
+    await this.reconcileTail;
+    await Promise.allSettled([...this.locks.values()]);
+    const cleanup = await Promise.allSettled(
+      [...this.servers.values()].map((state) => this.teardown(state.config.id, state.scope, true)),
+    );
+    const failures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "one or more MCP clients could not be closed while pausing",
+      );
+    }
   }
 
   async close(): Promise<void> {

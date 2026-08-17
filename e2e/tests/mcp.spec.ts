@@ -47,6 +47,31 @@ test("the empty state shows when no servers are configured", async ({ page }) =>
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 
+test("pauses MCP accessibly and preserves the policy across an app-server restart", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 480, height: 800 });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  const toggle = page.getByRole("switch", { name: "MCP runtime availability" });
+  await expect(toggle).toBeChecked();
+  const onCapsule = await toggle.locator("..").boundingBox();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  const pausedCapsule = await toggle.locator("..").boundingBox();
+  expect(Math.abs((onCapsule?.width ?? 0) - (pausedCapsule?.width ?? 0))).toBeLessThanOrEqual(1);
+  await expect(page.getByTestId("mcp-policy-status")).toContainText("MCP is paused");
+
+  await harness.restart();
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await expect(page.getByRole("switch", { name: "MCP runtime availability" })).not.toBeChecked();
+
+  // Restore shared-suite state and prove the explicit true survives too.
+  await page.getByRole("switch", { name: "MCP runtime availability" }).click();
+  await expect(page.getByRole("switch", { name: "MCP runtime availability" })).toBeChecked();
+});
+
 test("adds a remote HTTP server from the MCP form", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-mcp").click();

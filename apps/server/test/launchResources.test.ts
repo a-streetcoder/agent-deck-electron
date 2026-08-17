@@ -6,6 +6,89 @@ import { describe, expect, it } from "vitest";
 import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
 import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
+describe("MCP master launch policy", () => {
+  it("changes ordinary, named, and no-project fingerprints while emptying paused server/direct policy", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-mcp-policy-launch-"));
+    const projectPath = path.join(root, "project");
+    mkdirSync(projectPath);
+    const project = { id: "project", path: projectPath };
+    let enabled = true;
+    const context = {
+      projects: {
+        find: (predicate: (candidate: typeof project) => boolean) =>
+          predicate(project) ? project : undefined,
+      },
+      settings: {
+        get: () => ({
+          defaultSkills: [],
+          defaultPromptTemplates: [],
+          disabledSkills: [],
+          defaultThinking: null,
+        }),
+      },
+      resolveNamedAgent: () => ({
+        status: "ok" as const,
+        agent: {
+          body: "Named",
+          systemPromptMode: "replace" as const,
+          skillDirs: [],
+          extensions: [],
+          mcpServers: ["named-server"],
+          mcpDirectTools: ["search"],
+        },
+      }),
+      enabledExtensionPaths: () => [],
+      injectedCommands: { enabledExtensionPaths: () => [] },
+      scanSkillCandidatesFor: () => [],
+      rootsFor: (projectId?: string) => ({
+        home: root,
+        projectPath: projectId ? projectPath : undefined,
+      }),
+      resourceHome: () => root,
+      agentMemoryEnabled: () => false,
+      memoryBaseDir: path.join(root, "memory"),
+      mcpAssignments: {
+        defaultServerNames: () => ["ordinary-default"],
+        projectServerNames: () => ["ordinary-project"],
+      },
+      mcpPolicy: { enabled: () => enabled },
+      effectiveMcpConfigs: () => ({
+        valid: true,
+        configs: [
+          { id: "ordinary-default", command: "default" },
+          { id: "ordinary-project", command: "project" },
+          { id: "named-server", command: "named" },
+        ],
+      }),
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+    const resolveAll = () => ({
+      ordinary: resolveLaunchResources(context, { projectId: project.id }, {}),
+      named: resolveLaunchResources(context, { projectId: project.id, agentName: "named" }, {}),
+      noProject: resolveLaunchResources(context, {}, {}),
+    });
+
+    const on = resolveAll();
+    expect(on.ordinary.mcpServerIds).toEqual(["ordinary-default", "ordinary-project"]);
+    expect(on.named.mcpServerIds).toEqual(["named-server"]);
+    expect(on.noProject.mcpServerIds).toEqual([]);
+
+    enabled = false;
+    const off = resolveAll();
+    expect(off.ordinary.mcpServerIds).toEqual([]);
+    expect(off.named.mcpServerIds).toEqual([]);
+    expect(off.noProject.mcpServerIds).toEqual([]);
+    expect(off.named.fingerprint).not.toBe(on.named.fingerprint);
+    expect(off.ordinary.fingerprint).not.toBe(on.ordinary.fingerprint);
+    expect(off.noProject.fingerprint).not.toBe(on.noProject.fingerprint);
+
+    enabled = true;
+    const restored = resolveAll();
+    expect(restored.ordinary.fingerprint).toBe(on.ordinary.fingerprint);
+    expect(restored.named.fingerprint).toBe(on.named.fingerprint);
+    expect(restored.noProject.fingerprint).toBe(on.noProject.fingerprint);
+  });
+});
+
 describe("injected command launch matrix", () => {
   it("injects plain and named project parents, but not no-project or absent-store launches", () => {
     const root = mkdtempSync(path.join(tmpdir(), "deck-command-launch-"));
@@ -223,6 +306,7 @@ describe("agent memory launch resources", () => {
       ],
       {
         memoryEnabled: true,
+        mcpEnabled: true,
         defaultMcpServers: [],
         assignedMcpServers: [],
         effectiveMcpServerIds: [],
