@@ -1,9 +1,30 @@
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { InjectedCommandError, InjectedCommandStore } from "../src/injectedCommands.ts";
 import { SettingsStore } from "../src/persistence.ts";
+
+/**
+ * Windows creates symlinks only with Developer Mode or elevation, and the CI
+ * runner has neither — which is why this file's link case has been the sole
+ * red job on `test (windows-latest)`. The rule it proves (a library entry that
+ * became a link is neither listed nor deletable through) is platform-independent;
+ * only BUILDING the link needs the privilege. So the link case runs wherever it
+ * can be built, and the import rules keep running everywhere.
+ */
+const canCreateSymlink = ((): boolean => {
+  const probe = mkdtempSync(path.join(tmpdir(), "agent-deck-symlink-probe-"));
+  try {
+    writeFileSync(path.join(probe, "target"), "probe");
+    symlinkSync(path.join(probe, "target"), path.join(probe, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 const commandSource = (name: string, prompt = "hello") => `
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -131,7 +152,7 @@ describe("InjectedCommandStore", () => {
     }
   });
 
-  it("rejects collisions, multi-command files, bridge tools, privileged imports, and linked files", () => {
+  it("rejects collisions, multi-command files, bridge tools, and privileged imports", () => {
     const { store } = setup();
     expect(() => store.import("collision.ts", commandSource("optimize-agents-md"))).toThrow(
       InjectedCommandError,
@@ -151,7 +172,10 @@ describe("InjectedCommandStore", () => {
     expect(() =>
       store.import("fs.ts", `import { readFile } from "node:fs";\n${commandSource("one")}`),
     ).toThrow("privileged runtime access");
+  });
 
+  it.skipIf(!canCreateSymlink)("never lists or deletes through a linked library entry", () => {
+    const { store } = setup();
     const imported = store.import("safe.ts", commandSource("safe-command"));
     const importedPath = path.join(store.libraryDir, `${imported.id.slice("library:".length)}.ts`);
     store.delete(imported.id);
