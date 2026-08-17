@@ -308,6 +308,10 @@ export interface ManagedSessionRuntime {
   /** Roll back parking classification when scope close did not complete. */
   readonly cancelParkingExpectation: Effect.Effect<void>;
   /** Fail-closed parking proof from the runtime's authoritative live state. */
+  /** The exact inputs {@link parkingStateAllowsStop} folds for this session —
+   * exposed so a caller (and a test) can name the BLOCKER rather than read a
+   * composite boolean that many unrelated conditions also turn false. */
+  readonly parkingState: Effect.Effect<ParkingEligibilityState>;
   readonly parkingEligible: Effect.Effect<boolean>;
   /** Safe replacement boundary; unlike parking, empty-history sessions qualify. */
   readonly resourceRefreshEligible: Effect.Effect<boolean>;
@@ -1320,6 +1324,43 @@ export const makeManagedSessionRuntime = (
       }
     });
 
+    /** The exact inputs both eligibility verdicts fold, built once. Exposed on
+     * the runtime as {@link ManagedSessionRuntime.parkingState} so a test can
+     * assert WHICH blocker is set instead of a composite boolean — the
+     * proxy-assertion problem that let a passive-setStatus pin pass while the
+     * bug was still present. `resumableFile` is the only input that differs
+     * between the two callers. */
+    const parkingStateInputs = (resumableFile: boolean): ParkingEligibilityState => ({
+      authoritativeIdle,
+      resumableFile,
+      terminalFailure: meta.status === "failed",
+      pendingExtensionUi: pendingUiRequests.size > 0,
+      pendingAskUser: pendingAskUser.size > 0,
+      pendingSupervisor: pendingSupervisor.size > 0,
+      pendingUserTurn,
+      providerRetry: turnAwaitingProviderRetry,
+      compaction: compactionInFlight,
+      childRun: activeChildRuns > 0,
+      tool: activeToolCalls.size > 0,
+      transcriptIdle: transcript.agentStatus === "idle",
+      queueAvailable: transcript.pendingInput.status === "available",
+      queuedInput:
+        transcript.pendingInput.steering.length > 0 || transcript.pendingInput.followUp.length > 0,
+    });
+
+    /** True when meta.piSessionFile names a real file pi can resume from. */
+    const hasResumableFile = (): boolean => {
+      try {
+        return Boolean(
+          meta.piSessionFile &&
+            isAbsolute(meta.piSessionFile) &&
+            lstatSync(meta.piSessionFile).isFile(),
+        );
+      } catch {
+        return false;
+      }
+    };
+
     const runtime: ManagedSessionRuntime = {
       meta,
       bus,
@@ -1370,66 +1411,17 @@ export const makeManagedSessionRuntime = (
           expectedParking = false;
         }
       }),
-      parkingEligible: Effect.sync(() => {
-        let resumableFile = false;
-        try {
-          resumableFile = Boolean(
-            meta.piSessionFile &&
-              isAbsolute(meta.piSessionFile) &&
-              lstatSync(meta.piSessionFile).isFile(),
-          );
-        } catch {
-          resumableFile = false;
-        }
-        return parkingStateAllowsStop({
-          authoritativeIdle,
-          resumableFile,
-          terminalFailure: meta.status === "failed",
-          pendingExtensionUi: pendingUiRequests.size > 0,
-          pendingAskUser: pendingAskUser.size > 0,
-          pendingSupervisor: pendingSupervisor.size > 0,
-          pendingUserTurn,
-          providerRetry: turnAwaitingProviderRetry,
-          compaction: compactionInFlight,
-          childRun: activeChildRuns > 0,
-          tool: activeToolCalls.size > 0,
-          transcriptIdle: transcript.agentStatus === "idle",
-          queueAvailable: transcript.pendingInput.status === "available",
-          queuedInput:
-            transcript.pendingInput.steering.length > 0 ||
-            transcript.pendingInput.followUp.length > 0,
-        });
-      }),
-      resourceRefreshEligible: Effect.sync(() => {
-        let resumableFile = transcript.cells.length === 0;
-        try {
-          resumableFile ||= Boolean(
-            meta.piSessionFile &&
-              isAbsolute(meta.piSessionFile) &&
-              lstatSync(meta.piSessionFile).isFile(),
-          );
-        } catch {
-          // Keep the empty-history allowance only.
-        }
-        return parkingStateAllowsStop({
-          authoritativeIdle,
-          resumableFile,
-          terminalFailure: meta.status === "failed",
-          pendingExtensionUi: pendingUiRequests.size > 0,
-          pendingAskUser: pendingAskUser.size > 0,
-          pendingSupervisor: pendingSupervisor.size > 0,
-          pendingUserTurn,
-          providerRetry: turnAwaitingProviderRetry,
-          compaction: compactionInFlight,
-          childRun: activeChildRuns > 0,
-          tool: activeToolCalls.size > 0,
-          transcriptIdle: transcript.agentStatus === "idle",
-          queueAvailable: transcript.pendingInput.status === "available",
-          queuedInput:
-            transcript.pendingInput.steering.length > 0 ||
-            transcript.pendingInput.followUp.length > 0,
-        });
-      }),
+      parkingState: Effect.sync(() => parkingStateInputs(hasResumableFile())),
+      parkingEligible: Effect.sync(() =>
+        parkingStateAllowsStop(parkingStateInputs(hasResumableFile())),
+      ),
+      resourceRefreshEligible: Effect.sync(() =>
+        // A never-prompted session has no file to resume yet, and refreshing it
+        // loses nothing — that allowance is this caller's only difference.
+        parkingStateAllowsStop(
+          parkingStateInputs(transcript.cells.length === 0 || hasResumableFile()),
+        ),
+      ),
       resourceRefreshWaitingForSessionFile: Effect.sync(() => {
         if (!authoritativeIdle || transcript.cells.length === 0 || meta.piSessionFile) return false;
         return transcript.agentStatus === "idle";
