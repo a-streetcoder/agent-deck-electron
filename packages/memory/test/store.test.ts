@@ -391,3 +391,50 @@ describe("memory usage metadata (MEM-08/09/10)", () => {
     expect(parsed.lastUsedAt).toBeUndefined();
   });
 });
+
+describe("memory provenance is set once (MEM-11)", () => {
+  it("keeps the FIRST author when another agent updates the memory in place", () => {
+    const created = writeMemory(store, {
+      type: "decision",
+      title: "Shared decision",
+      summary: "who wrote it",
+      body: "original body",
+      sourceAgentName: "author-agent",
+    });
+    if (!created.ok) throw new Error("create failed");
+
+    const updated = writeMemory(store, {
+      id: created.record.id,
+      type: "decision",
+      title: "Shared decision",
+      summary: "who wrote it",
+      body: "edited by someone else",
+      sourceAgentName: "editor-agent",
+    });
+    if (!updated.ok) throw new Error("update failed");
+
+    // Native's updateMemory does not carry sourceAgentName at all, so an edit
+    // never relabels authorship.
+    expect(getMemory(store, created.record.id)!.sourceAgentName).toBe("author-agent");
+  });
+
+  it("backfills an author onto a record that never had one", () => {
+    const created = writeMemory(store, {
+      type: "context",
+      title: "Unattributed",
+      summary: "no author yet",
+      body: "body",
+    });
+    if (!created.ok) throw new Error("create failed");
+    const updated = writeMemory(store, {
+      id: created.record.id,
+      type: "context",
+      title: "Unattributed",
+      summary: "no author yet",
+      body: "body v2",
+      sourceAgentName: "late-agent",
+    });
+    if (!updated.ok) throw new Error("update failed");
+    expect(getMemory(store, created.record.id)!.sourceAgentName).toBe("late-agent");
+  });
+});

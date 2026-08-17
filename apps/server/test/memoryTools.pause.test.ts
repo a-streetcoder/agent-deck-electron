@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { graphemeCount } from "@agent-deck/memory";
+import { graphemeCount, listMemories } from "@agent-deck/memory";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import { registerMemoryTools } from "../src/memoryTools.ts";
@@ -225,5 +225,55 @@ describe("live agent memory pause guards", () => {
       content: "Memory project access changed; retry the search.",
       isError: true,
     });
+  });
+});
+
+describe("memory provenance (MEM-11)", () => {
+  const setup = (sourceAgent: (sessionId: string) => string | undefined) => {
+    const bridge = new BridgeRegistry();
+    const baseDir = mkdtempSync(path.join(tmpdir(), "agent-deck-mem-provenance-"));
+    const projectPath = mkdtempSync(path.join(tmpdir(), "mem-provenance-project-"));
+    registerMemoryTools(
+      bridge,
+      baseDir,
+      () => projectPath,
+      undefined,
+      undefined,
+      () => true,
+      () => 6000,
+      sourceAgent,
+    );
+    return { bridge, store: { baseDir, projectPath } };
+  };
+
+  const write = async (bridge: BridgeRegistry, title: string) =>
+    await bridge.dispatch(
+      call("agent_deck_memory_write", {
+        type: "decision",
+        title,
+        summary: `${title} summary`,
+        body: `${title} body`,
+      }),
+      { token: "token-a" },
+    );
+
+  it("stamps the writing agent on a delegated child's memory", async () => {
+    const { bridge, store } = setup(() => "reviewer");
+    const result = await write(bridge, "Child wrote this");
+    expect(result.isError).not.toBe(true);
+    const record = listMemories(store).find((entry) => entry.title === "Child wrote this")!;
+    // Native passes the run's agent name for a delegated write
+    // (AppViewModel.swift:6303) so the Memory detail can show its Source row.
+    expect(record.sourceAgentName).toBe("reviewer");
+  });
+
+  it("leaves a parent session's own memory unattributed, as native does", async () => {
+    const { bridge, store } = setup(() => undefined);
+    await write(bridge, "Parent wrote this");
+    const record = listMemories(store).find((entry) => entry.title === "Parent wrote this")!;
+    // Native passes nil for the parent's own write (AppViewModel.swift:6297) —
+    // even when that parent IS a named agent chat, so provenance means "a
+    // delegated run authored this", not "some agent was involved".
+    expect(record.sourceAgentName).toBeUndefined();
   });
 });

@@ -31,6 +31,8 @@ interface MemoryItem {
   body: string;
   tags: string[];
   updatedAt: string;
+  /** The delegated agent that authored it, when a child run did (MEM-11). */
+  sourceAgentName?: string;
 }
 
 interface Draft {
@@ -40,6 +42,10 @@ interface Draft {
   summary: string;
   body: string;
   projectId: string;
+  /** Read-only provenance shown while editing (MEM-11): native surfaces a
+   * "Source" row in the memory detail, and it is set once at creation, so the
+   * editor displays it rather than offering it as a field. */
+  sourceAgentName?: string;
 }
 
 const memoryMissingMessage = (titleSnapshot: string): string =>
@@ -986,6 +992,7 @@ export function MemoryScreen() {
       summary: memory.summary,
       body: memory.body,
       projectId: currentProjectId,
+      ...(memory.sourceAgentName ? { sourceAgentName: memory.sourceAgentName } : {}),
     });
 
   return (
@@ -1096,6 +1103,11 @@ export function MemoryScreen() {
               value={draft.summary}
               onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
             />
+            {draft.sourceAgentName ? (
+              <p className="text-xs text-text-muted" data-testid="memory-editor-source">
+                Source: {draft.sourceAgentName}
+              </p>
+            ) : null}
             <ControlTextArea
               data-testid="memory-body"
               className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
@@ -1182,6 +1194,15 @@ export function MemoryScreen() {
                       <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
                         {memory.summary}
                       </span>
+                      {memory.sourceAgentName ? (
+                        <span
+                          data-testid={`memory-source-${memory.id}`}
+                          className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                          title={`Written by the ${memory.sourceAgentName} agent`}
+                        >
+                          {memory.sourceAgentName}
+                        </span>
+                      ) : null}
                     </ControlButton>
                     <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                       <ControlButton

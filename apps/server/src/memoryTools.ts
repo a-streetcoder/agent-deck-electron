@@ -75,6 +75,13 @@ export function registerMemoryTools(
   }),
   isAgentMemoryEnabled: () => boolean = () => true,
   characterBudget: () => number = () => 6000,
+  /** MEM-11 provenance: the agent whose DELEGATED RUN is writing, or undefined
+   * for a parent session's own write. Native draws the line the same way — it
+   * passes the run's agent name for a child write (AppViewModel.swift:6303) and
+   * nil for the parent's (:6297), even when that parent is itself a named-agent
+   * chat. So this answers "a delegated run authored this", not "an agent was
+   * involved somewhere". */
+  resolveSourceAgentName: (sessionId: string) => string | undefined = () => undefined,
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -126,7 +133,15 @@ export function registerMemoryTools(
           isError: true,
         };
       }
-      const result = writeMemory(store, { ...parsed.data, type: parsed.data.type as MemoryType });
+      // The store keeps the FIRST author on an update (native sets provenance
+      // once at creation and its updateMemory never carries it), so passing this
+      // on an edit cannot relabel someone else's memory.
+      const sourceAgentName = resolveSourceAgentName(ctx.sessionId);
+      const result = writeMemory(store, {
+        ...parsed.data,
+        type: parsed.data.type as MemoryType,
+        ...(sourceAgentName ? { sourceAgentName } : {}),
+      });
       if (result.ok) {
         return {
           content: `${result.created ? "Stored" : "Updated"} memory ${result.record.id}: ${result.record.title}`,

@@ -758,6 +758,45 @@ describe("MemoryScreen semantic readiness", () => {
   });
 });
 
+describe("memory provenance display (MEM-11)", () => {
+  it("shows which delegated agent authored a memory, and nothing when unattributed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/settings") {
+          return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+        }
+        if (url === "/memory/semantic-status") {
+          return jsonResponse({ recall: status("not_requested", "lexical") });
+        }
+        if (url.startsWith("/memory?projectId=")) {
+          return jsonResponse({
+            memories: [
+              { ...memory("mem-child", "Written by a child"), sourceAgentName: "reviewer" },
+              memory("mem-parent", "Written by the parent"),
+            ],
+          });
+        }
+        throw new Error(`unexpected request: ${url}`);
+      }),
+    );
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    // Native shows a "Source" row for an attributed memory
+    // (AgentMemoryViews.swift:467) and omits it otherwise, so stored provenance
+    // is visible rather than buried in the file.
+    const source = await screen.findByTestId("memory-source-mem-child");
+    expect(source.textContent).toContain("reviewer");
+    expect(screen.queryByTestId("memory-source-mem-parent")).toBeNull();
+  });
+});
+
 describe("bulk stale delete (MEM-14)", () => {
   const staleAndActive = (sweeps: string[][]) =>
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

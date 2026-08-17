@@ -699,6 +699,14 @@ async function initServer(
       () => semanticRecall.getStatus(),
       agentMemoryEnabled,
       () => settings.get().agentMemoryInjectionCharacterBudget,
+      // MEM-11: attribute a memory to the DELEGATED RUN that wrote it. Only an
+      // authorized child bridge counts — a parent's own write stays
+      // unattributed even when the parent is a named-agent chat, which is the
+      // line native draws (AppViewModel.swift:6303 vs :6297).
+      (sessionId) =>
+        childMemoryAuthorizations.has(sessionId)
+          ? sessions.get(sessionId)?.meta.agentName
+          : undefined,
     );
   }
 

@@ -177,7 +177,12 @@ export function writeMemory(store: MemoryStore, input: MemoryWriteInput): Memory
       // Updating a stale memory reactivates it; otherwise keep pinned/active.
       status: input.status ?? (existing.status === "stale" ? "active" : existing.status),
       writeReason: input.writeReason ?? existing.writeReason,
-      sourceAgentName: input.sourceAgentName ?? existing.sourceAgentName,
+      // FIRST author wins. Native's updateMemory does not take or touch
+      // sourceAgentName at all (AgentMemoryStore.swift:218) — provenance is set
+      // once at creation — so agent B updating agent A's memory by id must not
+      // relabel it as B's. An input name is adopted only by a record that has
+      // none, which backfills a memory written before provenance existed.
+      sourceAgentName: existing.sourceAgentName ?? input.sourceAgentName,
       updatedAt: now,
     };
     writeRecord(store, updated);
