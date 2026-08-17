@@ -1,8 +1,9 @@
 import {
-  buildRecalledMemories,
   injectableIndex,
+  markMemoriesUsed,
   type MemorySearchHit,
   type MemoryStore,
+  renderRecalledMemories,
 } from "@agent-deck/memory";
 import type { ChildMemoryRecall } from "./services/sessionManager.ts";
 
@@ -102,14 +103,27 @@ export function makeChildMemoryRecall(options: {
       projectPath,
       injectableIndex({ baseDir: options.memoryBaseDir, projectPath }, 15),
     );
-    const recall = buildRecalledMemories(
-      result.hits.slice(0, 4).map((hit) => hit.record),
+    const injected = result.hits.slice(0, 4).map((hit) => hit.record);
+    const rendered = renderRecalledMemories(
+      injected,
       Math.min(options.settings.characterBudget(), 3500),
       "project",
     );
+    const recall = rendered.content;
     const prompt = recall ? `${preamble}\n\n${recall}` : preamble;
     return {
       prompt,
+      // MEM-10: usage is committed by the CALLER, after its own isStillValid
+      // re-prove passes and the prompt is actually adopted. Marking at render
+      // time credited memories for a prompt that a late settings/ownership
+      // change then discarded (Codex) — the repo's re-assert-at-use-time rule.
+      // Marked from includedRecords, so a memory the character budget dropped is
+      // never credited.
+      commitUsage: () =>
+        markMemoriesUsed(
+          { baseDir: options.memoryBaseDir, projectPath },
+          rendered.includedRecords.map((record) => record.id),
+        ),
       isStillValid: () =>
         options.settings.enabled() && options.projectPath(projectId) === projectPath,
     };

@@ -8,8 +8,11 @@ import {
   informativeTerms,
   injectableIndex,
   listMemories,
+  markMemoriesUsed,
   markStale,
   memoryTerms,
+  parseMemory,
+  serializeMemory,
   searchMemories,
   setMemoryStatus,
   sharedTerms,
@@ -326,5 +329,65 @@ describe("memory store", () => {
     expect(update.reason).toBe("not_found");
     const stale = markStale(store, "../escape");
     expect(stale.ok).toBe(false);
+  });
+});
+
+describe("memory usage metadata (MEM-08/09/10)", () => {
+  const write = (title: string): string => {
+    const result = writeMemory(store, {
+      type: "context",
+      title,
+      summary: `${title} summary words`,
+      body: `${title} body`,
+      tags: [],
+    });
+    if (!result.ok) throw new Error("write failed");
+    return result.record.id;
+  };
+
+  it("starts a new memory at useCount 0 with no lastUsedAt (native's create defaults)", () => {
+    const id = write("Fresh memory");
+    const record = getMemory(store, id)!;
+    expect(record.useCount).toBe(0);
+    expect(record.lastUsedAt).toBeUndefined();
+  });
+
+  it("markMemoriesUsed increments the count and stamps the time, durably", () => {
+    const id = write("Used memory");
+    markMemoriesUsed(store, [id]);
+    markMemoriesUsed(store, [id]);
+    // Re-read from disk: the whole point of the row is PERSISTED usage.
+    const record = getMemory(store, id)!;
+    expect(record.useCount).toBe(2);
+    expect(typeof record.lastUsedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(record.lastUsedAt!))).toBe(false);
+  });
+
+  it("skips ids it does not know without touching the ones it does", () => {
+    const id = write("Real memory");
+    markMemoriesUsed(store, ["mem_does_not_exist", id]);
+    expect(getMemory(store, id)!.useCount).toBe(1);
+    expect(getMemory(store, "mem_does_not_exist")).toBeNull();
+  });
+
+  it("does not disturb updatedAt — a recall is not an edit", () => {
+    const id = write("Untouched memory");
+    const before = getMemory(store, id)!.updatedAt;
+    markMemoriesUsed(store, [id]);
+    expect(getMemory(store, id)!.updatedAt).toBe(before);
+  });
+
+  it("reads a legacy record that predates the fields as useCount 0", () => {
+    const id = write("Legacy memory");
+    // Strip the usage keys the way a manifest written before this slice looks.
+    const record = getMemory(store, id)!;
+    const legacy = serializeMemory({ ...record, useCount: 0, lastUsedAt: undefined })
+      .split("\n")
+      .filter((line) => !line.startsWith("useCount:") && !line.startsWith("lastUsedAt:"))
+      .join("\n");
+    expect(legacy).not.toContain("useCount");
+    const parsed = parseMemory(legacy)!;
+    expect(parsed.useCount).toBe(0);
+    expect(parsed.lastUsedAt).toBeUndefined();
   });
 });

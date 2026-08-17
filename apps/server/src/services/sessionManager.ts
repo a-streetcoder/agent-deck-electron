@@ -150,6 +150,10 @@ export interface ChildMemoryLaunchContext {
   prompt: string;
   /** Re-proves live settings/project ownership immediately before spawn. */
   isStillValid(): boolean;
+  /** Record that these memories were actually injected (MEM-10). Called ONLY
+   * after {@link isStillValid} passes and the prompt is adopted, so a context
+   * that gets discarded never credits a use. */
+  commitUsage(): void;
 }
 
 export type ChildMemoryRecall = (request: {
@@ -2046,10 +2050,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           }),
         );
         const promptFile = join(promptDir, "system.md");
+        const childMemoryAdopted = childMemoryContext?.isStillValid() === true;
         const launchSystemPrompt =
-          childMemoryContext?.isStillValid() === true
+          childMemoryAdopted && childMemoryContext
             ? `${effectiveSystemPrompt}\n\n${childMemoryContext.prompt}`
             : effectiveSystemPrompt;
+        // MEM-10: the recalled memories reached THIS child's prompt, so credit
+        // them here — never at render time, where a late settings/ownership
+        // change could discard the context after it was already counted.
+        if (childMemoryAdopted && childMemoryContext) childMemoryContext.commitUsage();
         writeFileSync(promptFile, launchSystemPrompt);
 
         const childTools =

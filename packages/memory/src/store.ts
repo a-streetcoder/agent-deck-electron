@@ -215,6 +215,7 @@ export function writeMemory(store: MemoryStore, input: MemoryWriteInput): Memory
     tags: input.tags ?? [],
     writeReason: input.writeReason,
     sourceAgentName: input.sourceAgentName,
+    useCount: 0,
   };
   writeRecord(store, record);
   return { ok: true, record, created: true };
@@ -236,6 +237,26 @@ export function setMemoryStatus(
 }
 
 /** Mark a memory stale so it stops being injected (kept for inspection). */
+/**
+ * Record that recall INJECTED these memories (MEM-10, native
+ * `AgentMemoryStore.markUsed`): stamp `lastUsedAt` and bump `useCount`, skipping
+ * ids this store does not hold. `updatedAt` is deliberately untouched — a recall
+ * is not an edit, and moving it would reorder the memory list and make every
+ * recall look like a write.
+ */
+export function markMemoriesUsed(store: MemoryStore, ids: readonly string[]): void {
+  if (!hasProject(store)) return;
+  const usedAt = new Date().toISOString();
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const record = getMemory(store, id);
+    if (!record) continue;
+    writeRecord(store, { ...record, useCount: record.useCount + 1, lastUsedAt: usedAt });
+  }
+}
+
 export function markStale(store: MemoryStore, id: string): MemoryWriteResult {
   return setMemoryStatus(store, id, "stale");
 }
@@ -402,15 +423,18 @@ export async function semanticSearchMemoriesWithOutcome(
     };
   });
   ranked.sort((a, b) => {
-    // Native deliberately quantizes score before metadata ordering: pin and
-    // recency may settle a near-tie but never add relevance points. Native also
-    // checks useCount here; Electron does not persist it yet (tracked as MEM-08).
+    // Native deliberately quantizes score before metadata ordering: pin, usage
+    // and recency may settle a near-tie but never add relevance points. The
+    // order matches AgentMemoryStore.swift:314-323 exactly — bucket, pinned,
+    // useCount, updatedAt — so a memory that keeps proving useful wins over a
+    // same-bucket neighbour and never outranks a better match (MEM-08).
     const scoreBucketDifference =
       Math.floor(b.hit.score / SEMANTIC_SCORE_BUCKET) -
       Math.floor(a.hit.score / SEMANTIC_SCORE_BUCKET);
     return (
       scoreBucketDifference ||
       Number(b.record.status === "pinned") - Number(a.record.status === "pinned") ||
+      b.record.useCount - a.record.useCount ||
       b.record.updatedAt.localeCompare(a.record.updatedAt)
     );
   });

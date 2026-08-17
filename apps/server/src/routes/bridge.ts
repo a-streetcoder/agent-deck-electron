@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
-import { renderRecalledMemories, type MemoryStore } from "@agent-deck/memory";
+import { markMemoriesUsed, type MemoryStore, renderRecalledMemories } from "@agent-deck/memory";
 import { z } from "zod";
 import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts";
 import type { ServerContext } from "../context.ts";
@@ -213,6 +213,8 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   // (empty → the hook injects nothing). The launch index carries only titles;
   // this surfaces the relevant bodies per turn.
   const RECALL_LIMIT = 5;
+  /** Last (session, query) whose recall was credited — see markMemoriesUsed below. */
+  const lastRecallUsage = new Map<string, string>();
   async function handleRecall(
     sessionId: string,
     params: Record<string, unknown>,
@@ -255,6 +257,25 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       hits.map((hit) => hit.record),
       ctx.settings?.get().agentMemoryInjectionCharacterBudget ?? 6000,
     );
+    // MEM-10 (native AgentMemoryStore.markUsed, called from the retrieval sites
+    // in AppViewModel): a memory whose BODY actually reached the turn has been
+    // used. Marked from includedRecords, not from every hit — the character
+    // budget can drop a ranked hit, and an un-injected memory was not used.
+    // Placed after the owner/gate re-prove above so a discarded recall records
+    // nothing, and after rendering so the budget decision is already made.
+    // Idempotent per (session, query): the before_agent_start hook can invoke
+    // this more than once for one turn, and counting the same injection twice
+    // would skew the very tie-break useCount feeds (Codex). A repeat of the
+    // SAME query for the same session credits nothing further; the next turn's
+    // query is a different signature and counts again.
+    const usageSignature = `${sessionId} ${query}`;
+    if (lastRecallUsage.get(sessionId) !== usageSignature) {
+      lastRecallUsage.set(sessionId, usageSignature);
+      markMemoriesUsed(
+        store,
+        rendered.includedRecords.map((record) => record.id),
+      );
+    }
     return {
       content: rendered.content,
       recall: result.recall,

@@ -13,6 +13,7 @@ export {
   getMemory,
   injectableIndex,
   listMemories,
+  markMemoriesUsed,
   markStale,
   searchMemories,
   semanticSearchMemories,

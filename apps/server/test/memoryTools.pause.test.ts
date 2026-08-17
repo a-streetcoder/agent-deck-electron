@@ -78,6 +78,7 @@ describe("live agent memory pause guards", () => {
           type: "decision" as const,
           scope: "project" as const,
           status: "active" as const,
+          useCount: 0,
           title,
           summary: "summary",
           body: "👨‍👩‍👧‍👦".repeat(2000),
@@ -129,6 +130,7 @@ describe("live agent memory pause guards", () => {
           createdAt: string;
           updatedAt: string;
           tags: string[];
+          useCount: number;
         };
         score: number;
         sharedTerms: string[];
@@ -162,6 +164,7 @@ describe("live agent memory pause guards", () => {
             id: "memory-a",
             type: "decision",
             scope: "project",
+            useCount: 0,
             status: "active",
             title: "Should not leak",
             summary: "private summary",

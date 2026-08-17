@@ -6,6 +6,10 @@ import { MEMORY_STATUSES, MEMORY_TYPES, type MemoryRecord } from "./types.ts";
  * Format). The frontmatter is the durable metadata; the body is the content.
  */
 
+/** Ranking only needs ordering, so a counter this large is already meaningless;
+ * clamping keeps arithmetic exact and the YAML small. */
+const MAX_USE_COUNT = 1_000_000_000;
+
 export function serializeMemory(record: MemoryRecord): string {
   const frontmatter = stringifyYaml({
     id: record.id,
@@ -19,6 +23,8 @@ export function serializeMemory(record: MemoryRecord): string {
     tags: record.tags,
     writeReason: record.writeReason ?? "",
     sourceAgentName: record.sourceAgentName ?? "",
+    useCount: record.useCount,
+    lastUsedAt: record.lastUsedAt ?? "",
   }).trimEnd();
   return `---\n${frontmatter}\n---\n\n${record.body.trim()}\n`;
 }
@@ -75,5 +81,18 @@ export function parseMemory(text: string): MemoryRecord | null {
       typeof data.sourceAgentName === "string" && data.sourceAgentName
         ? data.sourceAgentName
         : undefined,
+    // Usage metadata (MEM-08/09/10) arrived after users already had memory
+    // files, so a manifest without these keys is NORMAL, not corrupt: default
+    // to unused rather than NaN. A non-integer or negative value on disk is
+    // equally untrusted — clamp it instead of propagating it into ranking.
+    // A hand-edited manifest is untrusted: only a SAFE integer inside a sane
+    // bound survives. Number.isInteger alone accepts 1e21, where `count + 1`
+    // equals `count`, so the counter would silently stop advancing (Codex).
+    useCount:
+      typeof data.useCount === "number" && Number.isSafeInteger(data.useCount) && data.useCount > 0
+        ? Math.min(data.useCount, MAX_USE_COUNT)
+        : 0,
+    lastUsedAt:
+      typeof data.lastUsedAt === "string" && data.lastUsedAt ? data.lastUsedAt : undefined,
   };
 }

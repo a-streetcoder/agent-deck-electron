@@ -44,6 +44,13 @@ export interface MemoryRecord {
   writeReason?: string;
   /** The subagent that wrote it, if any. */
   sourceAgentName?: string;
+  /** How many times recall has injected this memory (native `useCount`). Ranks
+   * near-ties: a memory that keeps proving useful wins over a same-scoring
+   * neighbour, but never outranks a genuinely better match. */
+  useCount: number;
+  /** ISO time of the last recall that injected it (native `lastUsedAt`);
+   * absent until first use. Evidence for staleness decisions. */
+  lastUsedAt?: string;
 }
 
 /** Fields an agent supplies to write a memory (id present = update in place). */

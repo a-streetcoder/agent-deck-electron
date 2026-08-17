@@ -6,6 +6,7 @@ const record: MemoryRecord = {
   id: "mem_20260706_context_x_abcdef",
   type: "context",
   scope: "project",
+  useCount: 0,
   status: "active",
   title: "A title: with a colon",
   summary: "A summary — with punctuation & an ampersand",

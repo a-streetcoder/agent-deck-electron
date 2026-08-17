@@ -343,6 +343,7 @@ describe("durable generic child lifecycle", () => {
     const recallChildMemory = vi.fn(async () => ({
       prompt: "VOLATILE_MEMORY_SENTINEL",
       isStillValid: () => true,
+      commitUsage: () => {},
     }));
     const result = await Effect.runPromise(
       Effect.scoped(
@@ -395,6 +396,7 @@ describe("durable generic child lifecycle", () => {
     const recallChildMemory = vi.fn(async () => ({
       prompt: "VOLATILE_MEMORY",
       isStillValid: () => true,
+      commitUsage: () => {},
     }));
     const childRuns = { create: vi.fn(), update: vi.fn() };
     await Effect.runPromise(
