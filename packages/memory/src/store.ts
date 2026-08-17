@@ -7,6 +7,7 @@ import { isSafeMemoryId, memoryFilePath, projectMemoryDir } from "./paths.ts";
 import { scanForSecrets } from "./secrets.ts";
 import { centeredCosineScores, type Embedder } from "./semantic.ts";
 import {
+  duplicateTerms,
   fuzzyMatchedTerms,
   informativeTerms,
   memoryTerms,
@@ -30,8 +31,10 @@ import type {
  * number of memories, which is small). All timestamps are absolute ISO strings.
  */
 
-/** Overlap coefficient at/above which a new write is held as a near-duplicate. */
-const DUPLICATE_OVERLAP = 0.6;
+/** Overlap coefficient at/above which a new write is held as a near-duplicate.
+ * Native's calibrated floor (AgentMemoryStore.swift:118): real duplicate pairs
+ * reached 0.647, genuinely new facts stayed at or below 0.09. */
+const DUPLICATE_OVERLAP = 0.55;
 /** A memory must share at least this many EXACT informative terms to be a hit. */
 const MIN_SHARED_TERMS = 1;
 /**
@@ -133,9 +136,71 @@ export function getMemory(store: MemoryStore, id: string): MemoryRecord | null {
   }
 }
 
+/**
+ * Centered-cosine floor for the embedding half of the near-duplicate guard.
+ * Native's calibration (AgentMemoryStore.swift:109-113): real re-writes scored
+ * 0.475 and 0.830, genuinely new same-domain facts peaked at 0.224.
+ */
+const DUPLICATE_SIMILARITY = 0.45;
+
+/** The one sentence an agent gets when EITHER duplicate signal fires, so the
+ * embedding path and the lexical path cannot drift into two different asks. */
+export function nearDuplicateGuidance(existing: MemoryRecord): string {
+  return `This looks like a near-duplicate of "${existing.title}" (id ${existing.id}). Pass that id to update it in place, or set confirmNew to store it as a distinct memory.`;
+}
+
+/**
+ * The embedding half of native's near-duplicate write guard
+ * (AgentMemoryStore.findNearDuplicate): which stored memory a candidate write
+ * most likely already restates. Native calls this the stronger judge of "the
+ * same fact in different words" and runs it BEFORE the lexical overlap check,
+ * which stays the fallback.
+ *
+ * Best-effort by design, exactly as native is: fewer than two memories (a
+ * centroid over one vector says nothing), an embedder that fails, or a batch
+ * that comes back malformed all return null, and the caller falls through to
+ * the lexical signal inside `writeMemory`. The guard exists to reduce
+ * duplicates, never to become a wall in front of a legitimate write.
+ */
+export async function findSemanticDuplicate(
+  store: MemoryStore,
+  embedder: Embedder,
+  candidate: { title: string; summary: string; body: string; tags?: string[] },
+): Promise<MemoryRecord | null> {
+  const records = injectable(listMemories(store));
+  if (records.length < 2) return null;
+  const candidateText = memoryEmbedText({
+    title: candidate.title,
+    summary: candidate.summary,
+    body: candidate.body,
+  });
+  let vectors: number[][];
+  try {
+    vectors = await embedder.embed([candidateText, ...records.map(memoryEmbedText)]);
+  } catch {
+    return null;
+  }
+  if (!validEmbeddingBatch(vectors, records.length + 1)) return null;
+  const [candidateVec, ...docVecs] = vectors as [number[], ...number[][]];
+  const scores = centeredCosineScores(candidateVec, docVecs);
+  // An empty result means the candidate sat exactly at the centroid: no
+  // direction to judge by, so no duplicate claim.
+  if (scores.length !== records.length) return null;
+  let best: { record: MemoryRecord; score: number } | null = null;
+  scores.forEach((score, index) => {
+    if (!best || score > best.score) best = { record: records[index]!, score };
+  });
+  const winner = best as { record: MemoryRecord; score: number } | null;
+  return winner && winner.score >= DUPLICATE_SIMILARITY ? winner.record : null;
+}
+
 /** Memories eligible for recall/injection: active or pinned. */
+function isInjectable(record: MemoryRecord): boolean {
+  return record.status === "active" || record.status === "pinned";
+}
+
 function injectable(records: MemoryRecord[]): MemoryRecord[] {
-  return records.filter((r) => r.status === "active" || r.status === "pinned");
+  return records.filter(isInjectable);
 }
 
 /**
@@ -190,18 +255,41 @@ export function writeMemory(store: MemoryStore, input: MemoryWriteInput): Memory
   }
 
   if (!input.confirmNew) {
-    const candidateTerms = memoryTerms({
+    // Native asks the embedder first and treats either signal as sufficient
+    // (AgentMemoryStore.swift:392-400). The caller supplies the embedding
+    // verdict because only it has an embedder; the lexical check below is the
+    // fallback that always runs.
+    // Re-assert at USE time. The verdict was computed before an await, so the
+    // memory it names may since have been deleted, retired or archived, and a
+    // caller could hand over a record this project never held. A memory an
+    // agent can no longer be shown cannot evidence a duplicate — pointing it at
+    // that id would be advice that cannot work — so the write falls through to
+    // the lexical check instead (Codex).
+    const semantic = input.semanticDuplicate ? getMemory(store, input.semanticDuplicate.id) : null;
+    if (semantic && isInjectable(semantic)) {
+      return {
+        ok: false,
+        reason: "duplicate",
+        existing: semantic,
+        message: nearDuplicateGuidance(semantic),
+      };
+    }
+    // Native's candidate text is title + summary + body, while the stored side
+    // also carries tags (AgentMemoryStore.swift:439-446) — deliberately kept,
+    // since a candidate's own tags cannot evidence that it restates something.
+    const candidateTerms = duplicateTerms({
       title: input.title,
       summary: input.summary,
-      tags: input.tags ?? [],
+      tags: [],
+      body: input.body,
     });
     for (const existing of injectable(listMemories(store))) {
-      if (overlapCoefficient(candidateTerms, memoryTerms(existing)) >= DUPLICATE_OVERLAP) {
+      if (overlapCoefficient(candidateTerms, duplicateTerms(existing)) >= DUPLICATE_OVERLAP) {
         return {
           ok: false,
           reason: "duplicate",
           existing,
-          message: `This looks like a near-duplicate of "${existing.title}" (id ${existing.id}). Pass that id to update it in place, or set confirmNew to store it as a distinct memory.`,
+          message: nearDuplicateGuidance(existing),
         };
       }
     }
@@ -330,7 +418,7 @@ export function searchMemories(
 }
 
 /** Text embedded for a memory's semantic vector — title + summary + bounded body. */
-function memoryEmbedText(record: MemoryRecord): string {
+function memoryEmbedText(record: { title: string; summary: string; body: string }): string {
   const bodyPrefix = record.body.slice(0, 600).trim();
   return bodyPrefix
     ? `${record.title}\n${record.summary}\n${bodyPrefix}`

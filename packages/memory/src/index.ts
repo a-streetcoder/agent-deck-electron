@@ -11,6 +11,8 @@ export {
 export {
   deleteMemory,
   deleteMemoryIfStale,
+  findSemanticDuplicate,
+  nearDuplicateGuidance,
   getMemory,
   injectableIndex,
   listMemories,

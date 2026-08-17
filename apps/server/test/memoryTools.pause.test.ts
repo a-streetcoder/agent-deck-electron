@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { graphemeCount, listMemories } from "@agent-deck/memory";
+import { graphemeCount, listMemories, writeMemory } from "@agent-deck/memory";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import { registerMemoryTools } from "../src/memoryTools.ts";
@@ -275,5 +275,149 @@ describe("memory provenance (MEM-11)", () => {
     // even when that parent IS a named agent chat, so provenance means "a
     // delegated run authored this", not "some agent was involved".
     expect(record.sourceAgentName).toBeUndefined();
+  });
+});
+
+describe("near-duplicate write guard, embedding signal wired to the tool (MEM-19)", () => {
+  const searchStub = vi.fn(async () => ({
+    hits: [],
+    recall: {
+      readiness: "not_requested" as const,
+      mode: "lexical" as const,
+      reason: null,
+      message: "lexical",
+    },
+  }));
+
+  it("holds a write the embedder says restates an existing memory, and stores nothing", async () => {
+    const bridge = new BridgeRegistry();
+    const baseDir = mkdtempSync(path.join(tmpdir(), "agent-deck-memory-dup-"));
+    const store = { baseDir, projectPath: "/project" };
+    const existing = writeMemory(store, {
+      type: "context",
+      title: "Login credentials",
+      summary: "Where the oauth token lives",
+      body: "The single sign-on secret is in 1Password under Platform.",
+    });
+    if (!existing.ok) throw new Error("unreachable");
+
+    // Native runs the embedding signal before the lexical one and holds the
+    // write on a hit (AppViewModel.swift:6334-6342). Without this wired to the
+    // tool, findSemanticDuplicate would be code nothing calls.
+    const findDuplicate = vi.fn(async () => existing.record);
+    registerMemoryTools(
+      bridge,
+      baseDir,
+      () => "/project",
+      searchStub,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      findDuplicate,
+    );
+
+    const result = await bridge.dispatch(
+      call("agent_deck_memory_write", {
+        type: "context",
+        title: "Single sign-on secret location",
+        summary: "which vault holds the sso credential",
+        body: "It lives in the Platform vault.",
+      }),
+      { token: "token-a" },
+    );
+
+    expect(findDuplicate).toHaveBeenCalledTimes(1);
+    expect(String(result.content)).toContain(existing.record.id);
+    expect(listMemories(store)).toHaveLength(1);
+  });
+
+  it("still reports a secret first when the write is also a semantic duplicate", async () => {
+    const bridge = new BridgeRegistry();
+    const baseDir = mkdtempSync(path.join(tmpdir(), "agent-deck-memory-dup-secret-"));
+    const store = { baseDir, projectPath: "/project" };
+    const existing = writeMemory(store, {
+      type: "context",
+      title: "Login credentials",
+      summary: "Where the oauth token lives",
+      body: "The single sign-on secret is in 1Password under Platform.",
+    });
+    if (!existing.ok) throw new Error("unreachable");
+    registerMemoryTools(
+      bridge,
+      baseDir,
+      () => "/project",
+      searchStub,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      async () => existing.record,
+    );
+
+    // Duplicate guidance says "pass confirmNew or an id" — advice that cannot
+    // work for content the store rejects outright. The write rules have one
+    // order, and it lives in writeMemory.
+    const result = await bridge.dispatch(
+      call("agent_deck_memory_write", {
+        type: "context",
+        title: "Token for the deploy bot",
+        summary: "the credential we rotate",
+        body: "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+      }),
+      { token: "token-a" },
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain("secret");
+    expect(listMemories(store)).toHaveLength(1);
+  });
+
+  it("does not consult the embedder for an update or a confirmed-new write", async () => {
+    const bridge = new BridgeRegistry();
+    const baseDir = mkdtempSync(path.join(tmpdir(), "agent-deck-memory-dup-skip-"));
+    const store = { baseDir, projectPath: "/project" };
+    const existing = writeMemory(store, {
+      type: "context",
+      title: "Login credentials",
+      summary: "Where the oauth token lives",
+      body: "The single sign-on secret is in 1Password under Platform.",
+    });
+    if (!existing.ok) throw new Error("unreachable");
+    const findDuplicate = vi.fn(async () => existing.record);
+    registerMemoryTools(
+      bridge,
+      baseDir,
+      () => "/project",
+      searchStub,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      findDuplicate,
+    );
+
+    // An update targets a specific memory, and confirmNew is the agent's
+    // explicit "this is a different fact" — native guards neither.
+    await bridge.dispatch(
+      call("agent_deck_memory_write", {
+        id: existing.record.id,
+        type: "context",
+        title: "Login credentials",
+        summary: "Where the oauth token lives",
+        body: "Now in the Platform vault.",
+      }),
+      { token: "token-a" },
+    );
+    await bridge.dispatch(
+      call("agent_deck_memory_write", {
+        type: "context",
+        title: "Something else entirely",
+        summary: "a genuinely separate fact",
+        body: "Unrelated content.",
+        confirmNew: true,
+      }),
+      { token: "token-a" },
+    );
+    expect(findDuplicate).not.toHaveBeenCalled();
   });
 });

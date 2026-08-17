@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   centeredCosineScores,
   cosineSimilarity,
+  findSemanticDuplicate,
   meanCenter,
   informativeTerms,
   searchMemories,
@@ -421,5 +422,93 @@ describe("semanticSearchMemories native qualification", () => {
     const embedder = mappedEmbedder({}, DOCUMENT_VECTORS);
     expect(await semanticSearchMemories(store, "   ", embedder)).toEqual([]);
     expect(await semanticSearchMemories(store, "oauth token", embedder, { limit: 0 })).toEqual([]);
+  });
+});
+
+describe("near-duplicate write guard, embedding signal (MEM-19)", () => {
+  // A write that restates "Login credentials" without reusing its words. The
+  // fake embedder keys on the exact text the store builds: the title, a
+  // newline, then the summary, when a candidate has no body.
+  const PARAPHRASE = {
+    title: "Where the oauth token lives",
+    summary: "the single sign-on secret and its home",
+    body: "",
+    tags: [],
+  };
+  const PARAPHRASE_TEXT = `${PARAPHRASE.title}\n${PARAPHRASE.summary}`;
+
+  // Native tries the embedding signal FIRST and calls it "the stronger judge of
+  // 'same fact in different words'" (AgentMemoryStore.swift:411-412); the
+  // lexical overlap coefficient is what it falls back to. Electron had only the
+  // fallback, so a paraphrase sharing no vocabulary was stored next to the
+  // memory it restated.
+  it("reports the memory a paraphrase restates, even with no shared vocabulary", async () => {
+    seedCalibratedCorpus();
+    const duplicate = await findSemanticDuplicate(
+      store,
+      mappedEmbedder({ [PARAPHRASE_TEXT]: [1, 0, 0] }, DOCUMENT_VECTORS),
+      PARAPHRASE,
+    );
+    expect(duplicate?.title).toBe("Login credentials");
+  });
+
+  it("stays silent on a genuinely new fact in the same corpus", async () => {
+    seedCalibratedCorpus();
+    const duplicate = await findSemanticDuplicate(
+      store,
+      mappedEmbedder(
+        { "Incident retro process\nwhat we do after an outage": [0, 0, 0, 1] },
+        DOCUMENT_VECTORS,
+      ),
+      {
+        title: "Incident retro process",
+        summary: "what we do after an outage",
+        body: "",
+        tags: [],
+      },
+    );
+    expect(duplicate).toBeNull();
+  });
+
+  it("abstains below two memories, where a centroid means nothing", async () => {
+    addMemory("Login credentials", "Where the oauth token lives");
+    const duplicate = await findSemanticDuplicate(
+      store,
+      mappedEmbedder({ [PARAPHRASE_TEXT]: [1, 0, 0] }, DOCUMENT_VECTORS),
+      PARAPHRASE,
+    );
+    expect(duplicate).toBeNull();
+  });
+
+  it("abstains when the embedder fails rather than blocking the write", async () => {
+    seedCalibratedCorpus();
+    const broken: Embedder = {
+      async embed() {
+        throw new Error("embedder down");
+      },
+    };
+    await expect(findSemanticDuplicate(store, broken, PARAPHRASE)).resolves.toBeNull();
+  });
+
+  it("only considers memories an agent could be shown", async () => {
+    seedCalibratedCorpus();
+    const archived = writeMemory(store, {
+      type: "context",
+      title: "Login credentials",
+      summary: "Where the oauth token lives",
+      body: "",
+      confirmNew: true,
+    });
+    if (!archived.ok) throw new Error("unreachable");
+    setMemoryStatus(store, archived.record.id, "archived");
+    const duplicate = await findSemanticDuplicate(
+      store,
+      mappedEmbedder({ [PARAPHRASE_TEXT]: [1, 0, 0] }, DOCUMENT_VECTORS),
+      PARAPHRASE,
+    );
+    // The live memory is still reported — it is only the retired copy that is
+    // invisible, so this cannot pass by finding nothing at all.
+    expect(duplicate?.title).toBe("Login credentials");
+    expect(duplicate?.id).not.toBe(archived.record.id);
   });
 });

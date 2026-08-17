@@ -2,9 +2,11 @@ import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import {
   createOnDeviceEmbedder,
   EmbedderUnavailableError,
+  findSemanticDuplicate,
   searchMemories,
   semanticSearchMemoriesWithOutcome,
   type Embedder,
+  type MemoryRecord,
   type MemorySearchHit,
   type MemoryStore,
 } from "@agent-deck/memory";
@@ -133,6 +135,29 @@ export class SemanticRecallCoordinator {
           : STATUSES.embeddingFailed;
     }
     return { hits: outcome.hits, recall: this.status };
+  }
+  /**
+   * MEM-19: the embedding half of the near-duplicate write guard, behind the
+   * same preference gate and embedder lifecycle as recall. Null whenever
+   * semantic ranking is not requested or the embedder is unavailable, which
+   * leaves writeMemory's lexical overlap check as the only signal — the same
+   * fallback native takes (AgentMemoryStore.swift:411-433).
+   *
+   * Deliberately does NOT touch `status`: a write-guard miss is not evidence
+   * about recall readiness, and the status drives a user-facing banner.
+   */
+  async findDuplicate(
+    store: MemoryStore,
+    candidate: { title: string; summary: string; body: string; tags?: string[] },
+  ): Promise<MemoryRecord | null> {
+    if (!this.requested()) return null;
+    const embedder = await this.resolveEmbedder(false);
+    if (!embedder || !this.requested()) return null;
+    const duplicate = await findSemanticDuplicate(store, embedder, candidate);
+    // Embedding is slow enough for the preference to change underneath it, and
+    // recall discards its result in exactly this case. A guard the user has
+    // switched off must not still hold their agent's write (Codex).
+    return this.requested() ? duplicate : null;
   }
 
   private isRuntimeFailure(): boolean {

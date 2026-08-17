@@ -66,6 +66,12 @@ export interface MemoryWriteInput {
   sourceAgentName?: string;
   /** Override the near-duplicate guard when the fact is genuinely distinct. */
   confirmNew?: boolean;
+  /** The embedding half of the near-duplicate guard, already computed by the
+   * caller that has an embedder (findSemanticDuplicate). Passed IN rather than
+   * checked at the call site so one function keeps the order of every write
+   * rule: a secret still loses to nothing, and the duplicate wording is the
+   * same whichever signal fired. */
+  semanticDuplicate?: MemoryRecord | null;
 }
 
 /** Outcome of a write attempt. */

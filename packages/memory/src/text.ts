@@ -1,10 +1,13 @@
 /**
  * Lexical matching primitives for recall and the near-duplicate guard. The
  * native app uses these as corrective evidence on top of on-device embeddings;
- * cross-platform, they are the primary signal until a JS embedder lands. Terms
- * are drawn from a memory's title + summary + tags (never the body — incidental
- * body vocabulary qualified junk in the native eval).
+ * cross-platform, they are the primary signal until a JS embedder lands. RECALL
+ * terms are drawn from a memory's title + summary + tags, never the body —
+ * incidental body vocabulary qualified junk in the native eval. The DUPLICATE
+ * guard is the one place that does read the body, because native splits it the
+ * same way (see `duplicateTerms`).
  */
+import { truncateGraphemes } from "./graphemes.ts";
 
 const STOPWORDS = new Set([
   "a",
@@ -309,6 +312,26 @@ export function memoryTerms(fields: {
   tags: string[];
 }): Set<string> {
   return informativeTerms([fields.title, fields.summary, fields.tags.join(" ")].join(" "));
+}
+
+/**
+ * Informative terms for the near-duplicate write guard, which — unlike recall —
+ * reads the BODY too, bounded by the same 600 characters the embedder sees
+ * (native AgentMemoryStore.swift:441-447, embedBodyCharacterLimit). A reworded
+ * title over a restated body is the duplicate shape this catches; recall keeps
+ * to the curated fields so a long body cannot drown a query.
+ */
+export function duplicateTerms(fields: {
+  title: string;
+  summary: string;
+  tags: string[];
+  body: string;
+}): Set<string> {
+  return informativeTerms(
+    [fields.title, fields.summary, fields.tags.join(" "), truncateGraphemes(fields.body, 600)].join(
+      " ",
+    ),
+  );
 }
 
 /** Native semantic-overlap terms carried by the same curated memory fields. */

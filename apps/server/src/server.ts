@@ -707,6 +707,10 @@ async function initServer(
         childMemoryAuthorizations.has(sessionId)
           ? sessions.get(sessionId)?.meta.agentName
           : undefined,
+      // MEM-19: the embedding half of the near-duplicate write guard, through
+      // the same coordinator recall uses so one preference and one embedder
+      // lifecycle govern both.
+      (store, candidate) => semanticRecall.findDuplicate(store, candidate),
     );
   }
 

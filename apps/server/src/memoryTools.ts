@@ -4,6 +4,7 @@ import {
   renderRecalledMemories,
   searchMemories,
   writeMemory,
+  type MemoryRecord,
   type MemorySearchHit,
   type MemoryStore,
   type MemoryType,
@@ -82,6 +83,15 @@ export function registerMemoryTools(
    * chat. So this answers "a delegated run authored this", not "an agent was
    * involved somewhere". */
   resolveSourceAgentName: (sessionId: string) => string | undefined = () => undefined,
+  /** MEM-19: the embedding half of the near-duplicate guard. Native asks its
+   * embedder BEFORE the lexical overlap check, calling it the stronger judge of
+   * "the same fact in different words" (AgentMemoryStore.swift:411). The default
+   * is a no-op, which leaves writeMemory's lexical guard as the only signal —
+   * the same degradation native takes when its embedder is unavailable. */
+  findDuplicate: (
+    store: MemoryStore,
+    candidate: { title: string; summary: string; body: string; tags?: string[] },
+  ) => Promise<MemoryRecord | null> = async () => null,
 ): void {
   const storeFor = (sessionId: string): MemoryStore | null => {
     const projectPath = resolveProjectPath(sessionId);
@@ -118,7 +128,7 @@ export function registerMemoryTools(
       promptSnippet:
         "agent_deck_memory_write — persist a durable project fact (decision/failure/runbook/context/preference).",
     },
-    (params, ctx) => {
+    async (params, ctx) => {
       if (!isAgentMemoryEnabled()) {
         return { content: "Agent Deck memory is paused", isError: true };
       }
@@ -136,10 +146,26 @@ export function registerMemoryTools(
       // The store keeps the FIRST author on an update (native sets provenance
       // once at creation and its updateMemory never carries it), so passing this
       // on an edit cannot relabel someone else's memory.
+      // Only a CREATE the agent has not already confirmed pays for an embedding:
+      // an update names the memory it means, and confirmNew is its explicit
+      // "this is a different fact" — native guards neither
+      // (AppViewModel.swift:6332). The verdict is handed to writeMemory rather
+      // than acted on here, so the store keeps ONE order of write rules: a
+      // secret in the content still loses to nothing (Codex).
+      const semanticDuplicate =
+        parsed.data.id || parsed.data.confirmNew
+          ? null
+          : await findDuplicate(store, {
+              title: parsed.data.title,
+              summary: parsed.data.summary,
+              body: parsed.data.body,
+              ...(parsed.data.tags ? { tags: parsed.data.tags } : {}),
+            });
       const sourceAgentName = resolveSourceAgentName(ctx.sessionId);
       const result = writeMemory(store, {
         ...parsed.data,
         type: parsed.data.type as MemoryType,
+        semanticDuplicate,
         ...(sourceAgentName ? { sourceAgentName } : {}),
       });
       if (result.ok) {

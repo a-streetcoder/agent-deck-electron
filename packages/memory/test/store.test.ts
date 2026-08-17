@@ -124,6 +124,85 @@ describe("memory store", () => {
     expect(listMemories(store)).toHaveLength(2);
   });
 
+  it("catches a restatement whose overlap lives in the body (MEM-19)", () => {
+    // Native's lexical duplicate signal compares title + summary + tags + body
+    // (AgentMemoryStore.swift:441-447). Electron compared only the curated
+    // fields, so an agent that reworded the title and summary while restating
+    // the same body stacked a paraphrase next to the original.
+    const first = writeMemory(store, {
+      type: "runbook",
+      title: "Postgres cluster migration",
+      summary: "how the production database moves",
+      body: "Take a pg_dump of the users table, restore it into the new cluster, then verify row counts against the old primary before switching the connection string.",
+    });
+    if (!first.ok) throw new Error("unreachable");
+
+    const restated = writeMemory(store, {
+      type: "context",
+      title: "Moving the database",
+      summary: "the plan we agreed",
+      body: "Restore the pg_dump of the users table into the new cluster and verify row counts against the old primary before the connection string switches.",
+    });
+    expect(restated.ok).toBe(false);
+    if (restated.ok) throw new Error("unreachable");
+    expect(restated.reason).toBe("duplicate");
+    if (restated.reason !== "duplicate") throw new Error("unreachable");
+    expect(restated.existing.id).toBe(first.record.id);
+  });
+
+  it("still stores a new fact whose body shares only the domain (MEM-19)", () => {
+    // The guard reduces duplicates; it must never become a wall in front of
+    // legitimate writes (native's own note at AgentMemoryStore.swift:401-402).
+    writeMemory(store, {
+      type: "runbook",
+      title: "Postgres cluster migration",
+      summary: "how the production database moves",
+      body: "Take a pg_dump of the users table, restore it into the new cluster, then verify row counts against the old primary before switching the connection string.",
+    });
+    const distinct = writeMemory(store, {
+      type: "decision",
+      title: "Connection pooling choice",
+      summary: "why we picked pgbouncer",
+      body: "Pgbouncer runs in transaction mode in front of the primary; the alternative proxy needed a sidecar per pod and its health checks flapped under load.",
+    });
+    expect(distinct.ok).toBe(true);
+    expect(listMemories(store)).toHaveLength(2);
+  });
+
+  it("re-resolves a supplied embedding verdict before acting on it (MEM-19)", () => {
+    const existing = writeMemory(store, {
+      type: "context",
+      title: "Login credentials",
+      summary: "Where the oauth token lives",
+      body: "The single sign-on secret lives in the Platform vault.",
+    });
+    if (!existing.ok) throw new Error("unreachable");
+
+    // The verdict is computed BEFORE an await: the memory it names can be
+    // retired, archived or deleted while the embedder runs, and a caller could
+    // hand over a record this project never had. A memory an agent can no
+    // longer be shown cannot evidence a duplicate — telling it to update that
+    // id would be advice that cannot work (Codex).
+    setMemoryStatus(store, existing.record.id, "archived");
+    const afterArchive = writeMemory(store, {
+      type: "context",
+      title: "Single sign-on secret location",
+      summary: "which vault holds it",
+      body: "Platform vault.",
+      semanticDuplicate: existing.record,
+    });
+    expect(afterArchive.ok).toBe(true);
+
+    const stranger = writeMemory(store, {
+      type: "context",
+      title: "Another separate fact",
+      summary: "unrelated to anything stored",
+      body: "Nothing in common.",
+      semanticDuplicate: { ...existing.record, id: "mem_does_not_exist" },
+    });
+    expect(stranger.ok).toBe(true);
+  });
+
   it("overrides the duplicate guard with confirmNew", () => {
     writeMemory(store, { type: "context", title: "A B C", summary: "a b c", body: "x" });
     const forced = writeMemory(store, {
