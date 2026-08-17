@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Ale
 
-> **Owner/scope:** Ale owns the 7 active P1/P2/P3 rows in this register, including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
+> **Owner/scope:** Ale owns the 7 active P1/P2/P3 rows in this register (ANA-01, blocked on an operator decision, and DST-01..06, blocked on release credentials — every implementable parity gap is closed), including all active prompt gaps alongside skills, instructions, and extensions. For the fixed baseline, taxonomy, shared evidence and corrections, historical closed/present rows, dependencies, limitations, and complete audit context, use Andrea’s canonical shared history in [`native-functional-parity-2026-07-24-andrea.md`](native-functional-parity-2026-07-24-andrea.md). Work only from the active rows below; do not cross into Andrea’s backlog.
 
 ## Register use
 
@@ -65,6 +65,94 @@ These are recommended checks for future implementation and regression coverage. 
 <!-- prettier-ignore -->
 | ID     | Priority | Status   | Difference                      | Plain English                                                                         | Why it matters                                                                              | Evidence                                                                       |
 | ------ | -------- | -------- | ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+
+## CI recovery — 2026-08-16
+
+`main` was red from 2026-08-03 (last green run) to 2026-08-16: 27 failed and 53
+cancelled runs, one success in between. Both parity sessions kept pushing
+against local gates that did not include the CI matrix, so failures accumulated
+unseen. Seven commits took the Linux e2e leg from 9 failures to GREEN (run
+31948883260, `e2e (ubuntu-latest)`: success — 247 passed, 1 flaky, 14
+skipped, 0 failed). The unit legs still
+carry their known machine-class failures (EPERM symlinks, the git
+release-sync quartet, the 1 MiB avatar body).
+
+- `8cfb6d8` — a same-id `session_rebind` tore the socket down and rejected the
+  in-flight request that had caused it, so a SUCCESSFUL checkpoint rollback
+  surfaced as "transport closed" with its confirm dialog stranded open. The
+  client now re-subscribes over the existing socket. Also gave `git.test.ts`'s
+  ~100-git-spawn "-50 exhaustion" test a 120s timeout; it had timed out in
+  every completed CI run since the last green one.
+- `a5b438d` — the resource refresh stamped `parkedAt` when it parked a session
+  it was about to relaunch (advertising "Parked · resumes on next command" for
+  a session that was merely restarting), and its replacement runtime inherited
+  no idle edge, so idle parking never re-armed and the park-interrupted title
+  helper never retried.
+- `f61ffe0` — **the one production bug in this set.** `POST /sessions`
+  fingerprinted launch resources from the REQUEST, not the cwd the session
+  actually runs in, so every chat with no project and no explicit cwd stored a
+  digest the resource refresh could never reproduce — and was therefore parked
+  and relaunched at EVERY idle, forever. The churn also rebuilt the event ring
+  under `transport-parity` and `subagent-durability`.
+- `31fb469`, `be911c9`, `c8a44aa`, `5e11378` — ISS-08 moved the issue boards to
+  the REST transport, but its test doubles never followed: the gh stubs still
+  answered `--json` shapes, the fixtures had no GitHub origin for the REST path
+  to resolve, the truncation disclosure had grown to name the type and
+  close-reason facets, and the row-count selector matched each row's own
+  `issue-*` children. Production was correct in all four.
+
+**Process note:** `pnpm test:pi` runs in the same CI job AFTER `pnpm test`, so
+it was skipped on every run while the unit step was failing — roughly two
+weeks with no Pi-integration coverage at all. It executed again once the unit
+step went green, which is how DEF-01 surfaced. Splitting `test:pi` into its own
+job would stop a unit failure from silently hiding the Pi suite again.
+
+### DEF-01 — CLOSED as a record correction, not a product defect
+
+DEF-01 was filed as "the transcript rebuilds EMPTY after a resource refresh …
+looks like data loss". **That premise was wrong**, and the row is removed
+rather than left to mislead. What the evidence actually showed, in order:
+
+- Instrumenting the seed proved every relaunch DOES rebuild the transcript —
+  4 active history entries in, 2 cells out, on every refresh.
+- Instrumenting the ingest loop for a transition from cells to none proved
+  nothing wipes it afterwards: no such transition ever fired.
+- The failing assertion used vitest's `waitFor` DEFAULT (1s) while the rebind
+  spawns a real pi and reseeds from history. Every neighbouring wait in the
+  same test is paced at 10–20s. Widening only that wait turns the file green,
+  7/7, twice.
+
+So the fix is the assertion's budget (`1aea7e7`), not the runtime: the
+transcript was always rebuilt correctly, just later than one second. The
+original "cells `[]` while the session file holds both roles" observation was
+real but was a snapshot taken too early, not evidence of loss.
+
+### DEF-02 — FIXED: a passive `setStatus` counted as a pending user question
+
+Found by running the Pi suite on a REAL user machine (a clean CI runner never
+sees it). pi sends its context-usage meter through the same channel as
+questions — `extension_ui_request` with `method: "setStatus"`, ticking several
+times per turn. The server counted EVERY request on that channel as pending
+work, so each tick:
+
+- set the needs-attention badge on a session nobody had to look at, and
+- landed in `pendingUiRequests`, which is drained ONLY by `respondToUiRequest`
+  (cancelled / confirmed / value). Nothing can answer a status tick, so the
+  entry was permanent — and through `pendingExtensionUi` it pinned BOTH idle
+  parking and resource refresh OFF for the rest of that session's life.
+
+The domain ingest already filtered to answerable methods
+(`select|confirm|input|editor`) with the rationale in a comment; the session
+manager's attention/parking bookkeeping was its unguarded sibling — the
+dominant defect shape in this codebase. The predicate is now one exported
+chokepoint, `isAnswerableUiRequest`, used by both.
+
+Evidence: caught by stack-tracing `markNeedsAttention` on a failing real-pi
+run, which named the `extension_ui_request` branch, then dumping the raw event
+(`method: "setStatus"`, `statusKey: "context-progress"`). Two of the three
+real-pi tests that had been failing on this machine — `session-failure` and
+`session-attention` — pass with the fix. `memory-inject` still fails here and
+is NOT claimed fixed.
 
 ## Analytics decision — blocked
 

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,14 +20,22 @@ let harness: E2eHarness;
 const project = mkdtempSync(path.join(tmpdir(), "proj-issues-filter-"));
 
 test.beforeAll(async () => {
+  // ISS-08 resolves owner/repo from the project's git origin to build the REST
+  // path, so the fixture needs a repo with a GitHub remote; a bare temp dir
+  // yields "no GitHub origin" and an empty board whatever the gh stub answers.
+  const git = (args: string[]): void => {
+    execFileSync("git", args, { cwd: project, stdio: "ignore" });
+  };
+  git(["init", "-b", "main"]);
+  git(["remote", "add", "origin", "https://github.com/x/y.git"]);
   const stub = path.join(mkdtempSync(path.join(tmpdir(), "gh-stub-")), "gh");
   writeFileSync(
     stub,
     `#!/bin/sh
 cat <<'JSON'
-[{"number":1,"title":"Fix login crash","state":"OPEN","url":"https://x/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"author":{"login":"alice"}},
- {"number":2,"title":"Add dark mode","state":"OPEN","url":"https://x/2","labels":[{"name":"feature"}],"assignees":[{"login":"doc"}],"author":{"login":"bob"}},
- {"number":3,"title":"Flaky retry logic","state":"OPEN","url":"https://x/3","labels":[{"name":"bug"},{"name":"flaky"}],"assignees":[{"login":"doc"}],"author":{"login":"alice"}}]
+[{"number":1,"title":"Fix login crash","state":"open","html_url":"https://github.com/x/y/issues/1","labels":[{"name":"bug"}],"assignees":[{"login":"marty"}],"user":{"login":"alice"},"updated_at":"2026-02-01T09:30:00Z"},
+ {"number":2,"title":"Add dark mode","state":"open","html_url":"https://github.com/x/y/issues/2","labels":[{"name":"feature"}],"assignees":[{"login":"doc"}],"user":{"login":"bob"},"updated_at":"2026-02-01T09:30:00Z"},
+ {"number":3,"title":"Flaky retry logic","state":"open","html_url":"https://github.com/x/y/issues/3","labels":[{"name":"bug"},{"name":"flaky"}],"assignees":[{"login":"doc"}],"user":{"login":"alice"},"updated_at":"2026-02-01T09:30:00Z"}]
 JSON
 `,
   );

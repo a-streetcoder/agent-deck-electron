@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const transportState = vi.hoisted(() => ({
   host: null as { onServerMessage: (message: unknown) => void } | null,
   connects: [] as string[],
+  resubscribes: [] as string[],
 }));
 
 vi.mock("./clientTransport.ts", () => ({
@@ -13,6 +14,9 @@ vi.mock("./clientTransport.ts", () => ({
     }
     connect(sessionId: string): void {
       transportState.connects.push(sessionId);
+    }
+    resubscribe(sessionId: string): void {
+      transportState.resubscribes.push(sessionId);
     }
     disconnect(): void {}
     send(): Promise<void> {
@@ -33,6 +37,7 @@ const response = (body: unknown, status = 200): Response =>
 
 beforeEach(() => {
   transportState.connects.length = 0;
+  transportState.resubscribes.length = 0;
   vi.stubGlobal("fetch", vi.fn());
   useAppStore.setState({
     session: null,
@@ -108,7 +113,7 @@ describe("history action client ownership", () => {
     expect(historyActionPending(source.id)).toBe(false);
   });
 
-  it("server-driven same-id rebind resets ancestry and reconnects every subscribed renderer", async () => {
+  it("server-driven same-id rebind resets ancestry and RESUBSCRIBES without dropping the socket", async () => {
     const source = session("source");
     await activate(source);
     useAppStore.setState({
@@ -119,11 +124,30 @@ describe("history action client ownership", () => {
       lastSeq: 42,
       error: "old process exited",
     });
+    const connectsBefore = transportState.connects.length;
     transportState.host?.onServerMessage({ type: "session_rebind", sessionId: source.id });
     expect(useAppStore.getState().transcript.cells).toEqual([]);
     expect(useAppStore.getState().lastSeq).toBe(0);
     expect(useAppStore.getState().error).toBeNull();
-    expect(transportState.connects.at(-1)).toBe(source.id);
+    // Over the SAME socket: a reconnect here would reject the in-flight request
+    // whose handler caused the rebind (rollback / wake-on-send) even though it
+    // succeeded — the defect that stranded the rollback dialog.
+    expect(transportState.resubscribes.at(-1)).toBe(source.id);
+    expect(transportState.connects.length).toBe(connectsBefore);
+  });
+
+  it("a rebind marks the subscription unsettled and drops the dead runtime's sideband state", async () => {
+    const source = session("source");
+    await activate(source);
+    useAppStore.setState({
+      sessionSubscriptionSettled: true,
+      checkpoints: [{ turnIndex: 0, createdAt: "now", label: "old", hasFiles: true }],
+    });
+    transportState.host?.onServerMessage({ type: "session_rebind", sessionId: source.id });
+    // Stale-until-refetch would otherwise stay on screen indefinitely if the
+    // resubscribe or either sideband refresh failed (Codex).
+    expect(useAppStore.getState().sessionSubscriptionSettled).toBe(false);
+    expect(useAppStore.getState().checkpoints).toEqual([]);
   });
 
   it("does not navigate or mutate drafts after a newer activation wins", async () => {

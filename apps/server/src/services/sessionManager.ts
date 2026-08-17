@@ -9,6 +9,7 @@ import {
   finalizeOpenProviderRetry,
   ingestMemoryRecallEntry,
   ingestPiEvent,
+  isAnswerableUiRequest,
   normalizeAgentOutput,
   reduceTranscript,
   type AskUserAnswer,
@@ -246,6 +247,14 @@ export interface SpawnSessionParams {
    * catch); it is fire-and-forget so it never perturbs the idle receipt timing.
    */
   readonly captureCheckpoint?: (label: string) => Effect.Effect<void>;
+  /**
+   * This runtime REPLACES one that was idle (the resource-refresh park +
+   * relaunch), so seeding from history restores the authoritative-idle edge the
+   * replacement process never emits — re-arming idle parking and the title
+   * helper the park interrupted. Never set for an ordinary launch, where only a
+   * real idle event may mark the session stoppable.
+   */
+  readonly resumedIdle?: boolean;
   /** Replace a Pi user message's image bytes with session-scoped opaque refs. */
   readonly decorateUserCell?: (
     cell: Extract<TranscriptState["cells"][number], { kind: "user" }>,
@@ -299,6 +308,10 @@ export interface ManagedSessionRuntime {
   /** Roll back parking classification when scope close did not complete. */
   readonly cancelParkingExpectation: Effect.Effect<void>;
   /** Fail-closed parking proof from the runtime's authoritative live state. */
+  /** The exact inputs {@link parkingStateAllowsStop} folds for this session —
+   * exposed so a caller (and a test) can name the BLOCKER rather than read a
+   * composite boolean that many unrelated conditions also turn false. */
+  readonly parkingState: Effect.Effect<ParkingEligibilityState>;
   readonly parkingEligible: Effect.Effect<boolean>;
   /** Safe replacement boundary; unlike parking, empty-history sessions qualify. */
   readonly resourceRefreshEligible: Effect.Effect<boolean>;
@@ -1011,8 +1024,18 @@ export const makeManagedSessionRuntime = (
       }
       if (type === "extension_ui_request") {
         const e = piEvent as { id: string; method: string };
-        pendingUiRequests.set(e.id, e.method);
-        markNeedsAttention();
+        // Only a request that BLOCKS on an answer is pending work. pi also
+        // sends fire-and-forget decoration here — `setStatus`, the
+        // context-usage meter, ticks several times per turn — and nothing can
+        // ever answer those, so recording one left an entry `respondToUiRequest`
+        // could never clear: a permanent needs-attention badge and, through
+        // `pendingExtensionUi`, idle parking and resource refresh pinned OFF for
+        // the session's remaining life. The domain ingest already filtered to
+        // answerable methods; this was its unguarded sibling.
+        if (isAnswerableUiRequest(e.method)) {
+          pendingUiRequests.set(e.id, e.method);
+          markNeedsAttention();
+        }
       }
       let retryChanged = false;
       const customEntry =
@@ -1265,7 +1288,78 @@ export const makeManagedSessionRuntime = (
         params.reconcileImages?.(historyUsers);
         if (meta.providerRetries?.length) persistProviderRetries();
       });
+      // A relaunch rebuilt a session that was IDLE when its previous runtime
+      // went away: the resource refresh parks and relaunches transparently.
+      // The replacement process emits no agent_status idle of its own, so
+      // without this every idle-edge consumer stays disarmed for the rest of
+      // the session's life:
+      //   - idle parking never becomes eligible again (parkingEligible requires
+      //     authoritativeIdle), so a refreshed session can never park; and
+      //   - the title helper, forked into the OLD session scope, was
+      //     interrupted by the park and never retried.
+      // Both e2e gates (session-parking, polish's generated title) caught this.
+      // DEFERRED and re-checked: yielding first lets pi events already queued on
+      // the stream ingest ahead of this, and an agent_start among them keeps
+      // authoritativeIdle false. Claiming the inherited idle synchronously could
+      // mark a BUSY replacement runtime stoppable (Codex). Forked into the
+      // SESSION scope like the idle-edge fork, so closing the session
+      // interrupts an in-flight helper — never an orphan pi.
+      if (params.resumedIdle) {
+        yield* Effect.sync(() =>
+          Effect.runFork(
+            Effect.forkIn(
+              Effect.yieldNow().pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    if (transcript.agentStatus !== "idle" || pendingUserTurn) return;
+                    authoritativeIdle = true;
+                    if (autoTitle()) Effect.runFork(Effect.forkIn(generateTitle, sessionScope));
+                  }),
+                ),
+              ),
+              sessionScope,
+            ),
+          ),
+        );
+      }
     });
+
+    /** The exact inputs both eligibility verdicts fold, built once. Exposed on
+     * the runtime as {@link ManagedSessionRuntime.parkingState} so a test can
+     * assert WHICH blocker is set instead of a composite boolean — the
+     * proxy-assertion problem that let a passive-setStatus pin pass while the
+     * bug was still present. `resumableFile` is the only input that differs
+     * between the two callers. */
+    const parkingStateInputs = (resumableFile: boolean): ParkingEligibilityState => ({
+      authoritativeIdle,
+      resumableFile,
+      terminalFailure: meta.status === "failed",
+      pendingExtensionUi: pendingUiRequests.size > 0,
+      pendingAskUser: pendingAskUser.size > 0,
+      pendingSupervisor: pendingSupervisor.size > 0,
+      pendingUserTurn,
+      providerRetry: turnAwaitingProviderRetry,
+      compaction: compactionInFlight,
+      childRun: activeChildRuns > 0,
+      tool: activeToolCalls.size > 0,
+      transcriptIdle: transcript.agentStatus === "idle",
+      queueAvailable: transcript.pendingInput.status === "available",
+      queuedInput:
+        transcript.pendingInput.steering.length > 0 || transcript.pendingInput.followUp.length > 0,
+    });
+
+    /** True when meta.piSessionFile names a real file pi can resume from. */
+    const hasResumableFile = (): boolean => {
+      try {
+        return Boolean(
+          meta.piSessionFile &&
+            isAbsolute(meta.piSessionFile) &&
+            lstatSync(meta.piSessionFile).isFile(),
+        );
+      } catch {
+        return false;
+      }
+    };
 
     const runtime: ManagedSessionRuntime = {
       meta,
@@ -1317,66 +1411,17 @@ export const makeManagedSessionRuntime = (
           expectedParking = false;
         }
       }),
-      parkingEligible: Effect.sync(() => {
-        let resumableFile = false;
-        try {
-          resumableFile = Boolean(
-            meta.piSessionFile &&
-              isAbsolute(meta.piSessionFile) &&
-              lstatSync(meta.piSessionFile).isFile(),
-          );
-        } catch {
-          resumableFile = false;
-        }
-        return parkingStateAllowsStop({
-          authoritativeIdle,
-          resumableFile,
-          terminalFailure: meta.status === "failed",
-          pendingExtensionUi: pendingUiRequests.size > 0,
-          pendingAskUser: pendingAskUser.size > 0,
-          pendingSupervisor: pendingSupervisor.size > 0,
-          pendingUserTurn,
-          providerRetry: turnAwaitingProviderRetry,
-          compaction: compactionInFlight,
-          childRun: activeChildRuns > 0,
-          tool: activeToolCalls.size > 0,
-          transcriptIdle: transcript.agentStatus === "idle",
-          queueAvailable: transcript.pendingInput.status === "available",
-          queuedInput:
-            transcript.pendingInput.steering.length > 0 ||
-            transcript.pendingInput.followUp.length > 0,
-        });
-      }),
-      resourceRefreshEligible: Effect.sync(() => {
-        let resumableFile = transcript.cells.length === 0;
-        try {
-          resumableFile ||= Boolean(
-            meta.piSessionFile &&
-              isAbsolute(meta.piSessionFile) &&
-              lstatSync(meta.piSessionFile).isFile(),
-          );
-        } catch {
-          // Keep the empty-history allowance only.
-        }
-        return parkingStateAllowsStop({
-          authoritativeIdle,
-          resumableFile,
-          terminalFailure: meta.status === "failed",
-          pendingExtensionUi: pendingUiRequests.size > 0,
-          pendingAskUser: pendingAskUser.size > 0,
-          pendingSupervisor: pendingSupervisor.size > 0,
-          pendingUserTurn,
-          providerRetry: turnAwaitingProviderRetry,
-          compaction: compactionInFlight,
-          childRun: activeChildRuns > 0,
-          tool: activeToolCalls.size > 0,
-          transcriptIdle: transcript.agentStatus === "idle",
-          queueAvailable: transcript.pendingInput.status === "available",
-          queuedInput:
-            transcript.pendingInput.steering.length > 0 ||
-            transcript.pendingInput.followUp.length > 0,
-        });
-      }),
+      parkingState: Effect.sync(() => parkingStateInputs(hasResumableFile())),
+      parkingEligible: Effect.sync(() =>
+        parkingStateAllowsStop(parkingStateInputs(hasResumableFile())),
+      ),
+      resourceRefreshEligible: Effect.sync(() =>
+        // A never-prompted session has no file to resume yet, and refreshing it
+        // loses nothing — that allowance is this caller's only difference.
+        parkingStateAllowsStop(
+          parkingStateInputs(transcript.cells.length === 0 || hasResumableFile()),
+        ),
+      ),
       resourceRefreshWaitingForSessionFile: Effect.sync(() => {
         if (!authoritativeIdle || transcript.cells.length === 0 || meta.piSessionFile) return false;
         return transcript.agentStatus === "idle";

@@ -68,6 +68,12 @@ export interface TransportHost {
 
 export interface ClientTransport {
   connect(sessionId: string): void;
+  /** Re-subscribe to the SAME session over the EXISTING socket after a
+   * server-driven process rebind, taking a full snapshot. Never closes the
+   * socket: the request whose handler caused the rebind is still in flight on
+   * it and its reply arrives there. Falls back to {@link connect} when there
+   * is no live socket for that session. */
+  resubscribe(sessionId: string): void;
   /** Deliberately close and forget the current subscription; no reconnect. */
   disconnect(): void;
   send(message: ClientMessage): Promise<void>;
@@ -154,6 +160,8 @@ export class RpcClientTransport implements ClientTransport {
   private transport: RpcTransport | null = null;
   private currentSessionId: string | null = null;
   private generation = 0;
+  /** Bumped per {@link resubscribe}: same-socket rebinds share a generation. */
+  private resubscribeEpoch = 0;
 
   constructor(private readonly host: TransportHost) {}
 
@@ -226,6 +234,35 @@ export class RpcClientTransport implements ClientTransport {
     });
     this.transport = transport;
     transport.connect();
+  }
+
+  resubscribe(sessionId: string): void {
+    const transport = this.transport;
+    if (
+      transport === null ||
+      this.currentSessionId !== sessionId ||
+      transport.getState() !== "connected"
+    ) {
+      this.connect(sessionId);
+      return;
+    }
+    const myGeneration = this.generation;
+    // Rebinds can land back-to-back on ONE socket (generation does not move),
+    // so a superseded resubscribe must not settle over the newer one (Codex).
+    const myEpoch = ++this.resubscribeEpoch;
+    // No lastSeq/streamGeneration: the replacement runtime carries new seq
+    // ancestry, so only a full snapshot is meaningful here.
+    void transport
+      .request({ type: "subscribe_session", sessionId })
+      .then(() => {
+        if (myGeneration !== this.generation || myEpoch !== this.resubscribeEpoch) return;
+        this.host.onSessionSubscribed?.(sessionId);
+      })
+      .catch((error: unknown) => {
+        if (myGeneration !== this.generation || myEpoch !== this.resubscribeEpoch) return;
+        if (transport.getState() !== "connected") return;
+        this.host.onServerMessage({ type: "error", message: String(error), sessionId });
+      });
   }
 
   disconnect(): void {

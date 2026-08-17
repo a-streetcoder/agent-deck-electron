@@ -456,7 +456,10 @@ describe("session worktree branch ownership", () => {
     expect((await gitWorktreeRegistrations(repo)).some((entry) => entry.path === target)).toBe(
       false,
     );
-  });
+    // ~100 sequential git spawns (50 branch creates + 50 colliding attempts):
+    // far beyond the 5s default on loaded CI runners (every completed CI run
+    // since 2026-08-03 timed out here).
+  }, 120_000);
 
   it("classifies only an exact pre-existing branch as a retryable collision", async () => {
     const repo = makeRepo();

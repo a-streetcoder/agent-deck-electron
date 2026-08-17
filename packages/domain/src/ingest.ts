@@ -9,6 +9,7 @@ import type {
   ToolCell,
   TranscriptCell,
 } from "./transcript.ts";
+import { isAnswerableUiRequest } from "./transcript.ts";
 import { extractFileAttachments } from "./fileAttachments.ts";
 import { extractFolderAttachments } from "./folderAttachments.ts";
 
@@ -630,7 +631,7 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
     case "extension_ui_request": {
       // Only requests that await an answer become cards; fire-and-forget
       // methods (notify, widgets, …) are not questions.
-      if (!["select", "confirm", "input", "editor"].includes(event.method)) return [];
+      if (!isAnswerableUiRequest(event.method)) return [];
       // The union has many variants; extract the display fields structurally.
       const request = event as {
         id: string;

@@ -1416,11 +1416,22 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // request-specific overrides; settings-derived provider/model choices stay live.
     let resolvedLaunch;
     try {
-      resolvedLaunch = resolveLaunchResources(ctx, body, {
-        provider: defaults.provider,
-        model: defaults.model,
-        extensions: defaults.extensions,
-      });
+      // Resolve against the cwd this session will ACTUALLY run in, not just the
+      // one the request named: a chat with no project and no explicit cwd falls
+      // back to the default cwd above, while SessionManager's resource refresh
+      // always resolves with meta.cwd. Passing only `body` left those two
+      // digests permanently unequal, so every such session was parked and
+      // relaunched at each idle chasing a fingerprint it could never reach.
+      // (The worktree branch below already re-resolves against its final cwd.)
+      resolvedLaunch = resolveLaunchResources(
+        ctx,
+        { ...body, cwd },
+        {
+          provider: defaults.provider,
+          model: defaults.model,
+          extensions: defaults.extensions,
+        },
+      );
     } catch (error) {
       return reply
         .status(error instanceof LaunchResourceResolutionError ? error.statusCode : 409)

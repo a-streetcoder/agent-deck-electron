@@ -159,6 +159,27 @@ afterAll(async () => {
   delete process.env.AGENT_DECK_PI_ENV;
 });
 
+/** The mock provider's request log is shared by every session this file
+ * starts, and a real-Pi turn can land its request well after the test that
+ * triggered it returned. Any assertion of the form "this call added no
+ * request" must therefore baseline against a SETTLED counter, not a live one.
+ * Returns the count once it has held steady for 250ms (5s cap). */
+async function quiescedRequestCount(): Promise<number> {
+  let last = mock.requests.length;
+  let steadyTicks = 0;
+  const deadline = Date.now() + 5_000;
+  while (steadyTicks < 10 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (mock.requests.length === last) {
+      steadyTicks += 1;
+    } else {
+      last = mock.requests.length;
+      steadyTicks = 0;
+    }
+  }
+  return last;
+}
+
 async function startSession(): Promise<string> {
   const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
     method: "POST",
@@ -489,7 +510,13 @@ describe("managed_subagent{agent}: named delegation", () => {
     ["missing-skill-bot", "absent-private-skill"],
     ["no-read-bot", "does not include `read`"],
   ])("fails named parent preflight before Pi spawn (%s)", async (agentName, expected) => {
-    const requestsBefore = mock.requests.length;
+    // The provider counter is shared with every other session in this file, so
+    // a turn started by an EARLIER test can still land its request after this
+    // baseline is taken — the assertion below then blames this preflight for
+    // someone else's request (Linux CI: "expected 57, got 58"). Take the
+    // baseline only once the counter has stopped moving; what this test claims
+    // is that a REJECTED preflight spawns no Pi of its own.
+    const requestsBefore = await quiescedRequestCount();
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },

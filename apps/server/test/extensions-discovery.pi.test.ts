@@ -246,8 +246,15 @@ describe("extension discovery", () => {
     expect(server.sessions.get(created.id)!.meta.streamGeneration).toBe(reboundGeneration);
     unsubscribe();
     expect(rebound.meta.piSessionFile).toBe(sessionFile);
-    await vi.waitFor(() =>
-      expect(rebound.snapshot().state.cells.some((cell) => cell.kind === "assistant")).toBe(true),
+    // The rebind spawns a REAL pi and reseeds from history, which is paced like
+    // every other wait in this test (10-20s), not by vitest's 1s waitFor
+    // default. The default only started failing once `pnpm test:pi` ran again
+    // after two weeks gated behind a failing unit step — the transcript was
+    // always rebuilt correctly, just later than one second.
+    await vi.waitFor(
+      () =>
+        expect(rebound.snapshot().state.cells.some((cell) => cell.kind === "assistant")).toBe(true),
+      { timeout: 20_000 },
     );
 
     const before = mock.requests.length;
