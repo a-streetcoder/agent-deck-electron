@@ -13,6 +13,7 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { attentionEpisodeKey } from "./attention-episodes.js";
 import { createWindowsAttentionOverlay, windowsAttentionDescription } from "./attention-overlay.js";
 import {
   allowPreviewNavigation,
@@ -77,7 +78,10 @@ const isControlPlaneUrl = (parsed) =>
 // Generation-orders backend refreshes so a slower old response cannot restore
 // a stale badge. The count itself is always derived from distinct durable rows.
 let attentionRefreshGeneration = 0;
-const notifiedAttentionIds = new Set();
+// Keyed by attention EPISODE, not session id: a session acknowledged and then
+// flagged again is a new episode, and keying by id alone silently suppressed its
+// notification (SES-14).
+const notifiedAttentionEpisodes = new Set();
 
 const registerNativeThemeUpdates = () => {
   nativeTheme.on("updated", () => {
@@ -877,8 +881,9 @@ async function refreshDesktopAttention(notificationHint) {
     );
     if (generation !== attentionRefreshGeneration) return;
     const pendingIds = new Set(pending.map((session) => session.id));
-    for (const id of notifiedAttentionIds) {
-      if (!pendingIds.has(id)) notifiedAttentionIds.delete(id);
+    const pendingEpisodes = new Set(pending.map((session) => attentionEpisodeKey(session)));
+    for (const key of notifiedAttentionEpisodes) {
+      if (!pendingEpisodes.has(key)) notifiedAttentionEpisodes.delete(key);
     }
     if (process.platform === "win32") {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -895,16 +900,21 @@ async function refreshDesktopAttention(notificationHint) {
       app.setBadgeCount(pendingIds.size);
     }
 
+    // The episode comes from the backend rows just fetched, never from the
+    // renderer's hint: main decides what is pending and which episode it is in.
+    const hintedEpisode = attentionEpisodeKey(
+      pending.find((session) => session.id === notificationHint?.sessionId),
+    );
     if (
       notificationHint &&
-      pendingIds.has(notificationHint.sessionId) &&
-      !notifiedAttentionIds.has(notificationHint.sessionId) &&
+      hintedEpisode &&
+      !notifiedAttentionEpisodes.has(hintedEpisode) &&
       mainWindow &&
       !mainWindow.isDestroyed() &&
       !mainWindow.isFocused() &&
       Notification.isSupported()
     ) {
-      notifiedAttentionIds.add(notificationHint.sessionId);
+      notifiedAttentionEpisodes.add(hintedEpisode);
       const notification = new Notification({
         title: notificationHint.title,
         body: notificationHint.body,

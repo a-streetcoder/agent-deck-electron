@@ -2562,6 +2562,11 @@ describe("durable session attention", () => {
             title: "Decision needed",
           });
           expect(changes.filter(Boolean)).toHaveLength(1);
+          // SES-14: each RAISE is stamped, so the desktop shell can tell a second
+          // attention episode from the first one it already notified about. A
+          // repeat within the same episode must not restamp it.
+          const firstRaise = params.meta.needsAttentionAt;
+          expect(typeof firstRaise).toBe("string");
           yield* rt.openSupervisorQuestion({
             requestId: "q2",
             subagentCellId: "child-2",
@@ -2569,6 +2574,23 @@ describe("durable session attention", () => {
             title: "Another decision",
           });
           expect(changes.filter(Boolean)).toHaveLength(1);
+          expect(params.meta.needsAttentionAt).toBe(firstRaise);
+
+          // A wall clock cannot be forced into a same-millisecond re-raise, so
+          // stand in for it: acknowledge, leave a stamp that is NOT in the past,
+          // and raise again. The new episode must still be distinguishable, or
+          // both observers coalesce it into the old one (Codex).
+          const notInThePast = new Date(Date.now() + 60_000).toISOString();
+          params.meta.needsAttention = false;
+          params.meta.needsAttentionAt = notInThePast;
+          yield* rt.openSupervisorQuestion({
+            requestId: "q3",
+            subagentCellId: "child-3",
+            method: "need_decision",
+            title: "A second episode",
+          });
+          expect(params.meta.needsAttention).toBe(true);
+          expect(params.meta.needsAttentionAt! > notInThePast).toBe(true);
         }),
       ),
     );

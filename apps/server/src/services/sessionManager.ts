@@ -792,6 +792,28 @@ export const makeManagedSessionRuntime = (
     const markNeedsAttention = (): void => {
       if (meta.needsAttention === true) return;
       meta.needsAttention = true;
+      // SES-14: stamp the raise, not the delivery. Two observers downstream (the
+      // renderer's snapshot diff and the shell's notified set) both lose a second
+      // attention episode when acknowledge and re-raise coalesce into one
+      // snapshot; the episode stamp is what distinguishes them. Guarded above, so
+      // a repeat inside one episode keeps the original stamp.
+      //
+      // The stamp must STRICTLY increase, not merely record the clock: an
+      // acknowledge-and-re-raise inside one millisecond would otherwise stamp the
+      // same value and reopen the very hole this closes (Codex). ISO strings from
+      // toISOString are fixed-width UTC, so comparing them lexicographically is
+      // the same as comparing the instants.
+      const raisedAt = new Date().toISOString();
+      const previousRaise = meta.needsAttentionAt;
+      if (!previousRaise || previousRaise < raisedAt) {
+        meta.needsAttentionAt = raisedAt;
+      } else {
+        const advanced = Date.parse(previousRaise) + 1;
+        meta.needsAttentionAt = Number.isFinite(advanced)
+          ? new Date(advanced).toISOString()
+          : raisedAt;
+      }
+
       onMetaChange(meta);
     };
 

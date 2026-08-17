@@ -20,14 +20,19 @@ vi.mock("@/lib/native", () => ({
 }));
 vi.mock("./wsBridge.ts", () => ({ acknowledgeSessionAttention: acknowledge }));
 
-import { newlyAttentiveSessionIds, useDesktopAttention } from "./useDesktopAttention.ts";
+import {
+  attentionEpisode,
+  newlyAttentiveSessionIds,
+  useDesktopAttention,
+} from "./useDesktopAttention.ts";
 import { useAppStore } from "./store.ts";
 
-const session = (id: string, needsAttention?: boolean): SessionMeta => ({
+const session = (id: string, needsAttention?: boolean, needsAttentionAt?: string): SessionMeta => ({
   id,
   cwd: "/tmp",
   createdAt: "2026-01-01T00:00:00.000Z",
   ...(needsAttention === undefined ? {} : { needsAttention }),
+  ...(needsAttentionAt === undefined ? {} : { needsAttentionAt }),
 });
 
 function Harness(): null {
@@ -63,9 +68,10 @@ describe("newlyAttentiveSessionIds", () => {
   });
 
   it("observes false→true transitions across every session", () => {
-    const previous = new Map([
-      ["selected", false],
-      ["hidden", false],
+    // Not-attentive is recorded as no episode at all.
+    const previous = new Map<string, string | null>([
+      ["selected", null],
+      ["hidden", null],
     ]);
     expect(
       newlyAttentiveSessionIds(previous, [session("selected", true), session("hidden", true)]),
@@ -73,7 +79,10 @@ describe("newlyAttentiveSessionIds", () => {
   });
 
   it("does not duplicate a notification for repeated metadata publication", () => {
-    expect(newlyAttentiveSessionIds(new Map([["chat", true]]), [session("chat", true)])).toEqual(
+    // Built from the same helper the hook stores, so this can never encode a
+    // stale snapshot shape: republishing one episode announces nothing.
+    const chat = session("chat", true);
+    expect(newlyAttentiveSessionIds(new Map([["chat", attentionEpisode(chat)]]), [chat])).toEqual(
       [],
     );
   });
@@ -178,5 +187,32 @@ describe("visible review acknowledgement", () => {
     expect(acknowledge).toHaveBeenCalledWith("selected");
     expect(native.sync).not.toHaveBeenCalled();
     expect(native.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("attention episodes (SES-14)", () => {
+  it("treats a re-raised session as newly attentive even when the flag never looked false", () => {
+    // Acknowledging and re-flagging can land inside ONE snapshot: the store goes
+    // true -> true and the boolean diff sees nothing, so the second episode was
+    // never announced (Codex). The backend stamps each raise, so the episode —
+    // not the flag — is what "newly attentive" means.
+    const previous = new Map([["s1", "2026-08-17T10:00:00.000Z"]]);
+    expect(
+      newlyAttentiveSessionIds(previous, [session("s1", true, "2026-08-17T11:00:00.000Z")]),
+    ).toEqual(["s1"]);
+    expect(
+      newlyAttentiveSessionIds(previous, [session("s1", true, "2026-08-17T10:00:00.000Z")]),
+    ).toEqual([]);
+  });
+
+  it("still announces a first raise and stays quiet with no previous snapshot", () => {
+    expect(
+      newlyAttentiveSessionIds(new Map([["s1", null]]), [
+        session("s1", true, "2026-08-17T10:00:00.000Z"),
+      ]),
+    ).toEqual(["s1"]);
+    expect(
+      newlyAttentiveSessionIds(null, [session("s1", true, "2026-08-17T10:00:00.000Z")]),
+    ).toEqual([]);
   });
 });

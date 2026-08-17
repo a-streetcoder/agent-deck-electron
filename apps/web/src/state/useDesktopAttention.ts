@@ -8,13 +8,26 @@ import { acknowledgeSessionAttention } from "./wsBridge.ts";
 /** Durable attention edges between two catalog observations. An absent legacy
  * value is false; hydration is a baseline, so restart never duplicates native
  * notifications. */
+/** The attention episode a session is in, or null when it needs no review. The
+ * raise stamp is what makes two consecutive episodes distinguishable: a session
+ * acknowledged and flagged again can present as true in both snapshots, and the
+ * boolean diff then announces nothing (Codex). A record with no stamp falls back
+ * to the flag, which is exactly the previous behaviour. */
+export function attentionEpisode(session: SessionMeta): string | null {
+  if (session.needsAttention !== true) return null;
+  return session.needsAttentionAt ?? "unstamped";
+}
+
 export function newlyAttentiveSessionIds(
-  previous: ReadonlyMap<string, boolean> | null,
+  previous: ReadonlyMap<string, string | null> | null,
   sessions: readonly SessionMeta[],
 ): string[] {
   if (previous === null) return [];
   return sessions
-    .filter((session) => session.needsAttention === true && previous.get(session.id) !== true)
+    .filter((session) => {
+      const episode = attentionEpisode(session);
+      return episode !== null && previous.get(session.id) !== episode;
+    })
     .map((session) => session.id);
 }
 
@@ -27,7 +40,7 @@ export function useDesktopAttention(): void {
   const view = useAppStore((state) => state.view);
   const projects = useAppStore((state) => state.projects);
   const attentionRoutingToken = useAppStore((state) => state.attentionRoutingToken);
-  const previousRef = useRef<Map<string, boolean> | null>(null);
+  const previousRef = useRef<Map<string, string | null> | null>(null);
   const acknowledgingRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -35,7 +48,7 @@ export function useDesktopAttention(): void {
     const previous = previousRef.current;
     const newlyAttentive = newlyAttentiveSessionIds(previous, sessions);
     previousRef.current = new Map(
-      sessions.map((item) => [item.id, item.needsAttention === true] as const),
+      sessions.map((item) => [item.id, attentionEpisode(item)] as const),
     );
 
     // Hydration and every durable metadata change reconcile the shell badge.

@@ -403,6 +403,12 @@ export const SessionMeta = Schema.mutable(
     /** Durable user-review marker. Absent on legacy records means false. Only the
      * server may raise it; the renderer may use the acknowledge-only route. */
     needsAttention: Schema.optional(Schema.Boolean),
+    /** When the CURRENT attention episode was raised. Stamped on each raise and
+     * never on a repeat within the same episode, so the desktop shell can tell a
+     * session needing review a second time from the one it already notified
+     * about — a distinction the boolean alone loses when acknowledge and re-raise
+     * land in one snapshot. Absent on legacy records. */
+    needsAttentionAt: Schema.optional(Schema.String),
     /** Durable terminal failure only. Running/idle remain live transcript state. */
     status: Schema.optional(SessionFailureStatusFromSelf),
     /** Safe, bounded explanation for the latest terminal chat failure. */
