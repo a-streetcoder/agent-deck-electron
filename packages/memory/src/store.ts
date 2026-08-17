@@ -257,6 +257,21 @@ export function markMemoriesUsed(store: MemoryStore, ids: readonly string[]): vo
   }
 }
 
+/**
+ * Delete `id` ONLY while it is still stale — the guarantee a bulk stale cleanup
+ * rests on, kept in ONE place so no caller can re-implement it and forget the
+ * check (MEM-14). Returns false when the memory is unknown or no longer stale.
+ *
+ * The read and the unlink are separate filesystem operations, so a process that
+ * reactivates the memory inside that window can still lose it. That is the same
+ * non-atomicity every mutation in this store has (writeMemory, setMemoryStatus
+ * and markStale are all read-modify-write without locks) and it predates this
+ * function; closing it needs store-wide locking, not a special case here.
+ */
+export function deleteMemoryIfStale(store: MemoryStore, id: string): boolean {
+  return getMemory(store, id)?.status === "stale" ? deleteMemory(store, id) : false;
+}
+
 export function markStale(store: MemoryStore, id: string): MemoryWriteResult {
   return setMemoryStatus(store, id, "stale");
 }

@@ -10,6 +10,7 @@ export {
 } from "./types.ts";
 export {
   deleteMemory,
+  deleteMemoryIfStale,
   getMemory,
   injectableIndex,
   listMemories,

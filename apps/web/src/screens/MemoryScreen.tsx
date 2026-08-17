@@ -673,6 +673,14 @@ export function MemoryScreen() {
   const navigationRequest = useAppStore((state) => state.memoryNavigationRequest);
   const clearNavigationRequest = useAppStore((state) => state.clearMemoryNavigationRequest);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  /** A bulk stale sweep is in flight. The REF is the lock — React state is
+   * asynchronous, so two clicks in one tick would both read `false` and fire two
+   * destructive sweeps (Codex). The state exists only to drive the label. */
+  const sweepingStaleRef = useRef(false);
+  const [sweepingStale, setSweepingStale] = useState(false);
+  /** Honest partial outcome: the server skips ids that stopped being stale, and
+   * silently reloading would hide that from someone who confirmed N deletions. */
+  const [staleSweepNotice, setStaleSweepNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [navigationAlert, setNavigationAlert] = useState<string | null>(null);
   // Monotonic request id: a slow response for a previously-selected project must
@@ -867,6 +875,50 @@ export function MemoryScreen() {
     }
   };
 
+  /** MEM-14 (native AgentMemoryViews.deleteStaleMemories): retire the whole
+   * visible stale group in one action. ONE request, not a loop of deletes: the
+   * server re-proves staleness per id at delete time, so a memory an agent
+   * reactivated between the click and the sweep survives, an already-deleted id
+   * is skipped instead of abandoning the rest of the cleanup, and there is no
+   * half-finished traversal to explain (Codex). The reload is skipped when the
+   * project changed under us, so a slow sweep can never repopulate project A's
+   * memories while project B is on screen. */
+  const removeStale = async (ids: readonly string[]): Promise<void> => {
+    const projectId = currentProjectId;
+    if (!projectId || ids.length === 0 || sweepingStaleRef.current) return;
+    sweepingStaleRef.current = true;
+    setSweepingStale(true);
+    setStaleSweepNotice(null);
+    try {
+      const response = await fetch("/memory/delete-stale", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ projectId, ids }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()) as { deleted?: number; skipped?: number };
+      if ((result.skipped ?? 0) > 0) {
+        setStaleSweepNotice(
+          `Deleted ${result.deleted ?? 0}. Skipped ${result.skipped} that were no longer stale.`,
+        );
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      sweepingStaleRef.current = false;
+      setSweepingStale(false);
+      if (useAppStore.getState().currentProjectId === projectId) await load();
+    }
+  };
+
+  // Native deletes the stale memories that are VISIBLE, so an active recall
+  // search narrows the sweep to its results (AgentMemoryViews: it walks
+  // `cachedLayout.visible`). Same rule here: search results when searching,
+  // otherwise the loaded list.
+  const visibleStaleIds = (searchResults ?? memories)
+    .filter((entry) => entry.status === "stale")
+    .map((entry) => entry.id);
+
   const save = async (): Promise<void> => {
     if (!draft || !draft.title.trim() || !draft.summary.trim() || !draft.body.trim()) return;
     const fields = {
@@ -949,18 +1001,40 @@ export function MemoryScreen() {
               Memory
             </h2>
           </div>
-          <ControlButton
-            data-testid="memory-new"
-            className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
-            onClick={startNew}
-          >
-            New memory
-          </ControlButton>
+          <div className="flex items-center gap-2">
+            {visibleStaleIds.length > 0 ? (
+              <ControlButton
+                data-testid="memory-delete-stale"
+                className="rounded-capsule border border-border-subtle px-3 py-1 text-xs font-medium text-text-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                title="Delete every stale memory shown"
+                disabled={sweepingStale}
+                onClick={() => {
+                  const count = visibleStaleIds.length;
+                  if (
+                    confirm(
+                      `Delete ${count} stale ${count === 1 ? "memory" : "memories"}? Their files are removed from disk.`,
+                    )
+                  ) {
+                    void removeStale(visibleStaleIds);
+                  }
+                }}
+              >
+                {sweepingStale ? "Deleting…" : `Delete stale (${visibleStaleIds.length})`}
+              </ControlButton>
+            ) : null}
+            <ControlButton
+              data-testid="memory-new"
+              className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
+              }}
+              onClick={startNew}
+            >
+              New memory
+            </ControlButton>
+          </div>
         </div>
         <p className="pb-2 text-xs text-text-muted">
           Durable project knowledge agents recall across sessions. Active and pinned memories are
@@ -1052,6 +1126,16 @@ export function MemoryScreen() {
               </ControlButton>
             </div>
           </div>
+        ) : null}
+
+        {staleSweepNotice ? (
+          <p
+            className="pb-2 text-xs text-warning"
+            role="status"
+            data-testid="memory-stale-sweep-notice"
+          >
+            {staleSweepNotice}
+          </p>
         ) : null}
 
         <div className="space-y-4" data-testid="memory-list">

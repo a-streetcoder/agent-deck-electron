@@ -1,7 +1,12 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { writeMemory, type MemoryRecord, type MemoryStore } from "@agent-deck/memory";
+import {
+  setMemoryStatus,
+  writeMemory,
+  type MemoryRecord,
+  type MemoryStore,
+} from "@agent-deck/memory";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -220,5 +225,46 @@ describe("memory inspection routes", () => {
     expect((await api("GET", `/memory/${id}?projectId=${projectId}`)).status).toBe(404);
     // A second delete 404s.
     expect((await api("DELETE", `/memory/${id}?projectId=${projectId}`)).status).toBe(404);
+  });
+});
+
+describe("bulk stale delete (MEM-14)", () => {
+  const store: MemoryStore = { baseDir: path.join(dataDir, "memory"), projectPath: projectDir };
+  const seed = (title: string, stale: boolean): string => {
+    const result = writeMemory(store, {
+      type: "context",
+      title,
+      summary: `${title} summary`,
+      body: `${title} body`,
+      confirmNew: true,
+    });
+    if (!result.ok) throw new Error("seed failed");
+    if (stale) setMemoryStatus(store, result.record.id, "stale");
+    return result.record.id;
+  };
+
+  it("deletes only the ids that are STILL stale, and reports what it skipped", async () => {
+    const staleId = seed("Bulk stale one", true);
+    const activeId = seed("Bulk active one", false);
+
+    // The client sends the ids it could SEE as stale. The server must re-prove
+    // staleness at delete time: a memory an agent reactivated between the user's
+    // click and this request must survive, or a bulk cleanup silently destroys
+    // live knowledge.
+    const response = await api("POST", "/memory/delete-stale", {
+      projectId,
+      ids: [staleId, activeId, "mem_does_not_exist"],
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 1, skipped: 2 });
+    expect((await api("GET", `/memory/${staleId}?projectId=${projectId}`)).status).toBe(404);
+    expect((await api("GET", `/memory/${activeId}?projectId=${projectId}`)).status).toBe(200);
+  });
+
+  it("requires a known project and a real id list", async () => {
+    expect((await api("POST", "/memory/delete-stale", { ids: [] })).status).toBe(400);
+    expect((await api("POST", "/memory/delete-stale", { projectId, ids: "nope" })).status).toBe(
+      400,
+    );
   });
 });

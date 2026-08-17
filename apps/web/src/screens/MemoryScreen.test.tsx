@@ -757,3 +757,121 @@ describe("MemoryScreen semantic readiness", () => {
     expect(await screen.findByRole("switch", { name: "Semantic ranking" })).toBeTruthy();
   });
 });
+
+describe("bulk stale delete (MEM-14)", () => {
+  const staleAndActive = (sweeps: string[][]) =>
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/memory/delete-stale") {
+        const body = JSON.parse(String(init?.body)) as { ids: string[] };
+        sweeps.push(body.ids);
+        return jsonResponse({ deleted: body.ids.length, skipped: 0 });
+      }
+      if (url === "/settings") {
+        return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+      }
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      if (url.startsWith("/memory?projectId=")) {
+        return jsonResponse({
+          memories: [
+            { ...memory("mem-active", "Keep me"), status: "active" },
+            { ...memory("mem-stale-1", "Retired one"), status: "stale" },
+            { ...memory("mem-stale-2", "Retired two"), status: "stale" },
+          ],
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+  const openProject = async (sweeps: string[][]) => {
+    vi.stubGlobal("fetch", staleAndActive(sweeps));
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+    await waitFor(() => expect(screen.getByTestId("memory-delete-mem-stale-1")).toBeTruthy());
+  };
+
+  it("sweeps exactly the visible stale ids in ONE request, leaving the others alone", async () => {
+    const sweeps: string[][] = [];
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    await openProject(sweeps);
+
+    fireEvent.click(screen.getByTestId("memory-delete-stale"));
+    await waitFor(() => expect(sweeps.length).toBe(1));
+    // One request, and the active memory is not in it. The SERVER re-proves
+    // staleness per id (memory-routes.test.ts pins that half), so a memory an
+    // agent reactivated mid-sweep survives.
+    expect(sweeps[0]).toEqual(["mem-stale-1", "mem-stale-2"]);
+    // Native's confirm names the count so a bulk destructive action is never a
+    // surprise ("Delete N stale memories?").
+    expect(
+      String((confirm as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0]),
+    ).toContain("2");
+  });
+
+  it("says so when the server skipped ids that stopped being stale", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/memory/delete-stale") return jsonResponse({ deleted: 1, skipped: 1 });
+        if (url === "/settings") {
+          return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+        }
+        if (url === "/memory/semantic-status") {
+          return jsonResponse({ recall: status("not_requested", "lexical") });
+        }
+        if (url.startsWith("/memory?projectId=")) {
+          return jsonResponse({
+            memories: [{ ...memory("mem-stale-1", "Retired one"), status: "stale" }],
+          });
+        }
+        throw new Error(`unexpected request: ${url}`);
+      }),
+    );
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+    await waitFor(() => expect(screen.getByTestId("memory-delete-stale")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("memory-delete-stale"));
+    // Reloading silently would hide a partial result from someone who just
+    // confirmed deleting everything shown.
+    const notice = await screen.findByTestId("memory-stale-sweep-notice");
+    expect(notice.textContent).toContain("Skipped 1");
+  });
+
+  it("sweeps nothing when the confirm is declined", async () => {
+    const sweeps: string[][] = [];
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
+    await openProject(sweeps);
+
+    fireEvent.click(screen.getByTestId("memory-delete-stale"));
+    expect(sweeps).toEqual([]);
+  });
+
+  it("offers no bulk control when nothing visible is stale", async () => {
+    vi.stubGlobal("fetch", initialFetch(false, status("not_requested", "lexical")));
+    useAppStore.setState({ currentProjectId: null, projects: [], projectsLoaded: true });
+    render(<MemoryScreen />);
+    expect(screen.queryByTestId("memory-delete-stale")).toBeNull();
+  });
+});

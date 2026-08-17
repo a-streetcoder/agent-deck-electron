@@ -1,5 +1,6 @@
 import {
   deleteMemory,
+  deleteMemoryIfStale,
   getMemory,
   listMemories,
   setMemoryStatus,
@@ -123,6 +124,38 @@ export function registerMemoryRoutes(ctx: ServerContext): void {
     }
     broadcast({ type: "resources_changed" });
     return { memory: result.record };
+  });
+
+  // MEM-14 (native AgentMemoryViews.deleteStaleMemories): retire a whole visible
+  // stale group in one request. The client sends the ids it could SEE as stale,
+  // and this RE-PROVES staleness per id at delete time — an agent can retire or
+  // reactivate a memory between the user's click and this call, and a bulk
+  // cleanup must never destroy a memory that is live again (Codex HIGH). An id
+  // that is unknown or no longer stale is skipped, not an error: the sweep
+  // completes and reports what it did, so one stale race cannot abandon the
+  // rest of the confirmed cleanup.
+  const deleteStaleBody = z.object({
+    projectId: z.string().min(1),
+    ids: z.array(z.string().min(1)).min(1),
+  });
+  fastify.post("/memory/delete-stale", async (request, reply) => {
+    const parsed = deleteStaleBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
+    const store = memoryStoreFor(parsed.data.projectId);
+    if (!store) return reply.code(400).send({ error: "memory requires a known project" });
+    let deleted = 0;
+    let skipped = 0;
+    for (const id of new Set(parsed.data.ids)) {
+      // deleteMemoryIfStale owns the re-proof (packages/memory): one chokepoint,
+      // so no caller can rebuild this check and forget it.
+      if (!deleteMemoryIfStale(store, id)) {
+        skipped += 1;
+        continue;
+      }
+      deleted += 1;
+    }
+    if (deleted > 0) broadcast({ type: "resources_changed" });
+    return { deleted, skipped };
   });
 
   fastify.delete("/memory/:id", async (request, reply) => {
