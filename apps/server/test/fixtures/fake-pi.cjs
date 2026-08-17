@@ -179,6 +179,21 @@ rl.on("line", (line) => {
             process.exitCode = 9;
           },
         );
+      } else if (cmd.message === "passive-status") {
+        // pi's context-usage meter: an extension_ui_request nothing can answer,
+        // emitted mid-turn. The session must stay ALIVE after idle — that is the
+        // real-world shape (a live session sitting idle with the meter having
+        // ticked), and exit handling would otherwise tear the pending-UI state
+        // down before a test could observe it.
+        send({
+          type: "extension_ui_request",
+          id: "status-1",
+          method: "setStatus",
+          statusKey: "context-progress",
+          statusText: "ctx 7/100k",
+        });
+        send({ type: "agent_end", messages: [] });
+        streamTimer = setInterval(() => {}, 1000);
       } else if (cmd.message === "fallback-error") {
         send({
           type: "agent_end",

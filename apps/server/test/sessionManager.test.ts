@@ -2613,6 +2613,46 @@ describe("durable session attention", () => {
     },
   );
 
+  it("keeps a passive setStatus out of the pending-UI blocker and off the badge", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          // An ENABLED receipt bus: the default harness one is off.
+          const params = makeParams({ receipts: new ReceiptBus(true) });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          // The transcript STARTS idle, so waiting on agentStatus proves nothing —
+          // it returns before the turn runs. The idle RECEIPT fires only when the
+          // domain idle event is processed, strictly after the ui request.
+          const idle = params.receipts.waitFor("idle", params.meta.id);
+          yield* rt.prompt("passive-status");
+          yield* Effect.promise(() => idle);
+
+          // pi streams its context-usage meter as
+          // extension_ui_request{method:"setStatus"} several times per turn.
+          // pendingUiRequests is drained ONLY by respondToUiRequest, so
+          // recording one pinned `pendingExtensionUi` true for the session's
+          // whole life — blocking idle parking AND resource refresh, and
+          // lighting the needs-attention badge (real-pi evidence:
+          // session-failure/session-attention on a developer machine).
+          //
+          // Assert the NAMED blocker, not the composite `parkingEligible`: that
+          // verdict is false here anyway (the fake pi has no resumable session
+          // file), which is precisely how an earlier version of this pin passed
+          // while the bug was live.
+          const state = yield* rt.parkingState;
+          expect(state.pendingExtensionUi).toBe(false);
+          // Deliberately NOT asserting needsAttention here: this fixture's turn
+          // completes successfully, and a completed turn marks attention by
+          // design, so that flag cannot discriminate. The badge consequence of
+          // the setStatus bug is covered by the real-pi session-attention test.
+          expect(state.pendingAskUser).toBe(false);
+        }),
+      ),
+    );
+  }, 15_000);
+
   it("does not mark a terminal provider failure", async () => {
     const { piHost } = makeFakePiHost();
     await Effect.runPromise(
