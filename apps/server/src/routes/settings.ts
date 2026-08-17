@@ -18,7 +18,13 @@ import {
   runDoctor,
   webAccessChecks,
 } from "@agent-deck/pi-host";
-import { listProviders, logoutProvider, scanEnv, writeEnvVar } from "@agent-deck/resources";
+import {
+  listProviders,
+  logoutProvider,
+  reconcileNeuralWattCatalog,
+  scanEnv,
+  writeEnvVar,
+} from "@agent-deck/resources";
 import {
   isKeybindingCommand,
   isValidChord,
@@ -475,6 +481,16 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     try {
       const defaults = envDefaults();
       const home = resourceHome();
+      // Native reconciles NeuralWatt's models.json block BEFORE asking pi for the
+      // catalog (AppViewModel.refreshAvailableModels), so a refresh is what picks
+      // up newly published models — and what removes the block after a sign-out,
+      // since pi would otherwise keep listing models the user cannot call.
+      // Best-effort: it never throws, and with no stored key it does not contact
+      // NeuralWatt at all.
+      const signedInToNeuralWatt = (await listProviders(rootsFor())).some(
+        (provider) => provider.id === "neuralwatt" && provider.signedIn,
+      );
+      await reconcileNeuralWattCatalog(rootsFor(), { hasRealKey: signedInToNeuralWatt });
       // Match an ordinary no-project launch: environment defaults first, then
       // enabled global extensions, then provider-registration fallbacks.
       const extensions = [

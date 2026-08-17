@@ -130,6 +130,10 @@ export {
 export { listProjectFiles, type ListProjectFilesOptions } from "./files.ts";
 export { listProviders, logoutProvider, type ProviderAuthInfo } from "./providers.ts";
 export {
+  reconcileNeuralWattCatalog,
+  type NeuralWattReconcileOptions,
+} from "./neuralwattCatalog.ts";
+export {
   ProviderLoginManager,
   type LoginEvent,
   type LoginStatus,
