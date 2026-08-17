@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -26,6 +26,7 @@ function makeHarness(
     authoritativeWrite?: boolean;
     hiddenProject?: boolean;
     callbackError?: string;
+    onRootsFor?: (home: string) => void;
   } = {},
 ): Harness {
   const fastify = Fastify();
@@ -77,12 +78,31 @@ function makeHarness(
     effectiveMcpConfigs: () => ({
       configs: [{ id: "remote", url: "https://mcp.example/mcp" }],
       valid: true,
+      catalog: {
+        valid: true,
+        servers: [
+          {
+            id: "remote",
+            transport: "http",
+            url: "https://mcp.example/mcp",
+            scope: "global",
+            sourcePath: path.join(home, ".pi", "agent", "mcp.json"),
+          },
+        ],
+      },
     }),
-    globalMcpConfigs: () => ({ configs: [], valid: true }),
+    globalMcpConfigs: () => ({
+      configs: [],
+      valid: true,
+      catalog: { servers: [], valid: true },
+    }),
     isMcpEnvOverride: () => false,
     oauthKey: (scope: string, id: string) => `${scope}:${id}`,
     broadcast,
-    rootsFor: () => ({ home }),
+    rootsFor: () => {
+      options.onRootsFor?.(home);
+      return { home, projectPath: home };
+    },
     projects: {
       list: () => [
         {
@@ -129,6 +149,47 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await harness.fastify.close();
+});
+
+describe("GET /mcp coherent provenance", () => {
+  it("keeps config and winning source from one snapshot when the file changes afterward", async () => {
+    await harness.fastify.close();
+    let laterRootReads = 0;
+    harness = makeHarness({
+      onRootsFor: (home) => {
+        laterRootReads += 1;
+        const file = path.join(home, ".pi", "mcp.json");
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          JSON.stringify({ mcpServers: { remote: { command: "changed-project-command" } } }),
+        );
+      },
+    });
+
+    const response = await harness.fastify.inject({
+      method: "GET",
+      url: "/mcp?projectId=project",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().servers).toEqual([
+      expect.objectContaining({
+        id: "remote",
+        transport: "http",
+        source: "global",
+        editable: true,
+        url: "https://mcp.example/mcp",
+        provenance: {
+          source: "global",
+          path: expect.stringMatching(/[\\/].pi[\\/]agent[\\/]mcp.json$/),
+        },
+      }),
+    ]);
+    // A second roots/catalog read would run the deterministic concurrent-write
+    // hook above and incorrectly pair the URL config with project provenance.
+    expect(laterRootReads).toBe(0);
+  });
 });
 
 describe("MCP policy route", () => {

@@ -32,6 +32,10 @@ interface McpAuth {
   automatic?: boolean;
 }
 
+type McpDefinitionProvenance =
+  | { source: "global" | "project"; path: string }
+  | { source: "environment"; variable: "AGENT_DECK_MCP_SERVERS" };
+
 interface McpServer {
   id: string;
   transport: McpTransport;
@@ -40,6 +44,7 @@ interface McpServer {
   error?: string;
   auth?: McpAuth;
   source?: "global" | "project" | "environment";
+  provenance?: McpDefinitionProvenance;
   editable?: boolean;
   command?: string;
   args?: string[];
@@ -68,6 +73,45 @@ function argsLineFrom(args: readonly string[] | undefined): string {
 function unescapeQuotedArg(inner: string, quote: '"' | "'"): string {
   const escaped = quote === '"' ? /\\(["\\])/g : /\\(['\\])/g;
   return inner.replace(escaped, "$1");
+}
+
+function provenancePresentation(server: McpServer): { label: string; detail?: string } | undefined {
+  const source = server.provenance?.source ?? server.source;
+  if (!source) return undefined;
+  const label =
+    source === "global"
+      ? "global config · editable"
+      : source === "project"
+        ? "project config · read only"
+        : "environment · read only";
+  const detail = server.provenance
+    ? "path" in server.provenance
+      ? server.provenance.path
+      : server.provenance.variable
+    : undefined;
+  return { label, detail };
+}
+
+function McpProvenance({ server }: { server: McpServer }) {
+  const provenance = provenancePresentation(server);
+  if (!provenance) return null;
+  const accessibleDetail = provenance.detail
+    ? `${provenance.label}: ${provenance.detail}`
+    : provenance.label;
+  return (
+    <div
+      data-testid={`mcp-provenance-${server.id}`}
+      className="mt-0.5 min-w-0 text-detail text-text-muted"
+      aria-label={accessibleDetail}
+    >
+      <span className="block">{provenance.label}</span>
+      {provenance.detail ? (
+        <span className="block truncate font-mono" title={provenance.detail}>
+          {provenance.detail}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function parseArgLine(value: string): string[] {
@@ -1061,8 +1105,8 @@ export function McpScreen() {
                       </label>
                     ) : null}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+                  <div className="min-w-0 basis-40 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden">
                       <span
                         className="truncate text-sm font-medium text-text-primary"
                         style={{ fontStretch: "expanded" }}
@@ -1097,16 +1141,6 @@ export function McpScreen() {
                       <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                         {server.transport}
                       </span>
-                      {server.source ? (
-                        <span
-                          className="truncate text-detail text-text-muted"
-                          title={server.source}
-                        >
-                          {server.source === "project"
-                            ? "project config · read only"
-                            : server.source}
-                        </span>
-                      ) : null}
                       {server.transport === "http" &&
                       server.auth &&
                       server.auth.status !== "none" ? (
@@ -1127,6 +1161,7 @@ export function McpScreen() {
                         {server.toolNames.length} tool{server.toolNames.length === 1 ? "" : "s"}
                       </span>
                     </div>
+                    <McpProvenance server={server} />
                     {!mcpEnabled ? (
                       <div className="truncate text-detail text-text-muted">
                         Paused globally; configuration and sign-ins are preserved.

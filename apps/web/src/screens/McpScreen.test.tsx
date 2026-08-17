@@ -289,6 +289,89 @@ describe("MCP configuration reload", () => {
   });
 });
 
+describe("MCP definition provenance", () => {
+  it("shows exact global, project, and environment origins with unchanged ownership", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/workspace/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: [],
+        },
+      ],
+    });
+    const longProjectPath = `/workspace/${"deep-directory/".repeat(12)}.pi/mcp.json`;
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: [
+          {
+            id: "global",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "global",
+            editable: true,
+            provenance: { source: "global", path: "/Users/test/.pi/agent/mcp.json" },
+          },
+          {
+            id: "project",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "project",
+            editable: false,
+            provenance: { source: "project", path: longProjectPath },
+          },
+          {
+            id: "environment",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "environment",
+            editable: false,
+            provenance: {
+              source: "environment",
+              variable: "AGENT_DECK_MCP_SERVERS",
+            },
+          },
+        ],
+      }),
+    );
+
+    render(<McpScreen />);
+
+    const global = await screen.findByTestId("mcp-provenance-global");
+    expect(global.textContent).toContain("global config · editable");
+    expect(global.textContent).toContain("/Users/test/.pi/agent/mcp.json");
+    expect(global.getAttribute("aria-label")).toBe(
+      "global config · editable: /Users/test/.pi/agent/mcp.json",
+    );
+    expect(screen.getByTestId("mcp-edit-global")).toBeTruthy();
+    expect(screen.getByTestId("mcp-remove-global")).toBeTruthy();
+
+    const project = screen.getByTestId("mcp-provenance-project");
+    expect(project.textContent).toContain("project config · read only");
+    expect(project.getAttribute("aria-label")).toContain(longProjectPath);
+    const projectPath = project.querySelector("[title]");
+    expect(projectPath?.getAttribute("title")).toBe(longProjectPath);
+    expect(projectPath?.className).toContain("truncate");
+    expect(screen.queryByTestId("mcp-edit-project")).toBeNull();
+    expect(screen.queryByTestId("mcp-remove-project")).toBeNull();
+
+    const environment = screen.getByTestId("mcp-provenance-environment");
+    expect(environment.textContent).toContain("environment · read only");
+    expect(environment.textContent).toContain("AGENT_DECK_MCP_SERVERS");
+    expect(environment.getAttribute("aria-label")).toBe(
+      "environment · read only: AGENT_DECK_MCP_SERVERS",
+    );
+    expect(screen.queryByTestId("mcp-edit-environment")).toBeNull();
+    expect(screen.queryByTestId("mcp-remove-environment")).toBeNull();
+  });
+});
+
 describe("project MCP assignments", () => {
   it("shows trust/source state and persists an assignment from an accessible checkbox", async () => {
     useAppStore.setState({

@@ -38,6 +38,8 @@ export interface McpServerEntry {
   /** The mcpServers key. */
   id: string;
   transport: McpTransport;
+  /** Exact file that supplied this effective definition. */
+  sourcePath: string;
   /** stdio transport. */
   command?: string;
   args?: string[];
@@ -99,9 +101,10 @@ function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
           : undefined,
         env: asStringRecord(config.env),
         scope,
+        sourcePath: file,
       });
     } else if (isValidHttpMcpUrl(config.url)) {
-      entries.push({ id, transport: "http", url: config.url, scope });
+      entries.push({ id, transport: "http", url: config.url, scope, sourcePath: file });
     }
     // Neither a command nor a valid http(s) url → not a usable server; skip.
   }

@@ -55,6 +55,7 @@ describe("readMcpServers", () => {
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
       scope: "global",
+      sourcePath: mcpConfigPath(roots, "global"),
     });
     expect(byId.remote).toMatchObject({ transport: "http", url: "https://example.com/mcp" });
     // An entry with neither command nor url is skipped.
@@ -65,8 +66,17 @@ describe("readMcpServers", () => {
     writeGlobal({ mcpServers: { db: { command: "global-db" } } });
     writeProject({ mcpServers: { db: { command: "project-db" }, extra: { command: "x" } } });
     const byId = Object.fromEntries(readMcpServers(roots).map((s) => [s.id, s]));
-    expect(byId.db).toMatchObject({ command: "project-db", scope: "project" });
-    expect(byId.extra).toMatchObject({ command: "x", scope: "project" });
+    expect(byId.db).toMatchObject({
+      command: "project-db",
+      scope: "project",
+      sourcePath: mcpConfigPath(roots, "project"),
+    });
+    expect(byId.extra).toMatchObject({
+      command: "x",
+      scope: "project",
+      sourcePath: mcpConfigPath(roots, "project"),
+    });
+    expect(byId.db?.sourcePath).not.toBe(mcpConfigPath(roots, "global"));
   });
 
   it("rejects malformed JSON and structurally invalid catalog documents", () => {

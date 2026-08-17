@@ -89,6 +89,9 @@ test("adds a remote HTTP server from the MCP form", async ({ page }) => {
   await expect(row).toContainText("http");
   await expect(row).toHaveAttribute("data-connected", "false");
   await expect(page.getByTestId("mcp-status-remote-http")).toHaveText("disconnected");
+  await expect(page.getByTestId("mcp-provenance-remote-http")).toHaveAccessibleName(
+    `global config · editable: ${path.join(harness.piHome, ".pi", "agent", "mcp.json")}`,
+  );
   await expect(page.getByTestId("mcp-assign-remote-http")).toHaveCount(0);
 
   page.once("dialog", (dialog) => void dialog.accept());
@@ -125,6 +128,27 @@ test("edits a remote HTTP server URL from the MCP form", async ({ page }) => {
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId("mcp-remove-remote-edit").click();
   await expect(page.getByTestId("mcp-remote-edit")).toHaveCount(0);
+});
+
+test("shows the winning project definition's exact read-only path", async ({ page }) => {
+  const projectConfig = path.join(project, ".pi", "mcp.json");
+  mkdirSync(path.dirname(projectConfig), { recursive: true });
+  writeFileSync(
+    projectConfig,
+    JSON.stringify({ mcpServers: { "project-origin": { command: "project-command" } } }),
+  );
+
+  await openProjectMcp(page);
+  await page.getByTestId("mcp-reload").click();
+  const origin = page.getByTestId("mcp-provenance-project-origin");
+  await expect(origin).toHaveAccessibleName(`project config · read only: ${projectConfig}`);
+  await expect(origin.locator("[title]")).toHaveAttribute("title", projectConfig);
+  await expect(page.getByTestId("mcp-edit-project-origin")).toHaveCount(0);
+  await expect(page.getByTestId("mcp-remove-project-origin")).toHaveCount(0);
+
+  writeFileSync(projectConfig, JSON.stringify({ mcpServers: {} }));
+  await page.getByTestId("mcp-reload").click();
+  await expect(page.getByTestId("mcp-project-origin")).toHaveCount(0);
 });
 
 test("lists a configured MCP server as connected and removes it", async ({ page }) => {

@@ -2,6 +2,7 @@ import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
 import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
 import type {
+  McpServerCatalog,
   ProviderLoginManager,
   ResourceRoots,
   SessionWorktreeStore,
@@ -72,6 +73,13 @@ export function envDefaults(): {
     env,
     cwd: process.env.AGENT_DECK_DEFAULT_CWD || undefined,
   };
+}
+
+export interface McpConfigSnapshot {
+  configs: McpServerConfig[];
+  valid: boolean;
+  /** File definitions used to derive configs, captured by the same catalog read. */
+  catalog: McpServerCatalog;
 }
 
 export interface NamedAgentLaunch {
@@ -148,8 +156,8 @@ export interface ServerContext {
     result: { ok: true; missing: string[] } | { ok: false; error: string };
     release(): Promise<void>;
   }>;
-  effectiveMcpConfigs(projectId: string): { configs: McpServerConfig[]; valid: boolean };
-  globalMcpConfigs(): { configs: McpServerConfig[]; valid: boolean };
+  effectiveMcpConfigs(projectId: string): McpConfigSnapshot;
+  globalMcpConfigs(): McpConfigSnapshot;
   isMcpEnvOverride(id: string): boolean;
   oauthKey(scope: string, id: string): string;
   projectHasEffectiveMcpGrant(projectId: string, serverId: string): boolean;

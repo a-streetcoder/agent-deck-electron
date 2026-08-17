@@ -280,6 +280,7 @@ describe("GET /mcp definition fields", () => {
           url: "https://example.com/mcp",
           headers: { Authorization: "Bearer secret" },
         },
+        envsrv: { command: "global-shadowed" },
       },
     });
     mkdirSync(path.join(projectPath, ".pi"), { recursive: true });
@@ -301,7 +302,9 @@ describe("GET /mcp definition fields", () => {
     await server.close();
     await start();
 
-    const globalList = (await (await api("GET", "/mcp")).json()) as {
+    const globalResponse = await api("GET", "/mcp");
+    const globalBody = await globalResponse.text();
+    const globalList = JSON.parse(globalBody) as {
       servers: Array<Record<string, unknown>>;
     };
     const files = globalList.servers.find((server) => server.id === "files");
@@ -313,6 +316,7 @@ describe("GET /mcp definition fields", () => {
       editable: true,
       command: "npx",
       args: ["-y", "server-fs"],
+      provenance: { source: "global", path: globalMcpPath() },
     });
     expect(files).not.toHaveProperty("env");
     expect(files).not.toHaveProperty("cwd");
@@ -326,18 +330,27 @@ describe("GET /mcp definition fields", () => {
     expect(env).toMatchObject({
       source: "environment",
       editable: false,
+      provenance: { source: "environment", variable: "AGENT_DECK_MCP_SERVERS" },
     });
     expect(env).not.toHaveProperty("command");
     expect(env).not.toHaveProperty("env");
+    expect(globalBody).not.toContain("env-cmd");
+    expect(globalBody).not.toContain('ENV":"secret');
+    expect(globalBody).not.toContain("global-shadowed");
 
     const projectList = (await (
       await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)
     ).json()) as { servers: Array<Record<string, unknown>> };
     const projectdb = projectList.servers.find((server) => server.id === "projectdb");
     const projectFiles = projectList.servers.find((server) => server.id === "files");
+    const projectEnv = projectList.servers.find((server) => server.id === "envsrv");
     expect(projectdb).toMatchObject({
       source: "project",
       editable: false,
+      provenance: {
+        source: "project",
+        path: path.join(projectPath, ".pi", "mcp.json"),
+      },
     });
     expect(projectdb).not.toHaveProperty("command");
     expect(projectdb).not.toHaveProperty("env");
@@ -346,7 +359,15 @@ describe("GET /mcp definition fields", () => {
       editable: true,
       command: "npx",
       args: ["-y", "server-fs"],
+      provenance: { source: "global", path: globalMcpPath() },
     });
     expect(projectFiles).not.toHaveProperty("env");
+    expect(projectEnv).toMatchObject({
+      source: "environment",
+      editable: false,
+      provenance: { source: "environment", variable: "AGENT_DECK_MCP_SERVERS" },
+    });
+    expect(projectEnv).not.toHaveProperty("command");
+    expect(projectEnv).not.toHaveProperty("env");
   });
 });

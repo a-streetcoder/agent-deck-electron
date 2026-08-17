@@ -10,6 +10,12 @@ import {
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 
+const MCP_ENV_SOURCE = "AGENT_DECK_MCP_SERVERS" as const;
+
+type McpDefinitionProvenance =
+  | { source: "global" | "project"; path: string }
+  | { source: "environment"; variable: typeof MCP_ENV_SOURCE };
+
 /** MCP catalog, global-only CRUD, project assignments, and scoped OAuth. */
 export function registerMcpRoutes(ctx: ServerContext): void {
   const {
@@ -74,6 +80,20 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return { url: entry.url };
   };
 
+  const definitionProvenance = (
+    source: "global" | "project" | "environment",
+    entry?: McpServerEntry,
+  ): McpDefinitionProvenance => {
+    if (source === "environment") return { source, variable: MCP_ENV_SOURCE };
+    if (!entry || entry.scope !== source) {
+      // File-backed source labels are derived from this same winning catalog,
+      // so this branch denotes an internal inconsistency rather than a fallback
+      // path that could accidentally identify the wrong definition.
+      throw new Error(`missing ${source} MCP provenance`);
+    }
+    return { source, path: entry.sourcePath };
+  };
+
   const projectScope = (raw: unknown): string | undefined => {
     if (typeof raw !== "string") return undefined;
     return projects.find((project) => project.id === raw) ? raw : undefined;
@@ -86,9 +106,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       return reply.status(404).send({ error: "unknown project" });
 
     if (!scope) {
-      const catalog = readMcpServerCatalog(rootsFor());
-      const globalById = new Map(catalog.servers.map((entry) => [entry.id, entry]));
       const globalSnapshot = globalMcpConfigs();
+      const catalog = globalSnapshot.catalog;
+      const globalById = new Map(catalog.servers.map((entry) => [entry.id, entry]));
       const configs = new Map<string, { id: string; transport: "stdio" | "http" }>();
       for (const config of globalSnapshot.configs)
         configs.set(config.id, { id: config.id, transport: "url" in config ? "http" : "stdio" });
@@ -109,16 +129,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
               ? "global"
               : "environment";
           const editable = source === "global";
+          const entry = globalById.get(config.id);
           return {
             ...config,
             source,
+            provenance: definitionProvenance(source, entry),
             // No-project catalog browsing must not disclose another project's
             // live connectivity or tool inventory.
             connected: false,
             toolNames: [] as string[],
             editable,
             auth: { status: "none" as const },
-            ...(editable ? definitionFields(globalById.get(config.id)) : {}),
+            ...(editable ? definitionFields(entry) : {}),
           };
         }),
       };
@@ -126,7 +148,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
 
     const snapshot = effectiveMcpConfigs(scope);
     const statuses = new Map(mcp.status(scope).map((status) => [status.id, status]));
-    const catalog = readMcpServerCatalog(rootsFor(scope));
+    const catalog = snapshot.catalog;
     const sourceById = new Map(catalog.servers.map((entry) => [entry.id, entry.scope]));
     const assigned = [...new Set(mcpAssignments.projectServerNames(scope))];
     const configured = new Set(snapshot.configs.map((config) => config.id));
@@ -147,18 +169,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           ? "environment"
           : (sourceById.get(config.id) ?? "environment");
         const editable = source === "global";
+        const entry = catalog.servers.find((candidate) => candidate.id === config.id);
         return {
           id: config.id,
           transport,
           source,
+          provenance: definitionProvenance(source, entry),
           connected: status?.connected ?? false,
           toolNames: status?.toolNames ?? [],
           error: status?.error,
           editable,
           auth: transport === "http" ? mcpOAuth.state(authId) : { status: "none" as const },
-          ...(editable
-            ? definitionFields(catalog.servers.find((entry) => entry.id === config.id))
-            : {}),
+          ...(editable ? definitionFields(entry) : {}),
         };
       }),
     };

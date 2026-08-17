@@ -774,7 +774,7 @@ async function initServer(
     isEnabled: () => mcpPolicy.enabled(),
   });
 
-  const globalMcpConfigs = (): { configs: McpServerConfig[]; valid: boolean } => {
+  const globalMcpConfigs = () => {
     const catalog = readMcpServerCatalog(rootsFor());
     const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
       if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
@@ -782,12 +782,14 @@ async function initServer(
         return [{ id: entry.id, command: entry.command, args: entry.args, env: entry.env }];
       return [];
     });
-    return { configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs), valid: catalog.valid };
+    return {
+      configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs),
+      valid: catalog.valid,
+      catalog,
+    };
   };
 
-  const effectiveMcpConfigs = (
-    projectId: string,
-  ): { configs: McpServerConfig[]; valid: boolean } => {
+  const effectiveMcpConfigs = (projectId: string) => {
     const catalog = readMcpServerCatalog(rootsFor(projectId));
     const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
       if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
@@ -798,6 +800,7 @@ async function initServer(
     return {
       configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs),
       valid: catalog.valid,
+      catalog,
     };
   };
 
