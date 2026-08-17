@@ -438,3 +438,62 @@ describe("memory provenance is set once (MEM-11)", () => {
     expect(getMemory(store, created.record.id)!.sourceAgentName).toBe("late-agent");
   });
 });
+
+describe("tags on update (MEM-12 guard)", () => {
+  it("an edit that omits tags PRESERVES them", () => {
+    const created = writeMemory(store, {
+      type: "runbook",
+      title: "Tagged runbook",
+      summary: "how to run it",
+      body: "steps",
+      tags: ["ci", "tests"],
+    });
+    if (!created.ok) throw new Error("create failed");
+    // The memory editor used to send no tags at all. That must keep them, not
+    // silently empty the list — pinned BEFORE the editor learned to send them,
+    // so the new field cannot quietly change this fallback.
+    const updated = writeMemory(store, {
+      id: created.record.id,
+      type: "runbook",
+      title: "Tagged runbook",
+      summary: "how to run it",
+      body: "edited steps",
+    });
+    if (!updated.ok) throw new Error("update failed");
+    expect(getMemory(store, created.record.id)!.tags).toEqual(["ci", "tests"]);
+  });
+
+  it("an edit that sends tags REPLACES them, including clearing to none", () => {
+    const created = writeMemory(store, {
+      type: "runbook",
+      title: "Retagged runbook",
+      summary: "how to run it",
+      body: "steps",
+      tags: ["old"],
+    });
+    if (!created.ok) throw new Error("create failed");
+    const retagged = writeMemory(store, {
+      id: created.record.id,
+      type: "runbook",
+      title: "Retagged runbook",
+      summary: "how to run it",
+      body: "steps",
+      tags: ["new", "fresh"],
+    });
+    if (!retagged.ok) throw new Error("retag failed");
+    expect(getMemory(store, created.record.id)!.tags).toEqual(["new", "fresh"]);
+
+    const cleared = writeMemory(store, {
+      id: created.record.id,
+      type: "runbook",
+      title: "Retagged runbook",
+      summary: "how to run it",
+      body: "steps",
+      tags: [],
+    });
+    if (!cleared.ok) throw new Error("clear failed");
+    // Native's editor can empty the field, so an explicit empty list must mean
+    // "no tags" rather than falling back to the old ones.
+    expect(getMemory(store, created.record.id)!.tags).toEqual([]);
+  });
+});

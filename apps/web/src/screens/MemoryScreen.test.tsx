@@ -758,6 +758,75 @@ describe("MemoryScreen semantic readiness", () => {
   });
 });
 
+describe("tag editing (MEM-12)", () => {
+  const editorFetch = (patches: unknown[]) =>
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PATCH") {
+        patches.push(JSON.parse(String(init.body)));
+        return jsonResponse({ memory: {} });
+      }
+      if (url === "/settings") {
+        return jsonResponse({ settings: { semanticMemoryEnabled: false } });
+      }
+      if (url === "/memory/semantic-status") {
+        return jsonResponse({ recall: status("not_requested", "lexical") });
+      }
+      if (url.startsWith("/memory?projectId=")) {
+        return jsonResponse({
+          memories: [{ ...memory("mem-tagged", "Tagged memory"), tags: ["ci", "tests"] }],
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+  it("edits tags as native does: comma-separated, trimmed, empties dropped", async () => {
+    const patches: unknown[] = [];
+    vi.stubGlobal("fetch", editorFetch(patches));
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Tagged memory"));
+    // Native seeds its "Comma-separated tags" field from the record
+    // (AgentMemoryViews.swift:437) so an edit starts from what is stored.
+    const tags = screen.getByTestId("memory-tags") as HTMLInputElement;
+    expect(tags.value).toBe("ci, tests");
+
+    fireEvent.change(tags, { target: { value: " ci ,, release ,  " } });
+    fireEvent.click(screen.getByTestId("memory-save"));
+
+    await waitFor(() => expect(patches.length).toBe(1));
+    // Native's parse: split on comma, trim, drop empties (:579-582).
+    expect((patches[0] as { edit: { tags: string[] } }).edit.tags).toEqual(["ci", "release"]);
+  });
+
+  it("leaves tags alone when the field was never touched", async () => {
+    const patches: unknown[] = [];
+    vi.stubGlobal("fetch", editorFetch(patches));
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
+    render(<MemoryScreen />);
+
+    fireEvent.click(await screen.findByText("Tagged memory"));
+    fireEvent.change(screen.getByTestId("memory-body"), { target: { value: "revised body" } });
+    fireEvent.click(screen.getByTestId("memory-save"));
+
+    // A body-only edit must not carry tags: the field is a flat comma-joined
+    // view, so re-sending it would re-split a tag containing a comma and would
+    // overwrite anything an agent tagged while the editor sat open. Omitting
+    // the key makes the store keep what is on disk.
+    await waitFor(() => expect(patches.length).toBe(1));
+    expect(patches[0] as { edit: Record<string, unknown> }).not.toHaveProperty("edit.tags");
+  });
+});
+
 describe("memory provenance display (MEM-11)", () => {
   it("shows which delegated agent authored a memory, and nothing when unattributed", async () => {
     vi.stubGlobal(
@@ -863,7 +932,7 @@ describe("bulk stale delete (MEM-14)", () => {
     );
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === "/memory/delete-stale") return jsonResponse({ deleted: 1, skipped: 1 });
         if (url === "/settings") {

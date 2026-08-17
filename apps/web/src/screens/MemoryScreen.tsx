@@ -42,6 +42,15 @@ interface Draft {
   summary: string;
   body: string;
   projectId: string;
+  /** Comma-separated tag text, native's own editor shape (MEM-12): the raw
+   * string is what the user types, parsed only on save. */
+  tags: string;
+  /** What the field held when the editor opened. Tags are sent ONLY when this
+   * differs, so an untouched field cannot overwrite what changed underneath it
+   * (an agent may retag while the editor is open) and cannot re-split a tag
+   * that contains a comma, which this flat representation cannot express
+   * (Codex). An untouched save omits tags and the store preserves them. */
+  tagsInitial: string;
   /** Read-only provenance shown while editing (MEM-11): native surfaces a
    * "Source" row in the memory detail, and it is set once at creation, so the
    * editor displays it rather than offering it as a field. */
@@ -825,6 +834,8 @@ export function MemoryScreen() {
         setDraft({
           id: memory.id,
           type: memory.type,
+          tags: (memory.tags ?? []).join(", "),
+          tagsInitial: (memory.tags ?? []).join(", "),
           title: memory.title,
           summary: memory.summary,
           body: memory.body,
@@ -932,6 +943,20 @@ export function MemoryScreen() {
       title: draft.title.trim(),
       summary: draft.summary.trim(),
       body: draft.body.trim(),
+      // Native's parse: split on comma, trim, drop empties
+      // (AgentMemoryViews.swift:579-582). Sent only when the field was actually
+      // touched (or on create): an untouched save omits tags entirely and the
+      // store keeps what is on disk, so editing a body never silently drops a
+      // tag an agent added meanwhile, nor re-splits a tag containing a comma
+      // that this flat field cannot represent.
+      ...(draft.id === undefined || draft.tags !== draft.tagsInitial
+        ? {
+            tags: draft.tags
+              .split(",")
+              .map((tag) => tag.trim())
+              .filter((tag) => tag.length > 0),
+          }
+        : {}),
     };
     try {
       const response = draft.id
@@ -982,7 +1007,15 @@ export function MemoryScreen() {
   }
 
   const startNew = (): void =>
-    setDraft({ type: "context", title: "", summary: "", body: "", projectId: currentProjectId });
+    setDraft({
+      type: "context",
+      title: "",
+      summary: "",
+      body: "",
+      tags: "",
+      tagsInitial: "",
+      projectId: currentProjectId,
+    });
 
   const startEdit = (memory: MemoryItem): void =>
     setDraft({
@@ -992,6 +1025,8 @@ export function MemoryScreen() {
       summary: memory.summary,
       body: memory.body,
       projectId: currentProjectId,
+      tags: memory.tags.join(", "),
+      tagsInitial: memory.tags.join(", "),
       ...(memory.sourceAgentName ? { sourceAgentName: memory.sourceAgentName } : {}),
     });
 
@@ -1102,6 +1137,13 @@ export function MemoryScreen() {
               placeholder="summary (a retrieval key)"
               value={draft.summary}
               onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
+            />
+            <ControlInput
+              data-testid="memory-tags"
+              className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+              placeholder="comma-separated tags"
+              value={draft.tags}
+              onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
             />
             {draft.sourceAgentName ? (
               <p className="text-xs text-text-muted" data-testid="memory-editor-source">
