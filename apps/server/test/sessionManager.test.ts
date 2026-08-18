@@ -2704,14 +2704,13 @@ describe("durable session attention", () => {
           const rt = yield* makeManagedSessionRuntime(piHost, buses, failed);
           yield* Effect.fork(rt.ingest);
           yield* rt.prompt("fallback-error");
-          // 30 s, not 10 s: this waits for a fake-pi turn to reach a terminal
-          // provider failure, and on a hosted macOS runner that spawn-plus-IPC
-          // round trip outlived the old budget while the test's own container
-          // sat unused. The assertion below is about needsAttention NOT being
-          // raised — nothing about it is time-sensitive.
+          // Back to 10 s now that the real cause is fixed: this never was a slow
+          // clock — `prompt` was wiping a failure that arrived before its own
+          // acknowledgement, so the condition could never become true no matter
+          // how long the wait ran.
           yield* waitUntil(
             () => failed.meta.status === "failed",
-            30_000,
+            10_000,
             () => {
               // The transcript is the discriminator: the fake pi answers the
               // prompt RPC (we got here, so it was alive), then emits agent_end
@@ -2752,7 +2751,38 @@ describe("durable session attention", () => {
         }),
       ),
     );
-  }, 45_000);
+  }, 15_000);
+
+  it("keeps a provider failure that arrived before the prompt acknowledgement", async () => {
+    // CI finally showed the raw stream for the intermittent attention failure:
+    // turn_start and agent_end BOTH arrived, agent_end carried
+    // stopReason "error", nothing threw — and meta.status was still unset. The
+    // reason is ordering: `prompt` clears failure in its success tap, which runs
+    // AFTER the RPC resolves, so an error ingested in between is wiped. This
+    // fixture forces that interleaving deterministically.
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams();
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("error-before-ack");
+          yield* waitUntil(
+            () => params.meta.status === "failed",
+            10_000,
+            () =>
+              `status=${params.meta.status ?? "none"} lastError=${params.meta.lastError ?? "none"}`,
+          );
+          expect(params.meta.lastError).toContain("Provider failed before the ack");
+          // The turn is OVER: the acknowledgement must not reopen it. A
+          // pendingUserTurn left set here has no later idle to consume it, and
+          // keeps the session out of parking and resource refresh (Codex).
+          expect(yield* rt.parkingState).toMatchObject({ pendingUserTurn: false });
+        }),
+      ),
+    );
+  }, 20_000);
 
   it("does not mark an explicitly aborted turn", async () => {
     const { piHost } = makeFakePiHost();

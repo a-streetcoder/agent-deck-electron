@@ -132,11 +132,11 @@ describe("final system prompt audit against pinned real Pi", () => {
     // than 1" (Windows CI), which reads like a missing provider request but is
     // just an exhausted clock.
     const waitFor = async (settled: () => boolean | Promise<boolean>): Promise<void> => {
-      // 90 s per wait, inside the suite's 180 s test budget. Each wait already
-      // gets its OWN deadline (that was the earlier fix); on a hosted Windows
-      // runner a real pi turn plus its provider round trip simply outlives 30 s,
-      // which is the "expected 1 to be greater than 1" this test documents.
-      const deadline = Date.now() + 90_000;
+      // Each wait gets its OWN deadline (an earlier fix for a shared clock). 60 s
+      // is generous for a real pi turn on a hosted runner without pretending a
+      // stall is slowness: Windows still fails this test, and that failure is
+      // about a second pi interaction hanging, not about this budget.
+      const deadline = Date.now() + 60_000;
       while (!(await settled()) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }

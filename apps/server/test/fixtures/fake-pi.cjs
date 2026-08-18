@@ -150,6 +150,26 @@ rl.on("line", (line) => {
         });
         break;
       }
+      if (cmd.message === "error-before-ack") {
+        // The provider error lands BEFORE the prompt acknowledgement. Real pi can
+        // interleave this way on a loaded machine, and it is what CI kept hitting:
+        // the session's own accept handler must not wipe a failure that already
+        // arrived for this turn.
+        send({ type: "turn_start" });
+        send({
+          type: "agent_end",
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "Provider failed before the ack",
+              content: [],
+            },
+          ],
+        });
+        send({ id: cmd.id, type: "response", command: "prompt", success: true });
+        break;
+      }
       send({ id: cmd.id, type: "response", command: "prompt", success: true });
       send({ type: "turn_start" });
       // FAKE_PI_HANG makes EVERY prompt stream forever (never agent_end) — used

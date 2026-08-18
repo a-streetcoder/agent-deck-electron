@@ -821,7 +821,13 @@ export const makeManagedSessionRuntime = (
       delete meta.status;
       delete meta.lastError;
     };
+    /** Bumped whenever a turn reaches a boundary — a recorded failure or an
+     * authoritative idle. `prompt` samples it before its RPC so it can tell state
+     * that PRECEDES its turn (safe to reset on acceptance) from a boundary that
+     * arrived while its own acknowledgement was still in flight (must survive). */
+    let turnBoundaryEpoch = 0;
     const recordFailure = (error: unknown, publish = true): void => {
+      turnBoundaryEpoch += 1;
       meta.status = "failed";
       meta.lastError = normalizeSessionError(error);
       if (publish) onMetaChange(meta);
@@ -1098,6 +1104,7 @@ export const makeManagedSessionRuntime = (
         }
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
           authoritativeIdle = true;
+          turnBoundaryEpoch += 1;
           receipts.emit("idle", meta.id);
           if (pendingUserTurn && !turnAwaitingProviderRetry) {
             if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
@@ -1558,24 +1565,43 @@ export const makeManagedSessionRuntime = (
         }),
 
       prompt: (message, images, streamingBehavior, titleSource) =>
-        handle.prompt(message, images, streamingBehavior).pipe(
-          // An accepted prompt is the authoritative recovery boundary. A later
-          // provider error in the same turn will set failure again.
-          Effect.tap(() =>
-            Effect.sync(() => {
-              const locked = lockTitleSource(titleSourceLocked, pendingTitleSource, titleSource);
-              titleSourceLocked = locked.locked;
-              pendingTitleSource = locked.source;
-              clearFailure();
-              pendingUserTurn = true;
-              currentTurnFailedOrCancelled = false;
-              turnAwaitingProviderRetry = false;
-              onMetaChange(meta);
-            }),
-          ),
-          Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
-          Effect.orDie,
-        ),
+        Effect.suspend(() => {
+          // Sampled BEFORE the RPC: pi can emit a provider error and its prompt
+          // acknowledgement in either order, and on a loaded machine the error
+          // arrives first. Clearing unconditionally here wiped a failure that
+          // belonged to the very turn being accepted — the session then looked
+          // healthy while the turn had already failed. CI reproduced it for days
+          // as an intermittent attention failure before the raw stream showed
+          // both events arriving intact with no failure recorded.
+          const epochAtSend = turnBoundaryEpoch;
+          return handle.prompt(message, images, streamingBehavior).pipe(
+            // An accepted prompt is the authoritative recovery boundary for
+            // failures that PRECEDE it. A later provider error in the same turn
+            // will set failure again.
+            Effect.tap(() =>
+              Effect.sync(() => {
+                const locked = lockTitleSource(titleSourceLocked, pendingTitleSource, titleSource);
+                titleSourceLocked = locked.locked;
+                pendingTitleSource = locked.source;
+                // The whole "a new turn is open" reset — not just the failure
+                // clear — belongs to a turn that has not already ended. When pi
+                // emitted the error and its idle before acknowledging, reopening
+                // pendingUserTurn here left it set with no later idle to consume
+                // it, which keeps a finished session out of parking and resource
+                // refresh until some other turn completes (Codex).
+                if (turnBoundaryEpoch === epochAtSend) {
+                  clearFailure();
+                  pendingUserTurn = true;
+                  currentTurnFailedOrCancelled = false;
+                  turnAwaitingProviderRetry = false;
+                }
+                onMetaChange(meta);
+              }),
+            ),
+            Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
+            Effect.orDie,
+          );
+        }),
       steer: (message) =>
         handle.steer(message).pipe(
           Effect.tapError((error) => Effect.sync(() => recordRpcFailure(error))),
