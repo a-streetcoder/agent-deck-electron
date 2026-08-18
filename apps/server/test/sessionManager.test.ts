@@ -259,6 +259,7 @@ describe("child transcript reconstruction ownership", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       store,
     );
 
@@ -2799,5 +2800,105 @@ describe("durable session attention", () => {
         }),
       ),
     );
+  });
+});
+
+describe("automatic title refresh (SES-18)", () => {
+  const withFakeTitle = async (reply: string, run: () => Promise<void>): Promise<void> => {
+    const previous = process.env.AGENT_DECK_FAKE_TITLE;
+    process.env.AGENT_DECK_FAKE_TITLE = reply;
+    try {
+      await run();
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_DECK_FAKE_TITLE;
+      else process.env.AGENT_DECK_FAKE_TITLE = previous;
+    }
+  };
+
+  const refreshWith = (
+    reply: string,
+    seed: (meta: SessionMeta) => void,
+    autoUpdateTitles = true,
+  ): Promise<SessionMeta> =>
+    new Promise((resolve, reject) => {
+      void withFakeTitle(reply, async () => {
+        const { piHost } = makeFakePiHost();
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const params = makeParams({
+                autoTitle: () => true,
+                autoUpdateTitles: () => autoUpdateTitles,
+              });
+              seed(params.meta);
+              const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+              yield* Effect.fork(rt.ingest);
+              yield* rt.prompt("say-hello");
+              yield* waitUntil(() => rt !== undefined, 100);
+              yield* rt.setPlan([
+                { id: "p1", title: "Rewrite the importer", status: "todo" as const },
+              ]);
+              // The refresh is forked; give it room to finish or decline.
+              yield* Effect.sleep("2500 millis");
+              resolve(params.meta);
+            }),
+          ),
+        );
+      }).catch(reject);
+    });
+
+  it("renames a generated title when the plan says the work changed", async () => {
+    const meta = await refreshWith("Rewrite the CSV importer", (m) => {
+      m.title = "Old title";
+      m.titleUserEdited = false; // this app generated it
+    });
+    expect(meta.title).toBe("Rewrite the CSV importer");
+  });
+
+  it("NEVER touches a title the user typed", async () => {
+    // The guard that protects user data: a typed title outranks any helper
+    // suggestion, and native gates both title paths on the same flag.
+    const meta = await refreshWith("Rewrite the CSV importer", (m) => {
+      m.title = "My own name";
+      m.titleUserEdited = true;
+    });
+    expect(meta.title).toBe("My own name");
+  });
+
+  it("will not rewrite a title of unknown provenance", async () => {
+    // A record saved before this field existed could have been renamed by hand.
+    // "No flag" is not "generated", so it is left alone (Codex).
+    const meta = await refreshWith("Rewrite the CSV importer", (m) => {
+      m.title = "Legacy title";
+    });
+    expect(meta.title).toBe("Legacy title");
+  });
+
+  it("declines politely when the helper decorates the KEEP sentinel", async () => {
+    const meta = await refreshWith('"KEEP."', (m) => {
+      m.title = "Still accurate";
+      m.titleUserEdited = false;
+    });
+    expect(meta.title).toBe("Still accurate");
+  });
+
+  it("leaves the title alone when the helper answers KEEP", async () => {
+    const meta = await refreshWith("KEEP", (m) => {
+      m.title = "Still accurate";
+      m.titleUserEdited = false;
+    });
+    expect(meta.title).toBe("Still accurate");
+  });
+
+  it("does nothing while the preference is off", async () => {
+    const meta = await refreshWith(
+      "Rewrite the CSV importer",
+      (m) => {
+        m.title = "Old title";
+        m.titleUserEdited = false;
+      },
+      false,
+    );
+    expect(meta.title).toBe("Old title");
   });
 });

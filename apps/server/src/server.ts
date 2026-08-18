@@ -476,6 +476,8 @@ async function initServer(
     // Live autoTitle preference (native OnboardingPreferencesView). `settings` is
     // declared below; this closure only runs at title time, long after startup.
     () => settings.get().autoTitle,
+    // SES-18: the refresh needs BOTH preferences, exactly as native gates it.
+    () => settings.get().autoTitle && settings.get().autoUpdateTitles,
     // Slice 9 turn-boundary hook: refresh the session's changed-file set when a
     // turn reaches idle; when the set CHANGED vs the previous one, push it to
     // clients and emit the diff_refreshed receipt (tests synchronize on it).

@@ -130,6 +130,9 @@ export interface AppSettings {
    * Commit/Push/Merge actions.
    */
   autoTitle: boolean;
+  /** SES-18: keep refreshing a generated title as the session's plan evolves.
+   * Requires `autoTitle`; a user-edited title is never touched. */
+  autoUpdateTitles: boolean;
   /** Allow automatic parent-session recall and model-facing memory tools. */
   agentMemoryEnabled: boolean;
   /** Maximum grapheme clusters in model-facing recalled memory output. */
@@ -450,6 +453,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       disabledModels: [],
       openAIFastModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
+      autoUpdateTitles: true, // native default: autoUpdatePiAgentSessionTitles
       agentMemoryEnabled: true,
       agentMemoryInjectionCharacterBudget: 6000,
       // Native default: delegated agents receive project memory context.
@@ -518,6 +522,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           // semantic env flag seeds only an absent field; malformed persisted values
           // fail closed instead of being re-enabled by the environment.
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
+          autoUpdateTitles:
+            typeof record.autoUpdateTitles === "boolean" ? record.autoUpdateTitles : true,
           // Pause is opt-out: legacy absence and malformed values both retain the
           // shipped enabled behavior. Only an explicit false pauses automation.
           agentMemoryEnabled:

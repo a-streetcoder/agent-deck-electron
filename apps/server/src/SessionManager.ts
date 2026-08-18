@@ -658,6 +658,8 @@ export class SessionManager {
     private readonly resolveAgent?: SpawnSessionParams["resolveAgent"],
     /** Live-read autoTitle preference (native autoTitle). */
     private readonly autoTitle: () => boolean = () => true,
+    /** SES-18: keep a generated title current as the plan evolves. */
+    private readonly autoUpdateTitles: () => boolean = () => false,
     /**
      * Turn-boundary hook (Slice 9): called after each turn reaches idle, with
      * the session's live meta. server.ts wires the diff engine's changed-file
@@ -1341,6 +1343,7 @@ export class SessionManager {
           }
         : {}),
       autoTitle: this.autoTitle,
+      autoUpdateTitles: this.autoUpdateTitles,
       ...(this.decorateUserCell
         ? {
             decorateUserCell: (cell: UserCell, rawMessage: unknown) =>

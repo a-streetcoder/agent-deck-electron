@@ -402,7 +402,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
     const meta = index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
-    const next = { ...meta, title: parsed.data.title, updatedAt: new Date().toISOString() };
+    // SES-18: mark it user-edited on the offline path too, or a session renamed
+    // while stopped would be re-titled automatically the next time it runs.
+    const next = {
+      ...meta,
+      title: parsed.data.title,
+      titleUserEdited: true,
+      updatedAt: new Date().toISOString(),
+    };
     index.upsert(next);
     broadcast({ type: "session_meta", session: next });
     return { session: next };

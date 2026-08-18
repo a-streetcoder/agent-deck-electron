@@ -237,6 +237,9 @@ export interface SpawnSessionParams {
   };
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
+  /** SES-18: live-read "keep the title current" preference (native
+   * autoUpdatePiAgentSessionTitles). Requires autoTitle. */
+  readonly autoUpdateTitles?: () => boolean;
   /**
    * Turn-boundary hook (Slice 9): forked into the session Scope at each
    * agent-idle, the same fire-and-forget shape as captureSessionFile /
@@ -421,6 +424,14 @@ export function activeEntryChain(data: EntriesData): EntriesData["entries"] {
 const TITLE_SYSTEM_PROMPT =
   "You generate a session title. Reply with ONLY a short title (max 8 words) " +
   "summarizing the user's message. No quotes, no punctuation at the end.";
+
+/** SES-18. `KEEP` is native's sentinel for "the title still fits" — the helper
+ * must be able to decline, or every plan change would churn the sidebar. */
+const TITLE_UPDATE_SYSTEM_PROMPT =
+  "You maintain a session title. You are given the current title, the user's " +
+  "latest message, and the session's plan. If the current title still describes " +
+  "the session, reply with exactly KEEP. Otherwise reply with ONLY a better " +
+  "short title (max 8 words). No quotes, no punctuation at the end.";
 
 const TITLE_TIMEOUT_MS = 20_000;
 
@@ -746,6 +757,7 @@ export const makeManagedSessionRuntime = (
 ): Effect.Effect<ManagedSessionRuntime, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { meta, receipts, onMetaChange, helperContext, autoTitle } = params;
+    const autoUpdateTitles = params.autoUpdateTitles ?? (() => false);
     // The per-session Scope (provided by the class facade in ../SessionManager.ts).
     // The pi subprocess is acquired into it, and the fire-and-forget title /
     // session-file fibers below are forked into it too, so session close ==
@@ -762,6 +774,8 @@ export const makeManagedSessionRuntime = (
     let transcript: TranscriptState = emptyTranscript();
     let sawFirstDelta = false;
     let titleStarted = false;
+    /** The newest accepted prompt, which is what SES-18's refresh describes. */
+    let latestUserPrompt = "";
     /** Once the first accepted prompt settles, later turns cannot retarget the title. */
     let titleSourceLocked = false;
     /** `undefined` means use the first user cell; a string (possibly empty) is authoritative. */
@@ -941,6 +955,86 @@ export const makeManagedSessionRuntime = (
     });
 
     /**
+     * SES-18: keep a GENERATED title describing the session as its plan evolves,
+     * the way native's `schedulePiAgentTitleUpdateIfNeeded` does. The plan — not
+     * every turn — is the trigger, because a plan is what says the work changed
+     * shape.
+     *
+     * Never touches a title the user typed. That guard is checked before the
+     * helper runs AND again after it returns, because the user can rename while
+     * the helper is in flight; the same re-check covers the title changing under
+     * us for any other reason.
+     */
+    const refreshTitle = Effect.gen(function* () {
+      if (!autoTitle() || !autoUpdateTitles()) return;
+      // `=== false` deliberately, not "not true": a record with NO flag has a
+      // title of unknown provenance — quite possibly typed by the user before
+      // this field existed — and must not be rewritten (Codex).
+      if (titleStarted || !meta.title || meta.titleUserEdited !== false) return;
+      const items = transcript.plan;
+      if (!items || items.length === 0) return;
+      // Native reads the newest USER message from its transcript. Electron's
+      // transcript is built from pi's events, which do not echo the user's own
+      // text, so the accepted prompt is the equivalent — and it is the same
+      // string the user actually sent.
+      const latest = latestUserPrompt.trim();
+      if (!latest) return;
+      const currentTitle = meta.title;
+      titleStarted = true;
+
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const helper = yield* piHost.spawn({
+            binPath: resolvePiBinary().path,
+            args: buildLaunchArgs({
+              kind: "helper",
+              systemPrompt: TITLE_UPDATE_SYSTEM_PROMPT,
+              provider: helperContext.provider,
+              model: helperContext.model,
+              extensions: helperContext.extensions,
+            }),
+            cwd: meta.cwd,
+            env: helperContext.env,
+            requestTimeoutMs: TITLE_TIMEOUT_MS,
+          });
+          const prompt = [
+            `Current title: ${currentTitle}`,
+            `Latest message: ${latest.slice(0, 2000)}`,
+            `Plan: ${items
+              .map((item) => item.title)
+              .join("; ")
+              .slice(0, 2000)}`,
+          ].join("\n");
+          yield* handleHelperPrompt(helper, prompt, TITLE_TIMEOUT_MS);
+          const { text } = yield* helper.request({ type: "get_last_assistant_text" });
+          return text ?? "";
+        }),
+      ).pipe(Effect.either);
+
+      titleStarted = false;
+      if (outcome._tag === "Left") return;
+      // Normalize FIRST, then test the sentinel: a helper that replies "KEEP.",
+      // quotes it, or adds a second line would otherwise have "KEEP" installed
+      // as the session's title (Codex).
+      const next = normalizeTitle(outcome.right.trim());
+      // The helper declining is the common case; anything unusable is treated
+      // the same way rather than invented into a title.
+      // Compare on letters only, so "KEEP.", '"KEEP"' and "Keep!" all read as the
+      // decline they obviously are rather than becoming the session's title.
+      const sentinel = next.replace(/[^a-z]/gi, "").toUpperCase();
+      if (!next || sentinel === "KEEP" || next === currentTitle) return;
+      // Re-check what could have changed while the helper ran.
+      if (meta.titleUserEdited || meta.title !== currentTitle) return;
+      meta.title = next;
+      onMetaChange(meta);
+      yield* handle.setSessionName(next).pipe(Effect.ignore);
+    });
+
+    const scheduleTitleRefresh = (): void => {
+      Effect.runFork(Effect.forkIn(refreshTitle, sessionScope));
+    };
+
+    /**
      * Isolated title-helper launch (pi-rpc-launch-flags.md §3): no session, no
      * tools, no resources; sends only the first user message. Fire-and-forget.
      */
@@ -980,13 +1074,20 @@ export const makeManagedSessionRuntime = (
         Effect.either,
       );
 
-      if (outcome._tag === "Left") {
-        titleStarted = false;
-        return;
-      }
+      // Cleared on EVERY exit, not just failure. `meta.title` is what stops a
+      // second generation, and leaving this true permanently disabled the SES-18
+      // refresh, which shares the flag to avoid racing this helper (Codex).
+      titleStarted = false;
+      if (outcome._tag === "Left") return;
       const title = outcome.right;
-      if (title) {
+      // The user can rename while the helper runs. A generated title must never
+      // win over one they typed, and must not clobber a title that appeared by
+      // any other route while we were away (Codex).
+      if (title && !meta.title && !meta.titleUserEdited) {
         meta.title = title;
+        // Explicitly NOT user-edited: the refresh only touches titles it knows
+        // this app generated, so an absent flag stays untouchable.
+        meta.titleUserEdited = false;
         onMetaChange(meta);
         receipts.emit("title", meta.id);
       }
@@ -1481,12 +1582,14 @@ export const makeManagedSessionRuntime = (
           emit({ type: "plan_set", items });
           meta.plan = transcript.plan;
           onMetaChange(meta);
+          scheduleTitleRefresh();
         }),
       updatePlan: (updates) =>
         Effect.sync(() => {
           emit({ type: "plan_update", updates });
           meta.plan = transcript.plan;
           onMetaChange(meta);
+          scheduleTitleRefresh();
         }),
       restorePlan: (items) =>
         Effect.sync(() => {
@@ -1583,6 +1686,7 @@ export const makeManagedSessionRuntime = (
             // will set failure again.
             Effect.tap(() =>
               Effect.sync(() => {
+                latestUserPrompt = message;
                 const locked = lockTitleSource(titleSourceLocked, pendingTitleSource, titleSource);
                 titleSourceLocked = locked.locked;
                 pendingTitleSource = locked.source;
@@ -1643,6 +1747,10 @@ export const makeManagedSessionRuntime = (
             yield* handle.setSessionName(title).pipe(Effect.ignore);
           }
           meta.title = title;
+          // SES-18: a typed title is the user's own data, and the automatic
+          // refresh below must never overwrite it. Native carries the same flag
+          // (`isTitleUserEdited`) and gates both title paths on it.
+          meta.titleUserEdited = true;
           onMetaChange(meta);
         }),
 

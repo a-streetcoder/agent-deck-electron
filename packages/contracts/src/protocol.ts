@@ -395,6 +395,10 @@ export const SessionMeta = Schema.mutable(
     title: Schema.optional(Schema.String),
     /** pi's canonical session file — the resume handle. Captured after first turn. */
     piSessionFile: Schema.optional(Schema.String),
+    /** The user named this session themselves (SES-18). Automatic title refresh
+     * must never overwrite it: a generated title is a convenience, a typed one is
+     * the user's own data. Absent on legacy records means "not user-edited". */
+    titleUserEdited: Schema.optional(Schema.Boolean),
     /** Set when the pi subprocess exits; absent while live or intentionally parked. */
     endedAt: Schema.optional(Schema.String),
     /** Device-local runtime evidence that the idle Pi process was intentionally

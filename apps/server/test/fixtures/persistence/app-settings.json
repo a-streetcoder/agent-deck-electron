@@ -26,6 +26,7 @@
     "anthropic:claude-legacy"
   ],
   "autoTitle": false,
+  "autoUpdateTitles": true,
   "worktreeIsolation": true,
   "keepWorktreeAfterMerge": true,
   "gitAutomation": false,

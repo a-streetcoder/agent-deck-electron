@@ -306,7 +306,10 @@ rl.on("line", (line) => {
         type: "response",
         command: "get_last_assistant_text",
         success: true,
-        data: { text: "hello" },
+        // A title helper's answer is whatever AGENT_DECK_FAKE_TITLE says, so a
+        // test can exercise the SES-18 refresh — including the KEEP sentinel —
+        // without a real model.
+        data: { text: process.env.AGENT_DECK_FAKE_TITLE || "hello" },
       });
       break;
     case "abort":
