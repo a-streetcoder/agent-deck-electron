@@ -2709,7 +2709,8 @@ describe("durable session attention", () => {
               // the child is still alive, since a dead pi explains both.
               // `snapshot` is a sync Effect; running it here is safe because this
               // callback only fires on the failure path.
-              const state = Effect.runSync(rt.snapshot).state;
+              const snapshot = Effect.runSync(rt.snapshot);
+              const state = snapshot.state;
               const alive = pids.map((pid) => {
                 try {
                   process.kill(pid, 0);
@@ -2721,7 +2722,11 @@ describe("durable session attention", () => {
               return (
                 `status=${failed.meta.status ?? "none"} lastError=${failed.meta.lastError ?? "none"} ` +
                 `attention=${String(failed.meta.needsAttention)} ended=${failed.meta.endedAt ?? "none"} ` +
-                `agentStatus=${state.agentStatus} cells=${state.cells.length} ` +
+                // seq is the discriminator the first two diagnostics lacked: the
+                // transcript STARTS idle with no cells, so agentStatus alone cannot
+                // separate "no event ever arrived" from "both events arrived and the
+                // failure mapping did not fire". A non-zero seq means ingestion ran.
+                `seq=${snapshot.seq} agentStatus=${state.agentStatus} cells=${state.cells.length} ` +
                 `kinds=${state.cells.map((cell: { kind: string }) => cell.kind).join(",") || "none"} ` +
                 `pids=${alive.join(",") || "none"}`
               );
