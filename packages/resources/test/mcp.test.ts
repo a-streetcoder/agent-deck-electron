@@ -121,6 +121,30 @@ describe("writeMcpServer / deleteMcpServer", () => {
     expect(Object.keys(doc.mcpServers as object).sort()).toEqual(["added", "keep"]);
   });
 
+  it("clears env when an emptied edit form supplies none (MCP-18)", () => {
+    // Same three-way rule headers got in MCP-12: absent PRESERVES (a command
+    // typo fix must not drop a token), an empty map CLEARS. Without the clear,
+    // emptying the Environment box silently kept the old variables.
+    writeMcpServer(roots, "global", "files", { command: "npx", env: { TOKEN: "secret" } });
+    const file = mcpConfigPath(roots, "global")!;
+    const withEnv = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(withEnv.mcpServers.files!.env).toEqual({ TOKEN: "secret" });
+
+    writeMcpServer(roots, "global", "files", { command: "npx" });
+    const preserved = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(preserved.mcpServers.files!.env).toEqual({ TOKEN: "secret" });
+
+    writeMcpServer(roots, "global", "files", { command: "npx", env: {} });
+    const cleared = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(cleared.mcpServers.files).not.toHaveProperty("env");
+  });
+
   it("writes headers with a remote server, and replaces them when re-supplied", () => {
     // MCP-12: a pasted `-H "Authorization: Bearer …"` is the whole point of an
     // authenticated remote server — dropping it saves a server that 401s.

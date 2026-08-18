@@ -543,7 +543,7 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
 | MCP-10 | **P3**   | Missing   | Reveal config file          | There is no action to reveal the owning config.                                                     | Manual repair is harder.                                     | Same as MCP-08.                                                                        |
 | MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
-| MCP-18 | **P3**   | Partial   | Transport-specific fields   | The editor does not expose the full native server field set.                                        | Advanced servers require manual config.                      | Same as MCP-15.                                                                        |
+| MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
 | MCP-19 | **P3**   | Partial   | Per-tool descriptions       | Live tool names appear, but description detail is thinner.                                          | Users cannot easily understand each tool before exposure.    | **E:** `mcpTools.ts`, `McpScreen.tsx`. **N:** MCP server screen.                       |
 | MCP-20 | **P2**   | Decision  | Tool exposure policy        | Native exposes ONE `mcp` proxy tool; Electron registers one tool per discovered MCP tool.            | The model sees a different tool surface for the same servers. | **E:** `mcpTools.ts` `scopeMcpBridgeSpecs`/`specs`, `server.ts` launch filtering. **N:** `PiNativeSubagentBridgeExtensions.swift`, `MCPBridgeAndConflictTests.swift`. Workstream 21. |
 
@@ -641,6 +641,25 @@ This is shared historical sequencing and dependency guidance, not a cross-owner 
     ecosystem-conventional, documents a deliberate divergence); or register both and let the agent's
     declaration choose (most code, and two ways to ask the same question, which this repo's own
     convention warns against).
+
+22. **Owner — may an editable server's env and header VALUES reach the renderer (MCP-18)?** Native's
+    manual editor shows them, because it reads `mcp.json` itself. Our renderer only knows what
+    `GET /mcp` returns, and `definitionFields` deliberately returns command/args/url and NOTHING
+    else: `mcp-edit.test.ts` pins `not.toHaveProperty("env")` and `not.toHaveProperty("headers")`
+    even for an EDITABLE global row, plus whole-body assertions that no secret substring travels.
+    That is a prior decision, not an oversight, so this slice stopped rather than reverse it. It is
+    load-bearing: without seeded values the form cannot round-trip, and an always-send box would
+    silently CLEAR an untouched server's env on the next save. Three options. (a) NATIVE PARITY —
+    return the values for editable global rows only (project and environment rows stay closed, as
+    they are today); the exposure moves from "a file the user owns" to "the local HTTP API", which
+    any process running as that user could already read from disk. (b) MASKED — return the KEYS with
+    empty values and have PATCH treat an untouched masked entry as "keep"; no secret travels, but a
+    user who genuinely wants an empty value collides with the sentinel. (c) WRITE-ONLY — no seeding,
+    absent-preserves semantics, so the user can add or replace variables but can neither see nor
+    clear the existing ones; safest, and the furthest from native. The option-independent write path
+    (a `parseMcpPairs` port, three-way `env` clear in the writer, and `PATCH` accepting validated
+    `env`/`headers`) has shipped as a LABELED FOUNDATION and is deliberately not yet called by any
+    UI; MCP-18 stays open until this is ruled on.
 
 ### Cross-owner coordination seams
 

@@ -273,6 +273,21 @@ export function derivedMcpServerName(parsed: McpPastedServer): string {
   return "mcp-server";
 }
 
+/** Parse one key/value pair per line, splitting on the first separator only. */
+export function parseMcpPairs(text: string, separator: string): Record<string, string> {
+  const pairs: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const separatorIndex = line.indexOf(separator);
+    if (separatorIndex < 0) continue;
+    const key = line.slice(0, separatorIndex).trim();
+    if (!key) continue;
+    pairs[key] = line.slice(separatorIndex + separator.length).trim();
+  }
+  // Native returns nil and omits the key when no pairs parse. The editor always
+  // sends this map, so an empty map deliberately means clear the stored pairs.
+  return pairs;
+}
+
 /** Parse pasted text into server configs; [] when nothing recognisable is in it. */
 export function parseMcpConfigPaste(text: string): McpPastedServer[] {
   const trimmed = text.trim();

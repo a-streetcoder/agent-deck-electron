@@ -76,10 +76,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       name: z.string().min(1).optional(),
       command: z.string().min(1),
       args: z.array(z.string()).optional(),
+      env: z.record(z.string()).optional(),
     }),
     z.object({
       name: z.string().min(1).optional(),
       url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+      headers: mcpHeaders.optional(),
     }),
   ]);
 
@@ -472,8 +474,8 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
     const input =
       "url" in parsed.data
-        ? { url: parsed.data.url }
-        : { command: parsed.data.command, args: parsed.data.args };
+        ? { url: parsed.data.url, headers: parsed.data.headers }
+        : { command: parsed.data.command, args: parsed.data.args, env: parsed.data.env };
     try {
       writeMcpServer(roots, "global", id, input);
     } catch (error) {

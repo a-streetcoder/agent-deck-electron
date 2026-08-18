@@ -346,7 +346,12 @@ function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<
     next.command = config.command;
     if (config.args !== undefined) next.args = config.args;
     else delete next.args;
-    if (config.env !== undefined) next.env = config.env;
+    // Environment is three-way: absent preserves it, non-empty replaces it,
+    // and explicitly empty removes it when the editor clears the field.
+    if (config.env !== undefined) {
+      if (Object.keys(config.env).length > 0) next.env = config.env;
+      else delete next.env;
+    }
     delete next.url;
     delete next.headers;
   } else {

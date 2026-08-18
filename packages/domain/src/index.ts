@@ -19,6 +19,7 @@ export * from "./slashUniverse.ts";
 export {
   derivedMcpServerName,
   parseMcpConfigPaste,
+  parseMcpPairs,
   shellTokenize,
   type McpPastedConfig,
   type McpPastedServer,

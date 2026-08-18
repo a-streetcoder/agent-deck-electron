@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { derivedMcpServerName, parseMcpConfigPaste } from "../src/mcpConfigPaste.ts";
+import { derivedMcpServerName, parseMcpConfigPaste, parseMcpPairs } from "../src/mcpConfigPaste.ts";
 
 /**
  * MCP-12 — native's `MCPConfigParser.parse`, which turns whatever a user copies
@@ -176,5 +176,37 @@ describe("derivedMcpServerName (MCP-12)", () => {
   it("falls back to a placeholder, including for an unparseable url", () => {
     expect(derivedMcpServerName({ config: {} })).toBe("mcp-server");
     expect(derivedMcpServerName({ config: { url: "not a url" } })).toBe("mcp-server");
+  });
+});
+
+/**
+ * MCP-18 — native's `parsePairs` (MCPServersScreen), which turns the manual
+ * form's "KEY=VALUE per line" env box and "KEY: VALUE per line" header box into
+ * a config map.
+ */
+describe("parseMcpPairs (MCP-18)", () => {
+  it("reads one pair per line, trimming both sides", () => {
+    expect(parseMcpPairs("A=1\n  B  =  two  ", "=")).toEqual({ A: "1", B: "two" });
+  });
+
+  it("splits on the FIRST separator only, so a value may contain it", () => {
+    expect(parseMcpPairs("Authorization: Bearer a:b:c", ":")).toEqual({
+      Authorization: "Bearer a:b:c",
+    });
+    expect(parseMcpPairs("URL=https://x.test/a=b", "=")).toEqual({ URL: "https://x.test/a=b" });
+  });
+
+  it("skips a line with no separator and a line with an empty key", () => {
+    expect(parseMcpPairs("nonsense\n=orphan\n   \nA=1", "=")).toEqual({ A: "1" });
+  });
+
+  it("returns an empty map for empty text", () => {
+    // Native returns nil here and omits the key. We always send the map, and an
+    // EMPTY one means CLEAR — that is how emptying the box removes the values.
+    expect(parseMcpPairs("   \n\n", "=")).toEqual({});
+  });
+
+  it("keeps an empty value", () => {
+    expect(parseMcpPairs("EMPTY=", "=")).toEqual({ EMPTY: "" });
   });
 });

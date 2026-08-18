@@ -28,6 +28,7 @@ function makeHarness(
     hiddenProject?: boolean;
     callbackError?: string;
     onRootsFor?: (home: string) => void;
+    catalogServers?: Record<string, unknown>[];
   } = {},
 ): Harness {
   const fastify = Fastify();
@@ -77,11 +78,16 @@ function makeHarness(
     reloadMcpConfig: vi.fn().mockResolvedValue({ ok: true }),
     reconcileProjectMcp: reconcile,
     effectiveMcpConfigs: () => ({
-      configs: [{ id: "remote", url: "https://mcp.example/mcp" }],
+      configs: (options.catalogServers ?? [{ id: "remote", url: "https://mcp.example/mcp" }]).map(
+        (server) => ({ id: server.id, url: server.url, command: server.command }),
+      ),
       valid: true,
       catalog: {
         valid: true,
-        servers: [
+        servers: options.catalogServers?.map((server) => ({
+          sourcePath: path.join(home, ".pi", "agent", "mcp.json"),
+          ...server,
+        })) ?? [
           {
             id: "remote",
             transport: "http",
@@ -238,6 +244,48 @@ describe("POST /mcp", () => {
       expect(response.statusCode).toBe(400);
     }
     expect(existsSync(path.join(harness.home, ".pi", "agent", "mcp.json"))).toBe(false);
+  });
+});
+
+describe("PATCH /mcp/:id (MCP-18)", () => {
+  it("accepts env for a stdio server and headers for a remote one", async () => {
+    // The edit form gains the Environment and Headers boxes native has, so the
+    // edit body must carry them; before, PATCH took command/args or url only and
+    // every keystroke in those boxes was discarded on save.
+    const file = path.join(harness.home, ".pi", "agent", "mcp.json");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ mcpServers: { remote: { url: "https://mcp.example/mcp" } } }),
+    );
+
+    const patched = await harness.fastify.inject({
+      method: "PATCH",
+      url: "/mcp/remote",
+      payload: { url: "https://mcp.example/mcp", headers: { Authorization: "Bearer t" } },
+    });
+    expect(patched.statusCode).toBe(200);
+    const doc = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(doc.mcpServers.remote!.headers).toEqual({ Authorization: "Bearer t" });
+  });
+
+  it("rejects an unusable header on edit exactly as add does", async () => {
+    const file = path.join(harness.home, ".pi", "agent", "mcp.json");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ mcpServers: { remote: { url: "https://mcp.example/mcp" } } }),
+    );
+
+    const response = await harness.fastify.inject({
+      method: "PATCH",
+      url: "/mcp/remote",
+      payload: { url: "https://mcp.example/mcp", headers: { "Bad Header": "x" } },
+    });
+
+    expect(response.statusCode).toBe(400);
   });
 });
 
