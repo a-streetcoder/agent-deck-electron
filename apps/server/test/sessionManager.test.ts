@@ -84,8 +84,16 @@ async function expectProcessGone(pid: number): Promise<void> {
  * fake-pi, capturing each child's pid in spawn order. `options.env` is preserved
  * (so a helper launched with FAKE_PI_HANG hangs); `binPath`/`args` are ignored.
  */
-function makeFakePiHost(): { piHost: PiHostShape; pids: number[] } {
+function makeFakePiHost(): {
+  piHost: PiHostShape;
+  pids: number[];
+  /** Every raw item the session's ingest loop received, in order. A failing wait
+   * can then report what pi ACTUALLY sent rather than leaving us to infer it
+   * from the transcript — which is what three CI rounds have cost so far. */
+  seen: unknown[];
+} {
   const pids: number[] = [];
+  const seen: unknown[] = [];
   const piHost: PiHostShape = {
     spawn: (options) =>
       spawnPiProcess({
@@ -100,9 +108,13 @@ function makeFakePiHost(): { piHost: PiHostShape; pids: number[] } {
             if (Option.isSome(pid)) pids.push(pid.value);
           }),
         ),
+        Effect.map((handle) => ({
+          ...handle,
+          events: handle.events.pipe(Stream.tap((item) => Effect.sync(() => seen.push(item)))),
+        })),
       ),
   };
-  return { piHost, pids };
+  return { piHost, pids, seen };
 }
 
 const tempDirsToClean: string[] = [];
@@ -2684,7 +2696,7 @@ describe("durable session attention", () => {
   }, 15_000);
 
   it("does not mark a terminal provider failure", async () => {
-    const { piHost, pids } = makeFakePiHost();
+    const { piHost, pids, seen } = makeFakePiHost();
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -2728,7 +2740,11 @@ describe("durable session attention", () => {
                 // failure mapping did not fire". A non-zero seq means ingestion ran.
                 `seq=${snapshot.seq} agentStatus=${state.agentStatus} cells=${state.cells.length} ` +
                 `kinds=${state.cells.map((cell: { kind: string }) => cell.kind).join(",") || "none"} ` +
-                `pids=${alive.join(",") || "none"}`
+                `pids=${alive.join(",") || "none"} ` +
+                // The raw items, so the next failure shows whether agent_end
+                // arrived at all and whether it still carried its assistant
+                // message with stopReason "error".
+                `raw=${JSON.stringify(seen).slice(0, 1200)}`
               );
             },
           );
