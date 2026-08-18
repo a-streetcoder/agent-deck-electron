@@ -545,7 +545,7 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 | MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
 | MCP-18 | **P3**   | Partial   | Transport-specific fields   | The editor does not expose the full native server field set.                                        | Advanced servers require manual config.                      | Same as MCP-15.                                                                        |
 | MCP-19 | **P3**   | Partial   | Per-tool descriptions       | Live tool names appear, but description detail is thinner.                                          | Users cannot easily understand each tool before exposure.    | **E:** `mcpTools.ts`, `McpScreen.tsx`. **N:** MCP server screen.                       |
-| MCP-20 | **P2**   | Divergent | Tool exposure policy        | Electron bridge registration and native direct/extension tools produce different default universes. | The same agent can receive a different tool set.             | **E:** `mcpTools.ts`, launch filtering. **N:** MCP bridge/assignment tests.            |
+| MCP-20 | **P2**   | Decision  | Tool exposure policy        | Native exposes ONE `mcp` proxy tool; Electron registers one tool per discovered MCP tool.            | The model sees a different tool surface for the same servers. | **E:** `mcpTools.ts` `scopeMcpBridgeSpecs`/`specs`, `server.ts` launch filtering. **N:** `PiNativeSubagentBridgeExtensions.swift`, `MCPBridgeAndConflictTests.swift`. Workstream 21. |
 
 ## GitHub issues
 
@@ -610,6 +610,37 @@ This is shared historical sequencing and dependency guidance, not a cross-owner 
 17. **Owner — MCP unresolved-variable policy (from MCP-17).** Interpolation now matches native exactly, so this is not a parity gap: an UNRESOLVED `${VAR}` is replaced with the EMPTY STRING, which SHORTENS a command line — `${MISSING}/usr/bin/x` launches `/usr/bin/x`, and `${MISSING}usr/bin/x` becomes a relative path resolved under the default home cwd. Codex raised it twice as a security-sensitive product decision rather than an implementation detail. Rule on whether to keep native-identical substitution, or to deliberately diverge by reporting unresolved references and refusing to launch the COMMAND specifically (keeping native semantics for args, env values and cwd). Not changed unilaterally, because a config that behaves differently in the two apps is its own hazard.
 18. **Owner — MCP definitions from repository content (from MCP-11).** The catalog now reads a project's bare `.mcp.json` as native does. Repository-controlled MCP definitions were ALREADY possible through `<project>/.pi/mcp.json`, so this is not a new primitive, but Codex is right that a generic root-level `.mcp.json` is far more likely to exist in a cloned repository and therefore materially broadens exposure. Two consequences worth an explicit ruling: (a) server assignments are keyed by NAME, so a repository defining `filesystem` can inherit a grant the user made for a different, trusted `filesystem` — binding grants to provenance, or re-confirming when the winning source changes, would close that; (b) these files are read synchronously and unbounded on the event loop, so a very large `.mcp.json` in a cloned repo is an availability risk. Neither is introduced by this slice, both are widened by it.
 19. **Owner — optional: a foreign-config importer (from MCP-13).** MCP-13 was CLOSED as a record correction, not implemented: it cited `MCPForeignConfigScanner.swift` and native's "guided import of discovered configs", and NEITHER EXISTS — no file in the oracle matches _Foreign_, and the only `foreign` occurrence in the whole Swift source is an unrelated transcript comment. Native does not scan other applications' MCP configuration; it reads four standard locations, which MCP-11 delivered. If importing another tool's MCP config is wanted, it is a NEW product feature with no native behaviour to port, and the owner should scope it as such.
+
+20. **Owner — a pasted server silently REPLACES an existing definition (from MCP-12).** Native's paste
+    tab saves each parsed server with no duplicate check, so pasting a snippet whose name matches a
+    configured server overwrites it, credentials included. We ported that behaviour but added a
+    warning line naming the servers a paste will replace; the manual add form still blocks a
+    duplicate name outright. Confirm the asymmetry is wanted, or rule that paste should skip,
+    rename, or require confirmation for an existing name.
+
+21. **Owner — one `mcp` proxy tool, or one tool per MCP tool (MCP-20).** This is an architectural
+    choice, verified on both sides rather than assumed, and it cannot be settled inside a slice.
+    NATIVE registers a single bridge tool named `mcp` with four actions — list / search / describe /
+    call — through which the model reaches every assigned server's tools
+    (`PiNativeSubagentBridgeExtensions.swift:19`, `MCPBridgeAndConflictTests.swift`). ELECTRON
+    registers one bridge spec per discovered tool, named `mcp__<server>__<tool>`, scoped per session
+    by `scopeMcpBridgeSpecs` against the agent's allowlist. Facts the ruling should weigh: (a)
+    CONTEXT — N tool schemas versus one, and a busy assignment is easily 100+ schemas; (b) TURNS —
+    the proxy costs an extra list/describe round trip before the first call, while per-tool specs
+    hand the model complete argument schemas up front; (c) ECOSYSTEM — `mcp__server__tool` is the
+    naming other MCP clients use, so a model prompted for it works in Electron and not in native;
+    (d) FRESHNESS — Electron fixes the tool list when the bridge extension is written at launch, so
+    a server that gains a tool mid-session needs the RES-12 session replacement, whereas the proxy
+    would see it on the next `list`. Two things are NOT gaps and should not be re-litigated: the
+    port already scopes per assigned server exactly as native does, and `resolveChildTools` already
+    unions bridge tool names into a restrictive `tools:` allowlist, which is the general form of
+    native's `includeMCPTool` flag — so no agent is blocked from its MCP tools on either side. Note
+    also that `mcp:<tool>` entries in an agent's `tools:` are the SEPARATE direct-adapter concept
+    already delivered by SUB-15/AGT-08; they are not this row. Three options: port native's proxy
+    (largest change, exact parity, biggest context win); keep per-tool registration (status quo,
+    ecosystem-conventional, documents a deliberate divergence); or register both and let the agent's
+    declaration choose (most code, and two ways to ask the same question, which this repo's own
+    convention warns against).
 
 ### Cross-owner coordination seams
 
