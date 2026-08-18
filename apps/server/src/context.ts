@@ -18,6 +18,7 @@ import type { McpAssignmentStore } from "./mcpAssignments.ts";
 import type { McpPolicyStore } from "./mcpPolicy.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
+import type { PlanEventServiceShape } from "./services/planEvents.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
@@ -115,6 +116,8 @@ export interface ServerContext {
    * real launcher. */
   fixTerminal?: { run(command: string): Promise<void>; runPiUpdate(): Promise<void> };
   sessions: SessionManager;
+  /** SUB-14: durable per-session plan history (read side + delete cleanup). */
+  planEvents: PlanEventServiceShape;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;
   sessionPastes: SessionPasteStore;

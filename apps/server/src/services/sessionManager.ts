@@ -59,6 +59,7 @@ import {
   type PiSpawnOptions,
   type PiStreamItem,
 } from "./piHost.ts";
+import type { PlanChangeOperation } from "./planEvents.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 
 /**
@@ -235,6 +236,15 @@ export interface SpawnSessionParams {
     updateTranscript?: (id: string, transcript: TranscriptState) => void;
     unregisterTranscript?: (id: string) => void;
   };
+  /**
+   * SUB-14: durable plan-history sink. Called with the plan before and after
+   * every change; it classifies the transition and ignores a no-op.
+   */
+  readonly recordPlanEvent?: (
+    op: PlanChangeOperation,
+    before: readonly SessionPlanItem[],
+    after: readonly SessionPlanItem[],
+  ) => void;
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
   /** SES-18: live-read "keep the title current" preference (native
@@ -1579,22 +1589,34 @@ export const makeManagedSessionRuntime = (
 
       setPlan: (items) =>
         Effect.sync(() => {
+          // Captured before the emit: the reducer returns a NEW plan array, so
+          // this reference still holds the outgoing plan afterwards.
+          const before = transcript.plan;
           emit({ type: "plan_set", items });
           meta.plan = transcript.plan;
           onMetaChange(meta);
+          params.recordPlanEvent?.("set", before, transcript.plan);
           scheduleTitleRefresh();
         }),
       updatePlan: (updates) =>
         Effect.sync(() => {
+          const before = transcript.plan;
           emit({ type: "plan_update", updates });
           meta.plan = transcript.plan;
           onMetaChange(meta);
+          params.recordPlanEvent?.("update", before, transcript.plan);
           scheduleTitleRefresh();
         }),
       restorePlan: (items) =>
         Effect.sync(() => {
           if (items.length === 0) return;
           emit({ type: "plan_set", items });
+          // Reported as a restore, NOT a set: reopening a session must not
+          // manufacture a fresh "created" over history it already holds. The
+          // store seeds one only when the session has no history at all, which
+          // is how a FORK — an inherited plan under a new session id — gets its
+          // first event instead of showing a plan with no past (Codex).
+          params.recordPlanEvent?.("restore", [], transcript.plan);
         }),
       appendSubagentProgress: (cellId, message) =>
         Effect.sync(() => emit({ type: "subagent_progress", cellId, message })),

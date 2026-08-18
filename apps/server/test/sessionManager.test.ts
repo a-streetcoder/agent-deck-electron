@@ -2803,6 +2803,79 @@ describe("durable session attention", () => {
   });
 });
 
+describe("plan history recording (SUB-14)", () => {
+  /**
+   * These pin the WIRING, not the classification — planEvents.test.ts owns the
+   * kinds. What matters here is that the production plan chokepoint hands the
+   * store the real before/after, because a durable history that nothing calls
+   * is the defect shape this repo keeps producing.
+   */
+  const recordedBy = async (
+    drive: (rt: ManagedSessionRuntime) => Effect.Effect<void>,
+  ): Promise<Array<{ op: string; before: string[]; after: string[] }>> => {
+    const { piHost } = makeFakePiHost();
+    const calls: Array<{ op: string; before: string[]; after: string[] }> = [];
+    const params = makeParams({
+      recordPlanEvent: (op, before, after) => {
+        calls.push({
+          op,
+          before: before.map((item) => `${item.id}:${item.title}:${item.status}`),
+          after: after.map((item) => `${item.id}:${item.title}:${item.status}`),
+        });
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* drive(rt);
+        }),
+      ),
+    );
+    return calls;
+  };
+
+  it("hands the store the outgoing and incoming plan on setPlan", async () => {
+    const calls = await recordedBy((rt) =>
+      Effect.gen(function* () {
+        yield* rt.setPlan([{ id: "p1", title: "first", status: "todo" as const }]);
+        yield* rt.setPlan([{ id: "p2", title: "second", status: "todo" as const }]);
+      }),
+    );
+
+    expect(calls).toEqual([
+      { op: "set", before: [], after: ["p1:first:todo"] },
+      { op: "set", before: ["p1:first:todo"], after: ["p2:second:todo"] },
+    ]);
+  });
+
+  it("hands the store the patched plan on updatePlan", async () => {
+    const calls = await recordedBy((rt) =>
+      Effect.gen(function* () {
+        yield* rt.setPlan([{ id: "p1", title: "first", status: "todo" as const }]);
+        yield* rt.updatePlan([{ id: "p1", status: "done" as const }]);
+      }),
+    );
+
+    expect(calls[1]).toEqual({
+      op: "update",
+      before: ["p1:first:todo"],
+      after: ["p1:first:done"],
+    });
+  });
+
+  it("reports a restored plan as a restore, never as a set", async () => {
+    const calls = await recordedBy((rt) =>
+      rt.restorePlan([{ id: "p1", title: "first", status: "todo" as const }]),
+    );
+
+    // A "set" here would forge a fresh "created" every time a session reopens;
+    // the store turns a restore into one only for a session with no history,
+    // which is how a fork's inherited plan gets its first event.
+    expect(calls).toEqual([{ op: "restore", before: [], after: ["p1:first:todo"] }]);
+  });
+});
+
 describe("automatic title refresh (SES-18)", () => {
   /**
    * The helper's answer travels in the SESSION's own helper env, never in

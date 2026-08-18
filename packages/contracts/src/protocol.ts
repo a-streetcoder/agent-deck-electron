@@ -316,6 +316,32 @@ export const SessionPlanItem = Schema.mutable(
 );
 export type SessionPlanItem = typeof SessionPlanItem.Type;
 
+/**
+ * How a plan changed (SUB-14), matching native's `PiSessionPlanEventKind`:
+ * `created` is the first plan, `replaced` swaps a whole plan for another,
+ * `updated` patches items in place, `cleared` empties one that existed.
+ */
+export const SessionPlanEventKind = Schema.Literal("created", "replaced", "updated", "cleared");
+export type SessionPlanEventKind = typeof SessionPlanEventKind.Type;
+
+/**
+ * One durable entry in a session's plan history. `items` is the FULL plan as it
+ * stood after the change (empty for `cleared`), so a reader reconstructs any
+ * point in the evolution without replaying patches — native records the whole
+ * snapshot per event for the same reason.
+ */
+export const SessionPlanEvent = Schema.mutable(
+  Schema.Struct({
+    id: Schema.String,
+    sessionId: Schema.String,
+    kind: SessionPlanEventKind,
+    items: Schema.mutable(Schema.Array(SessionPlanItem)),
+    /** ISO-8601, like every other durable timestamp on the wire. */
+    at: Schema.String,
+  }),
+);
+export type SessionPlanEvent = typeof SessionPlanEvent.Type;
+
 /** Durable snapshot of the immediate source of a stable-entry history fork. */
 export const ForkProvenance = Schema.mutable(
   Schema.Struct({

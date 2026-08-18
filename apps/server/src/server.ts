@@ -57,6 +57,7 @@ import { createEditorLauncher } from "./editorLauncher.ts";
 import { createScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import { makeCheckpointRollback } from "./checkpointRollback.ts";
 import { makeCheckpointService } from "./services/checkpoints.ts";
+import { makePlanEventService } from "./services/planEvents.ts";
 import { createFileService } from "./services/files.ts";
 import { LoopEngine } from "./loopEngine.ts";
 import {
@@ -312,6 +313,8 @@ async function initServer(
   // git-ref of the worktree) + the checkpoints_list op. Config-bound to the data
   // dir, so built directly here (not a runtime layer) — see services/checkpoints.ts.
   const checkpoints = makeCheckpointService({ dataDir });
+  // SUB-14: durable plan history, kept off the meta broadcast path.
+  const planEvents = makePlanEventService({ dataDir });
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
     fastify.log.warn({ err: error }, message),
   );
@@ -570,6 +573,7 @@ async function initServer(
       recall: (store, query, limit) => semanticRecall.recall(store, query, limit),
     }),
     () => mcpPolicy.enabled(),
+    planEvents,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1179,6 +1183,7 @@ async function initServer(
   const ctx: ServerContext = {
     fastify,
     sessions,
+    planEvents,
     sessionImages,
     agentAvatars,
     sessionPastes,

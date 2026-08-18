@@ -30,6 +30,7 @@ import type { ServerRuntime } from "./runtime.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
+import type { PlanChangeOperation, PlanEventServiceShape } from "./services/planEvents.ts";
 import type { StampedEvent } from "./services/pushBus.ts";
 import {
   readCanonicalChildTranscript,
@@ -701,6 +702,9 @@ export class SessionManager {
     private readonly recallChildMemory?: ChildMemoryRecall,
     /** Live master MCP policy, checked at delegated direct-adapter spawn. */
     private readonly mcpPolicyEnabled: () => boolean = () => true,
+    /** SUB-14 durable plan history. Appended at the same chokepoint that
+     * publishes `meta.plan`, so every plan change is recorded exactly once. */
+    private readonly planEvents?: PlanEventServiceShape,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1342,6 +1346,23 @@ export class SessionManager {
             },
           }
         : {}),
+      ...(this.planEvents
+        ? {
+            recordPlanEvent: (
+              op: PlanChangeOperation,
+              before: readonly SessionPlanItem[],
+              after: readonly SessionPlanItem[],
+            ) => {
+              try {
+                this.planEvents!.record(meta.id, op, before, after);
+              } catch {
+                // The plan itself is already published by this point. A full
+                // disk or an unwritable data dir must cost the user their plan
+                // HISTORY, never the plan or the turn (Codex).
+              }
+            },
+          }
+        : {}),
       autoTitle: this.autoTitle,
       autoUpdateTitles: this.autoUpdateTitles,
       ...(this.decorateUserCell
@@ -1745,6 +1766,14 @@ export class SessionManager {
       } catch {
         // Best-effort rollback must not mask the launch failure.
       }
+      try {
+        // A fork seeds a `created` for the plan it inherits, so a launch that
+        // fails afterwards would strand that history under a session id that
+        // never existed (Codex).
+        this.planEvents?.deleteSession(meta.id);
+      } catch {
+        // Best-effort rollback must not mask the launch failure.
+      }
       throw error;
     }
   }
@@ -1819,6 +1848,14 @@ export class SessionManager {
         rollbackAttachments?.();
       } catch {
         // Preserve the primary branch materialization failure.
+      }
+      try {
+        // A fork seeds a `created` for the plan it inherits, so a launch that
+        // fails afterwards would strand that history under a session id that
+        // never existed (Codex).
+        this.planEvents?.deleteSession(meta.id);
+      } catch {
+        // Best-effort rollback must not mask the launch failure.
       }
       throw error;
     }

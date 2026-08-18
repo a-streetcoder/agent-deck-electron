@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 17 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 16 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -414,7 +414,6 @@ Each row is one distinct user behavior or safety difference. “Plain English”
 | ID     | Priority | Status  | Difference                               | Plain English                                                                       | Why it matters                                   | Evidence                                                                 |
 | ------ | -------- | ------- | ---------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
 | SUB-04 | —        | Present | Child `contact_supervisor` and UI answer | Children can report progress or block for an answer; the user can answer in the UI. | This existing path must be preserved.            | **E:** `routes/bridge.ts`, supervisor tests.                             |
-| SUB-14 | **P3**   | Partial | Plan event history                       | Electron stores the current plan but not a durable history of plan changes.         | Users cannot see how the plan evolved.           | **E:** `bridgeTools.ts`, plan contracts. **N:** activity/session models. |
 
 ## Loops
 

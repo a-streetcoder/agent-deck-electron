@@ -390,6 +390,18 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
+  // SUB-14: how this session's plan evolved, oldest first. Read-only, and
+  // available for an ended session too — the history outlives the runtime, which
+  // is the entire point of persisting it. Answers for any session the app knows
+  // about, live or indexed; an unknown id is a 404 rather than an empty list, so
+  // a caller can tell "no plan changes" from "no such session".
+  fastify.get("/sessions/:id/plan-events", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const known = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+    if (!known) return reply.status(404).send({ error: "unknown session" });
+    return { events: ctx.planEvents.list(id) };
+  });
+
   // Rename: updates pi's session name (when live) and the persisted title.
   fastify.patch("/sessions/:id", async (request, reply) => {
     const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body);
@@ -767,6 +779,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         ctx.sessionPastes.deleteSession(id);
       } catch {
         // Session deletion already committed; retain optional paste metadata conservatively.
+      }
+      try {
+        // SUB-14: the plan history dies with its session, as native's delete does.
+        ctx.planEvents.deleteSession(id);
+      } catch {
+        // Session deletion already committed; a stale history bucket is inert.
       }
       if (meta.piSessionFile) {
         try {
