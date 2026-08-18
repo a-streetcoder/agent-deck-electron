@@ -199,6 +199,40 @@ describe("McpManager reconciliation", () => {
     await manager.close();
   });
 
+  it("reports each tool's raw name and description, not just the bridge name (MCP-19)", async () => {
+    // Native's Tools card lists `tool.name` with its description underneath, so
+    // a user can tell what a tool does BEFORE exposing the server to an agent.
+    // The description already reached the model through the bridge spec; status
+    // dropped it, and reported only the prefixed bridge names.
+    const client = fakeClient();
+    client.listTools.mockResolvedValue([
+      {
+        name: "create_issue",
+        description: "Open a GitHub issue.",
+        inputSchema: { type: "object" },
+      },
+      { name: "list_repos", inputSchema: { type: "object" } },
+    ]);
+    vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+    const manager = new McpManager(new BridgeRegistry());
+
+    await manager.connect({ id: "github", command: "gh-mcp" }, "global");
+
+    expect(manager.status()).toMatchObject([
+      {
+        id: "github",
+        toolNames: ["mcp__github__create_issue", "mcp__github__list_repos"],
+        tools: [
+          { name: "create_issue", description: "Open a GitHub issue." },
+          { name: "list_repos" },
+        ],
+      },
+    ]);
+    // A tool with no description must not invent one.
+    expect(manager.status()[0]!.tools[1]!.description).toBeUndefined();
+    await manager.close();
+  });
+
   it("routes same-id tools by authenticated session scope and cleans only the owning scope", async () => {
     const first = fakeClient();
     const second = fakeClient();

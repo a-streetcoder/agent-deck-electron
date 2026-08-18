@@ -16,6 +16,26 @@ type McpDefinitionProvenance =
   | { source: "global" | "project"; path: string }
   | { source: "environment"; variable: typeof MCP_ENV_SOURCE };
 
+type McpUiTool = { name: string; description?: string };
+
+// MCP metadata is untrusted remote input; bound it once at the renderer DTO
+// boundary so a huge inventory or description cannot freeze the UI.
+function uiToolInventory(status?: { toolNames: string[]; tools?: McpUiTool[] }): {
+  toolNames: string[];
+  tools: McpUiTool[];
+} {
+  return {
+    toolNames: status?.toolNames.slice(0, 200) ?? [],
+    tools:
+      status?.tools?.slice(0, 200).map((tool) => ({
+        ...tool,
+        ...(tool.description !== undefined && tool.description.length > 500
+          ? { description: `${tool.description.slice(0, 499)}…` }
+          : {}),
+      })) ?? [],
+  };
+}
+
 /** MCP catalog, global-only CRUD, project assignments, and scoped OAuth. */
 export function registerMcpRoutes(ctx: ServerContext): void {
   const {
@@ -166,7 +186,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             // No-project catalog browsing must not disclose another project's
             // live connectivity or tool inventory.
             connected: false,
-            toolNames: [] as string[],
+            ...uiToolInventory(),
             editable,
             auth: { status: "none" as const },
             ...(editable ? definitionFields(entry) : {}),
@@ -205,7 +225,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           source,
           provenance: definitionProvenance(source, entry),
           connected: status?.connected ?? false,
-          toolNames: status?.toolNames ?? [],
+          ...uiToolInventory(status),
           error: status?.error,
           editable,
           auth: transport === "http" ? mcpOAuth.state(authId) : { status: "none" as const },

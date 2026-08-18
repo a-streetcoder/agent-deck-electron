@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 6 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 5 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -350,6 +350,33 @@ Every supported effective MCP definition now carries the exact winning origin fr
 
 This is additive read-only metadata: runtime resolution, persistence, OAuth, process lifecycle, Electron main/preload, packaging, and sync seams are unchanged. Local macOS/Chromium acceptance passed workspace typecheck, lint/design-system, format, all 229 resource tests, focused server provenance tests (10/10), renderer MCP tests (41/41), and focused MCP Playwright (8/8). Light/dark normal and narrow screenshots were directly inspected; long paths retained full title/accessibility text without control loss. Independent review found and then accepted the coherent-snapshot correction that prevents provenance from racing a second config read. Windows/Linux runtime was not run; the implementation uses shared Node path/React logic and existing cross-platform path derivation. **MCP-08 closed. E:** resource MCP catalog source metadata, coherent effective snapshot, MCP route DTO, `McpScreen.tsx`, and focused resource/server/renderer/Playwright tests. **N:** winning `MCPServerEntry.sourcePath` and MCP source presentation.
 
+### MCP-19 — per-tool descriptions
+
+Each server row now has a Tools disclosure listing every tool under its OWN name with its
+description beneath, matching native's Tools card. The row itself shows the count.
+
+The data was already there: `mcpTools.ts` has always captured `description` from `listTools()` into
+the bridge spec, so the MODEL could read it — `McpManager.status()` simply dropped it and reported
+only the prefixed `mcp__server__tool` bridge names, which is all the renderer could print. So the row
+was smaller than it read: the fix is to carry `{name, description?}` beside `toolNames` (which 56
+tests depend on and is unchanged), pass it through the GET DTO as live status — NOT as a definition
+field, so it is deliberately not gated on `editable` — and render it.
+
+Tool metadata is untrusted remote input, so it is bounded where it crosses into the UI: at most 200
+tools, descriptions truncated at 500 characters, and Unicode bidirectional overrides stripped before
+rendering so a hostile server cannot make a tool name read as something else. The full text still
+reaches the model through the bridge spec. Native is protected from a huge inventory by SwiftUI's
+`LazyVStack`; our DOM list is eager, hence the cap.
+
+Local: web 489, server MCP 60/60, desktop 17, MCP Playwright 8/8; typechecks, lint and the
+design-system gate clean. Every pin two-sided. Independent Codex review found all three hardening
+gaps above plus the fact that the GET wiring itself had no test — removing `tools` from the DTO would
+have left every test green — which is now pinned. **Two e2e specs asserted the OLD presentation**
+(`mcp__mock__echo` inline in the row) and were updated to open the disclosure and assert the raw
+name, which is what native shows; the unit suites passed throughout, so only Playwright caught it.
+**MCP-19 closed. E:** `mcpTools.ts`, `routes/mcp.ts`, `McpScreen.tsx`. **N:** `MCPServersScreen.swift`
+`toolsCard`.
+
 ### MCP-10 — reveal the owning config
 
 Every MCP server row now has a Reveal action that opens the file DEFINING it in the OS file manager,
@@ -569,7 +596,6 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
 | MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
 | MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
-| MCP-19 | **P3**   | Partial   | Per-tool descriptions       | Live tool names appear, but description detail is thinner.                                          | Users cannot easily understand each tool before exposure.    | **E:** `mcpTools.ts`, `McpScreen.tsx`. **N:** MCP server screen.                       |
 | MCP-20 | **P2**   | Decision  | Tool exposure policy        | Native exposes ONE `mcp` proxy tool; Electron registers one tool per discovered MCP tool.            | The model sees a different tool surface for the same servers. | **E:** `mcpTools.ts` `scopeMcpBridgeSpecs`/`specs`, `server.ts` launch filtering. **N:** `PiNativeSubagentBridgeExtensions.swift`, `MCPBridgeAndConflictTests.swift`. Workstream 21. |
 
 ## GitHub issues

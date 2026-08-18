@@ -1944,3 +1944,78 @@ describe("MCP reveal config (MCP-10)", () => {
     expect(screen.queryByTestId("mcp-reveal-envsrv")).toBeNull();
   });
 });
+
+/**
+ * MCP-19 — native's Tools card lists each tool's own name with its description
+ * underneath, so a user can tell what a server actually does before assigning
+ * it to an agent. The port showed a truncated comma list of PREFIXED bridge
+ * names and no descriptions at all.
+ */
+describe("MCP per-tool descriptions (MCP-19)", () => {
+  const connectedServer = {
+    id: "github",
+    transport: "stdio",
+    command: "gh-mcp",
+    connected: true,
+    editable: true,
+    source: "global",
+    provenance: { source: "global", path: "/home/.pi/agent/mcp.json" },
+    toolNames: ["mcp__github__create_issue", "mcp__github__list_repos"],
+    tools: [{ name: "create_issue", description: "Open a GitHub issue." }, { name: "list_repos" }],
+  };
+
+  const show = async (server: Record<string, unknown>): Promise<void> => {
+    useAppStore.setState({ currentProjectId: null, projects: [] });
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ servers: [server] }));
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-provenance-github");
+  };
+
+  it("shows each tool's own name and description", async () => {
+    await show(connectedServer);
+
+    fireEvent.click(screen.getByTestId("mcp-tools-toggle-github"));
+
+    const tools = await screen.findByTestId("mcp-tools-github");
+    // The tool's OWN name, as the server reports it — not mcp__github__…
+    expect(tools.textContent).toContain("create_issue");
+    expect(tools.textContent).toContain("Open a GitHub issue.");
+    expect(tools.textContent).toContain("list_repos");
+  });
+
+  it("says why the list is empty rather than showing nothing", async () => {
+    await show({ ...connectedServer, connected: false, toolNames: [], tools: [] });
+
+    fireEvent.click(screen.getByTestId("mcp-tools-toggle-github"));
+
+    expect((await screen.findByTestId("mcp-tools-github")).textContent).toContain("Connect");
+  });
+
+  it("distinguishes a connected server that simply has no tools", async () => {
+    // Discovery finished and returned nothing. Saying "Loading tools…" forever
+    // describes a state the server is not in (Codex).
+    await show({ ...connectedServer, connected: true, toolNames: [], tools: [] });
+
+    fireEvent.click(screen.getByTestId("mcp-tools-toggle-github"));
+
+    const region = await screen.findByTestId("mcp-tools-github");
+    expect(region.textContent).not.toContain("Loading");
+    expect(region.textContent).not.toContain("Connect this server");
+    expect(region.textContent).toMatch(/no tools/i);
+  });
+
+  it("neutralises bidirectional overrides in tool text", async () => {
+    // A remote server controls this text. Bidi controls can make a tool name
+    // read as something else entirely in the UI.
+    await show({
+      ...connectedServer,
+      tools: [{ name: "safe‮eman_lufmrah", description: "Fine‭text" }],
+    });
+
+    fireEvent.click(screen.getByTestId("mcp-tools-toggle-github"));
+
+    const region = await screen.findByTestId("mcp-tools-github");
+    expect(region.textContent).not.toMatch(/[‪-‮⁦-⁩]/);
+    expect(region.textContent).toContain("safe");
+  });
+});

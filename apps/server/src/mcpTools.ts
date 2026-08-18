@@ -138,6 +138,8 @@ export interface McpServerStatus {
   connected: boolean;
   /** Bridge tool names (mcp__<id>__<tool>) currently registered for this server. */
   toolNames: string[];
+  /** Tool metadata exactly as reported by the server. */
+  tools: { name: string; description?: string }[];
   /** Present when the last connect/list attempt failed. */
   error?: string;
 }
@@ -259,6 +261,7 @@ interface ServerState {
   operationController?: AbortController;
   /** Bridge names/specs registered for this server (for scoped advertisement and teardown). */
   toolNames: string[];
+  tools: { name: string; description?: string }[];
   toolSpecs: ReturnType<BridgeRegistry["specs"]>;
   error?: string;
 }
@@ -341,6 +344,7 @@ export class McpManager {
         transport: isHttpConfig(state.config) ? "http" : "stdio",
         connected: state.client !== undefined,
         toolNames: [...state.toolNames],
+        tools: state.tools.map((tool) => ({ ...tool })),
         error: state.error,
       }));
   }
@@ -409,6 +413,7 @@ export class McpManager {
         transport: "http",
         connected: false,
         toolNames: [],
+        tools: [],
         error: "OAuth authorization is already in progress",
       };
     }
@@ -416,7 +421,14 @@ export class McpManager {
     if (this.closing) throw new Error("MCP manager is closing");
     const operationController = new AbortController();
     const key = this.key(scope, config.id);
-    const state: ServerState = { scope, config, operationController, toolNames: [], toolSpecs: [] };
+    const state: ServerState = {
+      scope,
+      config,
+      operationController,
+      toolNames: [],
+      tools: [],
+      toolSpecs: [],
+    };
     this.servers.set(key, state);
     let client: McpClient | undefined;
     try {
@@ -471,6 +483,10 @@ export class McpManager {
           parameters: normalizeParameters(tool.inputSchema),
         };
         state.toolNames.push(name);
+        state.tools.push({
+          name: tool.name,
+          ...(tool.description === undefined ? {} : { description: tool.description }),
+        });
         state.toolSpecs.push(spec);
         const owners = this.toolOwners.get(name) ?? new Set<string>();
         owners.add(key);
@@ -503,6 +519,7 @@ export class McpManager {
         }
       }
       state.toolNames = [];
+      state.tools = [];
       state.toolSpecs = [];
       await client?.close().catch(() => {});
       state.client = undefined;

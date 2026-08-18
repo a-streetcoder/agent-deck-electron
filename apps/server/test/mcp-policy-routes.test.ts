@@ -29,6 +29,7 @@ function makeHarness(
     callbackError?: string;
     onRootsFor?: (home: string) => void;
     catalogServers?: Record<string, unknown>[];
+    status?: Record<string, unknown>[];
   } = {},
 ): Harness {
   const fastify = Fastify();
@@ -64,7 +65,7 @@ function makeHarness(
     mcpPolicy: policy,
     mcp: {
       pause,
-      status: () => [],
+      status: () => options.status ?? [],
       refresh: vi.fn().mockResolvedValue(null),
       scopesFor: () => [],
       has: () => false,
@@ -200,6 +201,60 @@ describe("GET /mcp coherent provenance", () => {
     // A second roots/catalog read would run the deterministic concurrent-write
     // hook above and incorrectly pair the URL config with project provenance.
     expect(laterRootReads).toBe(0);
+  });
+});
+
+describe("GET /mcp live tools (MCP-19)", () => {
+  it("passes each tool's own name and description through to the renderer", async () => {
+    // Without this the row can only print the prefixed bridge names it already
+    // had, so the description never reaches the user (Codex).
+    await harness.fastify.close();
+    harness = makeHarness({
+      status: [
+        {
+          id: "remote",
+          transport: "http",
+          connected: true,
+          toolNames: ["mcp__remote__echo"],
+          tools: [{ name: "echo", description: "Echo the input." }],
+        },
+      ],
+    });
+
+    const servers = (
+      await harness.fastify.inject({ method: "GET", url: "/mcp?projectId=project" })
+    ).json().servers as { id: string; tools?: unknown }[];
+
+    expect(servers.find((server) => server.id === "remote")!.tools).toEqual([
+      { name: "echo", description: "Echo the input." },
+    ]);
+  });
+
+  it("bounds what an untrusted server can make the UI render", async () => {
+    // Tool metadata comes from a remote server. A huge inventory or a
+    // multi-megabyte description must not reach the renderer at all.
+    await harness.fastify.close();
+    harness = makeHarness({
+      status: [
+        {
+          id: "remote",
+          transport: "http",
+          connected: true,
+          toolNames: [],
+          tools: Array.from({ length: 500 }, (_, index) => ({
+            name: `tool_${index}`,
+            description: "d".repeat(5000),
+          })),
+        },
+      ],
+    });
+
+    const server = (
+      await harness.fastify.inject({ method: "GET", url: "/mcp?projectId=project" })
+    ).json().servers[0] as { tools: { name: string; description?: string }[] };
+
+    expect(server.tools.length).toBeLessThanOrEqual(200);
+    expect(server.tools[0]!.description!.length).toBeLessThanOrEqual(500);
   });
 });
 

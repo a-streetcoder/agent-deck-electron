@@ -168,8 +168,12 @@ test("lists a configured MCP server as connected and removes it", async ({ page 
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-connected", "true");
   await expect(page.getByTestId("mcp-status-mock")).toHaveText("connected");
-  // The echo tool the mock server exposes is listed.
-  await expect(row).toContainText("mcp__mock__echo");
+  // The echo tool the mock server exposes is listed — under its OWN name, in
+  // the Tools disclosure, as native's Tools card shows it (MCP-19). The row
+  // itself now carries the count, not a line of prefixed bridge names.
+  await expect(row).toContainText("Tools (1)");
+  await page.getByTestId("mcp-tools-toggle-mock").click();
+  await expect(page.getByTestId("mcp-tools-mock")).toContainText("echo");
 
   // Revoke project trust, then remove the global definition (confirm-gated,
   // native parity) → the row disappears + empty state.
@@ -200,7 +204,9 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   const row = page.getByTestId("mcp-external");
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-connected", "true");
-  await expect(row).toContainText("mcp__external__echo");
+  await expect(row).toContainText("Tools (1)");
+  await page.getByTestId("mcp-tools-toggle-external").click();
+  await expect(page.getByTestId("mcp-tools-external")).toContainText("echo");
 
   // A partial/broken external save fails closed: the useful connection remains
   // active and the user gets an actionable error instead of losing all tools.
