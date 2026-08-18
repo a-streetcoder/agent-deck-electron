@@ -2804,48 +2804,43 @@ describe("durable session attention", () => {
 });
 
 describe("automatic title refresh (SES-18)", () => {
-  const withFakeTitle = async (reply: string, run: () => Promise<void>): Promise<void> => {
-    const previous = process.env.AGENT_DECK_FAKE_TITLE;
-    process.env.AGENT_DECK_FAKE_TITLE = reply;
-    try {
-      await run();
-    } finally {
-      if (previous === undefined) delete process.env.AGENT_DECK_FAKE_TITLE;
-      else process.env.AGENT_DECK_FAKE_TITLE = previous;
-    }
-  };
-
-  const refreshWith = (
+  /**
+   * The helper's answer travels in the SESSION's own helper env, never in
+   * `process.env`. A global made these tests bleed into each other on CI: the
+   * refresh is forked, so a slow runner let one test's helper read the next
+   * test's answer, and two of them failed with another case's title.
+   */
+  const refreshWith = async (
     reply: string,
     seed: (meta: SessionMeta) => void,
     autoUpdateTitles = true,
-  ): Promise<SessionMeta> =>
-    new Promise((resolve, reject) => {
-      void withFakeTitle(reply, async () => {
-        const { piHost } = makeFakePiHost();
-        await Effect.runPromise(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const params = makeParams({
-                autoTitle: () => true,
-                autoUpdateTitles: () => autoUpdateTitles,
-              });
-              seed(params.meta);
-              const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
-              yield* Effect.fork(rt.ingest);
-              yield* rt.prompt("say-hello");
-              yield* waitUntil(() => rt !== undefined, 100);
-              yield* rt.setPlan([
-                { id: "p1", title: "Rewrite the importer", status: "todo" as const },
-              ]);
-              // The refresh is forked; give it room to finish or decline.
-              yield* Effect.sleep("2500 millis");
-              resolve(params.meta);
-            }),
-          ),
-        );
-      }).catch(reject);
+  ): Promise<SessionMeta> => {
+    const { piHost } = makeFakePiHost();
+    const params = makeParams({
+      autoTitle: () => true,
+      autoUpdateTitles: () => autoUpdateTitles,
+      helperContext: { env: { ...process.env, AGENT_DECK_FAKE_TITLE: reply } },
     });
+    seed(params.meta);
+    const before = params.meta.title;
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("say-hello");
+          yield* rt.setPlan([{ id: "p1", title: "Rewrite the importer", status: "todo" as const }]);
+          // Settle on the outcome, not a fixed sleep: a refresh that is going to
+          // change the title does so as soon as its helper answers, and one that
+          // declines leaves it alone for the whole budget.
+          yield* waitUntil(() => params.meta.title !== before, 12_000).pipe(
+            Effect.catchAllDefect(() => Effect.void),
+          );
+        }),
+      ),
+    );
+    return params.meta;
+  };
 
   it("renames a generated title when the plan says the work changed", async () => {
     const meta = await refreshWith("Rewrite the CSV importer", (m) => {
@@ -2853,7 +2848,7 @@ describe("automatic title refresh (SES-18)", () => {
       m.titleUserEdited = false; // this app generated it
     });
     expect(meta.title).toBe("Rewrite the CSV importer");
-  });
+  }, 30_000);
 
   it("NEVER touches a title the user typed", async () => {
     // The guard that protects user data: a typed title outranks any helper
@@ -2863,7 +2858,7 @@ describe("automatic title refresh (SES-18)", () => {
       m.titleUserEdited = true;
     });
     expect(meta.title).toBe("My own name");
-  });
+  }, 30_000);
 
   it("will not rewrite a title of unknown provenance", async () => {
     // A record saved before this field existed could have been renamed by hand.
@@ -2872,7 +2867,7 @@ describe("automatic title refresh (SES-18)", () => {
       m.title = "Legacy title";
     });
     expect(meta.title).toBe("Legacy title");
-  });
+  }, 30_000);
 
   it("declines politely when the helper decorates the KEEP sentinel", async () => {
     const meta = await refreshWith('"KEEP."', (m) => {
@@ -2880,7 +2875,7 @@ describe("automatic title refresh (SES-18)", () => {
       m.titleUserEdited = false;
     });
     expect(meta.title).toBe("Still accurate");
-  });
+  }, 30_000);
 
   it("leaves the title alone when the helper answers KEEP", async () => {
     const meta = await refreshWith("KEEP", (m) => {
@@ -2888,7 +2883,7 @@ describe("automatic title refresh (SES-18)", () => {
       m.titleUserEdited = false;
     });
     expect(meta.title).toBe("Still accurate");
-  });
+  }, 30_000);
 
   it("does nothing while the preference is off", async () => {
     const meta = await refreshWith(
@@ -2900,5 +2895,5 @@ describe("automatic title refresh (SES-18)", () => {
       false,
     );
     expect(meta.title).toBe("Old title");
-  });
+  }, 30_000);
 });
