@@ -546,7 +546,31 @@ const OWNERSHIP_OUTPUT_CAP = 4 * 1024 * 1024;
  * `p<pid>` lines. `null` = undeterminable, `[]` = table parsed but no visible
  * owner (both fall back to confirmed-listening — see the module doc).
  */
-export const defaultResolvePortOwners: PortOwnersResolver = async (port) => {
+/**
+ * One retry when the lookup does not answer. `null` means undeterminable, and
+ * the caller then accepts a merely-confirmed listener WITHOUT pid-tree ownership
+ * verification — so a single stalled `netstat`/`lsof` on a loaded machine
+ * quietly weakens a real check. A missing tool still costs nothing (the spawn
+ * fails immediately), and a genuinely unanswerable lookup still reports null
+ * (Codex).
+ */
+/**
+ * Retry ONLY an undeterminable answer. `[]` is a real answer — the table parsed
+ * and named no owner — so it is returned as-is; only `null` ("the lookup did not
+ * answer") is worth asking twice.
+ */
+export async function retryUndeterminable(
+  lookup: PortOwnersResolver,
+  port: number,
+): Promise<readonly number[] | null> {
+  const first = await lookup(port);
+  return first ?? (await lookup(port));
+}
+
+export const defaultResolvePortOwners: PortOwnersResolver = async (port) =>
+  await retryUndeterminable(lookupPortOwners, port);
+
+const lookupPortOwners: PortOwnersResolver = async (port) => {
   if (process.platform === "win32") {
     const out = await captureCommand("netstat", ["-ano"]);
     if (out === null) return null;

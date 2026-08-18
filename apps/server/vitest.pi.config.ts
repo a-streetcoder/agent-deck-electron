@@ -6,7 +6,11 @@ export default defineConfig({
     include: ["test/**/*.pi.test.ts"],
     passWithNoTests: true,
     fileParallelism: false,
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
+    // A single test here spawns a real pi, runs turns through the full HTTP+WS
+    // stack, and may restart the server. 60 s left no room above the 60 s
+    // receipt waits inside those tests, so a slow runner failed the wait and the
+    // test together.
+    testTimeout: 180_000,
+    hookTimeout: 120_000,
   },
 });

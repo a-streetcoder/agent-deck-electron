@@ -8,6 +8,7 @@ import { makeServerRuntime } from "../src/runtime.ts";
 import {
   defaultReadProcessTable,
   defaultResolvePortOwners,
+  retryUndeterminable,
   extractLoopbackPorts,
   listProjectScripts,
   pidWithinTree,
@@ -697,6 +698,40 @@ describe("port ownership (DEV-04)", () => {
     }
   });
 
+  it("asks a second time only when the owner lookup did not answer", async () => {
+    // A stalled netstat/lsof reports null, and the caller then accepts a merely
+    // confirmed listener WITHOUT pid-tree ownership verification — so a single
+    // unlucky spawn quietly weakens a real check (Codex). An empty result is a
+    // real answer and must NOT be retried, or every port with no visible owner
+    // pays double.
+    const calls: number[] = [];
+    const answering = async (port: number): Promise<readonly number[] | null> => {
+      calls.push(port);
+      return calls.length === 1 ? null : [4242];
+    };
+    expect(await retryUndeterminable(answering, 5150)).toEqual([4242]);
+    expect(calls).toHaveLength(2);
+
+    const empty: number[] = [];
+    let emptyCalls = 0;
+    expect(
+      await retryUndeterminable(async () => {
+        emptyCalls += 1;
+        return empty;
+      }, 5150),
+    ).toBe(empty);
+    expect(emptyCalls).toBe(1);
+
+    let nullCalls = 0;
+    expect(
+      await retryUndeterminable(async () => {
+        nullCalls += 1;
+        return null;
+      }, 5150),
+    ).toBeNull();
+    expect(nullCalls).toBe(2);
+  });
+
   it("real resolvers see this test process owning its own loopback listener", async () => {
     const listener = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -707,6 +742,9 @@ describe("port ownership (DEV-04)", () => {
       const address = listener.address();
       const port = typeof address === "object" && address !== null ? address.port : 0;
       expect(port).toBeGreaterThan(0);
+      // One call, exactly as production makes it: the retry that absorbs a
+      // stalled netstat/lsof lives in the resolver now, so this test proves the
+      // behaviour users actually get rather than a test-only loop (Codex).
       const owners = await defaultResolvePortOwners(port);
       // A platform without the lookup tool (e.g. lsof-less minimal Linux) is a
       // SUPPORTED fallback configuration, not a failure — nothing to pin there.

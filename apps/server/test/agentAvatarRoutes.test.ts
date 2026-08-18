@@ -92,7 +92,13 @@ describe("agent avatar routes", () => {
     const avatarUrl = catalog.agents.find((agent) => agent.name === "coder")?.avatarUrl;
     expect(avatarUrl).toBeDefined();
     expect(Buffer.from(await (await fetch(endpoint(avatarUrl!))).arrayBuffer())).toEqual(gif);
-  });
+    // Heavy by construction: a >1 MiB body is the SUBJECT here, and it travels
+    // base64-encoded through a real HTTP server, gets written, re-read and
+    // compared. Vitest's default 5 s budget was never a measurement — this file
+    // alone takes ~4.6 s — and it is what CI kept hitting. The assertions are
+    // about acceptance and byte-identity, not latency, so the budget is
+    // explicit instead.
+  }, 30_000);
 
   it("keeps hand-authored names catalog-readable", async () => {
     const response = await fetch(endpoint("/resources/agents?includeUnassigned=true"));

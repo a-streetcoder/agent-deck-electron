@@ -37,7 +37,11 @@ export class ReceiptBus {
     }
   }
 
-  async waitFor(name: ReceiptName, sessionId: string, timeoutMs = 30_000): Promise<void> {
+  /** 60 s, not 30 s: these waits gate REAL pi turns in the integration suite, and
+   * hosted runners routinely take longer than a developer machine. The old
+   * default had no measurement behind it and its failures were starved clocks,
+   * never wrong results. */
+  async waitFor(name: ReceiptName, sessionId: string, timeoutMs = 60_000): Promise<void> {
     if (!this.enabled) throw new Error("ReceiptBus is disabled (set AGENT_DECK_TEST=1)");
     if (this.seen.has(`${sessionId}:${name}`)) return;
     await new Promise<void>((resolve, reject) => {

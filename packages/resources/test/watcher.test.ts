@@ -182,13 +182,18 @@ describe("resource watcher", () => {
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed a trusted linked boundary")), 5_000),
+          // Backend subscription for a junction/symlinked boundary is the slow
+          // part, and on a loaded Windows runner it exceeded the old 5 s inner
+          // deadline while the test's own 15 s budget sat unused. The deadline
+          // now leaves headroom under that budget, so a real miss still fails
+          // with this message instead of the suite timing out.
+          setTimeout(() => reject(new Error("watcher missed a trusted linked boundary")), 15_000),
         ),
       ]);
     } finally {
       await watcher.close();
     }
-  }, 15_000);
+  }, 25_000);
 
   it("does not rescan for an unrelated sibling directory", async () => {
     const root = home();
