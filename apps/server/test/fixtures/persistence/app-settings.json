@@ -27,6 +27,7 @@
   ],
   "autoTitle": false,
   "autoUpdateTitles": true,
+  "subagentsEnabled": true,
   "worktreeIsolation": true,
   "keepWorktreeAfterMerge": true,
   "gitAutomation": false,

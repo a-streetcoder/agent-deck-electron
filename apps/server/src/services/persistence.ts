@@ -133,6 +133,8 @@ export interface AppSettings {
   /** SES-18: keep refreshing a generated title as the session's plan evolves.
    * Requires `autoTitle`; a user-edited title is never touched. */
   autoUpdateTitles: boolean;
+  /** Native `areSubagentsEnabledForNewSessions`: may sessions delegate to subagents. */
+  subagentsEnabled: boolean;
   /** Allow automatic parent-session recall and model-facing memory tools. */
   agentMemoryEnabled: boolean;
   /** Maximum grapheme clusters in model-facing recalled memory output. */
@@ -454,6 +456,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       openAIFastModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
       autoUpdateTitles: true, // native default: autoUpdatePiAgentSessionTitles
+      subagentsEnabled: true, // native default: delegation is on
       agentMemoryEnabled: true,
       agentMemoryInjectionCharacterBudget: 6000,
       // Native default: delegated agents receive project memory context.
@@ -524,6 +527,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           autoTitle: typeof record.autoTitle === "boolean" ? record.autoTitle : true,
           autoUpdateTitles:
             typeof record.autoUpdateTitles === "boolean" ? record.autoUpdateTitles : true,
+          // Absent means ENABLED: an existing install must not lose delegation
+          // just because its settings file predates this field.
+          subagentsEnabled:
+            typeof record.subagentsEnabled === "boolean" ? record.subagentsEnabled : true,
           // Pause is opt-out: legacy absence and malformed values both retain the
           // shipped enabled behavior. Only an explicit false pauses automation.
           agentMemoryEnabled:

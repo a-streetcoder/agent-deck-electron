@@ -104,6 +104,8 @@ const CHILD_MEMORY_TOOL_NAMES = new Set([
   "agent_deck_memory_search",
   "agent_deck_memory_mark_stale",
 ]);
+/** The bridge tools that start a child pi, withheld when delegation is off. */
+const DELEGATION_TOOL_NAMES = new Set(["managed_subagent", "managed_parallel"]);
 
 /**
  * The child subagent's supervisor tool. Exposed ONLY through the per-child bridge
@@ -361,10 +363,16 @@ async function initServer(
       // Plain sessions see assigned servers; named-agent policy can only narrow that set.
       // Non-MCP bridge tools remain independently available.
       const scope = meta.projectId;
+      // Delegation policy: don't ADVERTISE a tool this session would refuse.
+      // The refusal itself lives at the SessionManager spawn chokepoint (that is
+      // what makes it unbypassable); this only keeps the model from planning
+      // around a capability it does not have.
+      const delegationAllowed = meta.subagentsEnabled ?? settings.get().subagentsEnabled;
       const nonMcpTools = bridge
         .specs()
         .filter((spec) => !spec.name.startsWith("mcp__"))
-        .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"));
+        .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"))
+        .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       let tools = scope ? [...nonMcpTools, ...mcp.specs(scope)] : nonMcpTools;
       const allow = mcpAllowlistForSession(meta);
       tools = scopeMcpBridgeSpecs(tools, allow);
@@ -574,6 +582,7 @@ async function initServer(
     }),
     () => mcpPolicy.enabled(),
     planEvents,
+    () => settings.get().subagentsEnabled,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.

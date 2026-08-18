@@ -705,6 +705,8 @@ export class SessionManager {
     /** SUB-14 durable plan history. Appended at the same chokepoint that
      * publishes `meta.plan`, so every plan change is recorded exactly once. */
     private readonly planEvents?: PlanEventServiceShape,
+    /** Live app-level delegation default (native areSubagentsEnabledForNewSessions). */
+    private readonly subagentsEnabled: () => boolean = () => true,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1363,6 +1365,18 @@ export class SessionManager {
             },
           }
         : {}),
+      // Effective delegation policy, re-read at every child spawn: the
+      // session's own override when it has one, otherwise the app default.
+      // Re-asserted at USE time rather than trusted from storage. A stored value
+      // can arrive by import, migration or hand-editing and SessionIndex does
+      // not validate it, so a PRESENT non-boolean (`"false"`, `0`) must DENY
+      // rather than slide past a `=== false` test and fail open. Only genuine
+      // absence follows the app default (Codex).
+      subagentsEnabled: () => {
+        const override: unknown = meta.subagentsEnabled;
+        if (override === undefined) return this.subagentsEnabled();
+        return override === true;
+      },
       autoTitle: this.autoTitle,
       autoUpdateTitles: this.autoUpdateTitles,
       ...(this.decorateUserCell
@@ -1723,6 +1737,12 @@ export class SessionManager {
       piSessionFile: copyTo,
       title: source.title ? `${source.title} (fork)` : undefined,
       plan: source.plan,
+      subagentsEnabled: source.subagentsEnabled,
+      // Carry the delegation override. Dropping it would let a fork of a
+      // delegation-DISABLED session fall back to the permissive app default and
+      // spawn children the source was explicitly denied (Codex). Spread-safe:
+      // `undefined` still means "follow the app default".
+
       providerRetries: source.providerRetries,
       // A simple full-file duplicate retains identical canonical ancestry, so
       // its latest-turn prompt evidence remains valid (unlike history rewrites).

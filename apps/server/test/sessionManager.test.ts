@@ -2803,6 +2803,122 @@ describe("durable session attention", () => {
   });
 });
 
+describe("subagent delegation policy", () => {
+  /**
+   * Native lets a user turn delegation off (`areSubagentsEnabledForNewSessions`
+   * plus a per-session override). This port had no such control at all, so the
+   * FIRST thing that must be true is that the policy is enforced where a child
+   * is actually spawned — `runChildAgent` is the one function every path reaches
+   * (managed_subagent, managed_parallel, and routes/loops.ts, which calls
+   * `sessions.runSubagent` directly and never touches the bridge).
+   */
+  it("refuses to spawn a child when delegation is disabled, and says why", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const params = makeParams({ subagentsEnabled: () => false });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          const parentPids = pids.length;
+          const exit = yield* Effect.exit(rt.runChildAgent("say-hello"));
+
+          expect(exit._tag).toBe("Failure");
+          // Fail CLOSED and fail EARLY: no second pi may be started, and no
+          // durable child record or worktree may be allocated first.
+          expect(pids.length).toBe(parentPids);
+          // The refusal reaches the model as text it can report, not a bare throw.
+          const message = exit._tag === "Failure" ? String(exit.cause) : "";
+          expect(message).toContain("delegation");
+        }),
+      ),
+    );
+  });
+
+  it("spawns normally when delegation is enabled", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const params = makeParams({ subagentsEnabled: () => true });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* rt.runChildAgent("say-hello");
+          expect(pids.length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it("normalizes a malformed stored override to a denial", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/SessionManager.ts"), "utf8");
+    const reader = source.slice(source.indexOf("subagentsEnabled: () => {"));
+
+    // SessionIndex does not validate this field, so an imported, migrated or
+    // hand-edited `"false"` arrives as a truthy string. `?? appDefault` would
+    // hand it straight to a `=== false` test and fail OPEN; only genuine
+    // absence may fall through to the default (Codex).
+    expect(reader.slice(0, 300)).toContain("override === true");
+    expect(reader.slice(0, 300)).toContain("override === undefined");
+  });
+
+  it("does not corrupt the active-child count when it refuses", async () => {
+    const { piHost } = makeFakePiHost();
+    let allowed = false;
+    const params = makeParams({ subagentsEnabled: () => allowed });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          // Refuse once. A refusal that ran the decrement finalizer without the
+          // matching increment leaves the counter at -1 (Codex).
+          yield* Effect.exit(rt.runChildAgent("say-hello"));
+
+          // Now run a real child and look WHILE IT IS RUNNING: at -1 the
+          // increment only reaches 0, so `childRun` reads false and parking
+          // believes the session has no child to wait for. Checking after the
+          // child finished would pass either way.
+          allowed = true;
+          yield* Effect.fork(rt.runChildAgent("stream-forever"));
+          yield* waitUntil(
+            () => Effect.runSync(rt.parkingState).childRun,
+            8_000,
+            () => "childRun never became true while a child was streaming",
+          ).pipe(Effect.catchAllDefect((defect) => Effect.fail(new Error(String(defect)))));
+        }),
+      ),
+    );
+  }, 20_000);
+
+  it("carries a session's delegation override to a fork", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/SessionManager.ts"), "utf8");
+    const forkBody = source.slice(
+      source.indexOf("  async fork("),
+      source.indexOf("  async fork(") + 4000,
+    );
+
+    // fork() builds its metadata field-by-field, so an omitted override made the
+    // copy fall back to the permissive app default and delegate where its source
+    // could not (Codex). `materializeHistoryFork` spreads `...source` and was
+    // already safe.
+    expect(forkBody).toContain("subagentsEnabled: source.subagentsEnabled");
+  });
+
+  it("delegates by default, so an existing install is unaffected", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    // No reader supplied at all: absence must not read as "disabled", or every
+    // caller that has not been updated silently loses delegation.
+    const params = makeParams();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* rt.runChildAgent("say-hello");
+          expect(pids.length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+});
+
 describe("plan history recording (SUB-14)", () => {
   /**
    * These pin the WIRING, not the classification — planEvents.test.ts owns the

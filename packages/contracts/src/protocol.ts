@@ -484,6 +484,12 @@ export const SessionMeta = Schema.mutable(
      */
     plan: Schema.optional(Schema.mutable(Schema.Array(SessionPlanItem))),
     /**
+     * Per-session delegation override (native's `subagentsEnabled` on the
+     * session record). Absent means "follow the app default" — it is NOT the
+     * same as false, so an untouched session tracks the setting.
+     */
+    subagentsEnabled: Schema.optional(Schema.Boolean),
+    /**
      * Git worktree isolation (native piAgentSessionsUseWorktree). When the setting
      * is on and the project is a git repo, the session runs in its own worktree on
      * branch `agent-deck/session-<id>` (cwd = worktreePath) so its work never

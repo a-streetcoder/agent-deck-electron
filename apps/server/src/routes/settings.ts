@@ -348,6 +348,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         // Onboarding preferences (native OnboardingPreferencesView). null clears
         // defaultModel/defaultThinking back to "inherit the runtime default".
         autoTitle: z.boolean().optional(),
+        subagentsEnabled: z.boolean().optional(),
         agentMemoryEnabled: z.boolean().optional(),
         agentMemoryInjectionCharacterBudget: z.number().int().min(1000).max(20000).optional(),
         agentMemorySubagentsEnabled: z.boolean().optional(),
@@ -427,6 +428,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (d.defaultPromptTemplates !== undefined)
       patch.defaultPromptTemplates = d.defaultPromptTemplates;
     if (d.autoTitle !== undefined) patch.autoTitle = d.autoTitle;
+    if (d.subagentsEnabled !== undefined) patch.subagentsEnabled = d.subagentsEnabled;
     if (d.agentMemoryEnabled !== undefined) patch.agentMemoryEnabled = d.agentMemoryEnabled;
     if (d.agentMemoryInjectionCharacterBudget !== undefined)
       patch.agentMemoryInjectionCharacterBudget = d.agentMemoryInjectionCharacterBudget;

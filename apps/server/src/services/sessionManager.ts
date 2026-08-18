@@ -245,6 +245,12 @@ export interface SpawnSessionParams {
     before: readonly SessionPlanItem[],
     after: readonly SessionPlanItem[],
   ) => void;
+  /**
+   * Live-read delegation policy (native `areSubagentsEnabledForNewSessions`
+   * plus the per-session override). ABSENT MEANS ENABLED: a caller that has not
+   * been taught about the policy must keep delegating, never silently lose it.
+   */
+  readonly subagentsEnabled?: () => boolean;
   /** Live-read autoTitle preference (native autoTitle). */
   readonly autoTitle: () => boolean;
   /** SES-18: live-read "keep the title current" preference (native
@@ -1777,28 +1783,46 @@ export const makeManagedSessionRuntime = (
         }),
 
       runChildAgent: (task, agentName, toolPolicy, overrides, runOptions) =>
-        Effect.gen(function* () {
-          activeChildRuns += 1;
-          // Child execution is owned by the parent session Scope. Parent stop,
-          // deletion, and server shutdown therefore interrupt and finalize every
-          // child before the parent's teardown completes.
-          const fiber = yield* Effect.forkIn(
-            runChildAgent({
-              piHost,
-              helperContext,
-              meta,
-              params,
-              emit,
-              task,
-              agentName,
-              toolPolicy,
-              overrides,
-              runOptions,
-            }),
-            sessionScope,
-          );
-          return yield* Fiber.join(fiber);
-        }).pipe(Effect.ensuring(Effect.sync(() => (activeChildRuns -= 1)))),
+        Effect.suspend(() => {
+          // Delegation policy, enforced HERE because this is the one function
+          // every delegation path reaches — managed_subagent, each queued
+          // managed_parallel worker, continuations, and routes/loops.ts, which
+          // calls sessions.runSubagent directly and never touches the bridge.
+          // Refused OUTSIDE the ensured region below: inside it, the
+          // unconditional finalizer would decrement a counter this path never
+          // incremented, driving activeChildRuns negative and making a later
+          // real child look like no child at all to parking and resource
+          // refresh (Codex).
+          if (params.subagentsEnabled?.() === false) {
+            return Effect.fail(
+              new Error(
+                "Subagent delegation is turned off for this session. Enable it in Settings to delegate work to a subagent.",
+              ),
+            );
+          }
+          return Effect.gen(function* () {
+            activeChildRuns += 1;
+            // Child execution is owned by the parent session Scope. Parent stop,
+            // deletion, and server shutdown therefore interrupt and finalize every
+            // child before the parent's teardown completes.
+            const fiber = yield* Effect.forkIn(
+              runChildAgent({
+                piHost,
+                helperContext,
+                meta,
+                params,
+                emit,
+                task,
+                agentName,
+                toolPolicy,
+                overrides,
+                runOptions,
+              }),
+              sessionScope,
+            );
+            return yield* Fiber.join(fiber);
+          }).pipe(Effect.ensuring(Effect.sync(() => (activeChildRuns -= 1))));
+        }),
 
       onExit: (listener) => {
         if (currentExit) {

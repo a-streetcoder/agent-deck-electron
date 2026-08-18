@@ -149,6 +149,7 @@ interface Prefs {
   worktreeIsolation: boolean;
   keepWorktreeAfterMerge: boolean;
   gitAutomation: boolean;
+  subagentsEnabled: boolean;
   defaultModel: string | null;
   defaultThinking: string | null;
 }
@@ -448,6 +449,7 @@ export function OnboardingOverlay() {
             worktreeIsolation: s.worktreeIsolation,
             keepWorktreeAfterMerge: s.keepWorktreeAfterMerge,
             gitAutomation: s.gitAutomation,
+            subagentsEnabled: s.subagentsEnabled,
             defaultModel: s.defaultModel,
             defaultThinking: s.defaultThinking,
           });
@@ -873,6 +875,13 @@ export function OnboardingOverlay() {
                     description="Generate a session title from your first message."
                     checked={prefs.autoTitle}
                     onChange={(v) => patchPref({ autoTitle: v })}
+                  />
+                  <PrefToggle
+                    testid="pref-subagents"
+                    label="Let sessions delegate to subagents"
+                    description="Sessions may hand focused work to a subagent and run several in parallel. Turn off to keep every session doing its own work."
+                    checked={prefs.subagentsEnabled}
+                    onChange={(v) => patchPref({ subagentsEnabled: v })}
                   />
                   <PrefToggle
                     testid="pref-worktree"
