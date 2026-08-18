@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 5 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 4 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -350,6 +350,32 @@ Every supported effective MCP definition now carries the exact winning origin fr
 
 This is additive read-only metadata: runtime resolution, persistence, OAuth, process lifecycle, Electron main/preload, packaging, and sync seams are unchanged. Local macOS/Chromium acceptance passed workspace typecheck, lint/design-system, format, all 229 resource tests, focused server provenance tests (10/10), renderer MCP tests (41/41), and focused MCP Playwright (8/8). Light/dark normal and narrow screenshots were directly inspected; long paths retained full title/accessibility text without control loss. Independent review found and then accepted the coherent-snapshot correction that prevents provenance from racing a second config read. Windows/Linux runtime was not run; the implementation uses shared Node path/React logic and existing cross-platform path derivation. **MCP-08 closed. E:** resource MCP catalog source metadata, coherent effective snapshot, MCP route DTO, `McpScreen.tsx`, and focused resource/server/renderer/Playwright tests. **N:** winning `MCPServerEntry.sourcePath` and MCP source presentation.
 
+### MCP-14 — SSE transport (RECORD CORRECTION, not implemented)
+
+The row said Electron "supports stdio and Streamable HTTP, not legacy SSE", so "SSE-only servers
+cannot connect". That is true of Electron — and equally true of NATIVE, so it is not a parity gap.
+
+Native keeps `sse` as a distinct `MCPTransportKind` case, but `MCPConnection.swift:14` routes it to
+the same transport as `http`: `case .http, .sse: return try MCPHTTPTransport(config: config)`, under
+the comment "stdio for local servers, streamable-HTTP for remote (http/sse)". `MCPHTTPTransport`
+parses SSE-framed bodies because that is how streamable HTTP replies, NOT because it speaks the
+legacy two-endpoint SSE protocol. There is no legacy SSE client anywhere in the oracle. A
+genuinely SSE-only server fails on both apps.
+
+Electron reaches the same outcome by a different route: `parseMcpFile` ignores the `transport` field
+entirely and decides by SHAPE — a `command` is stdio, a valid http(s) `url` is remote — so an
+`sse`-labelled config is accepted and connected over `StreamableHTTPClientTransport` (which, per
+`packages/mcp/src/client.ts`, subsumes the older HTTP+SSE). Pinned by a test rather than by this
+paragraph: an `sse`-labelled config reads back as a remote server, and editing its url does not
+rewrite the user's own `transport` label. Both halves were verified to fail when the behaviour is
+removed.
+
+One cosmetic divergence is left deliberately: native's row displays "sse" for such a server because
+it retains the enum case, while Electron displays "http" because its transport is derived from
+shape. Connectivity is identical; reopen as a new row if the label matters. **MCP-14 closed as a
+record correction. E:** `packages/resources/src/mcp.ts` `parseMcpFile`, `packages/mcp/src/client.ts`.
+**N:** `MCP/MCPConnection.swift`, `MCP/MCPServerConfig.swift`, `MCP/MCPHTTPTransport.swift`.
+
 ### MCP-19 — per-tool descriptions
 
 Each server row now has a Tools disclosure listing every tool under its OWN name with its
@@ -594,7 +620,6 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                  | Plain English                                                                                       | Why it matters                                               | Evidence                                                                               |
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
 | MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
 | MCP-20 | **P2**   | Decision  | Tool exposure policy        | Native exposes ONE `mcp` proxy tool; Electron registers one tool per discovered MCP tool.            | The model sees a different tool surface for the same servers. | **E:** `mcpTools.ts` `scopeMcpBridgeSpecs`/`specs`, `server.ts` launch filtering. **N:** `PiNativeSubagentBridgeExtensions.swift`, `MCPBridgeAndConflictTests.swift`. Workstream 21. |
 

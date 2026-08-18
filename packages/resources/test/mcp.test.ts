@@ -101,6 +101,37 @@ describe("readMcpServers", () => {
   });
 });
 
+describe("sse-labelled servers (MCP-14)", () => {
+  it("reads an sse config as a remote server and keeps the label on rewrite", () => {
+    // Native routes BOTH `.http` and `.sse` to the same streamable-HTTP
+    // transport (MCPConnection.swift: `case .http, .sse`), and streamable HTTP
+    // subsumes the older HTTP+SSE framing. Neither app implements the legacy
+    // two-endpoint SSE protocol, so an sse-labelled server must simply connect
+    // as remote here too — the catalog decides by SHAPE, not by the label.
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: { docs: { url: "https://x.test/mcp", transport: "sse" } },
+      }),
+    );
+
+    const docs = readMcpServers(roots).find((server) => server.id === "docs");
+    expect(docs).toMatchObject({ transport: "http", url: "https://x.test/mcp" });
+
+    // Editing the url must not silently rewrite the user's own label.
+    writeMcpServer(roots, "global", "docs", { url: "https://y.test/mcp" });
+    const stored = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(stored.mcpServers.docs).toMatchObject({
+      url: "https://y.test/mcp",
+      transport: "sse",
+    });
+  });
+});
+
 describe("writeMcpServer / deleteMcpServer", () => {
   it("adds a server and reads it back (creating the file)", () => {
     writeMcpServer(roots, "global", "files", { command: "npx", args: ["-y", "server-fs"] });
