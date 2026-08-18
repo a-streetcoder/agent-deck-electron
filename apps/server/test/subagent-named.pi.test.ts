@@ -579,9 +579,17 @@ describe("managed_subagent{agent}: named delegation", () => {
 
     // No child ever launched for this session's ghost delegation, and the parent
     // got the failure back as the tool result.
-    const followUp = mock.requests[mock.requests.length - 1]!;
-    const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
-    expect(toolText).toContain("unknown agent: ghost-bot");
+    //
+    // Search for THIS session's follow-up rather than assuming it is the last
+    // request the mock saw. `mock` and `server` are shared by all 16 tests in
+    // this file, so a neighbouring test's request can land last and leave the
+    // filter empty — that produced `expected '[]' to contain 'unknown agent:
+    // ghost-bot'` on macos at c4e92e6 and again on windows at af96448, at two
+    // commits that touched nothing near this path.
+    const toolTexts = mock.requests
+      .filter((request) => !isChildRequest(request))
+      .map((request) => JSON.stringify(request.messages.filter((m) => m.role === "tool")));
+    expect(toolTexts.some((text) => text.includes("unknown agent: ghost-bot"))).toBe(true);
   });
 
   it("fails unassigned custom launch and delegation like an unknown name", async () => {
