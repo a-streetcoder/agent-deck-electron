@@ -246,6 +246,11 @@ export class SettingsStore {
     return runSyncUnwrapped(this.handle.setModelDisabled(key, disabled));
   }
 
+  /** SES-34: mark a model OpenAI Fast (`provider:id`). */
+  setModelFastMode(key: string, enabled: boolean): AppSettings {
+    return runSyncUnwrapped(this.handle.setModelFastMode(key, enabled));
+  }
+
   /** Enabled extension paths — merged into every session launch. */
   enabledExtensions(): string[] {
     return Effect.runSync(this.handle.enabledExtensions);

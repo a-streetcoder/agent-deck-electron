@@ -25,6 +25,7 @@ import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host"
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
+import { writeOpenAIFastConfig, writeOpenAIFastExtension } from "./openaiFastMode.ts";
 import { FileMcpOAuthStore, type McpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
@@ -258,6 +259,22 @@ async function initServer(
   // never falsely re-enable a server launched with AGENT_DECK_MEMORY=0.
   const agentMemoryEnabled = (): boolean => memoryEnabled && settings.get().agentMemoryEnabled;
   const memoryBaseDir = nodePath.join(dataDir, "memory");
+  // SES-34: the generated OpenAI Fast extension and the config it reads.
+  // Written once at startup so every launch has them; the toggle route
+  // rewrites the config, and the extension re-reads it per request, so a
+  // change applies to a live session without relaunching pi.
+  const openAIFastDir = nodePath.join(dataDir, "openai-fast");
+  const openAIFastExtension = writeOpenAIFastExtension(openAIFastDir);
+  // The extension resolves its config through this variable at REQUEST time, so
+  // without it the whole feature silently no-ops (Codex caught exactly that).
+  // Setting it on the server process reaches every pi child through one
+  // chokepoint — PiProcess spawns with `{...process.env, ...options.env}` — so
+  // parents, helpers and subagents all inherit it rather than each launch site
+  // having to remember.
+  process.env.AGENT_DECK_OPENAI_FAST_CONFIG = writeOpenAIFastConfig(
+    openAIFastDir,
+    settings.get().openAIFastModels,
+  );
   // Construct the deletion authority once from trusted app data. Its held native
   // direct-child capability and authoritative physical path own ordinary session
   // worktrees for this server lifetime. Loop uses only the dedicated `loop`
@@ -321,7 +338,9 @@ async function initServer(
       // `broadcast` is initialized during startServer, before any meta changes.
       broadcast({ type: "session_meta", session: meta });
     },
-    () => envDefaults().providerExtensions,
+    // The Fast extension rides with the provider-registration extensions. It is
+    // inert unless a model is BOTH eligible and listed in the config.
+    () => [...(envDefaults().providerExtensions ?? []), openAIFastExtension],
     (meta) => {
       if (bridge.size === 0 || !bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
@@ -1189,6 +1208,7 @@ async function initServer(
     memoryEnabled,
     agentMemoryEnabled,
     memoryBaseDir,
+    openAIFastDir,
     worktreesRoot,
     sessionWorktreeStore,
     semanticRecall,

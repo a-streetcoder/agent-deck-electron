@@ -21,6 +21,7 @@
   "disabledExtensions": [
     "/home/dev/.pi/ext/b.js"
   ],
+  "openAIFastModels": [],
   "disabledModels": [
     "anthropic:claude-legacy"
   ],

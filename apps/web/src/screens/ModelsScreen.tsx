@@ -1,6 +1,6 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Cpu, Eye, EyeOff, Sparkles } from "lucide-react";
+import { Check, Cpu, Eye, EyeOff, Sparkles, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -17,6 +17,10 @@ interface CatalogModel {
   maxTokens?: number;
   /** Hidden from the picker (app-level curation). */
   disabled?: boolean;
+  /** SES-34: the server decides which models can take OpenAI's priority tier,
+   * so the rule lives in one place instead of being re-derived here. */
+  fastEligible?: boolean;
+  fast?: boolean;
 }
 
 interface ActiveModel {
@@ -163,6 +167,33 @@ export function ModelsScreen() {
     reconcileTimer.current = setTimeout(() => {
       if (activeRef.current) void loadState(activeRef.current);
     }, 500);
+  };
+
+  const toggleFast = async (model: CatalogModel): Promise<void> => {
+    const key = `${model.provider}:${model.id}`;
+    if (pendingCurationRef.current.has(key)) return;
+    pendingCurationRef.current.add(key);
+    setPendingCuration(new Set(pendingCurationRef.current));
+    try {
+      const response = await fetch("/runtime/models/fast", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: model.provider, id: model.id, fast: !model.fast }),
+      });
+      if (!response.ok) return;
+      setModels((current) =>
+        current.map((entry) =>
+          entry.provider === model.provider && entry.id === model.id
+            ? { ...entry, fast: !model.fast }
+            : entry,
+        ),
+      );
+    } catch {
+      // Keep the authoritative row unchanged; a later click can retry.
+    } finally {
+      pendingCurationRef.current.delete(key);
+      setPendingCuration(new Set(pendingCurationRef.current));
+    }
   };
 
   const toggleDisabled = async (model: CatalogModel): Promise<void> => {
@@ -385,6 +416,28 @@ export function ModelsScreen() {
                               {model.disabled ? "Hidden from pickers" : "Shown in pickers"}
                             </span>
                           </ControlButton>
+                          {model.fastEligible ? (
+                            <ControlButton
+                              type="button"
+                              data-testid={`model-fast-${model.id}`}
+                              aria-label={model.fast ? "Turn off Fast" : "Turn on Fast"}
+                              aria-pressed={model.fast === true}
+                              aria-busy={isCurationPending}
+                              title="Ask OpenAI for the priority service tier on this model"
+                              disabled={isCurationPending}
+                              className="flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
+                              onClick={() => void toggleFast(model)}
+                            >
+                              <Zap
+                                size={15}
+                                aria-hidden
+                                style={
+                                  model.fast ? { color: "var(--color-brand-accent)" } : undefined
+                                }
+                              />
+                              <span>{model.fast ? "Fast" : "Standard"}</span>
+                            </ControlButton>
+                          ) : null}
                         </div>
                       );
                     })}

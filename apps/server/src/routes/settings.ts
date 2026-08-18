@@ -32,6 +32,11 @@ import {
   type KeybindingBinding,
 } from "@agent-deck/contracts";
 import { z } from "zod";
+import {
+  isFastModeActive,
+  isOpenAIFastEligible,
+  writeOpenAIFastConfig,
+} from "../openaiFastMode.ts";
 import type { AppSettings } from "../persistence.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import {
@@ -508,10 +513,15 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         signal: controller.signal,
       });
       const disabled = new Set(settings.get().disabledModels);
+      const fast = new Set(settings.get().openAIFastModels);
       return {
         models: models.map((model) => ({
           ...model,
           disabled: disabled.has(`${model.provider}:${model.id}`),
+          // `fastEligible` is what the renderer gates the control on, so the rule
+          // lives in one place rather than being re-derived in the UI.
+          fastEligible: isOpenAIFastEligible(model.provider, model.id),
+          fast: isFastModeActive([...fast], model.provider, model.id),
         })),
       };
     } catch (error) {
@@ -531,6 +541,41 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   });
 
   // Hide/show a model in the picker (app-level curation, the native Enabled/Disabled toggle).
+  /** Keep the on-disk config the Fast extension reads in step with settings. */
+  const syncOpenAIFastConfig = (keys: readonly string[]): void => {
+    writeOpenAIFastConfig(ctx.openAIFastDir, keys);
+  };
+
+  // SES-34: mark a model OpenAI Fast. Eligibility is enforced HERE — the renderer
+  // only ever offers the toggle on eligible rows, but a hand-made request must
+  // not be able to put an unsupported model in the config the extension reads.
+  fastify.post("/runtime/models/fast", async (request, reply) => {
+    const parsed = z
+      .object({ provider: z.string().min(1), id: z.string().min(1), fast: z.boolean() })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    if (!isOpenAIFastEligible(parsed.data.provider, parsed.data.id)) {
+      return reply.status(400).send({ error: "model does not support OpenAI Fast" });
+    }
+    // Write the config BEFORE persisting. The config is what actually authorizes
+    // the priority tier, so if the write fails, persisting "fast: off" while the
+    // old config still enables the model would leave live sessions paying for a
+    // tier the settings say is disabled (Codex). Failing here leaves both the
+    // setting and the config as they were.
+    const key = `${parsed.data.provider}:${parsed.data.id}`;
+    const current = new Set(settings.get().openAIFastModels);
+    if (parsed.data.fast) current.add(key);
+    else current.delete(key);
+    try {
+      syncOpenAIFastConfig([...current]);
+    } catch (error) {
+      return reply.status(500).send({ error: `could not update Fast mode: ${String(error)}` });
+    }
+    settings.setModelFastMode(key, parsed.data.fast);
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
+  });
+
   fastify.post("/runtime/models/disabled", async (request, reply) => {
     const parsed = z
       .object({ provider: z.string().min(1), id: z.string().min(1), disabled: z.boolean() })

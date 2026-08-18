@@ -166,6 +166,8 @@ export interface ServerContext {
   /** Live effective parent-agent automation preference (capability && setting). */
   agentMemoryEnabled(): boolean;
   memoryBaseDir: string;
+  /** SES-34: where the OpenAI Fast config + generated extension live. */
+  openAIFastDir: string;
   worktreesRoot: string;
   sessionWorktreeStore: SessionWorktreeStore;
   semanticRecall: SemanticRecallCoordinator;

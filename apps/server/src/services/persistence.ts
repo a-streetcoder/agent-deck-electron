@@ -117,6 +117,8 @@ export interface AppSettings {
   enabledLibraryCommandIDs: string[];
   /** Models the user hid from the picker, by "<provider>:<id>" key. */
   disabledModels: string[];
+  /** SES-34: models the user marked OpenAI Fast, as `provider:id`. */
+  openAIFastModels: string[];
   /**
    * Onboarding-preferences (native OnboardingPreferencesView). `defaultModel`
    * (provider-qualified "provider:id" so it launches under the right provider) /
@@ -279,6 +281,7 @@ export interface SettingsStoreHandle {
     disabled: boolean,
   ) => Effect.Effect<AppSettings>;
   readonly setModelDisabled: (key: string, disabled: boolean) => Effect.Effect<AppSettings>;
+  readonly setModelFastMode: (key: string, enabled: boolean) => Effect.Effect<AppSettings>;
   readonly enabledExtensions: Effect.Effect<string[]>;
   readonly forgetSkill: (name: string) => Effect.Effect<AppSettings>;
   readonly renameSkill: (oldName: string, newName: string) => Effect.Effect<AppSettings>;
@@ -445,6 +448,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       disabledInjectedCommandIDs: [],
       enabledLibraryCommandIDs: [],
       disabledModels: [],
+      openAIFastModels: [],
       autoTitle: true, // native default: sessions are auto-titled by the helper
       agentMemoryEnabled: true,
       agentMemoryInjectionCharacterBudget: 6000,
@@ -504,6 +508,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             record.enabledLibraryCommandIDs,
             LIBRARY_COMMAND_ID,
           ),
+          openAIFastModels: Array.isArray(record.openAIFastModels)
+            ? record.openAIFastModels.map(String)
+            : [],
           disabledModels: Array.isArray(record.disabledModels)
             ? record.disabledModels.map(String)
             : [],
@@ -835,6 +842,19 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           if (disabled) next.add(key);
           else next.delete(key);
           settings = { ...settings, disabledModels: [...next] };
+          flush();
+          return settings;
+        }),
+      // SES-34. Eligibility is NOT re-checked here: the route that calls this
+      // owns that rule, and the config writer drops anything ineligible before
+      // the extension ever sees it, so a stale stored key cannot upgrade a
+      // request.
+      setModelFastMode: (key, enabled) =>
+        Effect.sync(() => {
+          const next = new Set(settings.openAIFastModels);
+          if (enabled) next.add(key);
+          else next.delete(key);
+          settings = { ...settings, openAIFastModels: [...next] };
           flush();
           return settings;
         }),
