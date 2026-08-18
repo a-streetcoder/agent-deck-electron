@@ -87,6 +87,9 @@ function makeHarness(
             url: "https://mcp.example/mcp",
             scope: "global",
             sourcePath: path.join(home, ".pi", "agent", "mcp.json"),
+            // The catalog now carries whether a definition came from a file the
+            // app writes; this fixture's file is exactly that one.
+            writable: true,
           },
         ],
       },

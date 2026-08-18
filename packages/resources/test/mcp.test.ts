@@ -9,6 +9,7 @@ import {
   mcpConfigPath,
   McpConfigError,
   interpolateMcpValue,
+  mcpReadLocations,
   readMcpServerCatalog,
   readMcpServers,
   writeMcpServer,
@@ -440,5 +441,140 @@ describe("mcp interpolation looks up own properties only (MCP-17)", () => {
     // stopped at the "e" and left the accent behind.
     const name = "café";
     expect(interpolateMcpValue(`$${name}`, { [name]: "ok" }, "/home/u")).toBe("ok");
+  });
+});
+
+/**
+ * MCP-11: native's `MCPConfigLoader.configLocations` reads FOUR files, in this
+ * precedence order — `~/.config/mcp/mcp.json`, `~/.pi/agent/mcp.json`,
+ * `<project>/.mcp.json`, `<project>/.pi/mcp.json` — with later entries winning.
+ * This port read only the two `.pi` ones, so a server a user had configured in
+ * either standard location simply never appeared.
+ *
+ * WRITES stay where they were: native's `writableConfigURL` is
+ * `~/.pi/agent/mcp.json`, so the extra locations are read-only sources.
+ */
+describe("standard MCP config locations (MCP-11)", () => {
+  const writeAt = (file: string, config: unknown): void => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(config));
+  };
+
+  it("reads a server from ~/.config/mcp/mcp.json", () => {
+    writeAt(path.join(roots.home, ".config", "mcp", "mcp.json"), {
+      mcpServers: { xdg: { command: "xdg-server" } },
+    });
+
+    expect(readMcpServers(roots).map((s) => s.id)).toContain("xdg");
+  });
+
+  it("reads a server from the project's .mcp.json", () => {
+    writeAt(path.join(roots.projectPath!, ".mcp.json"), {
+      mcpServers: { bare: { command: "bare-server" } },
+    });
+
+    expect(readMcpServers(roots).map((s) => s.id)).toContain("bare");
+  });
+
+  it("keeps native's precedence when the same name appears in several files", () => {
+    writeAt(path.join(roots.home, ".config", "mcp", "mcp.json"), {
+      mcpServers: { dup: { command: "from-xdg" } },
+    });
+    writeGlobal({ mcpServers: { dup: { command: "from-pi-home" } } });
+    writeAt(path.join(roots.projectPath!, ".mcp.json"), {
+      mcpServers: { dup: { command: "from-bare-project" } },
+    });
+    writeProject({ mcpServers: { dup: { command: "from-pi-project" } } });
+
+    // Later location wins, and the project's .pi/mcp.json is last.
+    const entry = readMcpServers(roots).find((s) => s.id === "dup");
+    expect(entry).toMatchObject({ command: "from-pi-project" });
+  });
+
+  it("lets ~/.pi/agent/mcp.json override ~/.config/mcp/mcp.json", () => {
+    writeAt(path.join(roots.home, ".config", "mcp", "mcp.json"), {
+      mcpServers: { dup: { command: "from-xdg" } },
+    });
+    writeGlobal({ mcpServers: { dup: { command: "from-pi-home" } } });
+
+    expect(readMcpServers(roots).find((s) => s.id === "dup")).toMatchObject({
+      command: "from-pi-home",
+    });
+  });
+
+  it("still writes only to ~/.pi/agent/mcp.json", () => {
+    // Native's writableConfigURL is that file; the extra locations are read-only
+    // sources and must not become write targets.
+    expect(mcpConfigPath(roots, "global")).toBe(path.join(roots.home, ".pi", "agent", "mcp.json"));
+  });
+});
+
+/** MCP-11 read-location contract and the fail-open/fail-closed split. */
+describe("mcpReadLocations (MCP-11)", () => {
+  it("returns native's four files in native's precedence order", () => {
+    expect(mcpReadLocations(roots).map((l) => l.file)).toEqual([
+      path.join(roots.home, ".config", "mcp", "mcp.json"),
+      path.join(roots.home, ".pi", "agent", "mcp.json"),
+      path.join(roots.projectPath!, ".mcp.json"),
+      path.join(roots.projectPath!, ".pi", "mcp.json"),
+    ]);
+  });
+
+  it("omits both project files when there is no project", () => {
+    const locations = mcpReadLocations({ home: roots.home });
+    expect(locations.map((l) => l.scope)).toEqual(["global", "global"]);
+  });
+
+  it("marks only the two app-written files as owned", () => {
+    expect(mcpReadLocations(roots).map((l) => l.owned)).toEqual([false, true, false, true]);
+  });
+
+  it("a broken ecosystem file does not invalidate the catalog or hide valid servers", () => {
+    mkdirSync(path.join(roots.home, ".config", "mcp"), { recursive: true });
+    writeFileSync(path.join(roots.home, ".config", "mcp", "mcp.json"), "{ not json");
+    writeGlobal({ mcpServers: { ours: { command: "srv" } } });
+
+    // An unrelated tool's malformed file must not disable every MCP server the
+    // user has; native simply skips a file it cannot parse.
+    const catalog = readMcpServerCatalog(roots);
+    expect(catalog.valid).toBe(true);
+    expect(catalog.servers.map((s) => s.id)).toEqual(["ours"]);
+  });
+
+  it("still fails closed when an APP-OWNED file is malformed", () => {
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "{ not json");
+
+    expect(readMcpServerCatalog(roots).valid).toBe(false);
+  });
+});
+
+/** MCP-11: a definition from a file this app does not write is READ-ONLY. The
+ * routes derive Edit/Delete from this flag, so it has to be on the entry. */
+describe("read-only provenance (MCP-11)", () => {
+  it("marks an ecosystem definition unwritable and an app-owned one writable", () => {
+    mkdirSync(path.join(roots.home, ".config", "mcp"), { recursive: true });
+    writeFileSync(
+      path.join(roots.home, ".config", "mcp", "mcp.json"),
+      JSON.stringify({ mcpServers: { xdg: { command: "a" } } }),
+    );
+    writeGlobal({ mcpServers: { ours: { command: "b" } } });
+
+    const byId = Object.fromEntries(readMcpServers(roots).map((s) => [s.id, s]));
+    expect(byId.xdg!.writable).toBe(false);
+    expect(byId.ours!.writable).toBe(true);
+  });
+
+  it("takes writability from the WINNING file when a name appears in both", () => {
+    mkdirSync(path.join(roots.home, ".config", "mcp"), { recursive: true });
+    writeFileSync(
+      path.join(roots.home, ".config", "mcp", "mcp.json"),
+      JSON.stringify({ mcpServers: { dup: { command: "a" } } }),
+    );
+    writeGlobal({ mcpServers: { dup: { command: "b" } } });
+
+    // The app-owned file wins, so the effective definition IS editable.
+    expect(readMcpServers(roots).find((s) => s.id === "dup")!.writable).toBe(true);
   });
 });

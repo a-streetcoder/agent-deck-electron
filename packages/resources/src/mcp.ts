@@ -137,6 +137,12 @@ export interface McpServerEntry {
   url?: string;
   /** Extra request headers for a remote server (native MCPServerConfig.headers). */
   headers?: Record<string, string>;
+  /** True when this definition came from a file THIS APP writes, so it can be
+   * edited or deleted in-app. A definition from `~/.config/mcp/mcp.json` or a
+   * project's bare `.mcp.json` is read-only: native writes only to
+   * `~/.pi/agent/mcp.json`. Carried on the entry so a caller does not have to
+   * re-derive paths (and re-read roots) to know. */
+  writable: boolean;
   scope: McpConfigScope;
 }
 
@@ -163,7 +169,7 @@ interface ParsedMcpFile {
   valid: boolean;
 }
 
-function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
+function parseMcpFile(file: string, scope: McpConfigScope, writable: boolean): ParsedMcpFile {
   let data: unknown;
   try {
     data = JSON.parse(readFileSync(file, "utf8"));
@@ -191,6 +197,7 @@ function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
           ? config.args.filter((a): a is string => typeof a === "string")
           : undefined,
         env: asStringRecord(config.env),
+        writable,
         // Only a real string is a working directory; anything else is dropped
         // rather than coerced, so a malformed value cannot redirect a spawn.
         ...(typeof config.cwd === "string" && config.cwd.length > 0 ? { cwd: config.cwd } : {}),
@@ -203,6 +210,7 @@ function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
         id,
         transport: "http",
         url: config.url,
+        writable,
         ...(headers ? { headers } : {}),
         scope,
         sourcePath: file,
@@ -222,19 +230,53 @@ export interface McpServerCatalog {
  * All configured MCP servers, project entries overriding global ones by id.
  * Missing files are simply absent.
  */
+/**
+ * MCP-11 — every file native's `MCPConfigLoader.configLocations` reads, in its
+ * precedence order (later wins): the XDG-style `~/.config/mcp/mcp.json`, then
+ * `~/.pi/agent/mcp.json`, then the project's bare `.mcp.json`, then its
+ * `.pi/mcp.json`. This port read only the two `.pi` files, so a server
+ * configured in either standard location never appeared at all.
+ *
+ * READ locations only. Writes still go to `mcpConfigPath`, matching native's
+ * single `writableConfigURL` — the extra files belong to the wider ecosystem
+ * and this app does not edit them.
+ */
+export interface McpReadLocation {
+  file: string;
+  scope: McpConfigScope;
+  /** True for the two files this app itself writes. Only these may mark the
+   * catalog invalid: an unrelated tool's broken `~/.config/mcp/mcp.json` must
+   * not disable every MCP server the user has (native simply skips a file it
+   * cannot parse — it has no validity flag at all). */
+  owned: boolean;
+}
+
+export function mcpReadLocations(roots: ResourceRoots): McpReadLocation[] {
+  const locations: McpReadLocation[] = [
+    { file: path.join(roots.home, ".config", "mcp", "mcp.json"), scope: "global", owned: false },
+    { file: path.join(piAgentHome(roots), "mcp.json"), scope: "global", owned: true },
+  ];
+  if (roots.projectPath) {
+    locations.push({
+      file: path.join(roots.projectPath, ".mcp.json"),
+      scope: "project",
+      owned: false,
+    });
+    locations.push({
+      file: path.join(roots.projectPath, ".pi", "mcp.json"),
+      scope: "project",
+      owned: true,
+    });
+  }
+  return locations;
+}
+
 export function readMcpServerCatalog(roots: ResourceRoots): McpServerCatalog {
   const byId = new Map<string, McpServerEntry>();
   let valid = true;
-  const globalPath = mcpConfigPath(roots, "global");
-  if (globalPath) {
-    const parsed = parseMcpFile(globalPath, "global");
-    valid &&= parsed.valid;
-    for (const entry of parsed.entries) byId.set(entry.id, entry);
-  }
-  const projectPath = mcpConfigPath(roots, "project");
-  if (projectPath) {
-    const parsed = parseMcpFile(projectPath, "project");
-    valid &&= parsed.valid;
+  for (const { file, scope, owned } of mcpReadLocations(roots)) {
+    const parsed = parseMcpFile(file, scope, owned);
+    if (owned) valid &&= parsed.valid;
     for (const entry of parsed.entries) byId.set(entry.id, entry);
   }
   return { servers: [...byId.values()], valid };

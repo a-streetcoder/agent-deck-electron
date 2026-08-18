@@ -128,7 +128,11 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             : globalById.has(config.id)
               ? "global"
               : "environment";
-          const editable = source === "global";
+          // Editable means WRITABLE, not merely global-scoped. A server defined
+          // only in `~/.config/mcp/mcp.json` is a read-only ecosystem source:
+          // offering Edit/Delete produced a 404 from the writer, which targets
+          // `~/.pi/agent/mcp.json` alone (Codex).
+          const editable = source === "global" && globalById.get(config.id)?.writable === true;
           const entry = globalById.get(config.id);
           return {
             ...config,
@@ -168,8 +172,8 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         const source = isMcpEnvOverride(config.id)
           ? "environment"
           : (sourceById.get(config.id) ?? "environment");
-        const editable = source === "global";
         const entry = catalog.servers.find((candidate) => candidate.id === config.id);
+        const editable = source === "global" && entry?.writable === true;
         return {
           id: config.id,
           transport,
@@ -426,8 +430,13 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       // hasMcpServer throws on a malformed file (400). Usability matches GET:
       // only catalog-listed global entries are editable; leftover keys 404.
       const exists = hasMcpServer(roots, "global", id);
+      // Authorize on the SAME fact GET reports as `editable`: the EFFECTIVE
+      // definition must come from the writable file. Checking only key presence
+      // let a PATCH rewrite a hidden app-owned entry while the visible winner
+      // was a read-only ecosystem definition — GET said read-only, the mutation
+      // routes disagreed (Codex).
       const usable = readMcpServerCatalog(roots).servers.some(
-        (entry) => entry.id === id && entry.scope === "global",
+        (entry) => entry.id === id && entry.scope === "global" && entry.writable,
       );
       if (!exists || !usable) {
         return reply.code(404).send({ error: "unknown global MCP server" });
@@ -463,8 +472,15 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   fastify.delete("/mcp/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     let exists: boolean;
+    const deleteRoots = rootsFor();
     try {
-      exists = hasMcpServer(rootsFor(), "global", id);
+      // Same effective-definition rule as PATCH and GET: a read-only winner is
+      // not deletable, even if a shadowed key exists in the writable file.
+      exists =
+        hasMcpServer(deleteRoots, "global", id) &&
+        readMcpServerCatalog(deleteRoots).servers.some(
+          (entry) => entry.id === id && entry.scope === "global" && entry.writable,
+        );
     } catch (error) {
       return reply
         .code(400)
