@@ -2684,7 +2684,7 @@ describe("durable session attention", () => {
   }, 15_000);
 
   it("does not mark a terminal provider failure", async () => {
-    const { piHost } = makeFakePiHost();
+    const { piHost, pids } = makeFakePiHost();
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -2700,9 +2700,32 @@ describe("durable session attention", () => {
           yield* waitUntil(
             () => failed.meta.status === "failed",
             30_000,
-            () =>
-              `status=${failed.meta.status ?? "none"} lastError=${failed.meta.lastError ?? "none"} ` +
-              `attention=${String(failed.meta.needsAttention)} ended=${failed.meta.endedAt ?? "none"}`,
+            () => {
+              // The transcript is the discriminator: the fake pi answers the
+              // prompt RPC (we got here, so it was alive), then emits agent_end
+              // carrying stopReason "error". If agentStatus/cells show nothing
+              // arrived, the event was never ingested; if they moved, ingestion
+              // ran and the failure mapping is what did not. Also report whether
+              // the child is still alive, since a dead pi explains both.
+              // `snapshot` is a sync Effect; running it here is safe because this
+              // callback only fires on the failure path.
+              const state = Effect.runSync(rt.snapshot).state;
+              const alive = pids.map((pid) => {
+                try {
+                  process.kill(pid, 0);
+                  return `${pid}:alive`;
+                } catch {
+                  return `${pid}:gone`;
+                }
+              });
+              return (
+                `status=${failed.meta.status ?? "none"} lastError=${failed.meta.lastError ?? "none"} ` +
+                `attention=${String(failed.meta.needsAttention)} ended=${failed.meta.endedAt ?? "none"} ` +
+                `agentStatus=${state.agentStatus} cells=${state.cells.length} ` +
+                `kinds=${state.cells.map((cell: { kind: string }) => cell.kind).join(",") || "none"} ` +
+                `pids=${alive.join(",") || "none"}`
+              );
+            },
           );
           expect(failed.meta.needsAttention).not.toBe(true);
         }),
