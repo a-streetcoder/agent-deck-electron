@@ -256,3 +256,70 @@ describe("writeMcpServer / deleteMcpServer", () => {
     expect(readFileSync(file, "utf8")).toBe("{ this is broken json");
   });
 });
+
+/**
+ * MCP-15 / MCP-16: native's `MCPServerConfig` carries `cwd` for stdio and
+ * `headers` for http, and its transport applies both. This port parsed neither,
+ * so a working directory a user set in mcp.json never reached the spawn (a
+ * relative command then launched wherever the app happened to be) and a
+ * header-authenticated remote server could not authenticate at all.
+ */
+describe("stdio cwd and http headers (MCP-15, MCP-16)", () => {
+  it("keeps a stdio server's working directory", () => {
+    writeGlobal({
+      mcpServers: {
+        files: { command: "./server.sh", cwd: "/srv/project" },
+      },
+    });
+
+    expect(readMcpServers(roots)[0]).toMatchObject({
+      transport: "stdio",
+      command: "./server.sh",
+      cwd: "/srv/project",
+    });
+  });
+
+  it("keeps a remote server's custom headers", () => {
+    writeGlobal({
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp",
+          headers: { Authorization: "Bearer token", "X-Tenant": "acme" },
+        },
+      },
+    });
+
+    expect(readMcpServers(roots)[0]).toMatchObject({
+      transport: "http",
+      headers: { Authorization: "Bearer token", "X-Tenant": "acme" },
+    });
+  });
+
+  it("leaves both absent when the config does not set them", () => {
+    writeGlobal({
+      mcpServers: {
+        files: { command: "npx" },
+        remote: { url: "https://example.com/mcp" },
+      },
+    });
+
+    const byId = Object.fromEntries(readMcpServers(roots).map((s) => [s.id, s]));
+    // Absent must stay absent rather than becoming "" or {} — the spawn and the
+    // request layer both distinguish "unset" from "set to nothing".
+    expect(byId.files!.cwd).toBeUndefined();
+    expect(byId.remote!.headers).toBeUndefined();
+  });
+
+  it("ignores a non-string cwd and non-string header values", () => {
+    writeGlobal({
+      mcpServers: {
+        files: { command: "npx", cwd: 42 },
+        remote: { url: "https://example.com/mcp", headers: { ok: "yes", bad: 7 } },
+      },
+    });
+
+    const byId = Object.fromEntries(readMcpServers(roots).map((s) => [s.id, s]));
+    expect(byId.files!.cwd).toBeUndefined();
+    expect(byId.remote!.headers).toEqual({ ok: "yes" });
+  });
+});

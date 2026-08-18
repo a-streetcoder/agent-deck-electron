@@ -44,8 +44,13 @@ export interface McpServerEntry {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Working directory for the spawned command (native MCPServerConfig.cwd).
+   * Absent means "not set" — the launcher, not the parser, decides the default. */
+  cwd?: string;
   /** http/sse transport. */
   url?: string;
+  /** Extra request headers for a remote server (native MCPServerConfig.headers). */
+  headers?: Record<string, string>;
   scope: McpConfigScope;
 }
 
@@ -100,11 +105,22 @@ function parseMcpFile(file: string, scope: McpConfigScope): ParsedMcpFile {
           ? config.args.filter((a): a is string => typeof a === "string")
           : undefined,
         env: asStringRecord(config.env),
+        // Only a real string is a working directory; anything else is dropped
+        // rather than coerced, so a malformed value cannot redirect a spawn.
+        ...(typeof config.cwd === "string" && config.cwd.length > 0 ? { cwd: config.cwd } : {}),
         scope,
         sourcePath: file,
       });
     } else if (isValidHttpMcpUrl(config.url)) {
-      entries.push({ id, transport: "http", url: config.url, scope, sourcePath: file });
+      const headers = asStringRecord(config.headers);
+      entries.push({
+        id,
+        transport: "http",
+        url: config.url,
+        ...(headers ? { headers } : {}),
+        scope,
+        sourcePath: file,
+      });
     }
     // Neither a command nor a valid http(s) url → not a usable server; skip.
   }

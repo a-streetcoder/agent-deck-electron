@@ -4,7 +4,7 @@ import {
   type McpOAuthProvider,
   type StdioServerConfig,
 } from "@agent-deck/mcp";
-import { isValidHttpMcpUrl } from "@agent-deck/resources";
+import { isValidHttpMcpUrl, type McpServerEntry } from "@agent-deck/resources";
 import type { BridgeRegistry } from "./bridge.ts";
 
 /**
@@ -32,6 +32,39 @@ function stringRecordEqual(
   const leftEntries = Object.entries(left ?? {}).sort(([a], [b]) => a.localeCompare(b));
   const rightEntries = Object.entries(right ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
+/**
+ * The ONE projection from a parsed catalog entry to a launchable config
+ * (MCP-15, MCP-16). This lived inline in server.ts, twice, and BOTH copies
+ * silently dropped `cwd` and `headers`: a working directory set in mcp.json
+ * never reached the spawn, so a relative command launched wherever the app
+ * happened to be, and a header-authenticated remote server could not
+ * authenticate at all. One exported function so a field the catalog gains
+ * cannot reach one caller and miss the other.
+ */
+export function mcpEntryToConfig(entry: McpServerEntry, homeDir: string): McpServerConfig[] {
+  if (entry.transport === "http" && entry.url) {
+    return [{ id: entry.id, url: entry.url, ...(entry.headers ? { headers: entry.headers } : {}) }];
+  }
+  if (entry.command) {
+    return [
+      {
+        id: entry.id,
+        command: entry.command,
+        args: entry.args,
+        env: entry.env,
+        // Native defaults a missing cwd to the user's home rather than letting
+        // the child inherit the app's working directory, so a relative command
+        // resolves the same way in both apps.
+        cwd: entry.cwd ?? homeDir,
+        // Native defaults a missing cwd to the user's home rather than letting
+        // the child inherit the app's working directory, so a relative command
+        // resolves the same way in both apps.
+      },
+    ];
+  }
+  return [];
 }
 
 export function mcpServerConfigsEqual(left: McpServerConfig, right: McpServerConfig): boolean {

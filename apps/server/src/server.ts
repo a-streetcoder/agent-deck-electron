@@ -62,10 +62,10 @@ import { createFileService } from "./services/files.ts";
 import { LoopEngine } from "./loopEngine.ts";
 import {
   McpManager,
+  mcpEntryToConfig,
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
   scopeMcpBridgeSpecs,
-  type McpServerConfig,
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
@@ -848,12 +848,7 @@ async function initServer(
 
   const globalMcpConfigs = () => {
     const catalog = readMcpServerCatalog(rootsFor());
-    const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
-      if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
-      if (entry.command)
-        return [{ id: entry.id, command: entry.command, args: entry.args, env: entry.env }];
-      return [];
-    });
+    const fromFile = catalog.servers.flatMap((entry) => mcpEntryToConfig(entry, resourceHome()));
     return {
       configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs),
       valid: catalog.valid,
@@ -863,12 +858,7 @@ async function initServer(
 
   const effectiveMcpConfigs = (projectId: string) => {
     const catalog = readMcpServerCatalog(rootsFor(projectId));
-    const fromFile = catalog.servers.flatMap((entry): McpServerConfig[] => {
-      if (entry.transport === "http" && entry.url) return [{ id: entry.id, url: entry.url }];
-      if (entry.command)
-        return [{ id: entry.id, command: entry.command, args: entry.args, env: entry.env }];
-      return [];
-    });
+    const fromFile = catalog.servers.flatMap((entry) => mcpEntryToConfig(entry, resourceHome()));
     return {
       configs: mergeMcpServerConfigs(fromFile, mcpEnvConfigs),
       valid: catalog.valid,

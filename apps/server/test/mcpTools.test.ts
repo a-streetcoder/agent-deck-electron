@@ -1,3 +1,4 @@
+import type { McpServerEntry } from "@agent-deck/resources";
 import { McpClient } from "@agent-deck/mcp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
@@ -7,6 +8,7 @@ import {
   mcpServerConfigsEqual,
   mcpServerConfigsFromEnv,
   scopeMcpBridgeSpecs,
+  mcpEntryToConfig,
 } from "../src/mcpTools.ts";
 
 vi.mock("@agent-deck/mcp", () => ({
@@ -433,5 +435,63 @@ describe("McpManager reconciliation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * MCP-15 / MCP-16. This projection existed inline in server.ts TWICE, and both
+ * copies dropped `cwd` and `headers` — so a working directory set in mcp.json
+ * never reached the spawn and a header-authenticated remote server could not
+ * authenticate. It is one exported function now precisely so a catalog field
+ * cannot reach one caller and miss the other.
+ */
+describe("mcpEntryToConfig (MCP-15, MCP-16)", () => {
+  const entry = (over: Partial<McpServerEntry>): McpServerEntry =>
+    ({
+      id: "srv",
+      transport: "stdio",
+      scope: "global",
+      sourcePath: "/mcp.json",
+      ...over,
+    }) as McpServerEntry;
+
+  it("carries a stdio server's configured working directory", () => {
+    const [config] = mcpEntryToConfig(
+      entry({ command: "./server.sh", cwd: "/srv/project" }),
+      "/home/user",
+    );
+
+    expect(config).toMatchObject({ command: "./server.sh", cwd: "/srv/project" });
+  });
+
+  it("defaults a missing working directory to home, not the app's cwd", () => {
+    const [config] = mcpEntryToConfig(entry({ command: "./server.sh" }), "/home/user");
+
+    // Native uses the home directory; inheriting the app's cwd is what made a
+    // relative command launch in the wrong folder.
+    expect(config).toMatchObject({ cwd: "/home/user" });
+  });
+
+  it("carries a remote server's headers", () => {
+    const [config] = mcpEntryToConfig(
+      entry({ transport: "http", url: "https://example.com/mcp", headers: { A: "b" } }),
+      "/home/user",
+    );
+
+    expect(config).toEqual({ id: "srv", url: "https://example.com/mcp", headers: { A: "b" } });
+  });
+
+  it("omits headers entirely when none are configured", () => {
+    const [config] = mcpEntryToConfig(
+      entry({ transport: "http", url: "https://example.com/mcp" }),
+      "/home/user",
+    );
+
+    // An empty object would be sent as real (empty) header config downstream.
+    expect(config).toEqual({ id: "srv", url: "https://example.com/mcp" });
+  });
+
+  it("skips an entry that is neither a command nor a url", () => {
+    expect(mcpEntryToConfig(entry({}), "/home/user")).toEqual([]);
   });
 });
