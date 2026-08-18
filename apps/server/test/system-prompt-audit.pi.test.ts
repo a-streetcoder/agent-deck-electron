@@ -145,6 +145,19 @@ describe("final system prompt audit against pinned real Pi", () => {
     await waitFor(() => session.meta.finalSystemPromptAudit?.capturedAt !== firstCapturedAt);
     expect(session.meta.finalSystemPromptAudit?.capturedAt).not.toBe(firstCapturedAt);
     await waitFor(() => mock.requests.length !== requestsAfterFirstTurn);
+    // Windows CI fails HERE, and the wait above it passes — the audit for turn 2
+    // is captured, so our before_agent_start hook ran and Pi simply never called
+    // the provider afterwards. Report what we can see about that, because "1 is
+    // not greater than 1" says nothing about which side stalled.
+    if (mock.requests.length === requestsAfterFirstTurn) {
+      const state = await session.getState().catch((error: unknown) => ({ error: String(error) }));
+      throw new Error(
+        `Pi captured turn 2's system prompt but issued no provider request within 90s. ` +
+          `requests=${mock.requests.length} auditAt=${session.meta.finalSystemPromptAudit?.capturedAt} ` +
+          `status=${session.meta.status ?? "none"} lastError=${session.meta.lastError ?? "none"} ` +
+          `state=${JSON.stringify(state)}`,
+      );
+    }
     expect(mock.requests.length).toBeGreaterThan(requestsAfterFirstTurn);
     const secondProviderPrompt = systemText(mock.requests.at(-1)!);
     expect(session.meta.finalSystemPromptAudit?.text).toBe(secondProviderPrompt);

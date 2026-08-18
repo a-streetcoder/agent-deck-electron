@@ -139,11 +139,17 @@ function makeParams(overrides: Partial<SpawnSessionParams> = {}): SpawnSessionPa
   };
 }
 
-const waitUntil = (pred: () => boolean, ms = 5_000): Effect.Effect<void> =>
+/** `describe` reports what the caller could see when the wait expired. A bare
+ * "condition not met in time" is what CI has been handing back for the
+ * attention tests, and it says nothing about WHY the condition never held. */
+const waitUntil = (pred: () => boolean, ms = 5_000, describe?: () => string): Effect.Effect<void> =>
   Effect.gen(function* () {
     const deadline = Date.now() + ms;
     while (!pred() && Date.now() < deadline) yield* Effect.sleep("25 millis");
-    if (!pred()) yield* Effect.die(new Error("waitUntil: condition not met in time"));
+    if (!pred()) {
+      const detail = describe ? `: ${describe()}` : "";
+      yield* Effect.die(new Error(`waitUntil: condition not met in time${detail}`));
+    }
   });
 
 describe("Loop synthetic transcript restoration", () => {
@@ -2691,7 +2697,13 @@ describe("durable session attention", () => {
           // round trip outlived the old budget while the test's own container
           // sat unused. The assertion below is about needsAttention NOT being
           // raised — nothing about it is time-sensitive.
-          yield* waitUntil(() => failed.meta.status === "failed", 30_000);
+          yield* waitUntil(
+            () => failed.meta.status === "failed",
+            30_000,
+            () =>
+              `status=${failed.meta.status ?? "none"} lastError=${failed.meta.lastError ?? "none"} ` +
+              `attention=${String(failed.meta.needsAttention)} ended=${failed.meta.endedAt ?? "none"}`,
+          );
           expect(failed.meta.needsAttention).not.toBe(true);
         }),
       ),

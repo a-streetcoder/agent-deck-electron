@@ -47,13 +47,19 @@ function writeNamedAgent(defaultReads: readonly string[]): void {
 async function waitUntil(
   predicate: () => boolean,
   timeoutMs = CONTINUATION_COMPLETION_TIMEOUT_MS,
+  /** What the caller could see when the wait expired. A bare timeout tells us
+   * nothing about WHICH side stalled, which is exactly the question on Windows
+   * CI, where this and the system-prompt audit both hang on a SECOND Pi
+   * interaction while the first one succeeds. */
+  describe?: () => string,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   if (!predicate()) {
-    throw new Error(`timed out waiting ${timeoutMs}ms for continuation completion`);
+    const detail = describe ? ` — ${describe()}` : "";
+    throw new Error(`timed out waiting ${timeoutMs}ms for continuation completion${detail}`);
   }
 }
 
@@ -158,12 +164,25 @@ describe("managed_subagent real-Pi continuation", () => {
       }
     });
     await managed.prompt(SECOND_PARENT);
-    await waitUntil(() => {
-      const card = managed
-        .snapshot()
-        .state.cells.find((cell): cell is SubagentCell => cell.kind === "subagent");
-      return card?.task === SECOND_TASK && card.status === "done";
-    });
+    await waitUntil(
+      () => {
+        const card = managed
+          .snapshot()
+          .state.cells.find((cell): cell is SubagentCell => cell.kind === "subagent");
+        return card?.task === SECOND_TASK && card.status === "done";
+      },
+      undefined,
+      () => {
+        const card = managed
+          .snapshot()
+          .state.cells.find((cell): cell is SubagentCell => cell.kind === "subagent");
+        return (
+          `card.task=${card?.task ?? "none"} card.status=${card?.status ?? "none"} ` +
+          `deltas=${continuationDeltas.length} agentStatus=${managed.snapshot().state.agentStatus} ` +
+          `sessionStatus=${managed.meta.status ?? "none"} lastError=${managed.meta.lastError ?? "none"}`
+        );
+      },
+    );
     unsubscribe();
 
     const cards = managed
