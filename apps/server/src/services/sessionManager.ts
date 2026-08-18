@@ -1209,8 +1209,18 @@ export const makeManagedSessionRuntime = (
     const ingestLoop = handle.events.pipe(
       Stream.runForEach((item) =>
         // A malformed event/subscriber defect is isolated per item so later
-        // ordered events, including terminal failure detail, still arrive.
-        Effect.sync(() => processStreamItem(item)).pipe(Effect.catchAllDefect(() => Effect.void)),
+        // ordered events, including terminal failure detail, still arrive. It is
+        // REPORTED rather than discarded: a swallowed defect here is invisible
+        // and looks exactly like an event that never arrived — which is what CI
+        // has been showing (one published event, no failure recorded, no error
+        // anywhere). Isolation is the point; silence never was.
+        Effect.sync(() => processStreamItem(item)).pipe(
+          Effect.catchAllDefect((defect) =>
+            Effect.sync(() => {
+              console.error(`[session ${meta.id}] ingest defect:`, defect);
+            }),
+          ),
+        ),
       ),
       Effect.catchAll(() => Effect.void),
       Effect.ensuring(
