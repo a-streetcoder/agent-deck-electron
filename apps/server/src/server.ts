@@ -367,7 +367,15 @@ async function initServer(
       // The refusal itself lives at the SessionManager spawn chokepoint (that is
       // what makes it unbypassable); this only keeps the model from planning
       // around a capability it does not have.
-      const delegationAllowed = meta.subagentsEnabled ?? settings.get().subagentsEnabled;
+      // Absence means ENABLED here too. `?? setting` then a truthiness test made
+      // an UNDEFINED setting withhold the tools, which contradicts the runtime
+      // guard (`=== false`) and the loader default — a settings object built
+      // without this field would have silently stripped delegation from the
+      // model while the runtime still permitted it.
+      const delegationAllowed =
+        meta.subagentsEnabled === undefined
+          ? settings.get().subagentsEnabled !== false
+          : meta.subagentsEnabled === true;
       const nonMcpTools = bridge
         .specs()
         .filter((spec) => !spec.name.startsWith("mcp__"))
