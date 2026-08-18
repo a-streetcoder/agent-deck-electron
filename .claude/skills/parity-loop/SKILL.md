@@ -62,6 +62,19 @@ fix and watching the test fail — not by reading and agreeing.
    live behaviour gets a SECOND pass; that second pass has found real defects on every slice it ran.
 8. **Register edits in-band**, commit explicit paths, push, check CI, re-arm.
 
+**When the row collides with a prior deliberate decision, STOP.** A decision is deliberate when a
+test pins it on purpose — `not.toHaveProperty`, a whole-body "no secret substring" assertion, a
+comment saying why. Reversing it is the owner's call, not the slice's, even when native does the
+opposite. Ship the half of the slice no ruling can change, LABEL it as an unwired foundation in the
+commit subject, keep the row open, and record the options in a numbered workstream. MCP-18 is the
+worked example: the write path shipped, the DTO widening did not.
+
+**Machine facts for `GET /mcp` fixtures.** The no-project branch reads `globalMcpConfigs`, the
+project branch reads `effectiveMcpConfigs` — a harness that only stubs the latter returns an empty
+`servers` array for `GET /mcp`, so request `?projectId=…`. `definitionProvenance` throws when the
+entry's `scope` does not match the source, so a hand-built catalog entry needs `scope` AND
+`sourcePath`.
+
 ## Dispatching Codex
 
 Binary: `CODEX=/c/Users/alemo/.codex/packages/standalone/current/bin/codex.exe`.
