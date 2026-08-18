@@ -35,6 +35,26 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     mcpPolicy,
   } = ctx;
 
+  const mcpHeaders = z.record(z.string()).superRefine((headers, refinement) => {
+    const fieldName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+    for (const [name, value] of Object.entries(headers)) {
+      if (!fieldName.test(name)) {
+        refinement.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message: `invalid HTTP header name: ${name}`,
+        });
+      }
+      if (/[\r\n]/.test(value)) {
+        refinement.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message: `invalid HTTP header value for ${name}: must not contain CR or LF`,
+        });
+      }
+    }
+  });
+
   const mcpAddBody = z.union([
     z.object({
       name: z.string().min(1),
@@ -45,6 +65,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     z.object({
       name: z.string().min(1),
       url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+      // A pasted remote server usually carries its auth header; dropping it
+      // saves a definition that can only 401 (MCP-12).
+      headers: mcpHeaders.optional(),
     }),
   ]);
 
@@ -389,7 +412,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
     const data = parsed.data;
     const input =
-      "url" in data ? { url: data.url } : { command: data.command, args: data.args, env: data.env };
+      "url" in data
+        ? { url: data.url, headers: data.headers }
+        : { command: data.command, args: data.args, env: data.env };
     try {
       writeMcpServer(rootsFor(), "global", data.name, input);
     } catch (error) {

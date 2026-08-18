@@ -29,7 +29,7 @@ export function isValidHttpMcpUrl(value: unknown): value is string {
 /** The shape a caller supplies to add/update a server (stdio or http). */
 export type McpServerInput =
   | { command: string; args?: string[]; env?: Record<string, string> }
-  | { url: string };
+  | { url: string; headers?: Record<string, string> };
 
 /**
  * MCP-17 — native's `MCPConfigLoader.interpolate`, character for character.
@@ -351,6 +351,12 @@ function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<
     delete next.headers;
   } else {
     next.url = config.url;
+    // Headers are three-way: absent preserves credentials for URL-only edits,
+    // non-empty replaces them, and explicitly empty removes them for pasted replacements.
+    if (config.headers !== undefined) {
+      if (Object.keys(config.headers).length > 0) next.headers = config.headers;
+      else delete next.headers;
+    }
     delete next.command;
     delete next.args;
     delete next.env;

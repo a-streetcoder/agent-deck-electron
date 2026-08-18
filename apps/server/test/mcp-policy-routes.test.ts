@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -9,6 +9,7 @@ import { registerMcpRoutes } from "../src/routes/mcp.ts";
 
 interface Harness {
   fastify: FastifyInstance;
+  home: string;
   policy: McpPolicyStore;
   pause: ReturnType<typeof vi.fn>;
   reconcile: ReturnType<typeof vi.fn>;
@@ -135,6 +136,7 @@ function makeHarness(
   } as unknown as ServerContext);
   return {
     fastify,
+    home,
     policy,
     pause,
     reconcile,
@@ -192,6 +194,50 @@ describe("GET /mcp coherent provenance", () => {
     // A second roots/catalog read would run the deterministic concurrent-write
     // hook above and incorrectly pair the URL config with project provenance.
     expect(laterRootReads).toBe(0);
+  });
+});
+
+describe("POST /mcp", () => {
+  it("persists headers supplied with a remote server (MCP-12)", async () => {
+    // A pasted `claude mcp add … -H "Authorization: Bearer …"` carries the only
+    // thing that makes an authenticated remote server usable. The add body used
+    // to accept url alone, so the header was dropped between parse and disk.
+    const response = await harness.fastify.inject({
+      method: "POST",
+      url: "/mcp",
+      payload: {
+        name: "docs",
+        url: "https://mcp.example/mcp",
+        headers: { Authorization: "Bearer t" },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const doc = JSON.parse(
+      readFileSync(path.join(harness.home, ".pi", "agent", "mcp.json"), "utf8"),
+    ) as { mcpServers: Record<string, Record<string, unknown>> };
+    expect(doc.mcpServers.docs).toMatchObject({
+      url: "https://mcp.example/mcp",
+      headers: { Authorization: "Bearer t" },
+    });
+  });
+
+  it("rejects a header a real request could never send (MCP-12)", async () => {
+    // Written to disk, an unusable header only surfaces much later as a
+    // disconnected server; undici throws while building the request. Fail here.
+    for (const headers of [
+      { "Bad Header": "x" },
+      { "Bad:Header": "x" },
+      { Authorization: "Bearer\r\nX-Injected: 1" },
+    ]) {
+      const response = await harness.fastify.inject({
+        method: "POST",
+        url: "/mcp",
+        payload: { name: "docs", url: "https://mcp.example/mcp", headers },
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(existsSync(path.join(harness.home, ".pi", "agent", "mcp.json"))).toBe(false);
   });
 });
 

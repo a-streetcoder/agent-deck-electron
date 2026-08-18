@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 8 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 7 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -9,6 +9,14 @@ This report compares:
 - **Native macOS:** clean commit `6ba89a5` in `/Users/andrea/Documents/GitHub/agent-deck`.
 - **Electron:** exact committed baseline `e2b64fa` in `/Users/andrea/Documents/GitHub/agent-deck-electron`, including the LOOP-27 implementation from commit `57f7974` and the committed validation support.
 
+**Oracle HEAD in use on the implementing machine (2026-08-18): `4dc16c3`** in
+`C:\Users\alemo\Desktop\AI Playground\Agent-deck` (READ-ONLY). **Every row is a source-backed LEAD,
+not truth.** Verify the difference against BOTH the native source and the current Electron source
+before implementing: in this loop four rows overstated their gap, one (MCP-09) was already 80%
+delivered, and two (MCP-11, MCP-13) cited a native file that does not exist. If a row is already
+satisfied, prove it and close it — do not manufacture work. If a row misdescribes native, correct
+the record and say so in the commit.
+
 Those comparison commits remain the fixed original audit baseline. Later implementations, closures, and validation cited below are post-baseline corrections to this living register; they do not move or redefine that baseline.
 
 The scope is functionality, logic, persistence, safety, runtime behavior, and portable product outcomes. Styling, layout, animation, and pixel polish are excluded. Persisted identity/profile asset management is included; visual rendering and style parity are not. Native source is the product reference, not automatically the required implementation architecture.
@@ -16,6 +24,54 @@ The scope is functionality, logic, persistence, safety, runtime behavior, and po
 The original audit traced source, persistence, launch, runtime, cancellation, failure, watcher, Electron main/preload, packaging, and nearby test paths. Tests were inspected but **not generally executed for the original audit**, so most source-backed “present” findings are not fresh runtime certifications. LOOP-27 was subsequently validated on macOS arm64 with focused real-Pi isolated-worktree coverage; browser review, reload, and merge-suppression coverage; Electron opaque-ID reveal coverage; and relevant unit and safety tests. RES-01/02/03 were subsequently validated with native security tests, resource suites, and packaged Electron CRUD/containment smoke on Linux x64, Windows x64, macOS arm64, and macOS x64; the Windows job failed only after those checks on unrelated Loop tests. SKL-22 was subsequently validated with native managed-repository security, server, real-Pi, renderer/backend, and packaged Electron containment coverage across Linux, Windows, and macOS; Windows failures after those checks were unrelated Loop tests. SKL-02 was subsequently validated for legacy per-path merge and durable recovery behavior across Windows, Linux, and macOS; the Windows native-security job's final failures matched baseline `da22bb8` Loop-only failures after its Rust/native SKL tests passed. SKL-15/16 were subsequently closed against the pinned skill engine 0.1.5 with real-addon local-Git route/store acceptance and renderer interaction coverage on macOS arm64; shared packages exist for Darwin arm64/x64, Linux x64 GNU, and Windows x64 MSVC, but this slice did not execute Windows/Linux runtime coverage. GIT-09 was subsequently validated for session-worktree containment on Windows, Linux, and macOS. SUB-09 was subsequently validated locally with the full workspace suite, 82 pinned real-Pi tests, 37 Rust tests plus formatting and Clippy, native smoke, focused Electron opaque-ID security coverage, and relevant builds. SUB-08 was subsequently validated on macOS arm64 with the full workspace suite, 82 pinned real-Pi tests, focused component/browser E2E coverage, static checks, and direct light-theme visual inspection. Windows/Linux runtime execution was not repeated for this shared Node/React/Pi slice; no Electron main/preload, native-module, packaging, or durable-write surface changed. The full E2E suite was also run but had unrelated existing failures, so this report does not claim that suite passed.
 
 Evidence marked **E** is in `agent-deck-electron`. Evidence marked **N** is in native `agent-deck`. Paths are kept short in the register so each difference remains scannable.
+
+## Shared behavioral contracts (cross-cutting invariants)
+
+Native-verified contracts every slice must respect. Breaking one is a parity bug even when the
+screen looks right, and each has already been violated once here — they are the cure for this
+codebase's two dominant defect shapes (an invariant enforced at one call site and missed at its
+sibling; and tested code that nothing calls).
+
+1. **Atomic writes** when materializing anything a live watcher reads — temp file then `rename`.
+2. **A capability's default direction depends on the risk, not on a habit.** An absent subagent
+   delegation setting must mean ENABLED, so no existing install silently loses a capability; an
+   absent `editable`/`writable` flag must mean READ ONLY, so the app never offers a write it cannot
+   perform. State the direction and why, in the code, at each such default.
+3. **Authorize on the fact the UI reports.** `GET /mcp` reports `editable` from the entry's
+   `writable`; PATCH and DELETE must authorize on that same fact, never on mere key presence in a
+   file (Codex found the divergence in MCP-11).
+4. **One malformed entry must not invalidate the whole catalog.** Skip the bad entry, surface a
+   warning, keep the rest usable.
+5. **Never write configuration the runtime cannot use.** Validate at the write boundary (e.g. HTTP
+   header names and values on `POST /mcp`) rather than letting it fail much later as a mysterious
+   disconnected server.
+6. **A replace is verbatim; an edit is a merge.** A pasted definition replaces the stored one
+   including its credentials; a field-level edit preserves what it does not mention. Where one
+   function serves both, make the distinction explicit in its input, not implicit in its callers.
+7. **Interpolation semantics are exact**: an unresolved `${VAR}` becomes the EMPTY STRING at launch
+   time (MCP-17), applied to command, args, env values and cwd — never to `url` or `headers`.
+8. **The three surfaces** — the renderer screens, the server routes, and the resources layer — must
+   agree. Before changing a check, grep the other callers of the same data function.
+
+## Native → Electron translation guide
+
+Recurring native idioms and the Electron control that ports them. Deviations need a stated reason in
+the slice's completion note; `node scripts/check-design-system.mjs` fails the build on several.
+
+<!-- prettier-ignore -->
+| Native (SwiftUI, as used in agent-deck)               | Electron equivalent                                                     |
+| ----------------------------------------------------- | ------------------------------------------------------------------------ |
+| `Picker` + `.pickerStyle(.segmented)`                  | `AppSegmentedPicker` (never a raw select or radio group)                 |
+| `TextField`                                            | `ControlInput` from `design-system/components/NativeControls`             |
+| `TextEditor` / multi-line editor box                   | `ControlTextArea` — a raw textarea fails the design-system gate           |
+| `Button` (primary/secondary)                           | `ControlButton` with the repo's capsule/gradient classes                  |
+| `@State` in a view                                     | `useState`; derived values must be computed ABOVE their first use         |
+| A pure helper living on the view (e.g. `derivedName`)  | A function in `packages/domain`, unit-tested without the DOM              |
+| `(path as NSString).lastPathComponent`                 | split on both separators, drop empties, take the last                     |
+| Swift `String` `<` ordering                            | Code-POINT comparison — JS `<` is UTF-16 code units and differs on astral characters |
+| `URL(string:)?.host`                                   | `new URL(value).hostname` inside try/catch (it throws instead of nil)     |
+| `try? JSONDecoder().decode(...)` returning nil         | A parse returning `undefined`/`[]`; never a thrown error crossing the UI  |
+| Sheet with Save disabled until valid                   | `canSubmit` computed in the screen, `disabled={!canSubmit}` on submit     |
 
 ## Status and priority taxonomy
 
@@ -294,6 +350,41 @@ Every supported effective MCP definition now carries the exact winning origin fr
 
 This is additive read-only metadata: runtime resolution, persistence, OAuth, process lifecycle, Electron main/preload, packaging, and sync seams are unchanged. Local macOS/Chromium acceptance passed workspace typecheck, lint/design-system, format, all 229 resource tests, focused server provenance tests (10/10), renderer MCP tests (41/41), and focused MCP Playwright (8/8). Light/dark normal and narrow screenshots were directly inspected; long paths retained full title/accessibility text without control loss. Independent review found and then accepted the coherent-snapshot correction that prevents provenance from racing a second config read. Windows/Linux runtime was not run; the implementation uses shared Node path/React logic and existing cross-platform path derivation. **MCP-08 closed. E:** resource MCP catalog source metadata, coherent effective snapshot, MCP route DTO, `McpScreen.tsx`, and focused resource/server/renderer/Playwright tests. **N:** winning `MCPServerEntry.sourcePath` and MCP source presentation.
 
+### MCP-12 — smart paste
+
+The add form now carries native's **Manual | Paste** input mode (add only, never when editing). The
+Paste tab takes whatever a user copies out of a server's README — an `mcp.json` block, a bare
+name-to-config map, a single server object, or a `claude`/`codex mcp add` command line — and saves
+EVERY server it parses with the parsed config **verbatim**, deriving a name when the snippet carries
+none (parsed name, else the first URL host label that is not api/www/mcp/app, else the command's
+last path component, else `mcp-server`).
+
+The row said "populate an add form", and the first implementation did exactly that: a paste handler
+on the Name field. Reading `MCPConfigParser.swift` and `MCPServersScreen.swift` showed native never
+routes a paste through the manual fields, and the reason matters — those fields hold
+name/command/args/url only, so the autofill silently dropped the `env` and `headers` that make a
+server work. The design was rebuilt to match native. Env now reaches disk through the existing add
+body; `headers` did not exist end to end and was added (`McpServerInput`, `POST /mcp`, the writer).
+The manual form still has no env/headers fields — that remains **MCP-18**.
+
+Header semantics are three-way at the writer, because one function serves two callers: absent
+preserves (so fixing a URL typo through the edit form cannot silently drop a credential), non-empty
+replaces, and explicitly empty clears — the paste path always sends `headers`, so a pasted
+replacement cannot leave the previous server's `Authorization` pointed at a new URL. `POST /mcp` now
+rejects header names that are not RFC 7230 tokens and values containing CR or LF, instead of writing
+a config that can only fail at connect time.
+
+Local acceptance: domain 157, resources 257 (+11 skipped), web 483, focused server MCP routes 14/14;
+prettier, four project typechecks, root lint and the design-system gate clean. Every new pin was
+two-sided (green, fix reverted, RED quoted, restored). Two blind Codex passes ran: the first
+rejected the autofill design and found the dropped env/headers; the second found a HIGH (the
+preserved-credential overwrite), the UTF-16-versus-code-point ordering divergence, unvalidated
+header syntax, and two tests that could not fail — all fixed. Codex implemented that fix list from a
+written brief; the orchestrator wrote the tests, reviewed the diff, and ran every gate.
+**MCP-12 closed. E:** `packages/domain/src/mcpConfigPaste.ts`, `packages/resources/src/mcp.ts`,
+`apps/server/src/routes/mcp.ts`, `apps/web/src/screens/McpScreen.tsx` and their tests.
+**N:** `MCP/MCPConfigParser.swift`, `MCPServersScreen.swift` (paste section, `derivedName`, `save`).
+
 ### MCP-05 — default MCP assignment
 
 A durable **All Projects** assignment now grants configured MCP servers to ordinary project chats in union with each project's explicit assignments. Named-agent chats remain narrowed to the agent's configured declarations, and no-project chats receive no default grant. Stale names stay visible and removable but inert. Assignment writes and reads use one injectable `McpAssignmentStore`; failed filesystem writes cannot change live authorization. Unassignment cleans credentials only where no effective project or named-agent grant remains, definition deletion clears default and project references, and assignment changes participate in RES-12 controlled session replacement.
@@ -451,7 +542,6 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 | ID     | Priority | Status    | Difference                  | Plain English                                                                                       | Why it matters                                               | Evidence                                                                               |
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
 | MCP-10 | **P3**   | Missing   | Reveal config file          | There is no action to reveal the owning config.                                                     | Manual repair is harder.                                     | Same as MCP-08.                                                                        |
-| MCP-12 | **P2**   | Missing   | Smart paste                 | Pasting a config snippet does not populate an add form.                                             | Setup takes more manual translation.                         | **N:** `MCPConfigParser.swift`; E add form.                                            |
 | MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
 | MCP-18 | **P3**   | Partial   | Transport-specific fields   | The editor does not expose the full native server field set.                                        | Advanced servers require manual config.                      | Same as MCP-15.                                                                        |
 | MCP-19 | **P3**   | Partial   | Per-tool descriptions       | Live tool names appear, but description detail is thinner.                                          | Users cannot easily understand each tool before exposure.    | **E:** `mcpTools.ts`, `McpScreen.tsx`. **N:** MCP server screen.                       |

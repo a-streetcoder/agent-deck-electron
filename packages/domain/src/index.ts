@@ -16,3 +16,11 @@ export * from "./memory.ts";
 export * from "./extensions.ts";
 export * from "./loops.ts";
 export * from "./slashUniverse.ts";
+export {
+  derivedMcpServerName,
+  parseMcpConfigPaste,
+  shellTokenize,
+  type McpPastedConfig,
+  type McpPastedServer,
+  type McpPasteTransport,
+} from "./mcpConfigPaste.ts";

@@ -1,10 +1,15 @@
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ControlButton,
+  ControlInput,
+  ControlTextArea,
+} from "@/design-system/components/NativeControls";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { openExternal } from "@/lib/native";
+import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
 
@@ -18,6 +23,14 @@ import { updateProject } from "../state/wsBridge.ts";
  */
 
 type McpTransport = "stdio" | "http";
+
+/** Native's add sheet is either the manual fields or a paste box, never both. */
+type McpInputMode = "manual" | "paste";
+
+const MCP_INPUT_MODE_OPTIONS = [
+  { id: "manual", label: "Manual" },
+  { id: "paste", label: "Paste" },
+] as const;
 
 const MCP_TRANSPORT_OPTIONS = [
   { id: "stdio", label: "Local (stdio)" },
@@ -197,6 +210,8 @@ export function McpScreen() {
   const [reloading, setReloading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [transport, setTransport] = useState<McpTransport>("stdio");
+  const [inputMode, setInputMode] = useState<McpInputMode>("manual");
+  const [pasteText, setPasteText] = useState("");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
@@ -339,13 +354,35 @@ export function McpScreen() {
   const editing = editingId !== null;
   const formOpen = adding || editing;
   const duplicateName = !editing && servers.some((server) => server.id === trimmedName);
-  const canSubmit =
-    Boolean(trimmedName) &&
-    !saving &&
-    !duplicateName &&
-    (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl));
+
+  /**
+   * MCP-12 — native's Paste tab (`MCPServersScreen` + `MCPConfigParser`). A user
+   * drops a server's setup straight out of its README — an mcp.json block or a
+   * `claude`/`codex mcp add` line — and every server in it is saved with the
+   * parsed config VERBATIM. It deliberately does not fill the manual fields:
+   * those hold name/command/args/url only, so routing a paste through them
+   * would silently drop the env and headers that make the server work.
+   */
+  const pasting = !editing && inputMode === "paste";
+  const pastedServers = useMemo(
+    () => (pasting ? parseMcpConfigPaste(pasteText) : []),
+    [pasting, pasteText],
+  );
+  const replacedByPaste = pastedServers
+    .map(derivedMcpServerName)
+    .filter((pastedName) => servers.some((server) => server.id === pastedName));
+
+  const canSubmit = saving
+    ? false
+    : pasting
+      ? pastedServers.length > 0
+      : Boolean(trimmedName) &&
+        !duplicateName &&
+        (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl));
 
   const resetDraft = (): void => {
+    setInputMode("manual");
+    setPasteText("");
     setName("");
     setCommand("");
     setArgsText("");
@@ -354,28 +391,55 @@ export function McpScreen() {
     editSnapshot.current = null;
   };
 
+  const postServer = async (body: Record<string, unknown>): Promise<void> => {
+    const response = await fetch("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+  };
+
   const add = async (): Promise<void> => {
     if (!canSubmit || editing) return;
-    const body =
-      transport === "http"
-        ? { name: trimmedName, url: trimmedUrl }
-        : {
-            name: trimmedName,
-            command: trimmedCommand,
-            args: parsedArgs,
-          };
     setSaving(true);
+    let pastedServerCount = 0;
     try {
-      const response = await fetch("/mcp", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      if (pasting) {
+        // Sequential, so a failure half way leaves the rest unsent rather than
+        // racing several writes to the same file.
+        for (const parsed of pastedServers) {
+          const { command, args, env, url: pastedUrl, headers } = parsed.config;
+          const name = derivedMcpServerName(parsed);
+          try {
+            await postServer(
+              pastedUrl !== undefined && command === undefined
+                ? { name, url: pastedUrl, headers: headers ?? {} }
+                : {
+                    name,
+                    command,
+                    ...(args ? { args } : {}),
+                    ...(env ? { env } : {}),
+                  },
+            );
+            pastedServerCount += 1;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(`${name}: ${message}`);
+          }
+        }
+      } else {
+        await postServer(
+          transport === "http"
+            ? { name: trimmedName, url: trimmedUrl }
+            : { name: trimmedName, command: trimmedCommand, args: parsedArgs },
+        );
+      }
       resetDraft();
       setAdding(false);
       await load();
     } catch (err) {
+      if (pastedServerCount > 0) await load();
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
@@ -901,17 +965,52 @@ export function McpScreen() {
                 Editing {editingId}
               </p>
             ) : null}
-            <div data-testid="mcp-transport">
-              <AppSegmentedPicker
-                aria-label="MCP server type"
-                size="sm"
-                value={transport}
-                onChange={(next) => setTransport(next)}
-                disabled={saving}
-                options={MCP_TRANSPORT_OPTIONS}
-              />
-            </div>
-            <label className="flex flex-col gap-1">
+            {!editing ? (
+              <div data-testid="mcp-input-mode">
+                <AppSegmentedPicker
+                  aria-label="MCP input mode"
+                  size="sm"
+                  value={inputMode}
+                  onChange={(next) => setInputMode(next)}
+                  disabled={saving}
+                  options={MCP_INPUT_MODE_OPTIONS}
+                />
+              </div>
+            ) : null}
+            {pasting ? (
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-xs font-medium text-text-secondary">
+                  Paste a server&apos;s config, or a claude/codex mcp add command
+                </span>
+                <ControlTextArea
+                  autoFocus
+                  data-testid="mcp-paste"
+                  rows={4}
+                  className="min-w-0 w-full resize-y rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                  placeholder={
+                    '{ "mcpServers": { "amplitude": { "url": "https://mcp.amplitude.com/mcp" } } }'
+                  }
+                  value={pasteText}
+                  disabled={saving}
+                  onChange={(event) => setPasteText(event.target.value)}
+                />
+                <span className="text-xs text-text-muted">
+                  We parse it and add the server(s). Switch to Manual to fill the fields yourself.
+                </span>
+              </label>
+            ) : (
+              <div data-testid="mcp-transport">
+                <AppSegmentedPicker
+                  aria-label="MCP server type"
+                  size="sm"
+                  value={transport}
+                  onChange={(next) => setTransport(next)}
+                  disabled={saving}
+                  options={MCP_TRANSPORT_OPTIONS}
+                />
+              </div>
+            )}
+            <label className={cn("flex flex-col gap-1", pasting && "hidden")}>
               <span className="text-xs font-medium text-text-secondary">Name</span>
               <ControlInput
                 autoFocus={!editing}
@@ -925,7 +1024,7 @@ export function McpScreen() {
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <div className="flex flex-col gap-2">
+            <div className={cn("flex flex-col gap-2", pasting && "hidden")}>
               {transport === "stdio" ? (
                 <>
                   <label className="flex min-w-0 flex-col gap-1">
@@ -986,7 +1085,11 @@ export function McpScreen() {
                 {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
               </ControlButton>
             </div>
-            {duplicateName ? (
+            {replacedByPaste.length > 0 ? (
+              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                Adding replaces the existing {replacedByPaste.join(", ")}.
+              </p>
+            ) : duplicateName ? (
               <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
                 A server named {trimmedName} already exists.
               </p>

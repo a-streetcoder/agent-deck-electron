@@ -1726,3 +1726,150 @@ describe("MCP unknown ownership fails closed (MCP-09)", () => {
     expect(screen.queryByTestId("mcp-remove-unknown")).toBeNull();
   });
 });
+
+/**
+ * MCP-12: pasting a server's setup into the add form fills it in (native
+ * MCPConfigParser). The parser has its own tests in @agent-deck/domain; these
+ * pin that the screen actually CALLS it and maps the result onto the fields —
+ * a parser nothing invokes would be the never-wired defect.
+ */
+describe("MCP smart paste (MCP-12)", () => {
+  /**
+   * Native's add sheet has a Manual | Paste picker. The Paste tab takes a whole
+   * config snippet and saves EVERY server it parses with the config VERBATIM —
+   * it does not funnel them through the manual fields, which have nowhere to put
+   * env or headers.
+   */
+  const openPasteTab = async (existing: { id: string }[] = []): Promise<void> => {
+    useAppStore.setState({ currentProjectId: null, projects: [] });
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp" && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true }, 201));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          servers: existing.map((server) => ({
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            ...server,
+          })),
+        }),
+      );
+    });
+    render(<McpScreen />);
+    fireEvent.click(await screen.findByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Paste" }));
+  };
+
+  const type = (text: string): void => {
+    fireEvent.change(screen.getByTestId("mcp-paste"), { target: { value: text } });
+  };
+
+  const posts = (): unknown[] =>
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([input, init]) => String(input) === "/mcp" && init?.method === "POST")
+      .map(([, init]) => JSON.parse(String(init?.body)));
+
+  it("saves every server in a pasted block, keeping env the manual form cannot hold", async () => {
+    await openPasteTab();
+
+    type(
+      JSON.stringify({
+        mcpServers: {
+          zulu: { command: "z" },
+          alpha: { command: "npx", args: ["-y", "srv"], env: { TOKEN: "secret" } },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()).toEqual([
+      { name: "alpha", command: "npx", args: ["-y", "srv"], env: { TOKEN: "secret" } },
+      { name: "zulu", command: "z" },
+    ]);
+  });
+
+  it("keeps the auth header off a pasted remote server's command line", async () => {
+    await openPasteTab();
+
+    type('claude mcp add docs -t http https://example.com/mcp -H "Authorization: Bearer t"');
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]).toEqual({
+      name: "docs",
+      url: "https://example.com/mcp",
+      headers: { Authorization: "Bearer t" },
+    });
+  });
+
+  it("sends empty headers so a pasted replacement drops the old credential", async () => {
+    await openPasteTab([{ id: "docs" }]);
+
+    // Native replaces the whole config. Omitting headers here would leave the
+    // previous server's Authorization attached to the newly pasted url.
+    type(JSON.stringify({ mcpServers: { docs: { url: "https://new.test/mcp" } } }));
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]).toEqual({ name: "docs", url: "https://new.test/mcp", headers: {} });
+  });
+
+  it("derives a name for a snippet that carries none", async () => {
+    await openPasteTab();
+
+    // Native: the first host label that is not api/www/mcp/app.
+    type(JSON.stringify({ url: "https://mcp.amplitude.com/mcp" }));
+    fireEvent.click(screen.getByTestId("mcp-add-confirm"));
+
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect((posts()[0] as { name: string }).name).toBe("amplitude");
+  });
+
+  it("will not save text that parses to nothing", async () => {
+    await openPasteTab();
+
+    type("npm install some-mcp-server");
+
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
+    type(JSON.stringify({ command: "srv" }));
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("warns before a paste replaces a server that already exists", async () => {
+    await openPasteTab([{ id: "files" }]);
+
+    type(JSON.stringify({ mcpServers: { files: { command: "new" } } }));
+
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain("files");
+  });
+
+  it("offers Paste when adding but not when editing an existing server", async () => {
+    useAppStore.setState({ currentProjectId: null, projects: [] });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: [
+          {
+            id: "files",
+            transport: "stdio",
+            command: "npx",
+            connected: false,
+            toolNames: [],
+            editable: true,
+          },
+        ],
+      }),
+    );
+    render(<McpScreen />);
+    fireEvent.click(await screen.findByTestId("mcp-add"));
+    expect(screen.getByRole("radio", { name: "Paste" })).toBeTruthy();
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(await screen.findByTestId("mcp-edit-files"));
+
+    expect(screen.queryByRole("radio", { name: "Paste" })).toBeNull();
+  });
+});

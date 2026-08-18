@@ -121,6 +121,38 @@ describe("writeMcpServer / deleteMcpServer", () => {
     expect(Object.keys(doc.mcpServers as object).sort()).toEqual(["added", "keep"]);
   });
 
+  it("writes headers with a remote server, and replaces them when re-supplied", () => {
+    // MCP-12: a pasted `-H "Authorization: Bearer …"` is the whole point of an
+    // authenticated remote server — dropping it saves a server that 401s.
+    writeMcpServer(roots, "global", "docs", {
+      url: "https://x.test/mcp",
+      headers: { Authorization: "Bearer t" },
+    });
+    const file = mcpConfigPath(roots, "global")!;
+    const first = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(first.mcpServers.docs!.headers).toEqual({ Authorization: "Bearer t" });
+
+    // Absence preserves (see the url-typo test below); a new set replaces.
+    writeMcpServer(roots, "global", "docs", {
+      url: "https://x.test/mcp",
+      headers: { Authorization: "Bearer fresh" },
+    });
+    const second = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(second.mcpServers.docs!.headers).toEqual({ Authorization: "Bearer fresh" });
+
+    // An EMPTY set clears: a pasted replacement that carries no header must not
+    // leave the previous server's credential pointed at the new url.
+    writeMcpServer(roots, "global", "docs", { url: "https://y.test/mcp", headers: {} });
+    const third = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    expect(third.mcpServers.docs).not.toHaveProperty("headers");
+  });
+
   it("replaces an existing server of the same name", () => {
     writeMcpServer(roots, "global", "db", { command: "old" });
     writeMcpServer(roots, "global", "db", { command: "new" });
