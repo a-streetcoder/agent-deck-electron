@@ -19,6 +19,7 @@ export {
 export {
   deleteMcpServer,
   hasMcpServer,
+  interpolateMcpValue,
   isValidHttpMcpUrl,
   isValidMcpServerName,
   mcpConfigPath,

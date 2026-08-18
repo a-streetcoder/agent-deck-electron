@@ -4,7 +4,7 @@ import {
   type McpOAuthProvider,
   type StdioServerConfig,
 } from "@agent-deck/mcp";
-import { isValidHttpMcpUrl, type McpServerEntry } from "@agent-deck/resources";
+import { interpolateMcpValue, isValidHttpMcpUrl, type McpServerEntry } from "@agent-deck/resources";
 import type { BridgeRegistry } from "./bridge.ts";
 
 /**
@@ -43,26 +43,71 @@ function stringRecordEqual(
  * authenticate at all. One exported function so a field the catalog gains
  * cannot reach one caller and miss the other.
  */
-export function mcpEntryToConfig(entry: McpServerEntry, homeDir: string): McpServerConfig[] {
+/**
+ * MCP-17 — resolve `${VAR}`, `$VAR` and a leading `~` in the four fields native
+ * interpolates (command, args, env VALUES, cwd) and apply the home-directory
+ * cwd default. EVERY launchable stdio config goes through here, whichever
+ * source produced it: an mcp.json entry or an AGENT_DECK_MCP_SERVERS override.
+ * The override path skipped interpolation entirely, so the same config text
+ * behaved differently depending on where it was written (Codex) — one function
+ * is what stops that recurring.
+ *
+ * Returns null when the command expands to nothing: the parser already skips an
+ * entry with no command, and an entry whose command VANISHED because a variable
+ * was unset is the same thing. Passing "" to the spawn only fails later and
+ * more opaquely.
+ */
+function normalizeStdioLaunch<T extends { id: string } & StdioServerConfig>(
+  config: T,
+  homeDir: string,
+  environment: Record<string, string | undefined>,
+): T | null {
+  // A non-string slipped past validation (AGENT_DECK_MCP_SERVERS validates only
+  // `id` and the transport) must not THROW here: that would abort backend
+  // startup instead of failing one server's connection (Codex).
+  const expand = (value: unknown): string =>
+    typeof value === "string" ? interpolateMcpValue(value, environment, homeDir) : "";
+  const command = expand(config.command);
+  if (command.length === 0) return null;
+  return {
+    ...config,
+    command,
+    args: Array.isArray(config.args) ? config.args.map(expand) : undefined,
+    // Values only: an env NAME is a key, not a template (native maps over
+    // values with `mapValues`).
+    env:
+      typeof config.env === "object" && config.env !== null
+        ? Object.fromEntries(Object.entries(config.env).map(([k, v]) => [k, expand(v)]))
+        : undefined,
+    // Native defaults a missing cwd to the user's home rather than letting the
+    // child inherit the app's working directory.
+    cwd: typeof config.cwd === "string" && config.cwd ? expand(config.cwd) : homeDir,
+  };
+}
+
+export function mcpEntryToConfig(
+  entry: McpServerEntry,
+  homeDir: string,
+  environment: Record<string, string | undefined> = process.env,
+): McpServerConfig[] {
   if (entry.transport === "http" && entry.url) {
+    // Native interpolates ONLY the four stdio fields below — never `url` or
+    // `headers` — so these pass through untouched.
     return [{ id: entry.id, url: entry.url, ...(entry.headers ? { headers: entry.headers } : {}) }];
   }
   if (entry.command) {
-    return [
+    const launch = normalizeStdioLaunch(
       {
         id: entry.id,
         command: entry.command,
-        args: entry.args,
-        env: entry.env,
-        // Native defaults a missing cwd to the user's home rather than letting
-        // the child inherit the app's working directory, so a relative command
-        // resolves the same way in both apps.
-        cwd: entry.cwd ?? homeDir,
-        // Native defaults a missing cwd to the user's home rather than letting
-        // the child inherit the app's working directory, so a relative command
-        // resolves the same way in both apps.
+        ...(entry.args ? { args: entry.args } : {}),
+        ...(entry.env ? { env: entry.env } : {}),
+        ...(entry.cwd ? { cwd: entry.cwd } : {}),
       },
-    ];
+      homeDir,
+      environment,
+    );
+    return launch ? [launch] : [];
   }
   return [];
 }
@@ -577,7 +622,11 @@ export class McpManager {
 }
 
 /** Parse AGENT_DECK_MCP_SERVERS (a JSON array of server configs, stdio or http). */
-export function mcpServerConfigsFromEnv(raw: string | undefined): McpServerConfig[] {
+export function mcpServerConfigsFromEnv(
+  raw: string | undefined,
+  homeDir: string,
+  environment: Record<string, string | undefined> = process.env,
+): McpServerConfig[] {
   if (!raw) return [];
   let parsed: unknown;
   try {
@@ -586,16 +635,26 @@ export function mcpServerConfigsFromEnv(raw: string | undefined): McpServerConfi
     return [];
   }
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter((entry): entry is McpServerConfig => {
-    if (typeof entry !== "object" || entry === null) return false;
-    const e = entry as { id?: unknown; command?: unknown; url?: unknown };
-    if (typeof e.id !== "string") return false;
-    const hasCommand = typeof e.command === "string";
-    const hasUrl = e.url !== undefined;
-    // Exactly one transport (never both/neither — a dual entry would silently
-    // drop `command` since url wins), and any http url must be well-formed http(s).
-    if (hasCommand === hasUrl) return false;
-    if (hasUrl) return isValidHttpMcpUrl(e.url);
-    return true;
-  });
+  return parsed
+    .filter((entry): entry is McpServerConfig => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const e = entry as { id?: unknown; command?: unknown; url?: unknown };
+      if (typeof e.id !== "string") return false;
+      const hasCommand = typeof e.command === "string";
+      const hasUrl = e.url !== undefined;
+      // Exactly one transport (never both/neither — a dual entry would silently
+      // drop `command` since url wins), and any http url must be well-formed http(s).
+      if (hasCommand === hasUrl) return false;
+      if (hasUrl) return isValidHttpMcpUrl(e.url);
+      return true;
+    })
+    .map((config) => {
+      // Same launch normalization as a file entry. Without it the identical
+      // config text expanded in mcp.json and stayed literal here (Codex).
+      // `homeDir` is REQUIRED: making it optional meant a caller that omitted
+      // it silently launched literal `$VAR` text (Codex).
+      if ("url" in config) return config;
+      return normalizeStdioLaunch(config, homeDir, environment);
+    })
+    .filter((config): config is McpServerConfig => config !== null);
 }

@@ -31,6 +31,92 @@ export type McpServerInput =
   | { command: string; args?: string[]; env?: Record<string, string> }
   | { url: string };
 
+/**
+ * MCP-17 — native's `MCPConfigLoader.interpolate`, character for character.
+ * Applied to a server's command, args, env VALUES and cwd at LAUNCH time (the
+ * four fields native's transport interpolates; it does NOT touch `url` or
+ * `headers`, so neither do we).
+ *
+ * Two behaviours are deliberately faithful rather than "sensible":
+ *  - An UNRESOLVED variable becomes the EMPTY STRING, not a literal. A typo
+ *    therefore shortens a command line rather than leaving `${TYPO}` in it. It
+ *    is what native does, and a config has to mean the same thing in both apps.
+ *  - The tilde is expanded AFTER variables, so a variable holding `~` still
+ *    resolves — and only as the whole value or a `~/` prefix, never mid-path.
+ */
+/** Own properties only. A plain `environment[name]` walks the prototype chain,
+ * so `${constructor}` or `$toString` would resolve an Object.prototype member and
+ * splice a FUNCTION's source into a command line. Native looks up a Swift
+ * Dictionary, which has no such members (Codex). */
+function lookup(environment: Record<string, string | undefined>, name: string): string {
+  if (!Object.hasOwn(environment, name)) return "";
+
+  const value = environment[name];
+  return typeof value === "string" ? value : "";
+}
+
+export function interpolateMcpValue(
+  raw: string,
+  environment: Record<string, string | undefined>,
+  homeDirectory: string,
+): string {
+  // Iterate CODE POINTS, not UTF-16 code units. Swift walks Characters, so an
+  // astral identifier is one letter to native; indexing `raw[i]` here would see
+  // two lone surrogates, match neither the letter nor the number class, and
+  // silently leave the token unexpanded (Codex).
+  // Swift walks extended grapheme CLUSTERS, so a decomposed "e" + combining
+  // acute is ONE Character to native. Code points alone would stop at the "e"
+  // and leave the accent behind; Intl.Segmenter reproduces Swift's unit (Codex).
+  const chars = [...new Intl.Segmenter().segment(raw)].map((entry) => entry.segment);
+  let output = "";
+  let index = 0;
+  const isNameStart = (c: string): boolean => /[\p{L}_]/u.test(c);
+  const isNameChar = (c: string): boolean => /[\p{L}\p{N}_]/u.test(c);
+
+  while (index < chars.length) {
+    const character = chars[index]!;
+    if (character !== "$") {
+      output += character;
+      index += 1;
+      continue;
+    }
+    const afterDollar = index + 1;
+    if (afterDollar >= chars.length) {
+      // A trailing "$" is literal.
+      output += character;
+      index = afterDollar;
+      continue;
+    }
+    if (chars[afterDollar] === "{") {
+      const close = chars.indexOf("}", afterDollar);
+      if (close !== -1) {
+        // An UNRESOLVED name yields "" — native's `environment[name] ?? ""`.
+        output += lookup(environment, chars.slice(afterDollar + 1, close).join(""));
+        index = close + 1;
+        continue;
+      }
+      // No closing brace: emit the "$" and carry on, leaving "${NAME" intact.
+      output += character;
+      index = afterDollar;
+      continue;
+    }
+    if (isNameStart(chars[afterDollar]!)) {
+      let cursor = afterDollar;
+      while (cursor < chars.length && isNameChar(chars[cursor]!)) cursor += 1;
+      output += lookup(environment, chars.slice(afterDollar, cursor).join(""));
+      index = cursor;
+      continue;
+    }
+    // "$" followed by anything else (a digit, punctuation) stays literal.
+    output += character;
+    index = afterDollar;
+  }
+
+  if (output === "~") return homeDirectory;
+  if (output.startsWith("~/")) return homeDirectory + output.slice(1);
+  return output;
+}
+
 export class McpConfigError extends Error {}
 
 /** A normalized MCP server config resolved from an mcp.json entry. */

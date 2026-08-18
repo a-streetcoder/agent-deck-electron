@@ -8,6 +8,7 @@ import {
   isValidMcpServerName,
   mcpConfigPath,
   McpConfigError,
+  interpolateMcpValue,
   readMcpServerCatalog,
   readMcpServers,
   writeMcpServer,
@@ -321,5 +322,123 @@ describe("stdio cwd and http headers (MCP-15, MCP-16)", () => {
     const byId = Object.fromEntries(readMcpServers(roots).map((s) => [s.id, s]));
     expect(byId.files!.cwd).toBeUndefined();
     expect(byId.remote!.headers).toEqual({ ok: "yes" });
+  });
+});
+
+/**
+ * MCP-17: native interpolates `${VAR}`, `$VAR` and a leading `~` in a server's
+ * command, args, env VALUES and cwd (MCPConfigLoader.interpolate, applied in
+ * MCPTransport). Without it a perfectly ordinary `~/bin/server` or
+ * `${HOME}/srv` config works in native and fails here.
+ *
+ * The semantics below are native's exactly, including the sharp one: an
+ * UNRESOLVED variable becomes the EMPTY STRING, it is not left as a literal.
+ */
+describe("mcp value interpolation (MCP-17)", () => {
+  const env = { HOME: "/home/u", TOKEN: "abc", EMPTY: "" };
+  const interp = (raw: string) => interpolateMcpValue(raw, env, "/home/u");
+
+  it("expands both ${NAME} and $NAME", () => {
+    expect(interp("${TOKEN}")).toBe("abc");
+    expect(interp("$TOKEN")).toBe("abc");
+    expect(interp("x${TOKEN}y$TOKEN")).toBe("xabcyabc");
+  });
+
+  it("replaces an unresolved variable with nothing, as native does", () => {
+    // Native: `environment[name] ?? ""`. A typo therefore SHORTENS the value
+    // rather than leaving a literal — matching it matters because the result is
+    // a command line.
+    expect(interp("${MISSING}/bin")).toBe("/bin");
+    expect(interp("$MISSING/bin")).toBe("/bin");
+    expect(interp("${EMPTY}/bin")).toBe("/bin");
+  });
+
+  it("leaves a malformed or non-identifier dollar alone", () => {
+    expect(interp("${UNCLOSED")).toBe("${UNCLOSED");
+    expect(interp("cost is 5$")).toBe("cost is 5$");
+    expect(interp("$1 and $-")).toBe("$1 and $-");
+  });
+
+  it("consumes exactly the identifier run for a bare $NAME", () => {
+    expect(interp("$TOKEN-suffix")).toBe("abc-suffix");
+    expect(interp("$TOKEN/path")).toBe("abc/path");
+    // Digits and underscores continue a name; a hyphen ends it.
+    expect(interpolateMcpValue("$A_1", { A_1: "ok" }, "/home/u")).toBe("ok");
+  });
+
+  it("expands a leading tilde, and only a leading one", () => {
+    expect(interp("~")).toBe("/home/u");
+    expect(interp("~/bin/server")).toBe("/home/u/bin/server");
+    // Native only handles exactly "~" or a "~/" prefix.
+    expect(interp("~user/bin")).toBe("~user/bin");
+    expect(interp("/opt/~/bin")).toBe("/opt/~/bin");
+  });
+
+  it("applies the tilde AFTER variable expansion, as native does", () => {
+    // Native expands variables first, then checks the RESULT for a tilde.
+    expect(interpolateMcpValue("${T}/bin", { T: "~" }, "/home/u")).toBe("/home/u/bin");
+  });
+
+  it("is case sensitive", () => {
+    expect(interp("${token}")).toBe("");
+  });
+});
+
+/** MCP-17 scanner boundaries — the cases Codex flagged as most likely to hide a
+ * native-parity divergence. The astral one caught a real UTF-16 bug: indexing
+ * by code unit split the letter into lone surrogates and left it unexpanded. */
+describe("mcp interpolation scanner boundaries (MCP-17)", () => {
+  const home = "/home/u";
+  const run = (raw: string, env: Record<string, string>) => interpolateMcpValue(raw, env, home);
+
+  it("expands an identifier made of astral characters", () => {
+    const name = `${String.fromCodePoint(0x10400)}X`;
+    expect(run(`$${name}`, { [name]: "ok" })).toBe("ok");
+    expect(run(`\${${name}}`, { [name]: "ok" })).toBe("ok");
+  });
+
+  it("keeps a combining-mark identifier whole", () => {
+    expect(run("$café", { café: "ok" })).toBe("ok");
+  });
+
+  it("handles adjacent and nested-looking tokens the way native does", () => {
+    expect(run("$A$B", { A: "1", B: "2" })).toBe("12");
+    // `${A${B}}` takes the FIRST closing brace, so the name is "A${B" (unset →
+    // empty) and the trailing "}" survives.
+    expect(run("${A${B}}", { A: "1", B: "2" })).toBe("}");
+    // Not an escape: "$$" is a literal "$" followed by an expansion.
+    expect(run("$${A}", { A: "1" })).toBe("$1");
+  });
+
+  it("treats an empty brace name as an unset variable", () => {
+    expect(run("${}", {})).toBe("");
+    expect(run("x${}y", {})).toBe("xy");
+  });
+});
+
+/** MCP-17 lookup safety. `environment[name]` walks the prototype chain, so a
+ * config could resolve an Object.prototype member — and the result is spliced
+ * into a COMMAND LINE (Codex). */
+describe("mcp interpolation looks up own properties only (MCP-17)", () => {
+  it("treats an inherited property as an unset variable", () => {
+    // A STRING on the prototype is the case that distinguishes an own-property
+    // check from a plain typeof guard: `environment[name]` would return it and
+    // splice it into a command line.
+    const inherited = Object.create({ INHERITED: "leaked" }) as Record<string, string>;
+    expect(interpolateMcpValue("${INHERITED}", inherited, "/home/u")).toBe("");
+    expect(interpolateMcpValue("$INHERITED/bin", inherited, "/home/u")).toBe("/bin");
+    // Object.prototype members are caught too (they are functions, not strings).
+    expect(interpolateMcpValue("${constructor}", {}, "/home/u")).toBe("");
+  });
+
+  it("still resolves an own property that shadows one", () => {
+    expect(interpolateMcpValue("${toString}", { toString: "ok" }, "/home/u")).toBe("ok");
+  });
+
+  it("keeps a decomposed combining sequence whole", () => {
+    // "cafe" + U+0301 is ONE Character to Swift. Code-point iteration alone
+    // stopped at the "e" and left the accent behind.
+    const name = "café";
+    expect(interpolateMcpValue(`$${name}`, { [name]: "ok" }, "/home/u")).toBe("ok");
   });
 });

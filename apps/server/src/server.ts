@@ -822,7 +822,7 @@ async function initServer(
 
   // Catalog definitions are inert until a project or named agent explicitly
   // assigns their id. Per-project catalogs merge global < project < environment.
-  const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS);
+  const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS, resourceHome());
   // MCP OAuth (native MCPOAuthService): authed http servers get a per-server
   // OAuth provider whose URL-bound credentials persist under app data. A stable
   // env-overridable loopback callback is captured automatically; external

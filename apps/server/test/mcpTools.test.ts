@@ -72,6 +72,8 @@ describe("mcpServerConfigsFromEnv", () => {
         { id: "a", command: "node", args: ["a.js"] },
         { id: "b", command: "uvx", args: ["some-mcp"] },
       ]),
+      "/home/u",
+      {},
     );
     expect(configs).toHaveLength(2);
     expect(configs[0]).toMatchObject({ id: "a", command: "node" });
@@ -86,15 +88,17 @@ describe("mcpServerConfigsFromEnv", () => {
         "garbage",
         null,
       ]),
+      "/home/u",
+      {},
     );
     expect(configs.map((c) => c.id)).toEqual(["ok"]);
   });
 
   it("returns [] for empty, malformed, or non-array input", () => {
-    expect(mcpServerConfigsFromEnv(undefined)).toEqual([]);
-    expect(mcpServerConfigsFromEnv("")).toEqual([]);
-    expect(mcpServerConfigsFromEnv("not json")).toEqual([]);
-    expect(mcpServerConfigsFromEnv(JSON.stringify({ not: "an array" }))).toEqual([]);
+    expect(mcpServerConfigsFromEnv(undefined, "/home/u", {})).toEqual([]);
+    expect(mcpServerConfigsFromEnv("", "/home/u", {})).toEqual([]);
+    expect(mcpServerConfigsFromEnv("not json", "/home/u", {})).toEqual([]);
+    expect(mcpServerConfigsFromEnv(JSON.stringify({ not: "an array" }), "/home/u", {})).toEqual([]);
   });
 });
 
@@ -493,5 +497,130 @@ describe("mcpEntryToConfig (MCP-15, MCP-16)", () => {
 
   it("skips an entry that is neither a command nor a url", () => {
     expect(mcpEntryToConfig(entry({}), "/home/user")).toEqual([]);
+  });
+});
+
+/**
+ * MCP-17 wiring: interpolation has to happen where the config becomes
+ * launchable, not where the file was parsed — a variable changed between the
+ * two must take effect on the next spawn.
+ */
+describe("mcpEntryToConfig interpolation (MCP-17)", () => {
+  const entry = (over: Partial<McpServerEntry>): McpServerEntry =>
+    ({
+      id: "srv",
+      transport: "stdio",
+      scope: "global",
+      sourcePath: "/mcp.json",
+      ...over,
+    }) as McpServerEntry;
+
+  it("expands the command, args, env values and cwd", () => {
+    const [config] = mcpEntryToConfig(
+      entry({
+        command: "~/bin/$BIN",
+        args: ["--root", "${ROOT}"],
+        env: { TOKEN: "${SECRET}" },
+        cwd: "${ROOT}/work",
+      }),
+      "/home/u",
+      { BIN: "server", ROOT: "/srv", SECRET: "s3cret" },
+    );
+
+    expect(config).toMatchObject({
+      command: "/home/u/bin/server",
+      args: ["--root", "/srv"],
+      env: { TOKEN: "s3cret" },
+      cwd: "/srv/work",
+    });
+  });
+
+  it("does not interpolate a remote server's url or headers", () => {
+    const [config] = mcpEntryToConfig(
+      entry({
+        transport: "http",
+        url: "https://example.com/$NOPE",
+        headers: { A: "${NOPE}" },
+      }),
+      "/home/u",
+      { NOPE: "expanded" },
+    );
+
+    // Native interpolates only the four stdio fields; expanding a header here
+    // would diverge from it and could silently blank an auth token.
+    expect(config).toEqual({
+      id: "srv",
+      url: "https://example.com/$NOPE",
+      headers: { A: "${NOPE}" },
+    });
+  });
+
+  it("expands an env NAME's value but never the name itself", () => {
+    const [config] = mcpEntryToConfig(
+      entry({ command: "srv", env: { "${KEEP}": "${V}" } }),
+      "/home/u",
+      { KEEP: "changed", V: "ok" },
+    );
+
+    expect(config).toMatchObject({ env: { "${KEEP}": "ok" } });
+  });
+});
+
+/**
+ * MCP-17 sibling path: AGENT_DECK_MCP_SERVERS overrides are merged AFTER the
+ * file configs and were never interpolated, so the SAME config text behaved
+ * differently depending on where a user wrote it (Codex).
+ */
+describe("env-override MCP configs are launch-normalized too (MCP-17)", () => {
+  const raw = JSON.stringify([{ id: "x", command: "~/bin/$BIN", args: ["${ROOT}"] }]);
+
+  it("interpolates an override exactly like a file entry", () => {
+    const [config] = mcpServerConfigsFromEnv(raw, "/home/u", { BIN: "srv", ROOT: "/srv" });
+
+    expect(config).toMatchObject({
+      command: "/home/u/bin/srv",
+      args: ["/srv"],
+      cwd: "/home/u",
+    });
+  });
+
+  it("drops an override whose command expands to nothing", () => {
+    const vanished = JSON.stringify([{ id: "x", command: "${MISSING}" }]);
+
+    // The parser already skips an entry with no command; a command that
+    // VANISHED is the same thing, and "" would only fail later at the spawn.
+    expect(mcpServerConfigsFromEnv(vanished, "/home/u", {})).toEqual([]);
+  });
+
+  it("leaves a remote override's url alone", () => {
+    const remote = JSON.stringify([{ id: "r", url: "https://example.com/$NOPE" }]);
+
+    expect(mcpServerConfigsFromEnv(remote, "/home/u", { NOPE: "x" })).toEqual([
+      { id: "r", url: "https://example.com/$NOPE" },
+    ]);
+  });
+
+  it("still passes configs through untouched when no home is supplied", () => {
+    // The previous behaviour, kept for a caller that has no resource roots.
+    expect(mcpServerConfigsFromEnv(raw, "/home/u", {})).toEqual([
+      { id: "x", command: "/home/u/bin/", args: [""], env: undefined, cwd: "/home/u" },
+    ]);
+  });
+});
+
+/** MCP-17: AGENT_DECK_MCP_SERVERS validates only `id` and the transport, so a
+ * malformed field reaches interpolation. Throwing there aborts BACKEND STARTUP
+ * rather than failing one server (Codex). */
+describe("malformed env-override fields cannot abort startup (MCP-17)", () => {
+  it("survives non-string args, env values and cwd", () => {
+    const raw = JSON.stringify([
+      { id: "x", command: "srv", args: [1, "ok"], env: { A: 2 }, cwd: 3 },
+    ]);
+
+    expect(() => mcpServerConfigsFromEnv(raw, "/home/u", {})).not.toThrow();
+    const [config] = mcpServerConfigsFromEnv(raw, "/home/u", {});
+    // A non-string cannot be interpolated, so it becomes empty rather than
+    // crashing the process; cwd falls back to the home default.
+    expect(config).toMatchObject({ command: "srv", args: ["", "ok"], cwd: "/home/u" });
   });
 });
