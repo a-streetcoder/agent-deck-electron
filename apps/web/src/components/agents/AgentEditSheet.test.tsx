@@ -595,3 +595,192 @@ describe("AgentEditSheet builtin replacement create mode", () => {
     expect(body).toMatchObject({ name: "reviewer-custom", createFromBuiltin: "reviewer" });
   });
 });
+
+/**
+ * AGT-09: native's editor offers a Picker over the live model catalog, so a
+ * model name cannot be mistyped and an unsupported thinking level cannot be
+ * chosen. Electron used free text against a static level list, so both were
+ * only discovered at launch. The catalog is read the way ModelsScreen reads it
+ * — a live session's own catalog when there is one, discovery otherwise.
+ */
+describe("AgentEditSheet model catalog validation (AGT-09)", () => {
+  const catalog = [
+    {
+      provider: "anthropic",
+      id: "claude-opus-4",
+      supportedThinkingLevels: ["off", "low", "high"],
+    },
+    { provider: "openai", id: "gpt-5.4", supportedThinkingLevels: ["off"] },
+  ];
+
+  const renderWithCatalog = async (agent: AgentInfo): Promise<void> => {
+    // With a session open the catalog is a plain request to a pi that is already
+    // running — the path that carries per-model thinking levels. With no session
+    // the editor waits for the user to engage a model field before spawning one.
+    useAppStore.setState({
+      currentProjectId: null,
+      resourcesVersion: 0,
+      session: { id: "s1", cwd: "/tmp", createdAt: "2026-01-01T00:00:00.000Z" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes("/models")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ models: catalog }), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }),
+    );
+    render(<AgentEditSheet agent={null} createFromBuiltin={agent} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("editor-model-catalog")).toBeTruthy());
+  };
+
+  it("offers every catalog model as a suggestion for the model field", async () => {
+    await renderWithCatalog(builtin);
+
+    const options = Array.from(
+      screen.getByTestId("editor-model-catalog").querySelectorAll("option"),
+    ).map((option) => option.getAttribute("value"));
+    expect(options).toEqual(["anthropic/claude-opus-4", "openai/gpt-5.4"]);
+  });
+
+  it("flags a model that is not in the catalog while preserving the stored name", async () => {
+    await renderWithCatalog({ ...builtin, model: "anthropic/claude-typo-4" });
+
+    // Native keeps a stale model rather than dropping the user's config, so the
+    // field still holds it and only the diagnostic calls it out.
+    expect((screen.getByTestId("editor-model") as HTMLInputElement).value).toBe(
+      "anthropic/claude-typo-4",
+    );
+    expect(screen.getByTestId("editor-model-diagnostic").textContent).toContain(
+      "not in the current model catalog",
+    );
+  });
+
+  it("says nothing about a model that is in the catalog", async () => {
+    await renderWithCatalog({ ...builtin, model: "anthropic/claude-opus-4" });
+
+    expect(screen.queryByTestId("editor-model-diagnostic")).toBeNull();
+  });
+
+  it("offers only the thinking levels the selected model supports", async () => {
+    await renderWithCatalog({ ...builtin, model: "anthropic/claude-opus-4", thinking: "low" });
+
+    const levels = Array.from(
+      (screen.getByTestId("editor-thinking") as HTMLSelectElement).querySelectorAll("option"),
+    ).map((option) => option.getAttribute("value"));
+    // "" is "Pi default"; "off" is a DISTINCT explicit choice the model supports.
+    // medium/xhigh/max are absent because this model does not support them.
+    expect(levels).toEqual(["", "off", "low", "high"]);
+  });
+
+  it("flags a stored thinking level the selected model does not support", async () => {
+    await renderWithCatalog({ ...builtin, model: "openai/gpt-5.4", thinking: "high" });
+
+    expect(screen.getByTestId("editor-thinking-diagnostic").textContent).toContain(
+      "does not support",
+    );
+  });
+
+  it("keeps the full level list when the model is unknown to the catalog", async () => {
+    await renderWithCatalog({ ...builtin, model: "anthropic/claude-typo-4", thinking: "high" });
+
+    const levels = Array.from(
+      (screen.getByTestId("editor-thinking") as HTMLSelectElement).querySelectorAll("option"),
+    ).map((option) => option.getAttribute("value"));
+    // Unknown model = unknown capabilities: constraining here would hide levels
+    // the model may well support.
+    expect(levels).toEqual(["", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(screen.queryByTestId("editor-thinking-diagnostic")).toBeNull();
+  });
+
+  it("accepts a bare model id, which Pi resolves under the launch provider", async () => {
+    await renderWithCatalog({ ...builtin, model: "claude-opus-4" });
+
+    // The launch plan accepts Pi model patterns, not only `provider/id`, so
+    // demanding the canonical spelling would warn about a perfectly valid value.
+    expect(screen.queryByTestId("editor-model-diagnostic")).toBeNull();
+  });
+
+  it("keeps off selectable and unflagged for a model whose only level is off", async () => {
+    await renderWithCatalog({ ...builtin, model: "openai/gpt-5.4", thinking: "off" });
+
+    const levels = Array.from(
+      (screen.getByTestId("editor-thinking") as HTMLSelectElement).querySelectorAll("option"),
+    ).map((option) => option.getAttribute("value"));
+    // "off" is a supported explicit choice here, and is NOT interchangeable with
+    // the empty "Pi default" entry.
+    expect(levels).toEqual(["", "off"]);
+    expect((screen.getByTestId("editor-thinking") as HTMLSelectElement).value).toBe("off");
+    expect(screen.queryByTestId("editor-thinking-diagnostic")).toBeNull();
+  });
+
+  it("still shows a stored level the model does not support, marked unsupported", async () => {
+    await renderWithCatalog({ ...builtin, model: "openai/gpt-5.4", thinking: "high" });
+
+    const select = screen.getByTestId("editor-thinking") as HTMLSelectElement;
+    // Without a preserved option the control renders nothing selected and reads
+    // as "Pi default" while the save payload still carries "high".
+    expect(select.value).toBe("high");
+    expect(select.selectedOptions[0]?.textContent).toContain("unsupported");
+  });
+
+  it("refuses to resolve a bare id that several providers offer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).includes("/models")
+            ? new Response(
+                JSON.stringify({
+                  models: [
+                    { provider: "anthropic", id: "shared-id", supportedThinkingLevels: ["off"] },
+                    {
+                      provider: "bedrock",
+                      id: "shared-id",
+                      supportedThinkingLevels: ["off", "high"],
+                    },
+                  ],
+                }),
+                { status: 200 },
+              )
+            : new Response("{}", { status: 200 }),
+        ),
+      ),
+    );
+    useAppStore.setState({
+      currentProjectId: null,
+      resourcesVersion: 0,
+      session: { id: "s1", cwd: "/tmp", createdAt: "2026-01-01T00:00:00.000Z" },
+    });
+    render(
+      <AgentEditSheet
+        agent={null}
+        createFromBuiltin={{ ...builtin, model: "shared-id", thinking: "high" }}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("editor-model-diagnostic")).toBeTruthy());
+
+    expect(screen.getByTestId("editor-model-diagnostic").textContent).toContain("Ambiguous");
+    // Neither provider's ladder may drive the picker: the launch provider is
+    // unknown here, so capabilities are unknown too.
+    const levels = Array.from(
+      (screen.getByTestId("editor-thinking") as HTMLSelectElement).querySelectorAll("option"),
+    ).map((option) => option.getAttribute("value"));
+    expect(levels).toEqual(["", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("flags each fallback model that is not in the catalog", async () => {
+    await renderWithCatalog({
+      ...builtin,
+      fallbackModels: ["openai/gpt-5.4", "openai/gpt-typo"],
+    });
+
+    const diagnostic = screen.getByTestId("editor-fallback-models-diagnostic").textContent ?? "";
+    expect(diagnostic).toContain("openai/gpt-typo");
+    expect(diagnostic).not.toContain("openai/gpt-5.4");
+  });
+});

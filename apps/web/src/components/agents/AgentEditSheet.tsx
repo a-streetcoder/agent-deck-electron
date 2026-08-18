@@ -37,7 +37,27 @@ const TABS: Array<{ id: EditTab; label: string }> = [
 const inputClass =
   "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+// Pi's full ladder. `max` was missing, so an agent storing it rendered a select
+// with no matching option (Codex). Used only when the selected model's own
+// supported levels are unknown.
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * AGT-09: one model as both catalog routes report it. `supportedThinkingLevels`
+ * is optional because only a live session's catalog carries it — Pi's
+ * `--list-models` output, which discovery parses, has no per-model thinking map,
+ * so a session-less editor legitimately does not know.
+ */
+interface ModelCatalogEntry {
+  provider: string;
+  id: string;
+  supportedThinkingLevels?: string[];
+}
+
+/** How a model is named in this editor, matching the launch plan's `provider/id`. */
+function modelKey(entry: ModelCatalogEntry): string {
+  return `${entry.provider}/${entry.id}`;
+}
 
 interface ExtensionCatalogEntry {
   path: string;
@@ -62,6 +82,9 @@ export function AgentEditSheet({
 }) {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
+  // AGT-09: a live session's catalog is both cheaper than a discovery spawn and
+  // the only source that reports per-model thinking levels.
+  const sessionId = useAppStore((state) => state.session?.id ?? null);
   const seed = agent ?? createFromBuiltin;
   const isReplacement = createFromBuiltin !== undefined;
   const isBuiltin = agent?.scope === "builtin";
@@ -110,10 +133,15 @@ export function AgentEditSheet({
   const [body, setBody] = useState(seed?.body ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // AGT-09: the live model catalog, so model names are chosen rather than typed
+  // and a stale one is called out here instead of at launch.
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogEntry[]>([]);
+  const [modelCatalogRequested, setModelCatalogRequested] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const extensionCatalogSeq = useRef(0);
   const skillCatalogSeq = useRef(0);
+  const modelCatalogSeq = useRef(0);
 
   // Snapshot of the managed fields at open time — used both for dirty
   // detection (backdrop/Escape only dismiss when clean) and for the
@@ -204,6 +232,49 @@ export function AgentEditSheet({
     return () => dialog.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  // AGT-09 — the model catalog, read exactly the way ModelsScreen reads it: a
+  // live session's own catalog when there is one (it alone reports per-model
+  // thinking levels), and a discovery spawn otherwise. Best-effort: a failure
+  // leaves the catalog empty, which degrades to the previous free-text
+  // behaviour rather than blocking the edit.
+  useEffect(() => {
+    // Reading a running session's catalog is a plain request to a pi that is
+    // already up, so it happens on open. Discovery SPAWNS one, so it waits until
+    // the user actually engages a model field — opening this sheet must never
+    // start a process on its own.
+    const seq = ++modelCatalogSeq.current;
+    const controller = new AbortController();
+    // Drop the previous source's catalog FIRST. Keeping it while the new one
+    // loads — or forever, if the new request fails — would validate this
+    // session's models against another session's catalog, whose providers and
+    // extensions can differ (Codex).
+    setModelCatalog([]);
+    if (!sessionId && !modelCatalogRequested) return;
+    void (async () => {
+      try {
+        const response = sessionId
+          ? await fetch(`/sessions/${encodeURIComponent(sessionId)}/models`, {
+              signal: controller.signal,
+            })
+          : await fetch("/runtime/models/discover", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}",
+              signal: controller.signal,
+            });
+        if (!response.ok) return;
+        const data = (await response.json()) as { models?: ModelCatalogEntry[] };
+        if (seq === modelCatalogSeq.current) setModelCatalog(data.models ?? []);
+      } catch {
+        // Leave the catalog empty; the fields stay usable without it.
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (modelCatalogSeq.current === seq) modelCatalogSeq.current += 1;
+    };
+  }, [sessionId, modelCatalogRequested, resourcesVersion]);
+
   useEffect(() => {
     if (!skillCatalogRequested) return;
     const seq = ++skillCatalogSeq.current;
@@ -292,6 +363,46 @@ export function AgentEditSheet({
     return [...byPath.values()];
   })();
   const assignedSkillNames = [...new Set(parseList(skills))];
+  // AGT-09 derived catalog state. A model the catalog does not know is REPORTED,
+  // never rewritten: native keeps a stale model rather than dropping the user's
+  // configuration, and the catalog can legitimately be empty (discovery failed,
+  // or the provider is signed out).
+  // Matched against the EXACT stored string, untrimmed: that string is what save
+  // sends and what pi receives, so validating a tidied-up version of it would
+  // clear the warning while persisting the untidy value (Codex).
+  const catalogKnowsModel = (name: string): boolean =>
+    modelCatalog.some((entry) => modelKey(entry) === name || entry.id === name);
+  // A bare id is only resolved to a model when exactly ONE catalog entry claims
+  // it. The editor cannot know which provider a bare id will launch under, so
+  // when several expose the same id, resolving to the first would read another
+  // provider's capabilities — a launch-facing field must not guess (Codex).
+  const bareIdMatches = modelCatalog.filter((entry) => entry.id === model);
+  const selectedCatalogModel =
+    modelCatalog.find((entry) => modelKey(entry) === model) ??
+    (bareIdMatches.length === 1 ? bareIdMatches[0] : undefined);
+  const modelIsAmbiguous =
+    modelCatalog.every((entry) => modelKey(entry) !== model) && bareIdMatches.length > 1;
+  const modelIsStale = modelCatalog.length > 0 && model.length > 0 && !catalogKnowsModel(model);
+  const staleFallbackModels = modelCatalog.length
+    ? parseList(fallbackModels).filter((name) => !catalogKnowsModel(name))
+    : [];
+  // Only an unambiguously resolved model constrains the level list. An unknown
+  // or ambiguous one means unknown capabilities, and hiding levels there would
+  // be a guess.
+  const supportedThinking = selectedCatalogModel?.supportedThinkingLevels;
+  // `off` stays on the list. It is an explicit choice a model can support, and
+  // it is NOT the same as the empty "Pi default" entry — dropping it left a
+  // model whose only level is `off` with nothing to select, and made a stored
+  // `off` render as "Pi default" (Codex).
+  const offeredThinkingLevels = supportedThinking ?? THINKING_LEVELS;
+  const thinkingUnsupported =
+    supportedThinking !== undefined && thinking.length > 0 && !supportedThinking.includes(thinking);
+  // A stored level the model does not offer is still shown, so the control
+  // displays what will actually be saved. Without this the select falls back to
+  // rendering nothing and reads as "Pi default" while persisting the real value
+  // (Codex).
+  const preservedThinkingLevel =
+    thinking.length > 0 && !offeredThinkingLevels.includes(thinking) ? thinking : undefined;
   const extensionNameCounts = new Map<string, number>();
   for (const entry of extensionCatalog) {
     if (!entry.disabled) {
@@ -548,41 +659,118 @@ export function AgentEditSheet({
                 />
               </label>
               <div className="grid grid-cols-2 gap-3">
-                <label className="text-xs text-text-muted">
-                  Model
+                <div>
+                  <label className="text-xs text-text-muted">
+                    Model
+                    <ControlInput
+                      data-testid="editor-model"
+                      onFocus={() => setModelCatalogRequested(true)}
+                      className={inputClass}
+                      placeholder="Use Pi default"
+                      list="editor-model-catalog"
+                      aria-describedby={
+                        modelIsStale || modelIsAmbiguous ? "editor-model-diagnostic" : undefined
+                      }
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                    />
+                    {/* Suggestions rather than a hard picker: the catalog can be
+                        empty (discovery failed, provider signed out), and a field
+                        that refuses every value then would block the edit. */}
+                    <datalist id="editor-model-catalog" data-testid="editor-model-catalog">
+                      {modelCatalog.map((entry) => (
+                        <option key={modelKey(entry)} value={modelKey(entry)} />
+                      ))}
+                    </datalist>
+                  </label>
+                  {/* Outside the label, and described rather than named: text
+                      inside it joins the control's accessible name, so the field
+                      would read as "Model This model is not in…" (Codex). */}
+                  {modelIsStale || modelIsAmbiguous ? (
+                    <span
+                      id="editor-model-diagnostic"
+                      data-testid="editor-model-diagnostic"
+                      role="status"
+                      className="mt-1 block text-micro text-warning"
+                    >
+                      {modelIsAmbiguous
+                        ? `Ambiguous: ${bareIdMatches.length} providers offer this model id. Qualify it as provider/id to pin which one launches.`
+                        : "This model is not in the current model catalog. The stale name is preserved until you remove or replace it."}
+                    </span>
+                  ) : null}
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted">
+                    Thinking
+                    <ControlSelect
+                      data-testid="editor-thinking"
+                      className={inputClass}
+                      aria-describedby={
+                        thinkingUnsupported ? "editor-thinking-diagnostic" : undefined
+                      }
+                      value={thinking}
+                      onChange={(e) => setThinking(e.target.value)}
+                    >
+                      <option value="">Pi default</option>
+                      {preservedThinkingLevel !== undefined ? (
+                        <option value={preservedThinkingLevel}>
+                          {preservedThinkingLevel} (unsupported)
+                        </option>
+                      ) : null}
+                      {offeredThinkingLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </ControlSelect>
+                  </label>
+                  {thinkingUnsupported ? (
+                    <span
+                      id="editor-thinking-diagnostic"
+                      data-testid="editor-thinking-diagnostic"
+                      role="status"
+                      className="mt-1 block text-micro text-warning"
+                    >
+                      {/* Says only what is true: nothing in this app rewrites the
+                          level, and the launch passes it straight to pi (Codex). */}
+                      The selected model does not support “{thinking}”. Pick a listed level — this
+                      is sent to Pi as written.
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted">
+                  Fallback models (comma-separated; tried in order if the primary is unavailable)
+                  {/* No datalist here: browser completion replaces the WHOLE input
+                      value, so picking a suggestion after an existing entry would
+                      silently discard the earlier fallbacks (Codex). */}
                   <ControlInput
+                    data-testid="editor-fallback-models"
+                    onFocus={() => setModelCatalogRequested(true)}
                     className={inputClass}
-                    placeholder="Use Pi default"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="anthropic/claude-sonnet-4, openai/gpt-4o…"
+                    aria-describedby={
+                      staleFallbackModels.length > 0
+                        ? "editor-fallback-models-diagnostic"
+                        : undefined
+                    }
+                    value={fallbackModels}
+                    onChange={(e) => setFallbackModels(e.target.value)}
                   />
                 </label>
-                <label className="text-xs text-text-muted">
-                  Thinking
-                  <ControlSelect
-                    className={inputClass}
-                    value={thinking}
-                    onChange={(e) => setThinking(e.target.value)}
+                {staleFallbackModels.length > 0 ? (
+                  <span
+                    id="editor-fallback-models-diagnostic"
+                    data-testid="editor-fallback-models-diagnostic"
+                    role="status"
+                    className="mt-1 block text-micro text-warning"
                   >
-                    <option value="">Pi default</option>
-                    {THINKING_LEVELS.map((level) => (
-                      <option key={level} value={level}>
-                        {level}
-                      </option>
-                    ))}
-                  </ControlSelect>
-                </label>
+                    Not in the current model catalog: {staleFallbackModels.join(", ")}. Stale names
+                    are preserved until you remove or replace them.
+                  </span>
+                ) : null}
               </div>
-              <label className="block text-xs text-text-muted">
-                Fallback models (comma-separated; tried in order if the primary is unavailable)
-                <ControlInput
-                  data-testid="editor-fallback-models"
-                  className={inputClass}
-                  placeholder="anthropic/claude-sonnet-4, openai/gpt-4o…"
-                  value={fallbackModels}
-                  onChange={(e) => setFallbackModels(e.target.value)}
-                />
-              </label>
               <label className="block text-xs text-text-muted">
                 Default reads (one project-relative path per line)
                 <ControlTextArea
