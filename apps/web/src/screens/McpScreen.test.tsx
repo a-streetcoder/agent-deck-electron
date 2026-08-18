@@ -1600,3 +1600,129 @@ describe("MCP edit form", () => {
     );
   });
 });
+
+/**
+ * MCP-09: a globally-scoped server is not necessarily editable. Since the
+ * catalog began reading `~/.config/mcp/mcp.json` (MCP-11), a global definition
+ * can be read-only — the server already reports `editable: false` and both Edit
+ * and Delete are hidden, but the provenance line still claimed "editable",
+ * telling the user an edit would persist when nothing would accept it.
+ */
+describe("MCP read-only global provenance (MCP-09)", () => {
+  it("labels a non-editable global definition read only", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/workspace/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: [],
+        },
+      ],
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: [
+          {
+            id: "xdg",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "global",
+            editable: false,
+            provenance: { source: "global", path: "/Users/test/.config/mcp/mcp.json" },
+          },
+        ],
+      }),
+    );
+
+    render(<McpScreen />);
+
+    const row = await screen.findByTestId("mcp-provenance-xdg");
+    expect(row.textContent).toContain("read only");
+    expect(row.textContent).not.toContain("editable");
+    // The affordance already agrees; only the words disagreed.
+    expect(screen.queryByTestId("mcp-edit-xdg")).toBeNull();
+  });
+
+  it("still labels the app-owned global config editable", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/workspace/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: [],
+        },
+      ],
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: [
+          {
+            id: "ours",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "global",
+            editable: true,
+            provenance: { source: "global", path: "/Users/test/.pi/agent/mcp.json" },
+          },
+        ],
+      }),
+    );
+
+    render(<McpScreen />);
+
+    expect((await screen.findByTestId("mcp-provenance-ours")).textContent).toContain("editable");
+  });
+});
+
+/**
+ * MCP-09 fail-closed: `editable` is optional on the wire. Absence means
+ * ownership is UNKNOWN, and both the label and the Remove action must take the
+ * restrictive branch — the label promises persistence and Remove triggers a
+ * write, so guessing "editable" is the unsafe direction (Codex).
+ */
+describe("MCP unknown ownership fails closed (MCP-09)", () => {
+  it("labels a global server read only and hides both actions when editable is absent", async () => {
+    useAppStore.setState({
+      currentProjectId: "project-1",
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          path: "/workspace/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          assignedMcpServers: [],
+        },
+      ],
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: [
+          {
+            id: "unknown",
+            transport: "stdio",
+            connected: false,
+            toolNames: [],
+            source: "global",
+            // `editable` deliberately omitted — an older or partial response.
+            provenance: { source: "global", path: "/Users/test/.pi/agent/mcp.json" },
+          },
+        ],
+      }),
+    );
+
+    render(<McpScreen />);
+
+    const row = await screen.findByTestId("mcp-provenance-unknown");
+    expect(row.textContent).toContain("read only");
+    expect(screen.queryByTestId("mcp-edit-unknown")).toBeNull();
+    expect(screen.queryByTestId("mcp-remove-unknown")).toBeNull();
+  });
+});

@@ -78,9 +78,15 @@ function unescapeQuotedArg(inner: string, quote: '"' | "'"): string {
 function provenancePresentation(server: McpServer): { label: string; detail?: string } | undefined {
   const source = server.provenance?.source ?? server.source;
   if (!source) return undefined;
+  // A global definition is NOT automatically editable. Since the catalog began
+  // reading `~/.config/mcp/mcp.json` as well (MCP-11), a global server can come
+  // from a file this app never writes — Edit and Delete are already hidden for
+  // it, so saying "editable" promised a change nothing would accept (MCP-09).
   const label =
     source === "global"
-      ? "global config · editable"
+      ? server.editable === true
+        ? "global config · editable"
+        : "global config · read only"
       : source === "project"
         ? "project config · read only"
         : "environment · read only";
@@ -1247,7 +1253,7 @@ export function McpScreen() {
                       <Pencil size={13} />
                     </ControlButton>
                   ) : null}
-                  {server.editable !== false ? (
+                  {server.editable === true ? (
                     <ControlButton
                       data-testid={`mcp-remove-${server.id}`}
                       className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
