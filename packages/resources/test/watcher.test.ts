@@ -95,14 +95,18 @@ describe("resource watcher", () => {
       await Promise.race([
         localChanged,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed contained catalog creation")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed contained catalog creation")), 15_000),
         ),
       ]);
       expect(changes).toBe(1);
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 
   it("contains dynamically added project targets inside the project boundary", async () => {
     const root = home();
@@ -291,14 +295,18 @@ describe("resource watcher", () => {
       await Promise.race([
         localChanged,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed contained sibling edit")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed contained sibling edit")), 15_000),
         ),
       ]);
       expect(changes).toBe(1);
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 
   it("releases the effective project root when dynamic targets are removed", async () => {
     const root = home();
@@ -487,7 +495,11 @@ describe("resource watcher", () => {
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed contained loop sibling")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed contained loop sibling")), 15_000),
         ),
       ]);
       await delay(100);
@@ -496,7 +508,7 @@ describe("resource watcher", () => {
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 
   it("watches an exact project settings file without reacting to sibling files", async () => {
     const root = home();
@@ -526,7 +538,11 @@ describe("resource watcher", () => {
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed project settings creation")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed project settings creation")), 15_000),
         ),
       ]);
 
@@ -538,7 +554,7 @@ describe("resource watcher", () => {
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 
   it("watches an exact persisted collection root without creating it", async () => {
     const root = home();
@@ -559,13 +575,17 @@ describe("resource watcher", () => {
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed collection edit")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed collection edit")), 15_000),
         ),
       ]);
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 
   it("debounces every watcher error into an authoritative rescan", async () => {
     const root = home();
@@ -646,11 +666,15 @@ describe("resource watcher", () => {
       await Promise.race([
         changed,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("watcher missed later catalog creation")), 5_000),
+          // 15 s inside a 25 s budget. The give-up deadline was 5 s inside
+          // vitest's DEFAULT 5 s test timeout, so this message could never fire —
+          // the suite timed out first — and a loaded macOS runner exceeds 5 s of
+          // watch-backend subscription latency anyway.
+          setTimeout(() => reject(new Error("watcher missed later catalog creation")), 15_000),
         ),
       ]);
     } finally {
       await watcher.close();
     }
-  });
+  }, 25_000);
 });
