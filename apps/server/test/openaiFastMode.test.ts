@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   fastModeConfigKey,
+  isFastModeActive,
   isOpenAIFastEligible,
   writeOpenAIFastConfig,
   writeOpenAIFastExtension,
@@ -71,6 +72,18 @@ describe("OpenAI Fast mode (SES-34)", () => {
     expect(source).toContain("service_tier");
     expect(source).toContain("priority");
     expect(source).toContain("AGENT_DECK_OPENAI_FAST_CONFIG");
+  });
+
+  it("is inert on an empty config, which is why an unused launch need not load it", () => {
+    // The extension no-ops when nothing is enabled, but "inert" is not "absent":
+    // attaching it to every launch changed what pi loads for everyone and broke
+    // the real-pi suite on all three platforms, so server.ts attaches it only
+    // while a model is marked Fast. This pins the property that makes that guard
+    // safe — an empty config authorizes nothing.
+    const home = dir();
+    const file = writeOpenAIFastConfig(home, []);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ enabledModels: [] });
+    expect(isFastModeActive([], "openai-codex", "gpt-5.4")).toBe(false);
   });
 
   it("leaves an unreadable extension file rewritten rather than half-written", () => {

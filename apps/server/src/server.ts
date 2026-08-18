@@ -338,9 +338,18 @@ async function initServer(
       // `broadcast` is initialized during startServer, before any meta changes.
       broadcast({ type: "session_meta", session: meta });
     },
-    // The Fast extension rides with the provider-registration extensions. It is
-    // inert unless a model is BOTH eligible and listed in the config.
-    () => [...(envDefaults().providerExtensions ?? []), openAIFastExtension],
+    // The Fast extension is attached ONLY while at least one model is marked
+    // Fast. It would be inert otherwise — it no-ops on an empty config — but
+    // "inert" is not the same as "absent": adding an extension to every launch
+    // changes what pi loads for every user and every test, and the real-pi suite
+    // regressed on all three platforms the moment it went in unconditionally.
+    // The cost of this guard is that enabling Fast reaches a session at its next
+    // launch rather than its next turn; the config is still re-read per request,
+    // so a session launched WITH the extension picks up a toggle immediately.
+    () => [
+      ...(envDefaults().providerExtensions ?? []),
+      ...(settings.get().openAIFastModels.length > 0 ? [openAIFastExtension] : []),
+    ],
     (meta) => {
       if (bridge.size === 0 || !bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
