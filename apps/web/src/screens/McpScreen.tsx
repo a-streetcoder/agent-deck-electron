@@ -5,10 +5,10 @@ import {
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { FolderOpen, LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
-import { openExternal } from "@/lib/native";
+import { openExternal, revealResourceFile } from "@/lib/native";
 import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
@@ -699,6 +699,19 @@ export function McpScreen() {
     await load();
   };
 
+  const revealConfig = async (filePath: string): Promise<void> => {
+    try {
+      const revealed = await revealResourceFile({
+        kind: "mcp",
+        projectId: currentProjectId,
+        filePath,
+      });
+      if (!revealed) throw new Error("Resource file is unavailable");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   // Begin OAuth: the backend starts its callback owner before returning the
   // authorization URL. The renderer opens it and shows waiting/manual fallback;
   // state parsed here is used only by that explicit manual completion path.
@@ -1335,6 +1348,22 @@ export function McpScreen() {
                   >
                     <RefreshCw size={13} />
                   </ControlButton>
+                  {server.provenance && "path" in server.provenance ? (
+                    <ControlButton
+                      data-testid={`mcp-reveal-${server.id}`}
+                      className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      title="Reveal config file"
+                      aria-label={`Reveal MCP config file for ${server.id}`}
+                      onClick={() => {
+                        const provenance = server.provenance;
+                        if (provenance && "path" in provenance) {
+                          void revealConfig(provenance.path);
+                        }
+                      }}
+                    >
+                      <FolderOpen size={13} />
+                    </ControlButton>
+                  ) : null}
                   {server.editable === true ? (
                     <ControlButton
                       ref={(element) => {

@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 7 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 6 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -350,6 +350,32 @@ Every supported effective MCP definition now carries the exact winning origin fr
 
 This is additive read-only metadata: runtime resolution, persistence, OAuth, process lifecycle, Electron main/preload, packaging, and sync seams are unchanged. Local macOS/Chromium acceptance passed workspace typecheck, lint/design-system, format, all 229 resource tests, focused server provenance tests (10/10), renderer MCP tests (41/41), and focused MCP Playwright (8/8). Light/dark normal and narrow screenshots were directly inspected; long paths retained full title/accessibility text without control loss. Independent review found and then accepted the coherent-snapshot correction that prevents provenance from racing a second config read. Windows/Linux runtime was not run; the implementation uses shared Node path/React logic and existing cross-platform path derivation. **MCP-08 closed. E:** resource MCP catalog source metadata, coherent effective snapshot, MCP route DTO, `McpScreen.tsx`, and focused resource/server/renderer/Playwright tests. **N:** winning `MCPServerEntry.sourcePath` and MCP source presentation.
 
+### MCP-10 — reveal the owning config
+
+Every MCP server row now has a Reveal action that opens the file DEFINING it in the OS file manager,
+including for definitions this app cannot edit — which is the point of the row, since a read-only
+ecosystem or project definition can only be repaired by hand. An `AGENT_DECK_MCP_SERVERS` override
+gets no Reveal: it names a variable, not a file.
+
+The capability already existed for agents and prompts, so this extends a chokepoint rather than
+adding one: main refuses any renderer path the backend catalog does not already list. Two halves of
+that chokepoint were reachable only through Electron IPC and therefore untested — the request shape
+gate and the catalog comparison itself. Both were extracted to `apps/desktop/resource-file-request.js`
+and pinned: an unknown kind, a relative or NUL-bearing path, an over-long projectId, a validly
+shaped ARRAY, a malformed catalog body, and — for MCP — a path matched from `provenance.path` and
+never from any other field, so an environment override cannot authorize a reveal.
+
+Local: desktop 17/17 (node --test), web 485, MCP Playwright 8/8; typecheck, lint and the
+design-system gate clean. Every pin two-sided, including the fail-open form of the catalog check.
+Independent Codex review found the untested catalog authorization (fixed by the extraction above)
+and two pins that could not fail (rewritten); it also reported that the test's POSIX fixture path
+would fail on Windows, which is FALSE — `path.win32.isAbsolute("/Users/x")` is true and the suite
+passes on Windows. **Known limitation, pre-existing and not introduced here:** between `lstat` and
+`realpath` the final path component could be swapped for a symlink, and a path-taking shell API
+cannot close that race; it is recorded here rather than papered over. **MCP-10 closed. E:**
+`apps/desktop/resource-file-request.js`, `main.js`, `apps/web/src/lib/native.ts`, `McpScreen.tsx`.
+**N:** `MCPServersScreen.swift` `serverContextMenu`/`revealInFinder`.
+
 ### MCP-12 — smart paste
 
 The add form now carries native's **Manual | Paste** input mode (add only, never when editing). The
@@ -541,7 +567,6 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                  | Plain English                                                                                       | Why it matters                                               | Evidence                                                                               |
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| MCP-10 | **P3**   | Missing   | Reveal config file          | There is no action to reveal the owning config.                                                     | Manual repair is harder.                                     | Same as MCP-08.                                                                        |
 | MCP-14 | **P3**   | Missing   | SSE transport               | Electron supports stdio and Streamable HTTP, not legacy SSE.                                        | SSE-only servers cannot connect.                             | **E:** MCP client/config. **N:** MCP transport/config.                                 |
 | MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
 | MCP-19 | **P3**   | Partial   | Per-tool descriptions       | Live tool names appear, but description detail is thinner.                                          | Users cannot easily understand each tool before exposure.    | **E:** `mcpTools.ts`, `McpScreen.tsx`. **N:** MCP server screen.                       |

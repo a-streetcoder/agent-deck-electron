@@ -12,7 +12,7 @@ export interface AttentionPayload {
 }
 
 export type AppMenuName = "file" | "edit" | "view" | "resources" | "git" | "help";
-export type NativeResourceKind = "agent" | "prompt";
+export type NativeResourceKind = "agent" | "prompt" | "mcp";
 export interface NativeResourceFileRequest {
   kind: NativeResourceKind;
   projectId: string | null;

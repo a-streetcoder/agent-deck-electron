@@ -1873,3 +1873,74 @@ describe("MCP smart paste (MCP-12)", () => {
     expect(screen.queryByRole("radio", { name: "Paste" })).toBeNull();
   });
 });
+
+/**
+ * MCP-10 — native's server row menu has "Reveal Config in Finder" for EVERY
+ * entry, editable or not, so a read-only definition can still be opened by
+ * hand. The port knows each server's exact winning path from MCP-08.
+ */
+describe("MCP reveal config (MCP-10)", () => {
+  const withServers = async (servers: Record<string, unknown>[]): Promise<void> => {
+    useAppStore.setState({ currentProjectId: null, projects: [] });
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        servers: servers.map((server) => ({
+          transport: "stdio",
+          connected: false,
+          toolNames: [],
+          ...server,
+        })),
+      }),
+    );
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-provenance-files");
+  };
+
+  it("reveals a read-only definition's own file", async () => {
+    const revealResourceFile = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("agentDeck", { isElectron: true, revealResourceFile });
+    await withServers([
+      {
+        id: "files",
+        command: "npx",
+        editable: false,
+        source: "project",
+        provenance: { source: "project", path: "/repo/.pi/mcp.json" },
+      },
+    ]);
+
+    fireEvent.click(screen.getByTestId("mcp-reveal-files"));
+
+    await waitFor(() =>
+      expect(revealResourceFile).toHaveBeenCalledWith({
+        kind: "mcp",
+        projectId: null,
+        filePath: "/repo/.pi/mcp.json",
+      }),
+    );
+  });
+
+  it("offers no reveal for a definition that has no file", async () => {
+    vi.stubGlobal("agentDeck", { isElectron: true, revealResourceFile: vi.fn() });
+    await withServers([
+      {
+        id: "files",
+        command: "npx",
+        editable: false,
+        source: "global",
+        provenance: { source: "global", path: "/home/.pi/agent/mcp.json" },
+      },
+      {
+        id: "envsrv",
+        command: "env-cmd",
+        editable: false,
+        source: "environment",
+        provenance: { source: "environment", variable: "AGENT_DECK_MCP_SERVERS" },
+      },
+    ]);
+
+    // An environment override has no owning file to reveal.
+    expect(screen.getByTestId("mcp-reveal-files")).toBeTruthy();
+    expect(screen.queryByTestId("mcp-reveal-envsrv")).toBeNull();
+  });
+});

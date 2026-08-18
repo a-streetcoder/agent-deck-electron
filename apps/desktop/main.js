@@ -21,6 +21,11 @@ import {
   PREVIEW_PARTITION,
 } from "./preview-guard.js";
 import {
+  catalogEndpoint,
+  catalogListsPath,
+  parseResourceFileRequest,
+} from "./resource-file-request.js";
+import {
   app,
   BrowserWindow,
   dialog,
@@ -530,7 +535,7 @@ function buildAppMenu() {
 /**
  * Resolve a renderer resource identity against the backend's current catalog.
  * No path supplied by the renderer reaches shell APIs unless the exact path is
- * present in the requested project-scoped agent/prompt catalog.
+ * present in the requested project-scoped agent/prompt/MCP catalog.
  */
 async function validatedResourceFile(event, request) {
   const expectedRendererOrigin = serverPort
@@ -547,28 +552,13 @@ async function validatedResourceFile(event, request) {
     event.sender !== mainWindow.webContents ||
     event.senderFrame !== mainWindow.webContents.mainFrame ||
     senderOrigin !== expectedRendererOrigin ||
-    !serverPort ||
-    !request ||
-    typeof request !== "object"
+    !serverPort
   ) {
     throw new Error("Resource file is unavailable");
   }
-  const requestKeys = Object.keys(request);
-  const { kind, projectId, filePath } = request;
-  if (
-    requestKeys.length !== 3 ||
-    !requestKeys.every((key) => key === "kind" || key === "projectId" || key === "filePath") ||
-    (kind !== "agent" && kind !== "prompt") ||
-    (projectId !== null &&
-      (typeof projectId !== "string" || projectId.length === 0 || projectId.length > 256)) ||
-    typeof filePath !== "string" ||
-    filePath.length === 0 ||
-    filePath.length > 4096 ||
-    filePath.includes("\0") ||
-    !path.isAbsolute(filePath)
-  ) {
-    throw new Error("Resource file is unavailable");
-  }
+  const parsedRequest = parseResourceFileRequest(request);
+  if (!parsedRequest) throw new Error("Resource file is unavailable");
+  const { kind, projectId, filePath } = parsedRequest;
 
   if (projectId !== null) {
     const projectsResponse = await fetch(`http://127.0.0.1:${serverPort}/projects`);
@@ -583,13 +573,11 @@ async function validatedResourceFile(event, request) {
   }
 
   const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
-  const response = await fetch(
-    `http://127.0.0.1:${serverPort}/resources/${kind === "agent" ? "agents" : "prompts"}${query}`,
-  );
+  const endpoint = catalogEndpoint(kind);
+  const response = await fetch(`http://127.0.0.1:${serverPort}${endpoint}${query}`);
   if (!response.ok) throw new Error("Resource file is unavailable");
   const body = await response.json().catch(() => null);
-  const entries = body?.[kind === "agent" ? "agents" : "prompts"];
-  if (!Array.isArray(entries) || !entries.some((entry) => entry?.filePath === filePath)) {
+  if (!catalogListsPath(kind, body, filePath)) {
     throw new Error("Resource file is unavailable");
   }
 
