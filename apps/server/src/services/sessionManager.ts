@@ -821,10 +821,14 @@ export const makeManagedSessionRuntime = (
       delete meta.status;
       delete meta.lastError;
     };
-    /** Bumped whenever a turn reaches a boundary — a recorded failure or an
-     * authoritative idle. `prompt` samples it before its RPC so it can tell state
-     * that PRECEDES its turn (safe to reset on acceptance) from a boundary that
-     * arrived while its own acknowledgement was still in flight (must survive). */
+    /** Bumped by every recorded FAILURE. `prompt` samples it before its RPC so it
+     * can tell a failure that PRECEDES its turn (cleared on acceptance, which is
+     * how a rejected command recovers) from one that arrived while its own
+     * acknowledgement was still in flight (must survive).
+     *
+     * Deliberately NOT bumped on idle. A fast turn reaches idle before the tap
+     * runs, and counting that as a boundary blocked the ordinary recovery path —
+     * a rejected prompt followed by a good one kept its stale failure. */
     let turnBoundaryEpoch = 0;
     const recordFailure = (error: unknown, publish = true): void => {
       turnBoundaryEpoch += 1;
@@ -1104,7 +1108,6 @@ export const makeManagedSessionRuntime = (
         }
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
           authoritativeIdle = true;
-          turnBoundaryEpoch += 1;
           receipts.emit("idle", meta.id);
           if (pendingUserTurn && !turnAwaitingProviderRetry) {
             if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
