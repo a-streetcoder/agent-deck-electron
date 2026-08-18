@@ -392,6 +392,9 @@ const STATUS_ICON = {
 export function DoctorScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const [checks, setChecks] = useState<HealthCheck[]>([]);
+  // DOC-05: aggregated configuration warnings, shown together so a problem
+  // is discoverable without opening the resource that owns it.
+  const [warnings, setWarnings] = useState<Array<{ id: string; message: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const activeRequest = useRef<{ id: number; controller: AbortController } | null>(null);
@@ -430,9 +433,22 @@ export function DoctorScreen() {
           if (!report || !Array.isArray(report.checks)) {
             throw new Error("Doctor diagnostics returned an unexpected response.");
           }
+          // Absent or malformed warnings must not fail the page: an older
+          // server, or one whose resource scan threw, still has useful checks.
+          const rawWarnings = (data as { warnings?: unknown }).warnings;
+          const parsedWarnings = Array.isArray(rawWarnings)
+            ? rawWarnings.filter(
+                (entry): entry is { id: string; message: string } =>
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  typeof (entry as { id?: unknown }).id === "string" &&
+                  typeof (entry as { message?: unknown }).message === "string",
+              )
+            : [];
           if (activeRequest.current?.id === id) {
             succeeded = true;
             setChecks(report.checks as HealthCheck[]);
+            setWarnings(parsedWarnings);
           }
         })
         .catch((error: unknown) => {
@@ -554,6 +570,40 @@ export function DoctorScreen() {
             );
           })}
         </div>
+        {/* Hidden entirely when clean, as native's card is — an empty
+            "no problems" panel is noise on a page read for problems. */}
+        {warnings.length > 0 ? (
+          <section
+            className="mt-4 border-t border-border-subtle pt-3"
+            data-testid="doctor-warnings"
+            aria-labelledby="doctor-warnings-heading"
+          >
+            <h3
+              id="doctor-warnings-heading"
+              className="pb-2 text-sm font-semibold text-text-primary"
+            >
+              Warnings
+            </h3>
+            <div className="space-y-2">
+              {warnings.map((warning) => (
+                <div
+                  key={warning.id}
+                  data-testid="doctor-warning"
+                  className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                >
+                  <TriangleAlert
+                    aria-hidden="true"
+                    size={16}
+                    className="mt-0.5 shrink-0 text-warning"
+                  />
+                  <div className="min-w-0 flex-1 break-words text-xs text-text-secondary">
+                    {warning.message}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>
   );

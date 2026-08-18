@@ -22,7 +22,9 @@ import {
   listProviders,
   logoutProvider,
   reconcileNeuralWattCatalog,
+  scanAgents,
   scanEnv,
+  scanPrompts,
   writeEnvVar,
 } from "@agent-deck/resources";
 import {
@@ -38,6 +40,10 @@ import {
   writeOpenAIFastConfig,
 } from "../openaiFastMode.ts";
 import type { AppSettings } from "../persistence.ts";
+import {
+  aggregateConfigurationWarnings,
+  type DiagnosticWarning,
+} from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import {
   createExternalCommandLauncher,
@@ -68,6 +74,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     rootsFor,
     enabledExtensionPaths,
     mcpAssignments,
+    createAgentWarningContext,
   } = ctx;
 
   // Browser-CSRF guard for the terminal-launching POSTs (Codex): a hostile
@@ -183,7 +190,22 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       ...check,
       runnableFix: findDoctorFixCommand(report, check.id) !== null,
     }));
-    return { report: { ...report, checks } };
+    // DOC-05: the same per-resource verdicts the Agents screen shows, gathered
+    // so a problem is discoverable without visiting the resource that owns it.
+    // Isolated from the health report on purpose: these are three filesystem
+    // scans, and a throw in any of them must not cost the caller the checks it
+    // asked for — onboarding fetches this same route (Codex).
+    let warnings: DiagnosticWarning[] = [];
+    try {
+      warnings = aggregateConfigurationWarnings({
+        agents: scanAgents(rootsFor(projectId)),
+        warningContext: createAgentWarningContext(projectId),
+        prompts: scanPrompts(rootsFor(projectId)),
+      });
+    } catch {
+      // Report the health checks with no warnings rather than failing the page.
+    }
+    return { report: { ...report, checks }, warnings };
   });
 
   // DOC-01 (native openPiInstallInTerminal / Doctor Fix): run ONE check's fix
