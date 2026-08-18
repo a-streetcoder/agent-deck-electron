@@ -2686,12 +2686,17 @@ describe("durable session attention", () => {
           const rt = yield* makeManagedSessionRuntime(piHost, buses, failed);
           yield* Effect.fork(rt.ingest);
           yield* rt.prompt("fallback-error");
-          yield* waitUntil(() => failed.meta.status === "failed", 10_000);
+          // 30 s, not 10 s: this waits for a fake-pi turn to reach a terminal
+          // provider failure, and on a hosted macOS runner that spawn-plus-IPC
+          // round trip outlived the old budget while the test's own container
+          // sat unused. The assertion below is about needsAttention NOT being
+          // raised — nothing about it is time-sensitive.
+          yield* waitUntil(() => failed.meta.status === "failed", 30_000);
           expect(failed.meta.needsAttention).not.toBe(true);
         }),
       ),
     );
-  }, 15_000);
+  }, 45_000);
 
   it("does not mark an explicitly aborted turn", async () => {
     const { piHost } = makeFakePiHost();
