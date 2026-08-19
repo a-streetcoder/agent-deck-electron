@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 4 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 3 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -350,6 +350,36 @@ Every supported effective MCP definition now carries the exact winning origin fr
 
 This is additive read-only metadata: runtime resolution, persistence, OAuth, process lifecycle, Electron main/preload, packaging, and sync seams are unchanged. Local macOS/Chromium acceptance passed workspace typecheck, lint/design-system, format, all 229 resource tests, focused server provenance tests (10/10), renderer MCP tests (41/41), and focused MCP Playwright (8/8). Light/dark normal and narrow screenshots were directly inspected; long paths retained full title/accessibility text without control loss. Independent review found and then accepted the coherent-snapshot correction that prevents provenance from racing a second config read. Windows/Linux runtime was not run; the implementation uses shared Node path/React logic and existing cross-platform path derivation. **MCP-08 closed. E:** resource MCP catalog source metadata, coherent effective snapshot, MCP route DTO, `McpScreen.tsx`, and focused resource/server/renderer/Playwright tests. **N:** winning `MCPServerEntry.sourcePath` and MCP source presentation.
 
+### AGT-09 — picker-backed tool access
+
+The agent editor's Tools tab now carries native's "Tool Access" affordances: a caption saying which
+mode is in force, a "Choose Tool" picker over the available names, a removable token per selected
+tool, and a Reset that returns the agent to Pi defaults. The free-text field stays — it is how
+`mcp:` adapter names are typed (SUB-15/AGT-08) — so a typo is now avoidable rather than impossible.
+
+The catalog is `availableAgentToolNames` in `packages/domain`, a port of native's
+`availableToolNames(for:)`: the eight base Pi tools plus the agent's own declared names, deduped and
+sorted. **Deliberate divergence:** native also offers Exa's tools when `EXA_API_KEY` is set, else a
+`web_fetch` fallback when that dependency is installed. NEITHER exists in this Electron build —
+`packages/pi-host/src/doctor.ts` states it and no bridge registers them — so offering either would
+let a user allowlist a tool the build cannot provide. Both families are excluded, and an agent that
+already declares one keeps its declaration and its existing `exa-key-missing` warning. Because both
+of native's conditional branches are empty here, the catalog is static: no endpoint was added.
+
+Independent Codex review found a real semantics bug in the first implementation: the caption read
+"Pi default tool access" off an EMPTY list, but an empty list with `toolsExplicit` means NO tool
+access, so an agent granting nothing was described as unrestricted, and removing the last token
+silently read as a reset. The caption now keys on `toolsExplicit` with three states, and only Reset
+clears it. Also fixed: choosing a tool no longer reformats the user's typed value, and the catalog
+comparator is deterministic rather than host-locale dependent. Known and accepted: two identical
+names in the free-text list produce two identical `data-testid`s; removal is positional and still
+correct, and the only casualty is a confusing error in a hypothetical test.
+
+Local: domain 168, web 498, agent Playwright 7/7; typechecks, lint and the design-system gate clean.
+Every pin two-sided, including the caption and the append. **AGT-09 closed. E:**
+`packages/domain/src/resources.ts`, `apps/web/src/components/agents/AgentEditSheet.tsx`.
+**N:** `AgentManagementViews.swift` Tool Access card, `AppViewModel.swift:7052`.
+
 ### MCP-14 — SSE transport (RECORD CORRECTION, not implemented)
 
 The row said Electron "supports stdio and Streamable HTTP, not legacy SSE", so "SSE-only servers
@@ -596,7 +626,6 @@ There are no active Loop-domain functional parity rows.
 <!-- prettier-ignore -->
 | ID     | Priority | Status    | Difference                             | Plain English                                                                         | Why it matters                                                   | Evidence                                                                                  |
 | ------ | -------- | --------- | -------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| AGT-09 | **P3**   | Divergent | Picker-backed validation               | The TOOLS field still uses looser text input than native's picker (model/fallback/skill fields are now catalog-backed).       | Typos and stale names are found later.                           | **E:** `AgentEditSheet.tsx`. **N:** management views. **NARROWED 2026-08-18.** Shipped: the model and fallback-model fields now read the live catalog (a running session's `/sessions/:id/models`, else a focus-gated `/runtime/models/discover` — opening the sheet must not spawn pi), suggest via datalist, and report stale/ambiguous names in place; the thinking select is constrained to the selected model's `supportedThinkingLevels` when known. Skills were ALREADY better than this row implied — that tab has carried a live catalog with per-name missing/ambiguous/disabled/scope diagnostics since it shipped. REMAINING: the tools field, which needs a tool-catalog endpoint mirroring native's scope-aware `availableToolNames` (base list + Exa-configured and WebFetch-installed conditionals + MCP direct tools); no such endpoint exists on this side. ALSO NOT PORTED: native's `clampThinkingSelection`, which REWRITES a stored level when the model changes — this port reports instead of silently editing the user's config. NOT POSSIBLE without a session: discovery parses `pi --list-models`, which carries no per-model thinking map, so a session-less editor keeps the full static ladder rather than deriving a wrong one from the `reasoning` flag. |
 
 ## Skills and repositories
 

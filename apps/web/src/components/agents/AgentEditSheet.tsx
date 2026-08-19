@@ -9,6 +9,7 @@ import { X } from "lucide-react";
 import {
   SUBAGENT_EXPECTED_OUTCOMES,
   SUBAGENT_EXPECTED_OUTCOME_LABELS,
+  availableAgentToolNames,
   type AgentInfo,
   type ResourceScope,
   type SkillInfo,
@@ -348,6 +349,11 @@ export function AgentEditSheet({
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
+  const selectedTools = parseList(tools);
+  const selectedToolNames = new Set(selectedTools);
+  const toolPickerOptions = availableAgentToolNames(selectedTools).filter(
+    (name) => !selectedToolNames.has(name),
+  );
   const extensionEntries = (() => {
     const byPath = new Map(extensionCatalog.map((entry) => [entry.path, entry]));
     for (const selected of extensions) {
@@ -920,7 +926,81 @@ export function AgentEditSheet({
           ) : null}
 
           {tab === "tools" ? (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs text-text-secondary">Reset</div>
+                  <div data-testid="editor-tools-mode" className="text-xs text-text-muted">
+                    {!toolsExplicit
+                      ? "Currently using Pi default tool access."
+                      : selectedTools.length > 0
+                        ? "Using an explicit tool allowlist."
+                        : "Using an explicit tool allowlist that grants no tools."}
+                  </div>
+                </div>
+                <ControlButton
+                  type="button"
+                  data-testid="editor-tools-reset"
+                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary"
+                  onClick={() => {
+                    setTools("");
+                    setToolsExplicit(false);
+                  }}
+                >
+                  Reset Tool Access
+                </ControlButton>
+              </div>
+              <label className="block text-xs text-text-muted">
+                Add Tool
+                <ControlSelect
+                  data-testid="editor-tools-picker"
+                  className={inputClass}
+                  value=""
+                  onChange={(event) => {
+                    const name = event.target.value;
+                    if (!name) return;
+                    setTools(tools.trim().length === 0 ? name : `${tools}, ${name}`);
+                    setToolsExplicit(true);
+                  }}
+                >
+                  <option value="" disabled>
+                    Choose Tool
+                  </option>
+                  {toolPickerOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </ControlSelect>
+              </label>
+              <div>
+                <div className="text-xs text-text-muted">Selected</div>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {selectedTools.map((name, index) => (
+                    <span
+                      key={`${name}-${index}`}
+                      className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+                    >
+                      <span className="max-w-[24ch] truncate">{name}</span>
+                      <ControlButton
+                        type="button"
+                        data-testid={`editor-tools-remove-${name}`}
+                        className="text-text-muted hover:text-danger"
+                        aria-label={`Remove ${name} tool`}
+                        onClick={() => {
+                          // Removal must reserialize the free-text list; additions preserve it verbatim.
+                          setTools(
+                            selectedTools.filter((_, toolIndex) => toolIndex !== index).join(", "),
+                          );
+                          setToolsExplicit(true);
+                        }}
+                      >
+                        <X size={12} />
+                      </ControlButton>
+                    </span>
+                  ))}
+                </div>
+              </div>
               <label className="block text-xs text-text-muted">
                 Tools (comma-separated; empty = no tools when explicitly edited)
                 <ControlInput

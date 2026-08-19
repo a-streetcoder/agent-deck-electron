@@ -784,3 +784,100 @@ describe("AgentEditSheet model catalog validation (AGT-09)", () => {
     expect(diagnostic).not.toContain("openai/gpt-5.4");
   });
 });
+
+/**
+ * AGT-09 — native's "Tool Access" card: a Reset button beside a caption saying
+ * whether Pi defaults or an explicit allowlist is in force, a "Choose Tool"
+ * picker over the available names, and a removable token per selected tool.
+ * The port had only a comma-separated text box.
+ */
+describe("AgentEditSheet tool access (AGT-09)", () => {
+  const openTools = (agent: AgentInfo = builtin): void => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<AgentEditSheet agent={agent} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("editor-tab-tools"));
+  };
+
+  it("says whether Pi defaults or an explicit allowlist is in force", () => {
+    openTools({ ...builtin, tools: [], mcpDirectTools: [], toolsExplicit: false });
+
+    expect(screen.getByTestId("editor-tools-mode").textContent).toMatch(/default tool access/i);
+  });
+
+  it("adds a chosen tool to the allowlist without disturbing the typed value", () => {
+    openTools({ ...builtin, tools: ["read"], mcpDirectTools: [], toolsExplicit: true });
+
+    fireEvent.change(screen.getByTestId("editor-tools-picker"), { target: { value: "bash" } });
+
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("read, bash");
+    expect(screen.getByTestId("editor-tools-mode").textContent).toMatch(/explicit tool allowlist/i);
+  });
+
+  it("removes a tool from its token", () => {
+    openTools({ ...builtin, tools: ["read", "grep"], mcpDirectTools: [], toolsExplicit: true });
+
+    fireEvent.click(screen.getByTestId("editor-tools-remove-read"));
+
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("grep");
+  });
+
+  it("keeps an mcp: adapter name as a removable token", () => {
+    // The adapter name stays editable even though the picker cannot suggest it;
+    // WHICH names the catalog offers is `availableAgentToolNames`' job and is
+    // pinned in packages/domain, not here.
+    openTools({ ...builtin, tools: ["read"], mcpDirectTools: ["search"], toolsExplicit: true });
+
+    fireEvent.click(screen.getByTestId("editor-tools-remove-mcp:search"));
+
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("read");
+  });
+
+  it("distinguishes an EXPLICIT empty allowlist from Pi defaults", () => {
+    // `tools: []` with toolsExplicit means NO tool access — the opposite of Pi
+    // defaults. Reading the caption off the empty field said "defaults" for a
+    // configuration that grants nothing (Codex).
+    openTools({ ...builtin, tools: [], mcpDirectTools: [], toolsExplicit: true });
+
+    const mode = screen.getByTestId("editor-tools-mode").textContent ?? "";
+    expect(mode).not.toMatch(/default tool access/i);
+    expect(mode).toMatch(/no tools/i);
+  });
+
+  it("removing the last tool leaves an explicit empty allowlist, not defaults", () => {
+    openTools({ ...builtin, tools: ["read"], mcpDirectTools: [], toolsExplicit: true });
+
+    fireEvent.click(screen.getByTestId("editor-tools-remove-read"));
+
+    expect(screen.getByTestId("editor-tools-mode").textContent).not.toMatch(/default tool access/i);
+  });
+
+  it("appends a chosen tool without reformatting what the user typed", () => {
+    openTools({ ...builtin, tools: ["read"], mcpDirectTools: [], toolsExplicit: true });
+    fireEvent.change(screen.getByTestId("editor-tools"), { target: { value: "  Foo ,bar" } });
+
+    fireEvent.change(screen.getByTestId("editor-tools-picker"), { target: { value: "bash" } });
+
+    // Their spacing and casing survive; only the new name is added.
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("  Foo ,bar, bash");
+  });
+
+  it("never offers a tool that is already selected", () => {
+    openTools({ ...builtin, tools: ["read", "bash"], mcpDirectTools: [], toolsExplicit: true });
+
+    const offered = [...screen.getByTestId("editor-tools-picker").querySelectorAll("option")].map(
+      (option) => option.value,
+    );
+    expect(offered).not.toContain("read");
+    expect(offered).not.toContain("bash");
+    expect(offered).toContain("grep");
+  });
+
+  it("resets to Pi defaults", () => {
+    openTools({ ...builtin, tools: ["read", "grep"], mcpDirectTools: [], toolsExplicit: true });
+
+    fireEvent.click(screen.getByTestId("editor-tools-reset"));
+
+    expect((screen.getByTestId("editor-tools") as HTMLInputElement).value).toBe("");
+    expect(screen.getByTestId("editor-tools-mode").textContent).toMatch(/default tool access/i);
+  });
+});

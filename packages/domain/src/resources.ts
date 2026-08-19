@@ -192,7 +192,49 @@ export interface AgentWarningContext {
   projectSelected: boolean;
 }
 
+export const AGENT_BASE_TOOL_NAMES = [
+  "ask_user",
+  "bash",
+  "edit",
+  "find",
+  "grep",
+  "ls",
+  "read",
+  "write",
+] as const;
+
 const EXA_WEB_TOOLS = new Set(["web_search", "fetch_content", "get_search_content"]);
+
+const compareCodePoints = (left: string, right: string): number => {
+  const leftPoints = [...left];
+  const rightPoints = [...right];
+  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftPoint = leftPoints[index]!.codePointAt(0)!;
+    const rightPoint = rightPoints[index]!.codePointAt(0)!;
+    if (leftPoint !== rightPoint) return leftPoint < rightPoint ? -1 : 1;
+  }
+  return leftPoints.length - rightPoints.length;
+};
+
+/** Tool names this Electron build can actually offer in an agent allowlist. */
+export function availableAgentToolNames(declared: readonly string[]): string[] {
+  const names = new Set<string>(AGENT_BASE_TOOL_NAMES);
+  for (const entry of declared) {
+    const name = entry.trim();
+    if (!name || name.startsWith("mcp:")) continue;
+    // doctor.ts records that neither Exa tools nor the web_fetch fallback are
+    // available in this Electron build, so the picker must not offer them.
+    if (EXA_WEB_TOOLS.has(name) || name === "web_fetch") continue;
+    names.add(name);
+  }
+  return [...names].sort((left, right) => {
+    // Use code-point comparisons, not a locale collator: catalog order must be
+    // total and identical across machines, including case and diacritic ties.
+    const folded = compareCodePoints(left.toLowerCase(), right.toLowerCase());
+    return folded !== 0 ? folded : compareCodePoints(left, right);
+  });
+}
 
 function boundedSkillNames(names: readonly string[]): string {
   const shown = names.slice(0, 5).map((name) => `“${name.slice(0, 100)}”`);
