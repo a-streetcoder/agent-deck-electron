@@ -1,10 +1,11 @@
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   FolderPlus,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { PI_THINKING_LEVELS } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { ProviderLogo } from "./ProviderLogo.tsx";
 import { ProvidersScreen } from "../screens/ProvidersScreen.tsx";
 import { useAppStore, type AppView } from "../state/store.ts";
 
@@ -258,6 +260,153 @@ const primaryButtonClass =
   "flex items-center gap-1.5 rounded-capsule px-3.5 py-1.5 text-xs font-medium shadow-capsule";
 const overlayBackButtonClass =
   "flex items-center gap-1 rounded-capsule py-1 pr-2.5 text-xs text-text-secondary hover:text-text-primary";
+
+function useDismiss(onDismiss: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onMouse = (event: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onDismiss();
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        onDismiss();
+        ref.current?.querySelector("button")?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onMouse);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouse);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onDismiss]);
+  return ref;
+}
+
+function modelCatalogValue(model: CatalogModel): string {
+  return `${model.provider}:${model.id}`;
+}
+
+function PrefModelPicker({
+  models,
+  value,
+  disabled,
+  onChange,
+  triggerRef,
+}: {
+  models: CatalogModel[];
+  value: string | null;
+  disabled: boolean;
+  onChange: (next: string | null) => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss(() => setOpen(false));
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  const byProvider = new Map<string, CatalogModel[]>();
+  for (const model of models) {
+    byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model]);
+  }
+  const selected = models.find((model) => modelCatalogValue(model) === value);
+  const triggerLabel = !value
+    ? "Pi's default"
+    : (selected?.name ?? selected?.id ?? `${value} (saved)`);
+  const savedMissing = Boolean(
+    value && !models.some((model) => modelCatalogValue(model) === value),
+  );
+  const select = (next: string | null): void => {
+    if (disabled) return;
+    setOpen(false);
+    onChange(next);
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <ControlButton
+        ref={triggerRef}
+        id="pref-model"
+        data-testid="pref-model"
+        data-value={value ?? ""}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-sm text-text-primary outline-none focus:border-accent disabled:opacity-40"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="min-w-0 truncate">{triggerLabel}</span>
+        <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
+      </ControlButton>
+      {open ? (
+        <div
+          data-testid="pref-model-menu"
+          role="listbox"
+          aria-label="Default model"
+          className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-[70vh] w-full overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
+        >
+          <ControlButton
+            type="button"
+            role="option"
+            aria-selected={!value}
+            data-testid="pref-model-option-default"
+            className={cn(
+              "block w-full truncate rounded-md px-2 py-1 text-left text-sm",
+              !value ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
+            )}
+            onClick={() => select(null)}
+          >
+            Pi&apos;s default
+          </ControlButton>
+          {savedMissing && value ? (
+            <ControlButton
+              type="button"
+              role="option"
+              aria-selected
+              data-testid={`pref-model-option-${value}`}
+              className="block w-full truncate rounded-md bg-selection px-2 py-1 text-left text-sm text-text-primary"
+              onClick={() => select(value)}
+            >
+              {value} (saved)
+            </ControlButton>
+          ) : null}
+          {[...byProvider.entries()].map(([provider, providerModels]) => (
+            <div key={provider}>
+              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
+                {provider}
+              </div>
+              {providerModels.map((model) => {
+                const optionValue = modelCatalogValue(model);
+                const active = optionValue === value;
+                return (
+                  <ControlButton
+                    key={optionValue}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    data-testid={`pref-model-option-${optionValue}`}
+                    className={cn(
+                      "block w-full truncate rounded-md px-2 py-1 text-left text-sm",
+                      active
+                        ? "bg-selection text-text-primary"
+                        : "text-text-secondary hover:bg-hover",
+                    )}
+                    onClick={() => select(optionValue)}
+                  >
+                    {model.name ?? model.id}
+                  </ControlButton>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 const primaryButtonStyle = {
   background:
     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -303,7 +452,7 @@ export function OnboardingOverlay() {
   >("idle");
   const modelReq = useRef(0);
   const modelAbort = useRef<AbortController | null>(null);
-  const modelSelect = useRef<HTMLSelectElement | null>(null);
+  const modelSelect = useRef<HTMLButtonElement | null>(null);
   // Monotonic request id: a slow earlier /runtime/doctor response must not
   // overwrite a newer one (rapid Re-check, or the setup→final refetch).
   const checksReq = useRef(0);
@@ -912,31 +1061,13 @@ export function OnboardingOverlay() {
                     <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
                       Default model
                     </label>
-                    <ControlSelect
-                      ref={modelSelect}
-                      id="pref-model"
-                      data-testid="pref-model"
-                      className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                      value={prefs.defaultModel ?? ""}
+                    <PrefModelPicker
+                      models={models}
+                      value={prefs.defaultModel}
                       disabled={modelState === "initial-loading"}
-                      onChange={(event) => patchPref({ defaultModel: event.target.value || null })}
-                    >
-                      <option value="">Pi&apos;s default</option>
-                      {prefs.defaultModel &&
-                      !models.some(
-                        (model) => `${model.provider}:${model.id}` === prefs.defaultModel,
-                      ) ? (
-                        <option value={prefs.defaultModel}>{prefs.defaultModel} (saved)</option>
-                      ) : null}
-                      {models.map((model) => (
-                        <option
-                          key={`${model.provider}/${model.id}`}
-                          value={`${model.provider}:${model.id}`}
-                        >
-                          {model.name ?? model.id}
-                        </option>
-                      ))}
-                    </ControlSelect>
+                      onChange={(next) => patchPref({ defaultModel: next })}
+                      triggerRef={modelSelect}
+                    />
                     {modelState === "initial-loading" ? (
                       <span className="text-detail text-text-muted" role="status">
                         Discovering available models…

@@ -240,10 +240,12 @@ test("reaches preferences and discovers/persists a model before any session", as
   releaseDiscovery();
   const model = page.getByTestId("pref-model");
   await expect(model).toBeEnabled();
-  await expect(model.locator('option[value="mock:mock-model"]')).toHaveCount(1);
-  await expect(model.locator('option[value="mock:basic-model"]')).toHaveCount(0);
-  await model.selectOption("mock:mock-model");
-  await expect(model).toHaveValue("mock:mock-model");
+  await model.click();
+  await expect(page.getByTestId("pref-model-menu")).toBeVisible();
+  await expect(page.getByTestId("pref-model-option-mock:mock-model")).toHaveCount(1);
+  await expect(page.getByTestId("pref-model-option-mock:basic-model")).toHaveCount(0);
+  await page.getByTestId("pref-model-option-mock:mock-model").click();
+  await expect(model).toHaveAttribute("data-value", "mock:mock-model");
 
   await expect
     .poll(async () => {
@@ -291,8 +293,9 @@ test("shows discovery errors and retries from the keyboard", async ({ page }) =>
   await expect(page.getByText("Trying model discovery again…")).toBeVisible();
   await expect(page.getByTestId("pref-model")).toBeEnabled();
   const modelSelect = page.getByTestId("pref-model");
-  await expect(modelSelect.locator('option[value="mock:mock-model"]')).toHaveCount(1);
   await expect(modelSelect).toBeFocused();
+  await modelSelect.click();
+  await expect(page.getByTestId("pref-model-option-mock:mock-model")).toHaveCount(1);
 });
 
 test("the welcome carousel advances automatically", async ({ page }) => {
