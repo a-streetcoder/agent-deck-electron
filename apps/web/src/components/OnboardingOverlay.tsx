@@ -402,14 +402,6 @@ function PrefModelPicker({
                   </div>
                 ) : (
                   <>
-                    <ControlButton
-                      type="button"
-                      data-testid="pref-model-providers-back"
-                      className="flex items-center gap-1 self-start rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
-                      onClick={() => setProviderId(null)}
-                    >
-                      <ArrowLeft size={13} /> Back
-                    </ControlButton>
                     <div className="flex items-center gap-2 px-2 py-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
                       <ProviderLogo
                         providerId={providerId}
@@ -440,6 +432,16 @@ function PrefModelPicker({
                           </ControlButton>
                         );
                       })}
+                    </div>
+                    <div className="mt-2 flex items-center border-t border-border-subtle pt-3">
+                      <ControlButton
+                        type="button"
+                        data-testid="pref-model-providers-back"
+                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                        onClick={() => setProviderId(null)}
+                      >
+                        <ArrowLeft size={13} /> Back
+                      </ControlButton>
                     </div>
                   </>
                 )}
