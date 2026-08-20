@@ -355,9 +355,9 @@ function PrefModelPicker({
                 data-testid="pref-model-dialog-backdrop"
                 onClick={close}
               />
-              <div className="relative z-10 flex min-h-[min(24rem,70vh)] max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col rounded-xl border border-border-strong bg-surface-elevated p-5 shadow-elevated">
+              <div className="relative z-10 flex max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-elevated p-5 shadow-elevated">
                 {providerId === null ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto">
+                  <div className="min-h-0 overflow-y-auto">
                     <ControlButton
                       type="button"
                       data-testid="pref-model-option-default"
@@ -402,25 +402,24 @@ function PrefModelPicker({
                   </div>
                 ) : (
                   <>
-                    <div className="mb-3 flex items-center gap-2">
-                      <ControlButton
-                        type="button"
-                        data-testid="pref-model-providers-back"
-                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
-                        onClick={() => setProviderId(null)}
-                      >
-                        <ArrowLeft size={13} /> Back
-                      </ControlButton>
-                      <div className="flex min-w-0 items-center gap-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                        <ProviderLogo
-                          providerId={providerId}
-                          size={16}
-                          className="text-text-secondary"
-                        />
-                        <span className="truncate">{providerId}</span>
-                      </div>
+                    <ControlButton
+                      type="button"
+                      data-testid="pref-model-providers-back"
+                      className="flex items-center gap-1 self-start rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                      onClick={() => setProviderId(null)}
+                    >
+                      <ArrowLeft size={13} /> Back
+                    </ControlButton>
+                    <div className="flex items-center gap-2 px-2 py-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      <ProviderLogo
+                        providerId={providerId}
+                        size={16}
+                        className="text-text-secondary"
+                      />
+                      <span className="truncate">{providerId}</span>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto">
+                    <div className="border-t border-border-subtle" />
+                    <div className="min-h-0 flex-1 overflow-y-auto pt-2">
                       {providerModels.map((model) => {
                         const optionValue = modelCatalogValue(model);
                         const active = optionValue === value;
