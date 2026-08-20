@@ -241,7 +241,8 @@ test("reaches preferences and discovers/persists a model before any session", as
   const model = page.getByTestId("pref-model");
   await expect(model).toBeEnabled();
   await model.click();
-  await expect(page.getByTestId("pref-model-menu")).toBeVisible();
+  await expect(page.getByTestId("pref-model-dialog")).toBeVisible();
+  await page.getByTestId("pref-model-provider-mock").click();
   await expect(page.getByTestId("pref-model-option-mock:mock-model")).toHaveCount(1);
   await expect(page.getByTestId("pref-model-option-mock:basic-model")).toHaveCount(0);
   await page.getByTestId("pref-model-option-mock:mock-model").click();
@@ -295,6 +296,8 @@ test("shows discovery errors and retries from the keyboard", async ({ page }) =>
   const modelSelect = page.getByTestId("pref-model");
   await expect(modelSelect).toBeFocused();
   await modelSelect.click();
+  await expect(page.getByTestId("pref-model-dialog")).toBeVisible();
+  await page.getByTestId("pref-model-provider-mock").click();
   await expect(page.getByTestId("pref-model-option-mock:mock-model")).toHaveCount(1);
 });
 

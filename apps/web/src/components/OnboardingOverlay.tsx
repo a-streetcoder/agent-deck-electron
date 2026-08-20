@@ -1,6 +1,5 @@
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -262,58 +261,6 @@ const primaryButtonClass =
 const overlayBackButtonClass =
   "flex items-center gap-1 rounded-capsule py-1 pr-2.5 text-xs text-text-secondary hover:text-text-primary";
 
-function useDismiss(
-  onDismiss: () => void,
-  extraRefs: ReadonlyArray<RefObject<HTMLElement | null>> = [],
-) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onMouse = (event: MouseEvent): void => {
-      const target = event.target as Node;
-      if (ref.current?.contains(target)) return;
-      if (extraRefs.some((entry) => entry.current?.contains(target))) return;
-      onDismiss();
-    };
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        onDismiss();
-        ref.current?.querySelector("button")?.focus();
-      }
-    };
-    document.addEventListener("mousedown", onMouse);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onMouse);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onDismiss, extraRefs]);
-  return ref;
-}
-
-const MODEL_MENU_GAP_PX = 6;
-
-function layoutPrefModelMenu(trigger: DOMRect): {
-  left: number;
-  width: number;
-  maxHeight: number;
-  top?: number;
-  bottom?: number;
-} {
-  const viewportHeight = window.innerHeight;
-  const spaceBelow = viewportHeight - trigger.bottom - MODEL_MENU_GAP_PX;
-  const spaceAbove = trigger.top - MODEL_MENU_GAP_PX;
-  const openUp = spaceBelow < spaceAbove;
-  const maxHeight = Math.max(0, Math.min(viewportHeight * 0.7, openUp ? spaceAbove : spaceBelow));
-  return {
-    left: trigger.left,
-    width: trigger.width,
-    maxHeight,
-    ...(openUp
-      ? { bottom: viewportHeight - trigger.top + MODEL_MENU_GAP_PX }
-      : { top: trigger.bottom + MODEL_MENU_GAP_PX }),
-  };
-}
-
 function modelCatalogValue(model: CatalogModel): string {
   return `${model.provider}:${model.id}`;
 }
@@ -332,31 +279,24 @@ function PrefModelPicker({
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const [open, setOpen] = useState(false);
-  const [layout, setLayout] = useState<ReturnType<typeof layoutPrefModelMenu> | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const extraRefs = useRef([menuRef]).current;
-  const ref = useDismiss(() => setOpen(false), extraRefs);
-  const measure = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    setLayout(layoutPrefModelMenu(trigger.getBoundingClientRect()));
-  }, [triggerRef]);
+  const [providerId, setProviderId] = useState<string | null>(null);
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!open) {
-      setLayout(null);
+      setProviderId(null);
       return;
     }
-    measure();
-    window.addEventListener("resize", measure);
-    document.addEventListener("scroll", measure, true);
-    return () => {
-      window.removeEventListener("resize", measure);
-      document.removeEventListener("scroll", measure, true);
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
     };
-  }, [open, measure]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, triggerRef]);
 
   const byProvider = new Map<string, CatalogModel[]>();
   for (const model of models) {
@@ -369,14 +309,19 @@ function PrefModelPicker({
   const savedMissing = Boolean(
     value && !models.some((model) => modelCatalogValue(model) === value),
   );
+  const close = (): void => {
+    setOpen(false);
+    setProviderId(null);
+  };
   const select = (next: string | null): void => {
     if (disabled) return;
-    setOpen(false);
     onChange(next);
+    close();
   };
+  const providerModels = providerId ? (byProvider.get(providerId) ?? []) : [];
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative">
       <ControlButton
         ref={triggerRef}
         id="pref-model"
@@ -384,61 +329,86 @@ function PrefModelPicker({
         data-value={value ?? ""}
         type="button"
         disabled={disabled}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-sm text-text-primary outline-none focus:border-accent disabled:opacity-40"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setOpen(true)}
       >
         <span className="min-w-0 truncate">{triggerLabel}</span>
         <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
       </ControlButton>
-      {open && layout
-        ? createPortal(
-            <div
-              ref={menuRef}
-              data-testid="pref-model-menu"
-              role="listbox"
-              aria-label="Default model"
-              className="fixed z-[200] overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
-              style={{
-                left: layout.left,
-                width: layout.width,
-                maxHeight: layout.maxHeight,
-                top: layout.top,
-                bottom: layout.bottom,
-              }}
-            >
-              <ControlButton
-                type="button"
-                role="option"
-                aria-selected={!value}
-                data-testid="pref-model-option-default"
-                className={cn(
-                  "block w-full truncate rounded-md px-2 py-1 text-left text-sm",
-                  !value ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
-                )}
-                onClick={() => select(null)}
-              >
-                Pi&apos;s default
-              </ControlButton>
-              {savedMissing && value ? (
+      {open ? (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-overlay px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Default model"
+          data-testid="pref-model-dialog"
+        >
+          <ControlButton
+            type="button"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default"
+            aria-label="Close model picker"
+            data-testid="pref-model-dialog-backdrop"
+            onClick={close}
+          />
+          <div className="relative z-10 flex max-h-[70vh] w-full max-w-md flex-col rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated">
+            {providerId === null ? (
+              <div className="min-h-0 overflow-y-auto">
                 <ControlButton
                   type="button"
-                  role="option"
-                  aria-selected
-                  data-testid={`pref-model-option-${value}`}
-                  className="block w-full truncate rounded-md bg-selection px-2 py-1 text-left text-sm text-text-primary"
-                  onClick={() => select(value)}
+                  data-testid="pref-model-option-default"
+                  className={cn(
+                    "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
+                    !value
+                      ? "bg-selection text-text-primary"
+                      : "text-text-secondary hover:bg-hover",
+                  )}
+                  onClick={() => select(null)}
                 >
-                  {value} (saved)
+                  Pi&apos;s default
                 </ControlButton>
-              ) : null}
-              {[...byProvider.entries()].map(([provider, providerModels]) => (
-                <div key={provider}>
-                  <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                    <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
-                    {provider}
-                  </div>
+                {savedMissing && value ? (
+                  <ControlButton
+                    type="button"
+                    data-testid={`pref-model-option-${value}`}
+                    className="block w-full truncate rounded-md bg-selection px-2 py-2 text-left text-sm text-text-primary"
+                    onClick={() => select(value)}
+                  >
+                    {value} (saved)
+                  </ControlButton>
+                ) : null}
+                {[...byProvider.keys()].map((provider) => (
+                  <ControlButton
+                    key={provider}
+                    type="button"
+                    data-testid={`pref-model-provider-${provider}`}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
+                    onClick={() => setProviderId(provider)}
+                  >
+                    <ProviderLogo providerId={provider} size={18} className="text-text-secondary" />
+                    <span className="text-micro font-semibold uppercase tracking-wider">
+                      {provider}
+                    </span>
+                  </ControlButton>
+                ))}
+              </div>
+            ) : (
+              <>
+                <ControlButton
+                  type="button"
+                  data-testid="pref-model-providers-back"
+                  className={overlayBackButtonClass}
+                  onClick={() => setProviderId(null)}
+                >
+                  <ArrowLeft size={13} /> Back
+                </ControlButton>
+                <div className="flex items-center gap-1.5 px-2 pb-1 pt-0.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  <ProviderLogo providerId={providerId} size={12} className="text-text-secondary" />
+                  {providerId}
+                </div>
+                <div className="min-h-0 overflow-y-auto">
                   {providerModels.map((model) => {
                     const optionValue = modelCatalogValue(model);
                     const active = optionValue === value;
@@ -446,11 +416,9 @@ function PrefModelPicker({
                       <ControlButton
                         key={optionValue}
                         type="button"
-                        role="option"
-                        aria-selected={active}
                         data-testid={`pref-model-option-${optionValue}`}
                         className={cn(
-                          "block w-full truncate rounded-md px-2 py-1 text-left text-sm",
+                          "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
                           active
                             ? "bg-selection text-text-primary"
                             : "text-text-secondary hover:bg-hover",
@@ -462,11 +430,11 @@ function PrefModelPicker({
                     );
                   })}
                 </div>
-              ))}
-            </div>,
-            document.body,
-          )
-        : null}
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1195,7 +1163,7 @@ export function OnboardingOverlay() {
               <ControlButton
                 data-testid="onboarding-preferences-back"
                 className={overlayBackButtonClass}
-                onClick={() => goto("setup")}
+                onClick={() => goto(setupReady ? "tour" : "setup")}
               >
                 <ArrowLeft size={13} /> Back
               </ControlButton>
