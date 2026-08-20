@@ -266,14 +266,29 @@ function modelCatalogValue(model: CatalogModel): string {
   return `${model.provider}:${model.id}`;
 }
 
+/** Label for inherit (`defaultModel: null`): Pi's settings.json id, catalog name, or "Default". */
+export function inheritModelLabel(
+  runtimeDefaultModel: string | null | undefined,
+  models: readonly CatalogModel[],
+): string {
+  const raw = runtimeDefaultModel?.trim();
+  if (!raw) return "Default";
+  const colon = raw.indexOf(":");
+  const id = colon >= 0 ? raw.slice(colon + 1) : raw;
+  const match = models.find((model) => model.id === id);
+  return match?.name ?? match?.id ?? id;
+}
+
 function PrefModelPicker({
   models,
+  runtimeDefaultModel,
   value,
   disabled,
   onChange,
   triggerRef,
 }: {
   models: CatalogModel[];
+  runtimeDefaultModel: string | null;
   value: string | null;
   disabled: boolean;
   onChange: (next: string | null) => void;
@@ -304,9 +319,13 @@ function PrefModelPicker({
     byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model]);
   }
   const selected = models.find((model) => modelCatalogValue(model) === value);
-  const triggerLabel = !value
-    ? "Pi's default"
-    : (selected?.name ?? selected?.id ?? `${value} (saved)`);
+  const inheritLabel = inheritModelLabel(runtimeDefaultModel, models);
+  const triggerProviderId = value
+    ? (selected?.provider ?? (value.includes(":") ? value.slice(0, value.indexOf(":")) : "pi"))
+    : "pi";
+  const triggerLabel = value
+    ? (selected?.name ?? selected?.id ?? `${value} (saved)`)
+    : inheritLabel;
   const savedMissing = Boolean(
     value && !models.some((model) => modelCatalogValue(model) === value),
   );
@@ -335,7 +354,14 @@ function PrefModelPicker({
         className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-sm text-text-primary outline-none focus:border-accent disabled:opacity-40"
         onClick={() => setOpen(true)}
       >
-        <span className="min-w-0 truncate">{triggerLabel}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <ProviderLogo
+            providerId={triggerProviderId}
+            size={16}
+            className="shrink-0 text-text-secondary"
+          />
+          <span className="min-w-0 truncate">{triggerLabel}</span>
+        </span>
         <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
       </ControlButton>
       {open
@@ -362,14 +388,19 @@ function PrefModelPicker({
                       type="button"
                       data-testid="pref-model-option-default"
                       className={cn(
-                        "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
+                        "flex w-full items-center gap-2 truncate rounded-md px-2 py-2 text-left text-sm",
                         !value
                           ? "bg-selection text-text-primary"
                           : "text-text-secondary hover:bg-hover",
                       )}
                       onClick={() => select(null)}
                     >
-                      Pi&apos;s default
+                      <ProviderLogo
+                        providerId="pi"
+                        size={18}
+                        className="shrink-0 text-text-secondary"
+                      />
+                      <span className="min-w-0 truncate">{inheritLabel}</span>
                     </ControlButton>
                     {savedMissing && value ? (
                       <ControlButton
@@ -493,6 +524,7 @@ export function OnboardingOverlay() {
   const [checksLoading, setChecksLoading] = useState(false);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [models, setModels] = useState<CatalogModel[]>([]);
+  const [runtimeDefaultModel, setRuntimeDefaultModel] = useState<string | null>(null);
   const [modelState, setModelState] = useState<
     "idle" | "initial-loading" | "loading" | "success" | "error"
   >("idle");
@@ -611,10 +643,16 @@ export function OnboardingOverlay() {
     })
       .then((response) => {
         if (!response.ok) throw new Error("model discovery failed");
-        return response.json() as Promise<{ models: CatalogModel[] }>;
+        return response.json() as Promise<{
+          models: CatalogModel[];
+          runtimeDefaultModel?: string | null;
+        }>;
       })
       .then((data) => {
         if (req !== modelReq.current || controller.signal.aborted) return;
+        setRuntimeDefaultModel(
+          typeof data.runtimeDefaultModel === "string" ? data.runtimeDefaultModel : null,
+        );
         setModels(data.models.filter((model) => !model.disabled));
         setModelState("success");
         if (restoreSelectFocus) {
@@ -1109,6 +1147,7 @@ export function OnboardingOverlay() {
                     </label>
                     <PrefModelPicker
                       models={models}
+                      runtimeDefaultModel={runtimeDefaultModel}
                       value={prefs.defaultModel}
                       disabled={modelState === "initial-loading"}
                       onChange={(next) => patchPref({ defaultModel: next })}
@@ -1158,7 +1197,7 @@ export function OnboardingOverlay() {
                         patchPref({ defaultThinking: event.target.value || null })
                       }
                     >
-                      <option value="">Pi&apos;s default</option>
+                      <option value="">Default</option>
                       {PI_THINKING_LEVELS.map((level) => (
                         <option key={level} value={level}>
                           {level}

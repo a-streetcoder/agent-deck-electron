@@ -21,6 +21,7 @@ import {
 import {
   listProviders,
   logoutProvider,
+  piAgentHome,
   reconcileNeuralWattCatalog,
   scanAgents,
   scanEnv,
@@ -64,6 +65,23 @@ import {
  * doctor probe, provider auth/login, model curation, and the global
  * instructions editor. Moved verbatim from server.ts.
  */
+
+/** Pi's `settings.json` `defaultModel` (id or provider:id), or null if unset/unreadable. */
+export function readPiRuntimeDefaultModel(home: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(nodePath.join(piAgentHome({ home }), "settings.json"), "utf8"),
+    );
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const value = (parsed as Record<string, unknown>).defaultModel;
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function registerSettingsRoutes(ctx: ServerContext): void {
   const {
     fastify,
@@ -539,6 +557,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       const disabled = new Set(settings.get().disabledModels);
       const fast = new Set(settings.get().openAIFastModels);
       return {
+        runtimeDefaultModel: readPiRuntimeDefaultModel(home),
         models: models.map((model) => ({
           ...model,
           disabled: disabled.has(`${model.provider}:${model.id}`),

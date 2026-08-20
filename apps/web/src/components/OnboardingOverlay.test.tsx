@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { finalCtaFor } from "./OnboardingOverlay.tsx";
+import { finalCtaFor, inheritModelLabel } from "./OnboardingOverlay.tsx";
 
 /**
  * ONB-01 — the final step's smart-routing gates (native OnboardingViews:
@@ -51,6 +51,23 @@ describe("finalCtaFor (ONB-01 readiness gates)", () => {
  * the SessionManager chokepoint, so the toggle a user sets here decides whether
  * a session may delegate at all.
  */
+describe("inheritModelLabel", () => {
+  it("uses the resolved runtime id, not a Pi's default phrase", () => {
+    expect(inheritModelLabel("grok-4.6", [])).toBe("grok-4.6");
+    expect(
+      inheritModelLabel("grok-4.6", [
+        { provider: "xai", id: "grok-4.6", name: "Grok 4.6" },
+        { provider: "openrouter", id: "grok-4.6" },
+      ]),
+    ).toBe("Grok 4.6");
+    expect(inheritModelLabel("xai:grok-4.6", [{ provider: "xai", id: "grok-4.6" }])).toBe(
+      "grok-4.6",
+    );
+    expect(inheritModelLabel(null, [])).toBe("Default");
+    expect(inheritModelLabel("grok-4.6", [])).not.toMatch(/Pi/i);
+  });
+});
+
 describe("onboarding delegation preference", () => {
   it("is one of the preferences the overlay reads and writes", async () => {
     const source = await readFile(
