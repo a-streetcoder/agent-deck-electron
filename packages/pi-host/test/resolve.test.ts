@@ -2,7 +2,12 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PiNotFoundError, resolvePiBinary, resolvePiSpawnPlan } from "../src/resolve.ts";
+import {
+  PI_INSTALL_HINT,
+  PiNotFoundError,
+  resolvePiBinary,
+  resolvePiSpawnPlan,
+} from "../src/resolve.ts";
 
 function makeFakePi(dir: string): string {
   const name = process.platform === "win32" ? "pi.cmd" : "pi";
@@ -82,15 +87,20 @@ describe("resolvePiSpawnPlan", () => {
     expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
   });
 
-  it("passes through when AGENT_DECK_PI_CLI points at a missing file", () => {
+  it("fails loudly when AGENT_DECK_PI_CLI points at a missing file", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "pi-spawn-"));
     const runtime = makeFakePi(dir);
-    const env = {
-      AGENT_DECK_PI_PATH: runtime,
-      AGENT_DECK_PI_CLI: path.join(dir, "missing-cli.js"),
-      PATH: "",
-    };
-    const plan = resolvePiSpawnPlan(runtime, ["--version"], env);
-    expect(plan).toEqual({ command: runtime, args: ["--version"], env });
+    const missing = path.join(dir, "missing-cli.js");
+    expect(() =>
+      resolvePiSpawnPlan(runtime, ["--version"], {
+        AGENT_DECK_PI_PATH: runtime,
+        AGENT_DECK_PI_CLI: missing,
+        PATH: "",
+      }),
+    ).toThrow(
+      new PiNotFoundError(
+        `AGENT_DECK_PI_CLI is set to "${missing}" but no file exists there. ${PI_INSTALL_HINT}`,
+      ),
+    );
   });
 });

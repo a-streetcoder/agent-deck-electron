@@ -169,7 +169,12 @@ export function resolvePiSpawnPlan(
   env: NodeJS.ProcessEnv = process.env,
 ): PiSpawnPlan {
   const cli = env.AGENT_DECK_PI_CLI?.trim();
-  if (cli && existsSync(cli)) {
+  if (cli) {
+    if (!existsSync(cli)) {
+      throw new PiNotFoundError(
+        `AGENT_DECK_PI_CLI is set to "${cli}" but no file exists there. ${PI_INSTALL_HINT}`,
+      );
+    }
     return {
       command: binPath,
       args: [path.resolve(cli), ...args],
