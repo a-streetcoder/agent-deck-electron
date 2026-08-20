@@ -1,4 +1,5 @@
 import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 /**
@@ -30,6 +31,15 @@ export const ControlTextArea = forwardRef<
 
 export const ControlSelect = forwardRef<HTMLSelectElement, ComponentPropsWithoutRef<"select">>(
   function ControlSelect({ className, ...props }, ref) {
-    return <select ref={ref} className={cn(className, "pe-8")} {...props} />;
+    return (
+      <div className="relative block w-full">
+        <select ref={ref} className={cn("w-full appearance-none", className, "pe-8")} {...props} />
+        <ChevronDown
+          aria-hidden
+          size={16}
+          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted"
+        />
+      </div>
+    );
   },
 );

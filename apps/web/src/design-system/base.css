@@ -239,7 +239,8 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
-/* Keep the UA chevron off the trailing edge even when callers pass `px-*`. */
+/* UA chevrons sit on the border; ControlSelect draws an inset icon instead. */
 select {
-  padding-inline-end: var(--space-8);
+  appearance: none;
+  -webkit-appearance: none;
 }

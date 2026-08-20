@@ -78,6 +78,19 @@ describe("parseModelCatalog", () => {
     );
   });
 
+  it("rounds decimal K/M counts that are not binary-exact", () => {
+    expect(parseModelCatalog([HEADER, "neuralwatt gemma-4-31b 262.1K 16.4K yes yes"])).toEqual([
+      {
+        provider: "neuralwatt",
+        id: "gemma-4-31b",
+        contextWindow: 262_100,
+        maxTokens: 16_400,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+    ]);
+  });
+
   it.each([
     "mock model 128K 4K yes",
     "mock model 128K 4K yes yes extra",

@@ -63,13 +63,16 @@ export interface DiscoverModelCatalogOptions {
 function parseDisplayCount(value: string): number | null {
   // Pi displays whole counts directly and abbreviates larger values with K/M.
   // Keep this deliberately narrower than Number(): signs, exponents, decimals
-  // without units, and non-positive/non-integral results are malformed output.
+  // without units, and non-positive results are malformed output. Round after
+  // scaling so values like 262.1K survive IEEE error (262.1 * 1000 is not an
+  // integer in JS).
   const match = /^(?:([1-9]\d*)|((?:[1-9]\d*(?:\.\d+)?|0\.\d+))([KM]))$/.exec(value);
   if (!match) return null;
-  const count = match[1]
+  const scaled = match[1]
     ? Number(match[1])
     : Number(match[2]) * (match[3] === "K" ? 1_000 : 1_000_000);
-  return Number.isFinite(count) && Number.isInteger(count) && count > 0 ? count : null;
+  const count = Math.round(scaled);
+  return Number.isFinite(count) && count > 0 ? count : null;
 }
 
 function parseYesNo(value: string): boolean | null {
