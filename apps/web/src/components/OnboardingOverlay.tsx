@@ -1,5 +1,6 @@
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -337,104 +338,117 @@ function PrefModelPicker({
         <span className="min-w-0 truncate">{triggerLabel}</span>
         <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
       </ControlButton>
-      {open ? (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-overlay px-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Default model"
-          data-testid="pref-model-dialog"
-        >
-          <ControlButton
-            type="button"
-            tabIndex={-1}
-            className="absolute inset-0 cursor-default"
-            aria-label="Close model picker"
-            data-testid="pref-model-dialog-backdrop"
-            onClick={close}
-          />
-          <div className="relative z-10 flex max-h-[70vh] w-full max-w-md flex-col rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated">
-            {providerId === null ? (
-              <div className="min-h-0 overflow-y-auto">
-                <ControlButton
-                  type="button"
-                  data-testid="pref-model-option-default"
-                  className={cn(
-                    "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
-                    !value
-                      ? "bg-selection text-text-primary"
-                      : "text-text-secondary hover:bg-hover",
-                  )}
-                  onClick={() => select(null)}
-                >
-                  Pi&apos;s default
-                </ControlButton>
-                {savedMissing && value ? (
-                  <ControlButton
-                    type="button"
-                    data-testid={`pref-model-option-${value}`}
-                    className="block w-full truncate rounded-md bg-selection px-2 py-2 text-left text-sm text-text-primary"
-                    onClick={() => select(value)}
-                  >
-                    {value} (saved)
-                  </ControlButton>
-                ) : null}
-                {[...byProvider.keys()].map((provider) => (
-                  <ControlButton
-                    key={provider}
-                    type="button"
-                    data-testid={`pref-model-provider-${provider}`}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
-                    onClick={() => setProviderId(provider)}
-                  >
-                    <ProviderLogo providerId={provider} size={18} className="text-text-secondary" />
-                    <span className="text-micro font-semibold uppercase tracking-wider">
-                      {provider}
-                    </span>
-                  </ControlButton>
-                ))}
-              </div>
-            ) : (
-              <>
-                <ControlButton
-                  type="button"
-                  data-testid="pref-model-providers-back"
-                  className={overlayBackButtonClass}
-                  onClick={() => setProviderId(null)}
-                >
-                  <ArrowLeft size={13} /> Back
-                </ControlButton>
-                <div className="flex items-center gap-1.5 px-2 pb-1 pt-0.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                  <ProviderLogo providerId={providerId} size={12} className="text-text-secondary" />
-                  {providerId}
-                </div>
-                <div className="min-h-0 overflow-y-auto">
-                  {providerModels.map((model) => {
-                    const optionValue = modelCatalogValue(model);
-                    const active = optionValue === value;
-                    return (
+      {open
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-overlay px-5"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Default model"
+              data-testid="pref-model-dialog"
+            >
+              <ControlButton
+                type="button"
+                tabIndex={-1}
+                className="absolute inset-0 cursor-default"
+                aria-label="Close model picker"
+                data-testid="pref-model-dialog-backdrop"
+                onClick={close}
+              />
+              <div className="relative z-10 flex min-h-[min(24rem,70vh)] max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col rounded-xl border border-border-strong bg-surface-elevated p-5 shadow-elevated">
+                {providerId === null ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <ControlButton
+                      type="button"
+                      data-testid="pref-model-option-default"
+                      className={cn(
+                        "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
+                        !value
+                          ? "bg-selection text-text-primary"
+                          : "text-text-secondary hover:bg-hover",
+                      )}
+                      onClick={() => select(null)}
+                    >
+                      Pi&apos;s default
+                    </ControlButton>
+                    {savedMissing && value ? (
                       <ControlButton
-                        key={optionValue}
                         type="button"
-                        data-testid={`pref-model-option-${optionValue}`}
-                        className={cn(
-                          "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
-                          active
-                            ? "bg-selection text-text-primary"
-                            : "text-text-secondary hover:bg-hover",
-                        )}
-                        onClick={() => select(optionValue)}
+                        data-testid={`pref-model-option-${value}`}
+                        className="block w-full truncate rounded-md bg-selection px-2 py-2 text-left text-sm text-text-primary"
+                        onClick={() => select(value)}
                       >
-                        {model.name ?? model.id}
+                        {value} (saved)
                       </ControlButton>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
+                    ) : null}
+                    {[...byProvider.keys()].map((provider) => (
+                      <ControlButton
+                        key={provider}
+                        type="button"
+                        data-testid={`pref-model-provider-${provider}`}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
+                        onClick={() => setProviderId(provider)}
+                      >
+                        <ProviderLogo
+                          providerId={provider}
+                          size={18}
+                          className="text-text-secondary"
+                        />
+                        <span className="text-micro font-semibold uppercase tracking-wider">
+                          {provider}
+                        </span>
+                      </ControlButton>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-3 flex items-center gap-2">
+                      <ControlButton
+                        type="button"
+                        data-testid="pref-model-providers-back"
+                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                        onClick={() => setProviderId(null)}
+                      >
+                        <ArrowLeft size={13} /> Back
+                      </ControlButton>
+                      <div className="flex min-w-0 items-center gap-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                        <ProviderLogo
+                          providerId={providerId}
+                          size={16}
+                          className="text-text-secondary"
+                        />
+                        <span className="truncate">{providerId}</span>
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto">
+                      {providerModels.map((model) => {
+                        const optionValue = modelCatalogValue(model);
+                        const active = optionValue === value;
+                        return (
+                          <ControlButton
+                            key={optionValue}
+                            type="button"
+                            data-testid={`pref-model-option-${optionValue}`}
+                            className={cn(
+                              "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
+                              active
+                                ? "bg-selection text-text-primary"
+                                : "text-text-secondary hover:bg-hover",
+                            )}
+                            onClick={() => select(optionValue)}
+                          >
+                            {model.name ?? model.id}
+                          </ControlButton>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -1163,7 +1177,7 @@ export function OnboardingOverlay() {
               <ControlButton
                 data-testid="onboarding-preferences-back"
                 className={overlayBackButtonClass}
-                onClick={() => goto(setupReady ? "tour" : "setup")}
+                onClick={() => goto("tour")}
               >
                 <ArrowLeft size={13} /> Back
               </ControlButton>
