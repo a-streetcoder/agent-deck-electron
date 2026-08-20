@@ -492,6 +492,41 @@ describe("pi-version repair fix (DOC-03)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("probes --version through AGENT_DECK_PI_CLI when that file exists", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "doctor-pi-cli-"));
+    const isWindows = process.platform === "win32";
+    const runtime = path.join(dir, isWindows ? "runtime.cmd" : "runtime");
+    const cli = path.join(dir, "cli.js");
+    writeFileSync(
+      cli,
+      'if (process.env.ELECTRON_RUN_AS_NODE !== "1") process.exit(2);\nconsole.log("0.82.0-cli");\n',
+    );
+    writeFileSync(
+      runtime,
+      isWindows
+        ? '@echo off\r\nif "%~1"=="--version" (echo runtime-direct& exit /b 0)\r\nnode %*\r\n'
+        : '#!/bin/sh\nif [ "$1" = "--version" ]; then echo runtime-direct; exit 0; fi\nexec node "$@"\n',
+    );
+    if (!isWindows) chmodSync(runtime, 0o755);
+    const previousPath = process.env.AGENT_DECK_PI_PATH;
+    const previousCli = process.env.AGENT_DECK_PI_CLI;
+    process.env.AGENT_DECK_PI_PATH = runtime;
+    process.env.AGENT_DECK_PI_CLI = cli;
+    try {
+      const report = await runDoctor(dir);
+      const version = report.checks.find((check) => check.id === "pi-version");
+      expect(version).toBeDefined();
+      expect(version!.status).toBe("ok");
+      expect(version!.detail).toBe("0.82.0-cli");
+    } finally {
+      if (previousPath === undefined) delete process.env.AGENT_DECK_PI_PATH;
+      else process.env.AGENT_DECK_PI_PATH = previousPath;
+      if (previousCli === undefined) delete process.env.AGENT_DECK_PI_CLI;
+      else process.env.AGENT_DECK_PI_CLI = previousCli;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("gh install guidance (DOC-07)", () => {

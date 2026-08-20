@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PiNotFoundError, resolvePiBinary } from "../src/resolve.ts";
+import { PiNotFoundError, resolvePiBinary, resolvePiSpawnPlan } from "../src/resolve.ts";
 
 function makeFakePi(dir: string): string {
   const name = process.platform === "win32" ? "pi.cmd" : "pi";
@@ -51,5 +51,46 @@ describe("resolvePiBinary", () => {
     makeFakePi(pathDir);
     const resolved = resolvePiBinary({ AGENT_DECK_PI_PATH: override, PATH: pathDir });
     expect(resolved).toEqual({ path: override, source: "env" });
+  });
+});
+
+describe("resolvePiSpawnPlan", () => {
+  it("prepends AGENT_DECK_PI_CLI and patches ELECTRON_RUN_AS_NODE when the file exists", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-spawn-"));
+    const runtime = makeFakePi(dir);
+    const cli = path.join(dir, "cli.js");
+    writeFileSync(cli, 'console.log("pi");\n');
+    const env = {
+      AGENT_DECK_PI_PATH: runtime,
+      AGENT_DECK_PI_CLI: cli,
+      PATH: "",
+    };
+    const plan = resolvePiSpawnPlan(runtime, ["--list-models"], env);
+    expect(plan.command).toBe(runtime);
+    expect(plan.args).toEqual([cli, "--list-models"]);
+    expect(plan.env.ELECTRON_RUN_AS_NODE).toBe("1");
+    expect(plan.env.AGENT_DECK_PI_CLI).toBe(cli);
+  });
+
+  it("passes through command and args when AGENT_DECK_PI_CLI is unset", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-spawn-"));
+    const runtime = makeFakePi(dir);
+    const env = { AGENT_DECK_PI_PATH: runtime, PATH: "" };
+    const args = ["--mode", "rpc"];
+    const plan = resolvePiSpawnPlan(runtime, args, env);
+    expect(plan).toEqual({ command: runtime, args, env });
+    expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("passes through when AGENT_DECK_PI_CLI points at a missing file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-spawn-"));
+    const runtime = makeFakePi(dir);
+    const env = {
+      AGENT_DECK_PI_PATH: runtime,
+      AGENT_DECK_PI_CLI: path.join(dir, "missing-cli.js"),
+      PATH: "",
+    };
+    const plan = resolvePiSpawnPlan(runtime, ["--version"], env);
+    expect(plan).toEqual({ command: runtime, args: ["--version"], env });
   });
 });

@@ -238,3 +238,8 @@ textarea,
 [role="button"] {
   -webkit-app-region: no-drag;
 }
+
+/* Keep the UA chevron off the trailing edge even when callers pass `px-*`. */
+select {
+  padding-inline-end: var(--space-8);
+}

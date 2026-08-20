@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { PiNotFoundError, resolvePiBinary } from "@agent-deck/pi-host";
+import { PiNotFoundError, resolvePiBinary, resolvePiSpawnPlan } from "@agent-deck/pi-host";
 import { escapeWindowsShellArg, resolveCommandPath } from "./editorLauncher.ts";
 
 /**
@@ -46,6 +46,8 @@ interface PlanInput {
   readonly cwd: string;
   readonly piBinary: string;
   readonly sessionRef: string;
+  /** Extra argv between the Pi command and `--session` (packaged `cli.js`). */
+  readonly piLeadingArgs?: readonly string[];
 }
 
 export type ExternalTerminalPlan =
@@ -71,11 +73,23 @@ export function shellQuotePosix(value: string): string {
 }
 
 /** The one-shot macOS resume script (native's `.command` file, condensed). */
-export function buildResumeScript(cwd: string, piBinary: string, sessionRef: string): string {
+export function buildResumeScript(
+  cwd: string,
+  piBinary: string,
+  sessionRef: string,
+  leadingArgs: readonly string[] = [],
+): string {
+  const command = [
+    ...(leadingArgs.length > 0 ? ["ELECTRON_RUN_AS_NODE=1"] : []),
+    shellQuotePosix(piBinary),
+    ...leadingArgs.map(shellQuotePosix),
+    "--session",
+    shellQuotePosix(sessionRef),
+  ].join(" ");
   return [
     "#!/bin/zsh",
     `cd ${shellQuotePosix(cwd)} || exit 1`,
-    `${shellQuotePosix(piBinary)} --session ${shellQuotePosix(sessionRef)} || {`,
+    `${command} || {`,
     `  echo "Pi could not resume this session."`,
     `  read -k 1 "?Press any key to close."`,
     "}",
@@ -107,7 +121,9 @@ export function buildWindowsResumeScript(
   cwd: string,
   piBinary: string,
   sessionRef: string,
+  leadingArgs: readonly string[] = [],
 ): string {
+  const command = [piBinary, ...leadingArgs].map(quoteBatch).join(" ");
   return [
     "@echo off",
     "setlocal disabledelayedexpansion",
@@ -116,8 +132,9 @@ export function buildWindowsResumeScript(
     // parse as the bytes we wrote (a legacy ANSI code page would corrupt them).
     "chcp 65001 >nul",
     "title Agent Deck",
+    ...(leadingArgs.length > 0 ? ["set ELECTRON_RUN_AS_NODE=1"] : []),
     `cd /d ${quoteBatch(cwd)} || exit /b 1`,
-    `${quoteBatch(piBinary)} --session ${quoteBatch(sessionRef)} || pause`,
+    `${command} --session ${quoteBatch(sessionRef)} || pause`,
     "",
   ].join("\r\n");
 }
@@ -131,13 +148,15 @@ export function planExternalTerminalLaunch(
   input: PlanInput,
   resolveCommand: (name: string) => string | null,
 ): ExternalTerminalPlan | null {
+  const leadingArgs = input.piLeadingArgs ?? [];
+  const piArgv = [input.piBinary, ...leadingArgs, "--session", input.sessionRef];
   if (platform === "win32") {
     const wt = resolveCommand("wt");
     if (wt !== null) {
       return {
         kind: "spawn",
         command: wt,
-        args: ["-d", input.cwd, input.piBinary, "--session", input.sessionRef],
+        args: ["-d", input.cwd, ...piArgv],
         shell: false,
       };
     }
@@ -148,7 +167,7 @@ export function planExternalTerminalLaunch(
     // arguments internally instead.
     return {
       kind: "winScript",
-      script: buildWindowsResumeScript(input.cwd, input.piBinary, input.sessionRef),
+      script: buildWindowsResumeScript(input.cwd, input.piBinary, input.sessionRef, leadingArgs),
     };
   }
   if (platform === "darwin") {
@@ -157,7 +176,7 @@ export function planExternalTerminalLaunch(
     return {
       kind: "macScript",
       open,
-      script: buildResumeScript(input.cwd, input.piBinary, input.sessionRef),
+      script: buildResumeScript(input.cwd, input.piBinary, input.sessionRef, leadingArgs),
     };
   }
   if (platform === "linux") {
@@ -166,7 +185,7 @@ export function planExternalTerminalLaunch(
       return {
         kind: "spawn",
         command: xte,
-        args: ["-e", input.piBinary, "--session", input.sessionRef],
+        args: ["-e", ...piArgv],
         cwd: input.cwd,
         shell: false,
       };
@@ -176,13 +195,7 @@ export function planExternalTerminalLaunch(
       return {
         kind: "spawn",
         command: gnome,
-        args: [
-          `--working-directory=${input.cwd}`,
-          "--",
-          input.piBinary,
-          "--session",
-          input.sessionRef,
-        ],
+        args: [`--working-directory=${input.cwd}`, "--", ...piArgv],
         shell: false,
       };
     }
@@ -191,7 +204,7 @@ export function planExternalTerminalLaunch(
       return {
         kind: "spawn",
         command: konsole,
-        args: ["--workdir", input.cwd, "-e", input.piBinary, "--session", input.sessionRef],
+        args: ["--workdir", input.cwd, "-e", ...piArgv],
         shell: false,
       };
     }
@@ -259,8 +272,12 @@ export function createExternalTerminalLauncher(
       throw new Error("The pi session file for this session no longer exists.");
     }
     let piBinary: string;
+    let piLeadingArgs: readonly string[] = [];
     try {
-      piBinary = resolvePiBinary(env(), platform).path;
+      const resolved = resolvePiBinary(env(), platform);
+      const spawnPlan = resolvePiSpawnPlan(resolved.path, [], env());
+      piBinary = spawnPlan.command;
+      piLeadingArgs = spawnPlan.args;
     } catch (error) {
       // Stable public message; the detail (env paths) stays in the server log.
       console.error("[terminal] pi resolution failed:", error);
@@ -271,7 +288,7 @@ export function createExternalTerminalLauncher(
     }
     const plan = planExternalTerminalLaunch(
       platform,
-      { cwd: input.cwd, piBinary, sessionRef },
+      { cwd: input.cwd, piBinary, sessionRef, piLeadingArgs },
       resolveCommand,
     );
     if (plan === null) {
@@ -448,28 +465,35 @@ export function planExternalCommandLaunch(
 
 /** One-shot batch script updating pi in place (DOC-02, native
  * terminalPiSelfUpdateCommand): the RESOLVED pi path, batch-quoted. */
-export function buildWindowsPiUpdateScript(piBinary: string): string {
+export function buildWindowsPiUpdateScript(
+  piBinary: string,
+  leadingArgs: readonly string[] = [],
+): string {
+  const command = [piBinary, ...leadingArgs].map(quoteBatch).join(" ");
   return [
     "@echo off",
     "setlocal disabledelayedexpansion",
     "chcp 65001 >nul",
     "title Agent Deck",
-    `${quoteBatch(piBinary)} update pi`,
+    ...(leadingArgs.length > 0 ? ["set ELECTRON_RUN_AS_NODE=1"] : []),
+    `${command} update pi`,
     "pause",
     "",
   ].join("\r\n");
 }
 
 /** One-shot POSIX sh script updating pi in place; keeps the window open. */
-export function buildPosixPiUpdateScript(piBinary: string): string {
-  return [
-    "#!/bin/sh",
-    `${shellQuotePosix(piBinary)} update pi`,
-    "echo",
-    'printf "Press Enter to close."',
-    "read _",
-    "",
-  ].join("\n");
+export function buildPosixPiUpdateScript(
+  piBinary: string,
+  leadingArgs: readonly string[] = [],
+): string {
+  const command = [
+    ...(leadingArgs.length > 0 ? ["ELECTRON_RUN_AS_NODE=1"] : []),
+    shellQuotePosix(piBinary),
+    ...leadingArgs.map(shellQuotePosix),
+    "update pi",
+  ].join(" ");
+  return ["#!/bin/sh", command, "echo", 'printf "Press Enter to close."', "read _", ""].join("\n");
 }
 
 /** Compose the platform launch for the pi self-update script. Pure; null =
@@ -478,17 +502,22 @@ export function planPiUpdateLaunch(
   platform: NodeJS.Platform | string,
   piBinary: string,
   resolveCommand: (name: string) => string | null,
+  leadingArgs: readonly string[] = [],
 ): ExternalTerminalPlan | null {
   if (platform === "win32") {
-    return { kind: "winScript", script: buildWindowsPiUpdateScript(piBinary) };
+    return { kind: "winScript", script: buildWindowsPiUpdateScript(piBinary, leadingArgs) };
   }
   if (platform === "darwin") {
     const open = resolveCommand("open");
     if (open === null) return null;
-    return { kind: "macScript", open, script: buildPosixPiUpdateScript(piBinary) };
+    return {
+      kind: "macScript",
+      open,
+      script: buildPosixPiUpdateScript(piBinary, leadingArgs),
+    };
   }
   if (platform === "linux") {
-    const script = buildPosixPiUpdateScript(piBinary);
+    const script = buildPosixPiUpdateScript(piBinary, leadingArgs);
     const xte = resolveCommand("x-terminal-emulator");
     if (xte !== null) return { kind: "linuxScript", terminal: xte, argsPrefix: ["-e"], script };
     const gnome = resolveCommand("gnome-terminal");
@@ -556,8 +585,8 @@ export function createExternalCommandLauncher(
       if (resolved.source === "bundled") {
         throw new Error("Pi is bundled with Agent Deck and updates with the app.");
       }
-      const piBinary = resolved.path;
-      const plan = planPiUpdateLaunch(platform, piBinary, resolveCommand);
+      const spawnPlan = resolvePiSpawnPlan(resolved.path, [], env());
+      const plan = planPiUpdateLaunch(platform, spawnPlan.command, resolveCommand, spawnPlan.args);
       if (plan === null) {
         throw new Error("No supported terminal application was found on this machine.");
       }

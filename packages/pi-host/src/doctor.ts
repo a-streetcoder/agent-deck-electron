@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import spawn from "cross-spawn";
-import { PiNotFoundError, resolvePiBinary } from "./resolve.ts";
+import { PiNotFoundError, resolvePiBinary, resolvePiSpawnPlan } from "./resolve.ts";
 
 /**
  * Environment health probe (native Doctor screen): is pi installed, what
@@ -243,11 +243,18 @@ export function meetsMinNode(version: [number, number, number]): boolean {
  * .cmd/.bat via execFile without shell:true (CVE-2024-27980 mitigation → EINVAL);
  * cross-spawn rewrites the invocation — the same mechanism PiProcess relies on.
  */
-export function probeVersion(cmd: string, args: string[] = ["--version"]): Promise<string | null> {
+export function probeVersion(
+  cmd: string,
+  args: string[] = ["--version"],
+  env?: NodeJS.ProcessEnv,
+): Promise<string | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(cmd, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        ...(env ? { env } : {}),
+      });
     } catch {
       resolve(null);
       return;
@@ -365,7 +372,8 @@ export async function runDoctor(
   }
 
   if (binPath) {
-    const version = await probeVersion(binPath);
+    const plan = resolvePiSpawnPlan(binPath, ["--version"]);
+    const version = await probeVersion(plan.command, plan.args, plan.env);
     checks.push({
       id: "pi-version",
       label: "Pi version",

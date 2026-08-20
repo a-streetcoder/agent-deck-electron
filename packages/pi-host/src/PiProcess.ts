@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import spawn from "cross-spawn";
 import { createJsonlReader, type JsonlReader } from "./jsonl.ts";
+import { resolvePiSpawnPlan } from "./resolve.ts";
 
 const STDERR_CAP_BYTES = 64 * 1024;
 const KILL_GRACE_MS = 3_000;
@@ -75,9 +76,11 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
 
   start(): void {
     if (this.child) throw new Error("PiProcess already started");
-    const child = spawn(this.options.binPath, this.options.args, {
+    const env = { ...process.env, ...this.options.env };
+    const plan = resolvePiSpawnPlan(this.options.binPath, this.options.args, env);
+    const child = spawn(plan.command, plan.args, {
       cwd: this.options.cwd,
-      env: { ...process.env, ...this.options.env },
+      env: plan.env,
       stdio: ["pipe", "pipe", "pipe"],
       // POSIX: lead a fresh process group so stop() can signal pi AND its
       // children via the negative pid (Windows tree-kill goes through

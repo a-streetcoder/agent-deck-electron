@@ -256,6 +256,8 @@ function CopyFixButton({ command }: { command: string }) {
 
 const primaryButtonClass =
   "flex items-center gap-1.5 rounded-capsule px-3.5 py-1.5 text-xs font-medium shadow-capsule";
+const overlayBackButtonClass =
+  "flex items-center gap-1 rounded-capsule py-1 pr-2.5 text-xs text-text-secondary hover:text-text-primary";
 const primaryButtonStyle = {
   background:
     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -801,7 +803,7 @@ export function OnboardingOverlay() {
             <div className="flex items-center justify-between border-t border-border-subtle py-3">
               <ControlButton
                 data-testid="onboarding-setup-back"
-                className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className={overlayBackButtonClass}
                 onClick={() => setPhase("tour")}
               >
                 <ArrowLeft size={13} /> Back
@@ -834,7 +836,7 @@ export function OnboardingOverlay() {
             />
             <div className="flex shrink-0 items-center justify-between border-t border-border-subtle px-8 py-4">
               <ControlButton
-                className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className={overlayBackButtonClass}
                 onClick={() => {
                   setPhase("tour");
                   runChecks();
@@ -998,7 +1000,7 @@ export function OnboardingOverlay() {
             <div className="flex items-center justify-between border-t border-border-subtle px-5 py-3">
               <ControlButton
                 data-testid="onboarding-preferences-back"
-                className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className={overlayBackButtonClass}
                 onClick={() => goto("setup")}
               >
                 <ArrowLeft size={13} /> Back
@@ -1051,7 +1053,7 @@ export function OnboardingOverlay() {
             <div className="flex items-center justify-between pt-1">
               <ControlButton
                 data-testid="onboarding-final-back"
-                className="flex items-center gap-1 rounded-capsule px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className={overlayBackButtonClass}
                 onClick={() => goto("preferences")}
               >
                 <ArrowLeft size={13} /> Back

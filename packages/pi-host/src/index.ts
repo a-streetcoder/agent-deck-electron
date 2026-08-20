@@ -1,5 +1,12 @@
 export { createJsonlReader, serializeJsonLine, type JsonlReader } from "./jsonl.ts";
-export { PI_INSTALL_HINT, PiNotFoundError, resolvePiBinary, type ResolvedPi } from "./resolve.ts";
+export {
+  PI_INSTALL_HINT,
+  PiNotFoundError,
+  resolvePiBinary,
+  resolvePiSpawnPlan,
+  type PiSpawnPlan,
+  type ResolvedPi,
+} from "./resolve.ts";
 export { PiProcess, type PiProcessExit, type PiProcessOptions } from "./PiProcess.ts";
 export {
   discoverModelCatalog,

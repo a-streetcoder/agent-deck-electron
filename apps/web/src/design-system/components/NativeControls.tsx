@@ -1,4 +1,5 @@
 import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import { cn } from "@/lib/cn";
 
 /**
  * Low-level native controls owned by the design system.
@@ -28,7 +29,7 @@ export const ControlTextArea = forwardRef<
 });
 
 export const ControlSelect = forwardRef<HTMLSelectElement, ComponentPropsWithoutRef<"select">>(
-  function ControlSelect(props, ref) {
-    return <select ref={ref} {...props} />;
+  function ControlSelect({ className, ...props }, ref) {
+    return <select ref={ref} className={cn(className, "pe-8")} {...props} />;
   },
 );

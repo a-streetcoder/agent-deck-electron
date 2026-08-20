@@ -21,6 +21,13 @@ export interface ResolvedPi {
   source: "env" | "path" | "bundled" | "candidate";
 }
 
+/** The real argv/env used to spawn Pi after resolving a binary path. */
+export interface PiSpawnPlan {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+}
+
 const WINDOWS_EXTENSIONS = [".cmd", ".exe", ".bat", ".ps1", ""];
 
 function isExecutableFile(filePath: string): boolean {
@@ -147,4 +154,27 @@ export function resolvePiBinary(
   }
 
   throw new PiNotFoundError(`Could not find the pi binary. ${PI_INSTALL_HINT}`);
+}
+
+/**
+ * Packaged Electron builds set `AGENT_DECK_PI_PATH` to the Electron binary and
+ * `AGENT_DECK_PI_CLI` to bundled `cli.js`. Re-execing that binary through a
+ * shell wrapper often never runs as Node while the GUI is alive, so spawn the
+ * same way the owned server does: `execPath` + `cli.js` + `ELECTRON_RUN_AS_NODE`.
+ * Dev and tests omit `AGENT_DECK_PI_CLI` and keep a real `pi` binary unchanged.
+ */
+export function resolvePiSpawnPlan(
+  binPath: string,
+  args: readonly string[] = [],
+  env: NodeJS.ProcessEnv = process.env,
+): PiSpawnPlan {
+  const cli = env.AGENT_DECK_PI_CLI?.trim();
+  if (cli && existsSync(cli)) {
+    return {
+      command: binPath,
+      args: [path.resolve(cli), ...args],
+      env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+    };
+  }
+  return { command: binPath, args: [...args], env };
 }

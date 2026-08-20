@@ -86,6 +86,28 @@ describe("planExternalTerminalLaunch", () => {
     });
   });
 
+  it("prepends packaged cli.js and ELECTRON_RUN_AS_NODE when leading args are set", () => {
+    const resolve = (name: string) => (name === "open" ? "/usr/bin/open" : null);
+    const leadingArgs = ["/app/Resources/pi-runtime/cli.js"];
+    const plan = planExternalTerminalLaunch(
+      "darwin",
+      { ...posixInput, piLeadingArgs: leadingArgs },
+      resolve,
+    );
+    expect(plan).toEqual({
+      kind: "macScript",
+      open: "/usr/bin/open",
+      script: buildResumeScript(
+        posixInput.cwd,
+        posixInput.piBinary,
+        posixInput.sessionRef,
+        leadingArgs,
+      ),
+    });
+    expect(plan && "script" in plan ? plan.script : "").toContain("ELECTRON_RUN_AS_NODE=1");
+    expect(plan && "script" in plan ? plan.script : "").toContain(leadingArgs[0]);
+  });
+
   it("linux tries x-terminal-emulator, then gnome-terminal, then konsole", () => {
     const only = (available: string) => (name: string) =>
       name === available ? `/usr/bin/${available}` : null;
