@@ -1093,7 +1093,7 @@ export function OnboardingOverlay() {
 
         {phase === "preferences" ? (
           <div
-            className="mx-auto flex min-h-0 w-full max-w-3xl flex-col py-8"
+            className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col"
             data-testid="onboarding-preferences"
           >
             <SheetHeader className="items-start">
@@ -1224,7 +1224,7 @@ export function OnboardingOverlay() {
                 <div className="py-6 text-center text-sm text-text-muted">Loading preferences…</div>
               )}
             </div>
-            <SheetFooter>
+            <SheetFooter className="mt-auto shrink-0">
               <ControlButton
                 data-testid="onboarding-preferences-back"
                 className={overlayBackButtonClass}
