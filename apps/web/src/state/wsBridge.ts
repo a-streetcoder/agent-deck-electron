@@ -732,6 +732,19 @@ function handleMessage(message: ServerMessage): void {
       break;
     }
     case "error":
+      if (
+        currentSessionId !== null &&
+        message.sessionId === currentSessionId &&
+        message.message.includes("unknown session")
+      ) {
+        if (recoveredActivationToken === activationToken) {
+          store.setError(message.message);
+          break;
+        }
+        recoveredActivationToken = activationToken;
+        void recoverUnknownSession(currentSessionId, activationToken);
+        break;
+      }
       store.setError(message.message);
       break;
     case "session_exit":
@@ -800,6 +813,49 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function resumeSession(id: string): Promise<SessionMeta> {
+  const { session } = await fetchJson<{ session: SessionMeta }>(
+    `/sessions/${encodeURIComponent(id)}/resume`,
+    { method: "POST" },
+  );
+  return session;
+}
+
+function isUnknownSessionFailure(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("unknown session") || /\(404\)/.test(text);
+}
+
+async function recoverUnknownSession(sessionId: string, token: number): Promise<void> {
+  try {
+    let session: SessionMeta;
+    try {
+      session = await resumeSession(sessionId);
+    } catch (error) {
+      if (!isUnknownSessionFailure(error)) throw error;
+      const { currentProjectId, currentAgentName } = useAppStore.getState();
+      const created = await fetchJson<{ session: SessionMeta }>("/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(currentProjectId ? { projectId: currentProjectId } : {}),
+          ...(currentAgentName ? { agentName: currentAgentName } : {}),
+        }),
+      });
+      session = created.session;
+    }
+    if (token !== activationToken) return;
+    useAppStore.getState().setSession(session);
+    connect(session.id);
+    useAppStore.getState().setError(null);
+  } catch (error) {
+    if (token !== activationToken) return;
+    disconnect();
+    useAppStore.getState().setSession(null);
+    useAppStore.getState().setError(String(error));
+  }
+}
+
 async function findOrCreateSession(
   projectId: string | null,
   agentName: string | null,
@@ -810,16 +866,10 @@ async function findOrCreateSession(
     (s) => (s.agentName ?? null) === agentName,
   );
   const existing = scoped.at(-1);
-  // A persisted parked row after server restart has no in-memory Pi owner.
-  // Wake it through the same canonical resume transaction before subscribing.
-  if (existing?.endedAt || existing?.parkedAt) {
-    const { session } = await fetchJson<{ session: SessionMeta }>(
-      `/sessions/${encodeURIComponent(existing.id)}/resume`,
-      { method: "POST" },
-    );
-    return session;
-  }
-  if (existing) return existing;
+  // Index-only catalog rows look live (no endedAt/parkedAt) after restart but
+  // RPC subscribe is live-map only. Always resume before subscribing; server
+  // resume no-ops when the session is already running.
+  if (existing) return resumeSession(existing.id);
   const { session } = await fetchJson<{ session: SessionMeta }>("/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -842,6 +892,7 @@ export async function refreshSessions(): Promise<void> {
 }
 
 let activationToken = 0;
+let recoveredActivationToken: number | null = null;
 let notificationFocusToken = 0;
 const attentionMetaGeneration = new Map<string, number>();
 
@@ -908,10 +959,7 @@ async function switchToSessionAtActivation(target: SessionMeta, token: number): 
     store.setCurrentAgent(target.agentName ?? null);
     store.resetTranscript();
     store.setSession(null);
-    const { session } = await fetchJson<{ session: SessionMeta }>(
-      `/sessions/${encodeURIComponent(target.id)}/resume`,
-      { method: "POST" },
-    );
+    const session = await resumeSession(target.id);
     if (token !== activationToken) return;
     useAppStore.getState().setSession(session);
     connect(session.id);
