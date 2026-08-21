@@ -808,7 +808,7 @@ export function OnboardingOverlay() {
                 />
               ))}
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
-              <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-6xl flex-col gap-2 px-8 pb-7 text-white">
+              <SheetContainer className="absolute inset-x-0 bottom-0 flex flex-col gap-2 pb-7 text-white">
                 <div key={tourPage.image} className="onboarding-slide-copy">
                   <h2
                     data-testid="onboarding-title"
@@ -817,7 +817,7 @@ export function OnboardingOverlay() {
                   >
                     {tourPage.title}
                   </h2>
-                  <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/80">
+                  <p className="mt-2 text-sm leading-relaxed text-white/80">
                     {tourPage.description}
                   </p>
                 </div>
@@ -849,14 +849,14 @@ export function OnboardingOverlay() {
                     <ArrowRight size={14} />
                   </ControlButton>
                 </div>
-              </div>
+              </SheetContainer>
             </div>
             <div
-              className="mx-auto w-full max-w-6xl flex-1 border-t border-border-subtle px-8 py-5"
+              className="flex min-h-0 flex-1 flex-col border-t border-border-subtle"
               data-testid="onboarding-setup-summary"
             >
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
+              <SheetContainer className="flex-1 py-5">
+                <div className="mb-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
                     {checksLoading ? (
                       <RefreshCw size={15} className="animate-spin text-accent" />
@@ -875,70 +875,58 @@ export function OnboardingOverlay() {
                       : "One quick setup step still needs your attention."}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      "rounded-capsule px-2.5 py-1 text-detail font-medium",
-                      setupReady
-                        ? "bg-success-subtle text-success"
-                        : "bg-warning-subtle text-warning",
-                    )}
-                  >
-                    {setupReady ? "Ready to start" : "Action needed"}
-                  </span>
-                </div>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {checksLoading && checks.length === 0
-                  ? Array.from({ length: 4 }, (_, index) => (
-                      <div
-                        key={index}
-                        className="flex animate-pulse items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
-                      >
-                        <span className="h-3.5 w-3.5 rounded-full bg-border-strong" />
-                        <span className="h-2.5 w-20 rounded bg-border-strong" />
-                      </div>
-                    ))
-                  : null}
-                {checks
-                  .filter((check) =>
-                    SUMMARY_CHECK_IDS.includes(check.id as (typeof SUMMARY_CHECK_IDS)[number]),
-                  )
-                  .map((check) => {
-                    const { label, Icon, color } = STATUS_META[check.status];
-                    const statusLabel =
-                      requiredSetupIds.includes(check.id) && check.status !== "ok"
-                        ? "Needs setup"
-                        : label;
-                    return (
-                      <div
-                        key={check.id}
-                        className="flex min-w-0 items-start gap-2.5 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
-                      >
-                        <Icon size={14} style={{ color }} className="mt-0.5 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-xs font-medium text-text-primary">
-                              {summaryCheckLabel(check.id)}
-                            </span>
-                            <span
-                              className="text-overline uppercase tracking-wide"
-                              style={{ color }}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {checksLoading && checks.length === 0
+                    ? Array.from({ length: 4 }, (_, index) => (
+                        <div
+                          key={index}
+                          className="flex animate-pulse items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2"
+                        >
+                          <span className="h-3.5 w-3.5 rounded-full bg-border-strong" />
+                          <span className="h-2.5 w-20 rounded bg-border-strong" />
+                        </div>
+                      ))
+                    : null}
+                  {checks
+                    .filter((check) =>
+                      SUMMARY_CHECK_IDS.includes(check.id as (typeof SUMMARY_CHECK_IDS)[number]),
+                    )
+                    .map((check) => {
+                      const { label, Icon, color } = STATUS_META[check.status];
+                      const statusLabel =
+                        requiredSetupIds.includes(check.id) && check.status !== "ok"
+                          ? "Needs setup"
+                          : label;
+                      return (
+                        <div
+                          key={check.id}
+                          className="flex min-w-0 items-start gap-2.5 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                        >
+                          <Icon size={14} style={{ color }} className="mt-0.5 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs font-medium text-text-primary">
+                                {summaryCheckLabel(check.id)}
+                              </span>
+                              <span
+                                className="text-overline uppercase tracking-wide"
+                                style={{ color }}
+                              >
+                                {statusLabel}
+                              </span>
+                            </div>
+                            <div
+                              className="mt-0.5 truncate text-micro text-text-muted"
+                              title={check.detail}
                             >
-                              {statusLabel}
-                            </span>
-                          </div>
-                          <div
-                            className="mt-0.5 truncate text-micro text-text-muted"
-                            title={check.detail}
-                          >
-                            {summaryCheckDetail(check)}
+                              {summaryCheckDetail(check)}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-              </div>
+                      );
+                    })}
+                </div>
+              </SheetContainer>
             </div>
             <SheetFooter
               trailing={
