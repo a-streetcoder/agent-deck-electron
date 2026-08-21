@@ -607,7 +607,7 @@ function DesktopBrowser(): ReactElement {
           className={cn(
             "shrink-0 rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-30",
             picking
-              ? "bg-accent text-on-accent"
+              ? "bg-accent/20 text-accent"
               : "text-text-muted hover:bg-hover hover:text-text-primary",
           )}
           title="Pick an element for context"

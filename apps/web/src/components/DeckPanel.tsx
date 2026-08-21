@@ -127,8 +127,7 @@ function RunRow({
           </span>
           {run.needsInput ? (
             <span
-              className="rounded-capsule px-2 py-0.5 text-micro font-medium"
-              style={{ color: "var(--color-accent-foreground)", background: "var(--color-accent)" }}
+              className="rounded-capsule bg-accent-surface px-2 py-0.5 text-micro font-medium text-text-primary"
               data-testid="deck-run-needs-input"
             >
               Needs input

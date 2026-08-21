@@ -148,7 +148,7 @@ function InlineCommentEditor(props: {
           type="button"
           data-testid="diff-comment-save"
           disabled={text.trim().length === 0}
-          className="rounded-md bg-accent px-2.5 py-1 text-detail font-medium text-on-accent transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="rounded-md bg-primary px-2.5 py-1 text-detail font-medium text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-40"
           onClick={() => props.onSubmit(text)}
         >
           {props.mode === "edit" ? "Save" : "Comment"}
@@ -361,12 +361,7 @@ function WorktreeMergeToolbar(props: {
       <ControlButton
         type="button"
         data-testid="diff-merge"
-        className="shrink-0 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
-        style={{
-          background:
-            "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-          color: "var(--color-accent-foreground)",
-        }}
+        className="shrink-0 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
         disabled={merging || running}
         title={running ? "Wait for the current turn to finish" : undefined}
         onClick={() => void merge()}

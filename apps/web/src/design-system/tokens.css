@@ -20,6 +20,8 @@
   --color-brand-accent-bright: #9fe2ff;
   --color-brand-accent-deep: #43a0c7;
   --color-brand-accent-shadow: #1c414f;
+  --color-brand-action: #236882;
+  --color-brand-action-hover: #287594;
 
   /* Surfaces */
   --color-surface: #1e1e20;
@@ -212,8 +214,8 @@
   --opacity-disabled: 0.55;
 
   /* Compatibility aliases. New code uses the semantic names above. */
-  --color-primary: var(--color-brand-accent);
-  --color-primary-hover: var(--color-brand-accent-bright);
+  --color-primary: var(--color-brand-action);
+  --color-primary-hover: var(--color-brand-action-hover);
   --color-accent: var(--color-brand-accent);
   --color-accent-foreground: var(--color-text-on-accent);
   --color-on-primary: var(--color-text-on-accent);
@@ -230,7 +232,6 @@
   --color-text-muted: #6a6a70;
   --color-text-disabled: #97979d;
   --color-text-inverse: #f5f5f7;
-  --color-text-on-accent: var(--color-brand-accent-shadow);
   --color-text-on-media: #ffffff;
   --color-border-subtle: rgba(0, 0, 0, 0.06);
   --color-border-strong: rgba(0, 0, 0, 0.14);

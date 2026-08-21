@@ -260,12 +260,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           </ControlButton>
           <ControlButton
             data-testid="skill-editor-save"
-            className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
+            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
             disabled={!form.name.trim()}
             onClick={() => void save()}
           >
@@ -1562,12 +1557,7 @@ export function SkillsScreen() {
             />
             <ControlButton
               data-testid="new-skill"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
               title="New skill"
               onClick={() =>
                 setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
@@ -2351,12 +2341,7 @@ export function SkillsScreen() {
                   <>
                     <ControlButton
                       data-testid="skill-edit"
-                      className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
-                      style={{
-                        background:
-                          "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                        color: "var(--color-accent-foreground)",
-                      }}
+                      className="flex items-center gap-1.5 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
                       onClick={() => setEditing(editDraft(selected))}
                     >
                       <Pencil size={12} />

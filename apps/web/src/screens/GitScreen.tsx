@@ -773,12 +773,7 @@ export function GitScreen() {
                   </ControlButton>
                   <ControlButton
                     data-testid="git-release-confirm"
-                    className="rounded-capsule px-4 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
-                    style={{
-                      background:
-                        "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                      color: "var(--color-accent-foreground)",
-                    }}
+                    className="rounded-capsule bg-primary px-4 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                     disabled={releasing || preflighting || preflight?.state !== "ready"}
                     onClick={() => void release()}
                   >
@@ -868,12 +863,7 @@ export function GitScreen() {
               </div>
               <ControlButton
                 data-testid="git-merge"
-                className="shrink-0 rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="shrink-0 rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={merging || agentRunning}
                 title={agentRunning ? "Wait for the current turn to finish" : undefined}
                 onClick={() => void merge()}
@@ -982,12 +972,7 @@ export function GitScreen() {
                     </ControlButton>
                     <ControlButton
                       data-testid="git-commit-push"
-                      className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
-                      style={{
-                        background:
-                          "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                        color: "var(--color-accent-foreground)",
-                      }}
+                      className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                       disabled={committing || status.clean || !message.trim()}
                       onClick={() => void commit(true)}
                     >

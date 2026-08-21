@@ -65,6 +65,11 @@ Approved type exceptions:
 
 `installSystemTheme` follows the operating-system appearance and emits a design-system theme event. React code uses `useResolvedTheme`; imperative integrations subscribe through their adapter. Every new token must have acceptable contrast in both themes.
 
+- `--color-primary` is the action fill (control-grade teal). `--color-accent` is identity sky cyan.
+- Filled chrome that carries a label uses `bg-primary text-on-accent` in both themes.
+- Sky cyan is for focus, selection, info, glyphs, and 20% washes (`bg-accent/20 text-accent`), never as an opaque label fill.
+- App icon magenta is identity artwork, not a token.
+
 ## Approved exceptions
 
 - `components/diff/EditorIcons.tsx` and `JetBrainsIcons.tsx` preserve vendor artwork colors.

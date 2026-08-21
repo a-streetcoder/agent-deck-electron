@@ -418,12 +418,7 @@ export function AgentDetail({
             </ControlButton>
             <ControlButton
               data-testid="agent-edit"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
+              className="flex items-center gap-1.5 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
               onClick={onEdit}
             >
               <Pencil size={12} />
@@ -797,12 +792,7 @@ export function AgentsScreen() {
               />
               <ControlButton
                 data-testid="new-agent"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
                 title="New agent"
                 onClick={() => setEditing("new")}
               >

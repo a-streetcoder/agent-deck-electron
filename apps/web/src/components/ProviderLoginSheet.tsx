@@ -247,12 +247,7 @@ export function ProviderLoginSheet({
                 type="submit"
                 form={promptFormId}
                 data-testid="login-prompt-submit"
-                className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
               >
                 Submit
               </ControlButton>

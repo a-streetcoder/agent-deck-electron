@@ -48,11 +48,9 @@ const sizeClasses: Record<ButtonSize, string> = {
 /**
  * Variant chrome. Notes on the mapping:
  *
- * - `primary` — capsule background with a top-left → bottom-right gradient
- *   from brandAccentBright → brandAccent (`bg-primary` resolves to the
- *   active theme accent; the hover state simulates accent-bright by
- *   stepping to `bg-primary-hover`). Capsule shadow approximates
- *   `shadow(brandAccent@0.18, radius 5)` from AppPrimaryButtonStyle.
+ * - `primary` — solid action fill (`bg-primary` / `hover:bg-primary-hover`)
+ *   with `text-on-accent`. Capsule shadow approximates
+ *   AppPrimaryButtonStyle elevation.
  * - `secondary` — glass capsule chrome via the secondary card tokens.
  * - `ghost` — transparent default with neutral hover wash.
  * - `pill` — translucent glass capsule that brightens with `isActive` to
@@ -76,7 +74,7 @@ const variantClasses: Record<ButtonVariant, string> = {
     "rounded-full border-transparent",
     "bg-surface-elevated/80 text-text-primary",
     "hover:bg-hover active:opacity-75",
-    "data-[active=true]:bg-primary/20 data-[active=true]:text-accent",
+    "data-[active=true]:bg-accent/20 data-[active=true]:text-accent",
     "data-[active=true]:font-semibold",
   ),
   destructive: cn(

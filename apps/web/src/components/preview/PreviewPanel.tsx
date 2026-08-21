@@ -412,7 +412,7 @@ export function ScriptsRunner(props: {
         ) : (
           <ControlButton
             type="button"
-            className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-50"
             data-testid="preview-run"
             disabled={!hasScripts || selected === null}
             onClick={onRun}
@@ -1044,7 +1044,7 @@ function ElementCaptureForm(props: {
         </ControlButton>
         <ControlButton
           type="submit"
-          className="rounded-md bg-accent px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="rounded-md bg-primary px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-50"
           data-testid="preview-element-add"
           disabled={!canAdd}
         >

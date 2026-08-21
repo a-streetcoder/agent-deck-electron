@@ -21,7 +21,7 @@ const INLINE_STYLES = [
   "[&_strong]:font-semibold [&_em]:italic",
   "[&_del]:line-through [&_del]:opacity-70",
   "[&_code]:rounded [&_code]:bg-surface-elevated [&_code]:px-1 [&_code]:py-[1px] [&_code]:font-mono [&_code]:text-[0.85em]",
-  "[&_a]:text-accent [&_a]:underline [&_a:hover]:text-primary-hover",
+  "[&_a]:text-accent [&_a]:underline [&_a:hover]:text-accent-bright",
 ];
 
 export const MarkdownInline = forwardRef<HTMLSpanElement, MarkdownInlineProps>(

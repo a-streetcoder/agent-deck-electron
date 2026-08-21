@@ -256,12 +256,7 @@ function DiscoveryPanel() {
             </span>
             <ControlButton
               data-testid={`discovery-add-${candidate.name}`}
-              className="rounded-capsule px-2.5 py-0.5 text-detail font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
+              className="rounded-capsule bg-primary px-2.5 py-0.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
               onClick={() => void addProject(candidate.path).then(() => void scan())}
             >
               Add
@@ -343,12 +338,7 @@ export function ProjectsScreen() {
               </div>
               <ControlButton
                 data-testid="projects-add"
-                className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
                 title="Add project"
                 onClick={() => void startAdd()}
               >
@@ -382,12 +372,7 @@ export function ProjectsScreen() {
               />
               <ControlButton
                 data-testid="projects-add-confirm"
-                className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={!draftPath.trim()}
                 onClick={() =>
                   void addProject(draftPath.trim()).then(() => {

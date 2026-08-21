@@ -131,12 +131,7 @@ export function EnvironmentScreen() {
               </ControlSelect>
               <ControlButton
                 data-testid="env-new-save"
-                className="rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
+                className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newKey)}
                 onClick={() =>
                   void writeVar(newScope, newKey, newValue).then(() => {

@@ -58,7 +58,7 @@ const BLOCK_STYLES = [
   "[&_th]:border-b [&_th]:border-border-strong [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold",
   "[&_td]:border-b [&_td]:border-border-subtle [&_td]:px-2 [&_td]:py-1",
   // Links
-  "[&_a]:text-accent [&_a]:underline [&_a:hover]:text-primary-hover",
+  "[&_a]:text-accent [&_a]:underline [&_a:hover]:text-accent-bright",
   // Horizontal rule
   "[&_hr]:my-4 [&_hr]:border-0 [&_hr]:border-t [&_hr]:border-border-subtle",
 ];

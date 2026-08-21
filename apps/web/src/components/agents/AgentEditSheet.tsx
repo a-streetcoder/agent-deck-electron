@@ -1224,12 +1224,7 @@ export function AgentEditSheet({
           </ControlButton>
           <ControlButton
             data-testid="editor-save"
-            className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
+            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
             disabled={
               saving || extensionCatalogLoading || skillCatalogLoading || (!agent && !name.trim())
             }

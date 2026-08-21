@@ -636,12 +636,7 @@ export function IssuesScreen() {
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <ControlButton
                     data-testid="issue-open-in-pi"
-                    className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
-                    style={{
-                      background:
-                        "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                      color: "var(--color-accent-foreground)",
-                    }}
+                    className="flex items-center gap-1.5 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
                     onClick={() => void start(detail)}
                   >
                     <Sparkles size={13} /> Open in Pi

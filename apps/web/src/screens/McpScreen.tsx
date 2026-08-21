@@ -1090,12 +1090,7 @@ export function McpScreen() {
                 <ControlButton
                   type="submit"
                   data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
-                  className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
-                  style={{
-                    background:
-                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                    color: "var(--color-accent-foreground)",
-                  }}
+                  className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                   disabled={!canSubmit}
                 >
                   {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
@@ -1539,12 +1534,7 @@ export function McpScreen() {
                               />
                               <ControlButton
                                 data-testid={`mcp-login-submit-${server.id}`}
-                                className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
-                                style={{
-                                  background:
-                                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                                  color: "var(--color-accent-foreground)",
-                                }}
+                                className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                                 disabled={!code.trim() || loginSubmitting}
                                 onClick={() => void submitCode()}
                               >

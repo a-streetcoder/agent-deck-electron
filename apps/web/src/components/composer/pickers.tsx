@@ -317,13 +317,8 @@ export function SendStopButton({
       <ControlButton
         data-testid="send-button"
         className={cn(
-          "flex h-9 w-9 items-center justify-center rounded-full shadow-capsule transition-all disabled:opacity-40",
+          "flex h-9 w-9 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule transition-all hover:bg-primary-hover disabled:opacity-40",
         )}
-        style={{
-          background:
-            "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-          color: "var(--color-text-on-accent)",
-        }}
         disabled={disabled}
         title={running ? "Queue input" : "Send"}
         aria-label={running ? "Queue input" : "Send"}

@@ -257,7 +257,7 @@ export function SkillImportPreviewDialog({
             </ControlButton>
             <ControlButton
               data-testid="skill-import-preview-import"
-              className="rounded-capsule border border-accent bg-accent/10 px-3 py-1.5 text-detail font-medium text-accent hover:bg-accent/20 disabled:opacity-40"
+              className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent hover:bg-primary-hover disabled:opacity-40"
               disabled={selected.size === 0 || importing}
               onClick={() => void doImport()}
             >

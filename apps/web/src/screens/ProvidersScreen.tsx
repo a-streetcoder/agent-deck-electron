@@ -237,7 +237,7 @@ function ProviderGroup({
               <ControlButton
                 type="button"
                 data-testid={`provider-signout-${provider.id}`}
-                className="mr-2 flex shrink-0 items-center gap-1 rounded-capsule bg-primary/20 px-2.5 py-1 text-detail font-medium text-accent hover:bg-primary/30 disabled:cursor-wait disabled:opacity-50"
+                className="mr-2 flex shrink-0 items-center gap-1 rounded-capsule bg-accent/20 px-2.5 py-1 text-detail font-medium text-accent hover:bg-accent/30 disabled:cursor-wait disabled:opacity-50"
                 aria-label={`Sign out of ${provider.name}`}
                 title={`Sign out of ${provider.name} and remove its stored credentials`}
                 disabled={disconnectingId !== null}

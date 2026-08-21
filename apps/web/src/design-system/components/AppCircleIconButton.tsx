@@ -5,9 +5,9 @@ import { cn } from "../../lib/cn";
  * Visual style of the circle icon button. Mirrors macOS
  * `AppCircleIconButtonStyle`:
  *
- *  - `soft`      → translucent brand-accent glass + accent foreground
+ *  - `soft`      → translucent identity wash + accent glyph
  *                  (the default; matches the toolbar's primary affordances)
- *  - `prominent` → opaque brand-accent fill + accent-foreground glyph
+ *  - `prominent` → opaque action fill + on-accent glyph
  *                  (sheet headers, splash CTAs)
  *  - `neutral`   → bare regular glass with mutedText glyph
  *                  (incidental affordances)
@@ -39,7 +39,7 @@ const sizeClasses: Record<AppCircleIconButtonSize, string> = {
 };
 
 const appearanceClasses: Record<AppCircleIconButtonAppearance, string> = {
-  soft: cn("bg-primary/20 text-accent", "border-transparent hover:bg-primary/30"),
+  soft: cn("bg-accent/20 text-accent", "border-transparent hover:bg-accent/30"),
   prominent: cn("bg-primary text-on-accent", "border-transparent hover:bg-primary-hover"),
   neutral: cn("bg-surface-elevated text-text-muted", "border-border-subtle hover:bg-hover"),
 };
