@@ -1,4 +1,5 @@
 import { AppSpinner } from "@/design-system/components/AppSpinner";
+import { Button } from "@/design-system/components/Button";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
 import { SheetFooter } from "@/design-system/components/SheetFooter";
 import { SheetHeader } from "@/design-system/components/SheetHeader";
@@ -260,11 +261,6 @@ function CopyFixButton({ command }: { command: string }) {
   );
 }
 
-const primaryButtonClass =
-  "flex items-center gap-1.5 rounded-capsule px-3.5 py-1.5 text-xs font-medium shadow-capsule";
-const overlayBackButtonClass =
-  "flex items-center gap-1 rounded-capsule py-1 pr-2.5 text-xs text-text-secondary hover:text-text-primary";
-
 function modelCatalogValue(model: CatalogModel): string {
   return `${model.provider}:${model.id}`;
 }
@@ -471,16 +467,21 @@ function PrefModelPicker({
                         );
                       })}
                     </div>
-                    <SheetFooter>
-                      <ControlButton
-                        type="button"
-                        data-testid="pref-model-providers-back"
-                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
-                        onClick={() => setProviderId(null)}
-                      >
-                        <ArrowLeft size={13} /> Back
-                      </ControlButton>
-                    </SheetFooter>
+                    <SheetFooter
+                      className="px-5 py-3"
+                      leading={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="md"
+                          data-testid="pref-model-providers-back"
+                          leadingIcon={<ArrowLeft size={13} />}
+                          onClick={() => setProviderId(null)}
+                        >
+                          Back
+                        </Button>
+                      }
+                    />
                   </>
                 )}
               </div>
@@ -491,12 +492,6 @@ function PrefModelPicker({
     </div>
   );
 }
-const primaryButtonStyle = {
-  background:
-    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-  color: "var(--color-accent-foreground)",
-} as const;
-
 /**
  * ONB-01 — the final step's smart-routing (native OnboardingFinalView
  * primaryTarget: "land the user in the one place that fixes what's still
@@ -944,124 +939,129 @@ export function OnboardingOverlay() {
                   })}
               </div>
             </div>
-            <div className="mt-auto flex w-full items-center justify-end border-t border-border-subtle px-8 py-4">
-              <ControlButton
-                data-testid="onboarding-get-started"
-                className={cn(
-                  primaryButtonClass,
-                  "disabled:cursor-not-allowed disabled:opacity-40",
-                )}
-                style={primaryButtonStyle}
-                disabled={checksLoading}
-                title={setupReady ? "Open Agent Deck" : setupActionLabel}
-                onClick={performSetupAction}
-              >
-                {nextSetupCheck?.id === "auth" ? (
-                  <ShieldCheck size={13} aria-hidden />
-                ) : (
-                  <Rocket size={13} aria-hidden />
-                )}
-                {checksLoading ? "Checking…" : setupActionLabel}
-              </ControlButton>
-            </div>
+            <SheetFooter
+              trailing={
+                <Button
+                  variant="primary"
+                  size="md"
+                  data-testid="onboarding-get-started"
+                  disabled={checksLoading}
+                  title={setupReady ? "Open Agent Deck" : setupActionLabel}
+                  leadingIcon={
+                    nextSetupCheck?.id === "auth" ? (
+                      <ShieldCheck size={13} aria-hidden />
+                    ) : (
+                      <Rocket size={13} aria-hidden />
+                    )
+                  }
+                  onClick={performSetupAction}
+                >
+                  {checksLoading ? "Checking…" : setupActionLabel}
+                </Button>
+              }
+            />
           </>
         ) : null}
 
         {phase === "setup" ? (
-          <div
-            className="mx-auto flex min-h-0 w-full max-w-6xl flex-col px-8 py-8"
-            data-testid="onboarding-setup"
-          >
-            <div className="flex items-center justify-between pb-2 pt-4">
-              <div className="flex items-center gap-2">
-                <Stethoscope size={16} className="text-text-secondary" />
-                <h2
-                  className="text-base font-semibold text-text-primary"
-                  style={{ fontStretch: "expanded" }}
+          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-setup">
+            <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-8 pt-8">
+              <div className="flex items-center justify-between pb-2 pt-4">
+                <div className="flex items-center gap-2">
+                  <Stethoscope size={16} className="text-text-secondary" />
+                  <h2
+                    className="text-base font-semibold text-text-primary"
+                    style={{ fontStretch: "expanded" }}
+                  >
+                    Finish setup
+                  </h2>
+                </div>
+                <ControlButton
+                  data-testid="onboarding-recheck"
+                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={checksLoading}
+                  onClick={runChecks}
                 >
-                  Finish setup
-                </h2>
+                  <RefreshCw size={11} className={checksLoading ? "animate-spin" : undefined} />
+                  {checksLoading ? "Checking…" : "Re-check"}
+                </ControlButton>
               </div>
-              <ControlButton
-                data-testid="onboarding-recheck"
-                className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                disabled={checksLoading}
-                onClick={runChecks}
-              >
-                <RefreshCw size={11} className={checksLoading ? "animate-spin" : undefined} />
-                {checksLoading ? "Checking…" : "Re-check"}
-              </ControlButton>
-            </div>
-            <p className="mb-4 text-sm text-text-secondary">
-              Complete the item below, then ask Agent Deck to check again.
-            </p>
-            <div className="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-y-auto pb-3 md:grid-cols-2">
-              {checks.length === 0 && checksLoading ? (
-                <div className="py-6 text-center text-sm text-text-muted">Checking your setup…</div>
-              ) : null}
-              {checks
-                .filter((check) => requiredSetupIds.includes(check.id) && check.status !== "ok")
-                .map((check) => {
-                  const { label, Icon, color } = STATUS_META[check.status];
-                  const isProvider = check.id === "auth";
-                  return (
-                    <div
-                      key={check.id}
-                      className="flex items-start gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-3"
-                      data-testid="onboarding-check"
-                      data-check-id={check.id}
-                      data-check-status={check.status}
-                    >
-                      <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-text-primary">
-                            {check.label}
-                          </span>
-                          <span className="text-micro uppercase tracking-wide" style={{ color }}>
-                            {label}
-                          </span>
+              <p className="mb-4 text-sm text-text-secondary">
+                Complete the item below, then ask Agent Deck to check again.
+              </p>
+              <div className="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-y-auto pb-3 md:grid-cols-2">
+                {checks.length === 0 && checksLoading ? (
+                  <div className="py-6 text-center text-sm text-text-muted">
+                    Checking your setup…
+                  </div>
+                ) : null}
+                {checks
+                  .filter((check) => requiredSetupIds.includes(check.id) && check.status !== "ok")
+                  .map((check) => {
+                    const { label, Icon, color } = STATUS_META[check.status];
+                    const isProvider = check.id === "auth";
+                    return (
+                      <div
+                        key={check.id}
+                        className="flex items-start gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-3"
+                        data-testid="onboarding-check"
+                        data-check-id={check.id}
+                        data-check-status={check.status}
+                      >
+                        <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-text-primary">
+                              {check.label}
+                            </span>
+                            <span className="text-micro uppercase tracking-wide" style={{ color }}>
+                              {label}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 break-words text-detail leading-relaxed text-text-muted">
+                            {friendlyCheckDetail(check)}
+                          </div>
+                          {isProvider && check.status !== "ok" ? (
+                            <ControlButton
+                              data-testid="onboarding-connect-provider"
+                              className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-text-primary"
+                              onClick={() => setPhase("provider")}
+                            >
+                              Connect an AI model
+                            </ControlButton>
+                          ) : null}
                         </div>
-                        <div className="mt-0.5 break-words text-detail leading-relaxed text-text-muted">
-                          {friendlyCheckDetail(check)}
-                        </div>
-                        {isProvider && check.status !== "ok" ? (
-                          <ControlButton
-                            data-testid="onboarding-connect-provider"
-                            className="mt-1.5 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-text-primary"
-                            onClick={() => setPhase("provider")}
-                          >
-                            Connect an AI model
-                          </ControlButton>
-                        ) : null}
+                        {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
                       </div>
-                      {check.fixCommand ? <CopyFixButton command={check.fixCommand} /> : null}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+              </div>
             </div>
-            <div className="flex items-center justify-between border-t border-border-subtle py-3">
-              <ControlButton
-                data-testid="onboarding-setup-back"
-                className={overlayBackButtonClass}
-                onClick={() => setPhase("tour")}
-              >
-                <ArrowLeft size={13} /> Back
-              </ControlButton>
-              <ControlButton
-                data-testid="onboarding-setup-continue"
-                className={cn(
-                  primaryButtonClass,
-                  "disabled:cursor-not-allowed disabled:opacity-40",
-                )}
-                style={primaryButtonStyle}
-                disabled={checksLoading}
-                onClick={setupReady ? performSetupAction : runChecks}
-              >
-                {checksLoading ? "Checking…" : setupReady ? "Get Started" : "Check again"}
-                <ArrowRight size={13} aria-hidden />
-              </ControlButton>
-            </div>
+            <SheetFooter
+              leading={
+                <Button
+                  variant="ghost"
+                  size="md"
+                  data-testid="onboarding-setup-back"
+                  leadingIcon={<ArrowLeft size={13} />}
+                  onClick={() => setPhase("tour")}
+                >
+                  Back
+                </Button>
+              }
+              trailing={
+                <Button
+                  variant="primary"
+                  size="md"
+                  data-testid="onboarding-setup-continue"
+                  disabled={checksLoading}
+                  trailingIcon={<ArrowRight size={13} aria-hidden />}
+                  onClick={setupReady ? performSetupAction : runChecks}
+                >
+                  {checksLoading ? "Checking…" : setupReady ? "Get Started" : "Check again"}
+                </Button>
+              }
+            />
           </div>
         ) : null}
 
@@ -1074,234 +1074,249 @@ export function OnboardingOverlay() {
                 setPhase("tour");
               }}
             />
-            <div className="flex shrink-0 items-center justify-between border-t border-border-subtle px-8 py-4">
-              <ControlButton
-                className={overlayBackButtonClass}
-                onClick={() => {
-                  setPhase("tour");
-                  runChecks();
-                }}
-              >
-                <ArrowLeft size={13} /> Back
-              </ControlButton>
-              <span className="text-xs text-text-muted">
-                Connect at least one provider to continue.
-              </span>
-            </div>
+            <SheetFooter
+              leading={
+                <Button
+                  variant="ghost"
+                  size="md"
+                  leadingIcon={<ArrowLeft size={13} />}
+                  onClick={() => {
+                    setPhase("tour");
+                    runChecks();
+                  }}
+                >
+                  Back
+                </Button>
+              }
+              trailing={
+                <span className="text-xs text-text-muted">
+                  Connect at least one provider to continue.
+                </span>
+              }
+            />
           </div>
         ) : null}
 
         {phase === "preferences" ? (
-          <div
-            className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col"
-            data-testid="onboarding-preferences"
-          >
-            <SheetHeader className="items-start">
-              <div className="flex min-w-0 flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <SlidersHorizontal size={16} className="text-text-secondary" />
-                  <h2
-                    className="text-base font-semibold text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
-                    Preferences
-                  </h2>
+          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-preferences">
+            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+              <SheetHeader className="items-start">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal size={16} className="text-text-secondary" />
+                    <h2
+                      className="text-base font-semibold text-text-primary"
+                      style={{ fontStretch: "expanded" }}
+                    >
+                      Preferences
+                    </h2>
+                  </div>
+                  <p className="text-xs text-text-muted">
+                    Defaults for new sessions — you can change these anytime later.
+                  </p>
                 </div>
-                <p className="text-xs text-text-muted">
-                  Defaults for new sessions — you can change these anytime later.
-                </p>
-              </div>
-            </SheetHeader>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-3">
-              {prefs ? (
-                <>
-                  <PrefToggle
-                    testid="pref-auto-title"
-                    label="Auto-name sessions"
-                    description="Generate a session title from your first message."
-                    checked={prefs.autoTitle}
-                    onChange={(v) => patchPref({ autoTitle: v })}
-                  />
-                  <PrefToggle
-                    testid="pref-subagents"
-                    label="Let sessions delegate to subagents"
-                    description="Sessions may hand focused work to a subagent and run several in parallel. Turn off to keep every session doing its own work."
-                    checked={prefs.subagentsEnabled}
-                    onChange={(v) => patchPref({ subagentsEnabled: v })}
-                  />
-                  <PrefToggle
-                    testid="pref-worktree"
-                    label="Isolate sessions in a worktree"
-                    description="Run each project session in its own git worktree. Session creation stops if isolation cannot be made."
-                    checked={prefs.worktreeIsolation}
-                    onChange={(v) => patchPref({ worktreeIsolation: v })}
-                  />
-                  <PrefToggle
-                    testid="pref-keep-worktree"
-                    label="Keep worktree and branch after a successful merge"
-                    description="Applies only with worktree isolation. On by default so you can keep iterating; turn off to remove the worktree and branch only after a successful merge. Deleting a session removes its worktree regardless."
-                    disabledDescription="Enable worktree isolation to change this preference."
-                    checked={prefs.keepWorktreeAfterMerge}
-                    disabled={!prefs.worktreeIsolation}
-                    onChange={(v) => patchPref({ keepWorktreeAfterMerge: v })}
-                  />
-                  <PrefToggle
-                    testid="pref-git-automation"
-                    label="Enable git actions"
-                    description="Show Commit / Push / Merge actions on the Git screen."
-                    checked={prefs.gitAutomation}
-                    onChange={(v) => patchPref({ gitAutomation: v })}
-                  />
-                  <div className="flex flex-col gap-1 pt-1">
-                    <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
-                      Default model
-                    </label>
-                    <PrefModelPicker
-                      models={models}
-                      runtimeDefaultModel={runtimeDefaultModel}
-                      value={prefs.defaultModel}
-                      disabled={modelState === "initial-loading" || modelState === "loading"}
-                      onChange={(next) => patchPref({ defaultModel: next })}
-                      triggerRef={modelSelect}
+              </SheetHeader>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-3">
+                {prefs ? (
+                  <>
+                    <PrefToggle
+                      testid="pref-auto-title"
+                      label="Auto-name sessions"
+                      description="Generate a session title from your first message."
+                      checked={prefs.autoTitle}
+                      onChange={(v) => patchPref({ autoTitle: v })}
                     />
-                    {modelState === "initial-loading" ? (
-                      <span className="text-detail text-text-muted" role="status">
-                        Discovering available models…
-                      </span>
-                    ) : modelState === "loading" ? (
-                      <span className="text-detail text-text-muted" role="status">
-                        Trying model discovery again…
-                      </span>
-                    ) : modelState === "success" && models.length === 0 ? (
-                      <span className="text-detail text-text-muted" role="status">
-                        No models are currently available from connected providers.
-                      </span>
-                    ) : modelState === "error" ? (
-                      <div
-                        className="flex items-center gap-2 text-detail text-text-muted"
-                        role="alert"
-                      >
-                        <span>Models could not be discovered.</span>
-                        <ControlButton
-                          data-testid="pref-model-retry"
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
-                          onClick={() => discoverModels(false, true)}
+                    <PrefToggle
+                      testid="pref-subagents"
+                      label="Let sessions delegate to subagents"
+                      description="Sessions may hand focused work to a subagent and run several in parallel. Turn off to keep every session doing its own work."
+                      checked={prefs.subagentsEnabled}
+                      onChange={(v) => patchPref({ subagentsEnabled: v })}
+                    />
+                    <PrefToggle
+                      testid="pref-worktree"
+                      label="Isolate sessions in a worktree"
+                      description="Run each project session in its own git worktree. Session creation stops if isolation cannot be made."
+                      checked={prefs.worktreeIsolation}
+                      onChange={(v) => patchPref({ worktreeIsolation: v })}
+                    />
+                    <PrefToggle
+                      testid="pref-keep-worktree"
+                      label="Keep worktree and branch after a successful merge"
+                      description="Applies only with worktree isolation. On by default so you can keep iterating; turn off to remove the worktree and branch only after a successful merge. Deleting a session removes its worktree regardless."
+                      disabledDescription="Enable worktree isolation to change this preference."
+                      checked={prefs.keepWorktreeAfterMerge}
+                      disabled={!prefs.worktreeIsolation}
+                      onChange={(v) => patchPref({ keepWorktreeAfterMerge: v })}
+                    />
+                    <PrefToggle
+                      testid="pref-git-automation"
+                      label="Enable git actions"
+                      description="Show Commit / Push / Merge actions on the Git screen."
+                      checked={prefs.gitAutomation}
+                      onChange={(v) => patchPref({ gitAutomation: v })}
+                    />
+                    <div className="flex flex-col gap-1 pt-1">
+                      <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
+                        Default model
+                      </label>
+                      <PrefModelPicker
+                        models={models}
+                        runtimeDefaultModel={runtimeDefaultModel}
+                        value={prefs.defaultModel}
+                        disabled={modelState === "initial-loading" || modelState === "loading"}
+                        onChange={(next) => patchPref({ defaultModel: next })}
+                        triggerRef={modelSelect}
+                      />
+                      {modelState === "initial-loading" ? (
+                        <span className="text-detail text-text-muted" role="status">
+                          Discovering available models…
+                        </span>
+                      ) : modelState === "loading" ? (
+                        <span className="text-detail text-text-muted" role="status">
+                          Trying model discovery again…
+                        </span>
+                      ) : modelState === "success" && models.length === 0 ? (
+                        <span className="text-detail text-text-muted" role="status">
+                          No models are currently available from connected providers.
+                        </span>
+                      ) : modelState === "error" ? (
+                        <div
+                          className="flex items-center gap-2 text-detail text-text-muted"
+                          role="alert"
                         >
-                          Retry
-                        </ControlButton>
-                      </div>
-                    ) : null}
+                          <span>Models could not be discovered.</span>
+                          <ControlButton
+                            data-testid="pref-model-retry"
+                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                            onClick={() => discoverModels(false, true)}
+                          >
+                            Retry
+                          </ControlButton>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label
+                        className="text-sm font-medium text-text-primary"
+                        htmlFor="pref-thinking"
+                      >
+                        Default thinking
+                      </label>
+                      <ControlSelect
+                        id="pref-thinking"
+                        data-testid="pref-thinking"
+                        className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                        value={prefs.defaultThinking ?? ""}
+                        onChange={(event) =>
+                          patchPref({ defaultThinking: event.target.value || null })
+                        }
+                      >
+                        <option value="">Default</option>
+                        {PI_THINKING_LEVELS.map((level) => (
+                          <option key={level} value={level}>
+                            {level}
+                          </option>
+                        ))}
+                      </ControlSelect>
+                      <p className="mt-1 text-xs text-text-muted">
+                        Applied when supported by the selected model; Pi may clamp unsupported
+                        levels.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="py-6 text-center text-sm text-text-muted">
+                    Loading preferences…
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label
-                      className="text-sm font-medium text-text-primary"
-                      htmlFor="pref-thinking"
-                    >
-                      Default thinking
-                    </label>
-                    <ControlSelect
-                      id="pref-thinking"
-                      data-testid="pref-thinking"
-                      className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                      value={prefs.defaultThinking ?? ""}
-                      onChange={(event) =>
-                        patchPref({ defaultThinking: event.target.value || null })
-                      }
-                    >
-                      <option value="">Default</option>
-                      {PI_THINKING_LEVELS.map((level) => (
-                        <option key={level} value={level}>
-                          {level}
-                        </option>
-                      ))}
-                    </ControlSelect>
-                    <p className="mt-1 text-xs text-text-muted">
-                      Applied when supported by the selected model; Pi may clamp unsupported levels.
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="py-6 text-center text-sm text-text-muted">Loading preferences…</div>
-              )}
+                )}
+              </div>
             </div>
-            <SheetFooter className="mt-auto shrink-0">
-              <ControlButton
-                data-testid="onboarding-preferences-back"
-                className={overlayBackButtonClass}
-                onClick={() => goto("tour")}
-              >
-                <ArrowLeft size={13} /> Back
-              </ControlButton>
-              <ControlButton
-                data-testid="onboarding-preferences-continue"
-                className={primaryButtonClass}
-                style={primaryButtonStyle}
-                onClick={() => goto("final")}
-              >
-                Continue <ArrowRight size={13} aria-hidden />
-              </ControlButton>
-            </SheetFooter>
+            <SheetFooter
+              leading={
+                <Button
+                  variant="ghost"
+                  size="md"
+                  data-testid="onboarding-preferences-back"
+                  leadingIcon={<ArrowLeft size={13} />}
+                  onClick={() => goto("tour")}
+                >
+                  Back
+                </Button>
+              }
+              trailing={
+                <Button
+                  variant="primary"
+                  size="md"
+                  data-testid="onboarding-preferences-continue"
+                  trailingIcon={<ArrowRight size={13} aria-hidden />}
+                  onClick={() => goto("final")}
+                >
+                  Continue
+                </Button>
+              }
+            />
           </div>
         ) : null}
 
         {phase === "final" ? (
-          <div
-            className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-3 px-5 py-8"
-            data-testid="onboarding-final"
-          >
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              {routed.view === "chat" && !modelsPending ? "You're all set" : "Almost there"}
-            </h2>
-            <p className="text-sm leading-relaxed text-text-secondary">
-              {piMissing
-                ? "Pi isn't ready yet — review setup to finish installing it."
-                : providerMissing
-                  ? "Connect a model provider so Pi has a model to run."
-                  : modelsMissing
-                    ? "Your provider is connected, but no usable models loaded — load models so Pi can run."
-                    : modelsPending
-                      ? "Checking which models your provider offers…"
-                      : projectMissing
-                        ? "Add a project folder to start a coding session in it."
-                        : "Your workspace is ready. Jump into a coding session with Pi."}
-            </p>
-            <div className="flex flex-col gap-1.5 py-1">
-              <FinalGate label="Pi runtime" ok={!piMissing} />
-              <FinalGate label="Model provider" ok={!providerMissing} />
-              <FinalGate
-                label="AI models"
-                ok={!providerMissing && !modelsMissing && !modelsPending}
-              />
-              <FinalGate label="A project" ok={!projectMissing} />
-            </div>
-            <div className="flex items-center justify-between pt-1">
-              <ControlButton
-                data-testid="onboarding-final-back"
-                className={overlayBackButtonClass}
-                onClick={() => goto("preferences")}
+          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-final">
+            <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-3 px-5 py-8">
+              <h2
+                className="text-base font-semibold text-text-primary"
+                style={{ fontStretch: "expanded" }}
               >
-                <ArrowLeft size={13} /> Back
-              </ControlButton>
-              <ControlButton
-                data-testid="onboarding-finish"
-                data-target={finalCta.view}
-                className={cn(
-                  primaryButtonClass,
-                  "disabled:cursor-not-allowed disabled:opacity-40",
-                )}
-                style={primaryButtonStyle}
-                // Never a dead end (native's button always routes somewhere
-                // corrective): disabled ONLY while a verdict is pending —
-                // checks in flight, or a connected provider's catalog unknown.
-                disabled={checksLoading || modelsPending}
-                onClick={() => finishTo(finalCta.view)}
-              >
-                <finalCta.Icon size={13} aria-hidden /> {finalCta.label}
-              </ControlButton>
+                {routed.view === "chat" && !modelsPending ? "You're all set" : "Almost there"}
+              </h2>
+              <p className="text-sm leading-relaxed text-text-secondary">
+                {piMissing
+                  ? "Pi isn't ready yet — review setup to finish installing it."
+                  : providerMissing
+                    ? "Connect a model provider so Pi has a model to run."
+                    : modelsMissing
+                      ? "Your provider is connected, but no usable models loaded — load models so Pi can run."
+                      : modelsPending
+                        ? "Checking which models your provider offers…"
+                        : projectMissing
+                          ? "Add a project folder to start a coding session in it."
+                          : "Your workspace is ready. Jump into a coding session with Pi."}
+              </p>
+              <div className="flex flex-col gap-1.5 py-1">
+                <FinalGate label="Pi runtime" ok={!piMissing} />
+                <FinalGate label="Model provider" ok={!providerMissing} />
+                <FinalGate
+                  label="AI models"
+                  ok={!providerMissing && !modelsMissing && !modelsPending}
+                />
+                <FinalGate label="A project" ok={!projectMissing} />
+              </div>
             </div>
+            <SheetFooter
+              leading={
+                <Button
+                  variant="ghost"
+                  size="md"
+                  data-testid="onboarding-final-back"
+                  leadingIcon={<ArrowLeft size={13} />}
+                  onClick={() => goto("preferences")}
+                >
+                  Back
+                </Button>
+              }
+              trailing={
+                <Button
+                  variant="primary"
+                  size="md"
+                  data-testid="onboarding-finish"
+                  data-target={finalCta.view}
+                  leadingIcon={<finalCta.Icon size={13} aria-hidden />}
+                  disabled={checksLoading || modelsPending}
+                  onClick={() => finishTo(finalCta.view)}
+                >
+                  {finalCta.label}
+                </Button>
+              }
+            />
           </div>
         ) : null}
       </div>
