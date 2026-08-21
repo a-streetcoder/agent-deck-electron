@@ -3,15 +3,14 @@ import {
   ControlInput,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
   Copy,
-  Key,
   Pencil,
   Plus,
-  Stethoscope,
   TriangleAlert,
   Trash2,
   XCircle,
@@ -80,18 +79,11 @@ export function EnvironmentScreen() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="environment-screen">
-      <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2">
-            <Key size={16} className="text-text-secondary" />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              Environment
-            </h2>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="environment-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-environment.jpg"
+        title="Environment"
+        actions={
           <ControlButton
             data-testid="env-add"
             className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
@@ -108,141 +100,145 @@ export function EnvironmentScreen() {
           >
             <Plus size={14} />
           </ControlButton>
-        </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Variables from ~/.pi/agent/.env and this project's .pi/.env. Values are masked; editing
-          replaces the whole value.
-        </p>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
+          <p className="pb-3 text-xs text-text-muted">
+            Variables from ~/.pi/agent/.env and this project's .pi/.env. Values are masked; editing
+            replaces the whole value.
+          </p>
 
-        {adding ? (
-          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border-strong bg-surface p-2">
-            <ControlInput
-              data-testid="env-new-key"
-              className="min-w-[10ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="KEY"
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
-            />
-            <ControlInput
-              data-testid="env-new-value"
-              className="min-w-[12ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="value"
-              value={newValue}
-              onChange={(e) => setNewValue(e.target.value)}
-            />
-            <ControlSelect
-              data-testid="env-new-scope"
-              className="rounded border border-border-strong bg-surface px-2 py-1 text-xs text-text-primary"
-              value={newScope}
-              onChange={(e) => setNewScope(e.target.value as EnvScope)}
-            >
-              <option value="global">global</option>
-              {currentProjectId ? <option value="project">project</option> : null}
-            </ControlSelect>
-            <ControlButton
-              data-testid="env-new-save"
-              className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              disabled={!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newKey)}
-              onClick={() =>
-                void writeVar(newScope, newKey, newValue).then(() => {
-                  setNewKey("");
-                  setNewValue("");
-                  setAdding(false);
-                })
-              }
-            >
-              Add
-            </ControlButton>
-          </div>
-        ) : null}
-
-        <div className="space-y-1">
-          {entries.map((entry) => {
-            const isEditing = editing?.scope === entry.scope && editing.key === entry.key;
-            return (
-              <div
-                key={`${entry.scope}:${entry.key}`}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5",
-                  entry.overridden && "opacity-55",
-                )}
-                data-testid="env-row"
-                data-env-key={entry.key}
-                data-env-scope={entry.scope}
+          {adding ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border-strong bg-surface p-2">
+              <ControlInput
+                data-testid="env-new-key"
+                className="min-w-[10ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                placeholder="KEY"
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value)}
+              />
+              <ControlInput
+                data-testid="env-new-value"
+                className="min-w-[12ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                placeholder="value"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+              />
+              <ControlSelect
+                data-testid="env-new-scope"
+                className="rounded border border-border-strong bg-surface px-2 py-1 text-xs text-text-primary"
+                value={newScope}
+                onChange={(e) => setNewScope(e.target.value as EnvScope)}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm text-text-primary">{entry.key}</div>
-                  <div
-                    className="truncate font-mono text-micro text-text-muted"
-                    data-testid="env-source"
-                    title={entry.source}
-                  >
-                    {entry.source}
-                  </div>
-                </div>
-                {isEditing ? (
-                  <ControlInput
-                    autoFocus
-                    data-testid={`env-edit-input-${entry.key}`}
-                    className="w-40 rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                    placeholder="new value"
-                    value={draftValue}
-                    onChange={(e) => setDraftValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void writeVar(entry.scope, entry.key, draftValue).then(() =>
-                          setEditing(null),
-                        );
-                      }
-                      if (e.key === "Escape") setEditing(null);
-                    }}
-                    onBlur={() => setEditing(null)}
-                  />
-                ) : (
-                  <span className="font-mono text-xs text-text-muted">
-                    {entry.masked || "(empty)"}
-                  </span>
-                )}
-                <ScopeChip scope={entry.scope} />
-                {entry.overridden ? (
-                  <span className="text-micro text-text-muted">overridden</span>
-                ) : null}
-                <ControlButton
-                  data-testid={`env-edit-${entry.key}`}
-                  className="rounded p-1 text-text-muted hover:text-text-primary"
-                  title="Set value"
-                  onClick={() => {
-                    setDraftValue("");
-                    setEditing({ scope: entry.scope, key: entry.key });
-                  }}
-                >
-                  <Pencil size={12} />
-                </ControlButton>
-                <ControlButton
-                  data-testid={`env-delete-${entry.key}`}
-                  className="rounded p-1 text-text-muted hover:text-danger"
-                  title="Delete"
-                  onClick={() => {
-                    if (confirm(`Delete environment key "${entry.key}"?`)) {
-                      void deleteVar(entry.scope, entry.key);
-                    }
-                  }}
-                >
-                  <Trash2 size={12} />
-                </ControlButton>
-              </div>
-            );
-          })}
-          {entries.length === 0 ? (
-            <div className="py-6 text-center text-sm text-text-muted">
-              No environment variables found.
+                <option value="global">global</option>
+                {currentProjectId ? <option value="project">project</option> : null}
+              </ControlSelect>
+              <ControlButton
+                data-testid="env-new-save"
+                className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+                disabled={!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newKey)}
+                onClick={() =>
+                  void writeVar(newScope, newKey, newValue).then(() => {
+                    setNewKey("");
+                    setNewValue("");
+                    setAdding(false);
+                  })
+                }
+              >
+                Add
+              </ControlButton>
             </div>
           ) : null}
+
+          <div className="space-y-1">
+            {entries.map((entry) => {
+              const isEditing = editing?.scope === entry.scope && editing.key === entry.key;
+              return (
+                <div
+                  key={`${entry.scope}:${entry.key}`}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5",
+                    entry.overridden && "opacity-55",
+                  )}
+                  data-testid="env-row"
+                  data-env-key={entry.key}
+                  data-env-scope={entry.scope}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-sm text-text-primary">{entry.key}</div>
+                    <div
+                      className="truncate font-mono text-micro text-text-muted"
+                      data-testid="env-source"
+                      title={entry.source}
+                    >
+                      {entry.source}
+                    </div>
+                  </div>
+                  {isEditing ? (
+                    <ControlInput
+                      autoFocus
+                      data-testid={`env-edit-input-${entry.key}`}
+                      className="w-40 rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                      placeholder="new value"
+                      value={draftValue}
+                      onChange={(e) => setDraftValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          void writeVar(entry.scope, entry.key, draftValue).then(() =>
+                            setEditing(null),
+                          );
+                        }
+                        if (e.key === "Escape") setEditing(null);
+                      }}
+                      onBlur={() => setEditing(null)}
+                    />
+                  ) : (
+                    <span className="font-mono text-xs text-text-muted">
+                      {entry.masked || "(empty)"}
+                    </span>
+                  )}
+                  <ScopeChip scope={entry.scope} />
+                  {entry.overridden ? (
+                    <span className="text-micro text-text-muted">overridden</span>
+                  ) : null}
+                  <ControlButton
+                    data-testid={`env-edit-${entry.key}`}
+                    className="rounded p-1 text-text-muted hover:text-text-primary"
+                    title="Set value"
+                    onClick={() => {
+                      setDraftValue("");
+                      setEditing({ scope: entry.scope, key: entry.key });
+                    }}
+                  >
+                    <Pencil size={12} />
+                  </ControlButton>
+                  <ControlButton
+                    data-testid={`env-delete-${entry.key}`}
+                    className="rounded p-1 text-text-muted hover:text-danger"
+                    title="Delete"
+                    onClick={() => {
+                      if (confirm(`Delete environment key "${entry.key}"?`)) {
+                        void deleteVar(entry.scope, entry.key);
+                      }
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </ControlButton>
+                </div>
+              );
+            })}
+            {entries.length === 0 ? (
+              <div className="py-6 text-center text-sm text-text-muted">
+                No environment variables found.
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -482,21 +478,12 @@ export function DoctorScreen() {
   }, [cancelActiveRequest, refresh]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="doctor-screen">
-      <div
-        className="rounded-2xl border border-border-subtle bg-surface-elevated p-4"
-        aria-busy={loading}
-      >
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2">
-            <Stethoscope aria-hidden="true" size={16} className="text-text-secondary" />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              Doctor
-            </h2>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="doctor-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-doctor.jpg"
+        title="Doctor"
+        subtitle="Environment health for the pi runtime this app drives."
+        actions={
           <ControlButton
             ref={refreshButton}
             type="button"
@@ -507,103 +494,115 @@ export function DoctorScreen() {
           >
             {loading ? "Checking…" : "Re-check"}
           </ControlButton>
-        </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Environment health for the pi runtime this app drives.
-        </p>
-        <div className="sr-only" role="status" aria-live="polite" data-testid="doctor-status">
-          {loading
-            ? "Checking diagnostics…"
-            : loadError
-              ? "Diagnostics refresh failed."
-              : "Diagnostics up to date."}
-        </div>
-        {loadError ? (
-          <div
-            className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-sm text-text-primary"
-            role="alert"
-            data-testid="doctor-error"
-          >
-            <span>{loadError}</span>
-            <ControlButton
-              type="button"
-              className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-              onClick={() => refresh(true)}
-            >
-              Retry
-            </ControlButton>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div
+          className="rounded-2xl border border-border-subtle bg-surface-elevated p-4"
+          aria-busy={loading}
+        >
+          <div className="sr-only" role="status" aria-live="polite" data-testid="doctor-status">
+            {loading
+              ? "Checking diagnostics…"
+              : loadError
+                ? "Diagnostics refresh failed."
+                : "Diagnostics up to date."}
           </div>
-        ) : null}
-        <div className="space-y-2">
-          {checks.map((check) => {
-            const { Icon, color, label } = STATUS_ICON[check.status];
-            return (
-              <div
-                key={check.id}
-                className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
-                data-testid="doctor-check"
-                data-check-id={check.id}
-                data-check-status={check.status}
-              >
-                <Icon aria-hidden="true" size={16} style={{ color }} className="mt-0.5 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-x-2">
-                    <div className="text-sm font-medium text-text-primary">{check.label}</div>
-                    <span className="text-micro font-medium uppercase text-text-secondary">
-                      {label}
-                    </span>
-                  </div>
-                  <div className="break-words font-mono text-xs text-text-muted">
-                    {check.detail}
-                  </div>
-                </div>
-                {check.id === "pi-version" ? <UpdatePiButton /> : null}
-                {check.fixCommand ? (
-                  <div className="flex shrink-0 items-center gap-1">
-                    {check.runnableFix ? (
-                      <RunFixButton checkId={check.id} projectId={currentProjectId ?? undefined} />
-                    ) : null}
-                    <CopyFixButton command={check.fixCommand} />
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-        {/* Hidden entirely when clean, as native's card is — an empty
-            "no problems" panel is noise on a page read for problems. */}
-        {warnings.length > 0 ? (
-          <section
-            className="mt-4 border-t border-border-subtle pt-3"
-            data-testid="doctor-warnings"
-            aria-labelledby="doctor-warnings-heading"
-          >
-            <h3
-              id="doctor-warnings-heading"
-              className="pb-2 text-sm font-semibold text-text-primary"
+          {loadError ? (
+            <div
+              className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-sm text-text-primary"
+              role="alert"
+              data-testid="doctor-error"
             >
-              Warnings
-            </h3>
-            <div className="space-y-2">
-              {warnings.map((warning) => (
+              <span>{loadError}</span>
+              <ControlButton
+                type="button"
+                className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+                onClick={() => refresh(true)}
+              >
+                Retry
+              </ControlButton>
+            </div>
+          ) : null}
+          <div className="space-y-2">
+            {checks.map((check) => {
+              const { Icon, color, label } = STATUS_ICON[check.status];
+              return (
                 <div
-                  key={warning.id}
-                  data-testid="doctor-warning"
+                  key={check.id}
                   className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                  data-testid="doctor-check"
+                  data-check-id={check.id}
+                  data-check-status={check.status}
                 >
-                  <TriangleAlert
+                  <Icon
                     aria-hidden="true"
                     size={16}
-                    className="mt-0.5 shrink-0 text-warning"
+                    style={{ color }}
+                    className="mt-0.5 shrink-0"
                   />
-                  <div className="min-w-0 flex-1 break-words text-xs text-text-secondary">
-                    {warning.message}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <div className="text-sm font-medium text-text-primary">{check.label}</div>
+                      <span className="text-micro font-medium uppercase text-text-secondary">
+                        {label}
+                      </span>
+                    </div>
+                    <div className="break-words font-mono text-xs text-text-muted">
+                      {check.detail}
+                    </div>
                   </div>
+                  {check.id === "pi-version" ? <UpdatePiButton /> : null}
+                  {check.fixCommand ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      {check.runnableFix ? (
+                        <RunFixButton
+                          checkId={check.id}
+                          projectId={currentProjectId ?? undefined}
+                        />
+                      ) : null}
+                      <CopyFixButton command={check.fixCommand} />
+                    </div>
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
+              );
+            })}
+          </div>
+          {/* Hidden entirely when clean, as native's card is — an empty
+            "no problems" panel is noise on a page read for problems. */}
+          {warnings.length > 0 ? (
+            <section
+              className="mt-4 border-t border-border-subtle pt-3"
+              data-testid="doctor-warnings"
+              aria-labelledby="doctor-warnings-heading"
+            >
+              <h3
+                id="doctor-warnings-heading"
+                className="pb-2 text-sm font-semibold text-text-primary"
+              >
+                Warnings
+              </h3>
+              <div className="space-y-2">
+                {warnings.map((warning) => (
+                  <div
+                    key={warning.id}
+                    data-testid="doctor-warning"
+                    className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+                  >
+                    <TriangleAlert
+                      aria-hidden="true"
+                      size={16}
+                      className="mt-0.5 shrink-0 text-warning"
+                    />
+                    <div className="min-w-0 flex-1 break-words text-xs text-text-secondary">
+                      {warning.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </div>
       </div>
     </div>
   );

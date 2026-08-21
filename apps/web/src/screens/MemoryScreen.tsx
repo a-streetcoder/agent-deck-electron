@@ -5,9 +5,10 @@ import {
   ControlSelect,
 } from "@/design-system/components/NativeControls";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Archive, Brain, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
 
@@ -1047,26 +1048,25 @@ export function MemoryScreen() {
 
   if (!currentProjectId) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="memory-screen">
-        <div className="mx-auto max-w-3xl">
-          <div className="flex items-center gap-2 pb-1">
-            <Brain size={16} className="text-text-secondary" aria-hidden />
-            <h2 className="text-base font-semibold text-text-primary">Memory</h2>
-          </div>
-          <p className="pb-2 text-xs text-text-muted">
-            Durable project knowledge agents recall across sessions.
-          </p>
-          <AgentMemoryPreference />
-          <SemanticMemoryPreference
-            onChanged={semanticPreferenceChanged}
-            recall={semanticRecall}
-            setRecall={setSemanticRecall}
-          />
-          <div
-            className="py-10 text-center text-sm text-text-muted"
-            data-testid="memory-no-project"
-          >
-            Memory is project-scoped. Open a project to see and manage its memories.
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="memory-screen">
+        <SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="mx-auto max-w-3xl">
+            <p className="pb-2 text-xs text-text-muted">
+              Durable project knowledge agents recall across sessions.
+            </p>
+            <AgentMemoryPreference />
+            <SemanticMemoryPreference
+              onChanged={semanticPreferenceChanged}
+              recall={semanticRecall}
+              setRecall={setSemanticRecall}
+            />
+            <div
+              className="py-10 text-center text-sm text-text-muted"
+              data-testid="memory-no-project"
+            >
+              Memory is project-scoped. Open a project to see and manage its memories.
+            </div>
           </div>
         </div>
       </div>
@@ -1098,18 +1098,11 @@ export function MemoryScreen() {
     });
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="memory-screen">
-      <div className="mx-auto max-w-3xl">
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2">
-            <Brain size={16} className="text-text-secondary" aria-hidden />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              Memory
-            </h2>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="memory-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-memory.jpg"
+        title="Memory"
+        actions={
           <div className="flex items-center gap-2">
             {visibleStaleIds.length > 0 ? (
               <ControlButton
@@ -1144,263 +1137,267 @@ export function MemoryScreen() {
               New memory
             </ControlButton>
           </div>
-        </div>
-        <p className="pb-2 text-xs text-text-muted">
-          Durable project knowledge agents recall across sessions. Active and pinned memories are
-          injected; stale and archived are kept but not injected.
-        </p>
-        <AgentMemoryPreference />
-        <SemanticMemoryPreference
-          onChanged={semanticPreferenceChanged}
-          recall={semanticRecall}
-          setRecall={setSemanticRecall}
-        />
-        {navigationAlert ? (
-          <div
-            className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-sm text-danger"
-            role="alert"
-            data-testid="memory-navigation-alert"
-          >
-            {navigationAlert}
-          </div>
-        ) : null}
-        <ControlInput
-          data-testid="memory-search"
-          className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-          placeholder="Search memories (recall ranking)…"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-        />
-
-        {draft ? (
-          <div
-            className="mb-4 space-y-2 rounded-2xl border border-border-strong bg-surface-elevated p-4"
-            data-testid="memory-editor"
-          >
-            <div className="flex gap-2">
-              <ControlSelect
-                data-testid="memory-type"
-                className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                value={draft.type}
-                onChange={(e) => setDraft({ ...draft, type: e.target.value as MemoryType })}
-              >
-                {MEMORY_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </ControlSelect>
-              <ControlInput
-                data-testid="memory-title"
-                className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                placeholder="title"
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              />
-            </div>
-            <ControlInput
-              data-testid="memory-summary"
-              className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="summary (a retrieval key)"
-              value={draft.summary}
-              onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
-            />
-            <ControlInput
-              data-testid="memory-tags"
-              className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="comma-separated tags"
-              value={draft.tags}
-              onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
-            />
-            {draft.id !== undefined ? (
-              <dl
-                data-testid="memory-meta"
-                className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-muted"
-              >
-                {[
-                  // Native's detail rows, in its order (AgentMemoryViews.swift:461-471).
-                  // Type mirrors the select above rather than a stored snapshot, so the
-                  // row can never contradict what a save would write.
-                  ["Type", draft.type],
-                  ["Scope", draft.scope ?? "project"],
-                  ["Created", formatMemoryTime(draft.createdAt)],
-                  ["Updated", formatMemoryTime(draft.updatedAt)],
-                  ...(draft.sourceAgentName ? [["Source", draft.sourceAgentName]] : []),
-                  ["File", draft.filePath ?? "—"],
-                ].map(([label, value]) => (
-                  <Fragment key={label}>
-                    <dt className="font-medium text-text-secondary">{label}</dt>
-                    <dd className="truncate" title={value}>
-                      {value}
-                    </dd>
-                  </Fragment>
-                ))}
-              </dl>
-            ) : null}
-            <ControlTextArea
-              data-testid="memory-body"
-              className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="the durable content"
-              spellCheck={false}
-              value={draft.body}
-              onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-            />
-            <div className="flex items-center justify-end gap-2">
-              <ControlButton
-                className="rounded-capsule px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => setDraft(null)}
-              >
-                Cancel
-              </ControlButton>
-              <ControlButton
-                data-testid="memory-save"
-                className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
-                disabled={!draft.title.trim() || !draft.summary.trim() || !draft.body.trim()}
-                onClick={() => void save()}
-              >
-                Save
-              </ControlButton>
-            </div>
-          </div>
-        ) : null}
-
-        {staleSweepNotice ? (
-          <p
-            className="pb-2 text-xs text-warning"
-            role="status"
-            data-testid="memory-stale-sweep-notice"
-          >
-            {staleSweepNotice}
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-3xl">
+          <p className="pb-2 text-xs text-text-muted">
+            Durable project knowledge agents recall across sessions. Active and pinned memories are
+            injected; stale and archived are kept but not injected.
           </p>
-        ) : null}
-
-        <div className="space-y-4" data-testid="memory-list">
-          {(searchResults !== null
-            ? searchResults.length
-              ? [{ status: "recall", label: "Recall results", memories: searchResults }]
-              : []
-            : groupMemoriesByStatus(memories)
-          ).map((group) => (
-            <section key={group.status} data-testid={`memory-section-${group.status}`}>
-              <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                {group.label}
-                <span className="rounded-capsule border border-border-subtle px-1 tabular-nums normal-case">
-                  {group.memories.length}
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                {group.memories.map((memory) => (
-                  <div
-                    key={memory.id}
-                    data-testid={`memory-${memory.id}`}
-                    data-status={memory.status}
-                    className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
-                  >
-                    <ControlButton
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                      onClick={() => startEdit(memory)}
-                    >
-                      <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
-                        {memory.type}
-                      </span>
-                      <span
-                        data-testid="memory-status-chip"
-                        className={cn(
-                          "rounded-capsule border px-1.5 text-micro",
-                          STATUS_STYLE[memory.status],
-                        )}
-                      >
-                        {memory.status}
-                      </span>
-                      <span className="truncate text-sm font-medium text-text-primary">
-                        {memory.title}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
-                        {memory.summary}
-                      </span>
-                      {memory.sourceAgentName ? (
-                        <span
-                          data-testid={`memory-source-${memory.id}`}
-                          className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                          title={`Written by the ${memory.sourceAgentName} agent`}
-                        >
-                          {memory.sourceAgentName}
-                        </span>
-                      ) : null}
-                    </ControlButton>
-                    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                      <ControlButton
-                        data-testid={`memory-pin-${memory.id}`}
-                        className={cn(
-                          "rounded p-1 hover:text-accent",
-                          memory.status === "pinned" ? "text-accent" : "text-text-muted",
-                        )}
-                        title={memory.status === "pinned" ? "Unpin" : "Pin"}
-                        onClick={() =>
-                          void setStatus(
-                            memory.id,
-                            memory.status === "pinned" ? "active" : "pinned",
-                          )
-                        }
-                      >
-                        <Pin size={13} />
-                      </ControlButton>
-                      {memory.status === "stale" || memory.status === "archived" ? (
-                        <ControlButton
-                          data-testid={`memory-activate-${memory.id}`}
-                          className="rounded p-1 text-text-muted hover:text-accent"
-                          title="Re-activate"
-                          onClick={() => void setStatus(memory.id, "active")}
-                        >
-                          <RotateCcw size={13} />
-                        </ControlButton>
-                      ) : (
-                        <ControlButton
-                          data-testid={`memory-archive-${memory.id}`}
-                          className="rounded p-1 text-text-muted hover:text-text-secondary"
-                          title="Archive"
-                          onClick={() => void setStatus(memory.id, "archived")}
-                        >
-                          <Archive size={13} />
-                        </ControlButton>
-                      )}
-                      <ControlButton
-                        data-testid={`memory-delete-${memory.id}`}
-                        className="rounded p-1 text-text-muted hover:text-danger"
-                        title="Delete"
-                        onClick={() => {
-                          if (confirm("Delete this memory? This removes its file from disk.")) {
-                            void remove(memory.id);
-                          }
-                        }}
-                      >
-                        <Trash2 size={13} />
-                      </ControlButton>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-          {searchResults !== null ? (
-            searchResults.length === 0 ? (
-              <div
-                className="py-8 text-center text-sm text-text-muted"
-                data-testid="memory-search-empty"
-              >
-                No memories recalled for this query.
-              </div>
-            ) : null
-          ) : memories.length === 0 && !draft ? (
-            <div className="py-8 text-center text-sm text-text-muted" data-testid="memory-empty">
-              No memories yet. Agents add them as they work, or create one manually.
+          <AgentMemoryPreference />
+          <SemanticMemoryPreference
+            onChanged={semanticPreferenceChanged}
+            recall={semanticRecall}
+            setRecall={setSemanticRecall}
+          />
+          {navigationAlert ? (
+            <div
+              className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-sm text-danger"
+              role="alert"
+              data-testid="memory-navigation-alert"
+            >
+              {navigationAlert}
             </div>
           ) : null}
+          <ControlInput
+            data-testid="memory-search"
+            className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+            placeholder="Search memories (recall ranking)…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+
+          {draft ? (
+            <div
+              className="mb-4 space-y-2 rounded-2xl border border-border-strong bg-surface-elevated p-4"
+              data-testid="memory-editor"
+            >
+              <div className="flex gap-2">
+                <ControlSelect
+                  data-testid="memory-type"
+                  className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                  value={draft.type}
+                  onChange={(e) => setDraft({ ...draft, type: e.target.value as MemoryType })}
+                >
+                  {MEMORY_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </ControlSelect>
+                <ControlInput
+                  data-testid="memory-title"
+                  className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                  placeholder="title"
+                  value={draft.title}
+                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                />
+              </div>
+              <ControlInput
+                data-testid="memory-summary"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="summary (a retrieval key)"
+                value={draft.summary}
+                onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
+              />
+              <ControlInput
+                data-testid="memory-tags"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="comma-separated tags"
+                value={draft.tags}
+                onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
+              />
+              {draft.id !== undefined ? (
+                <dl
+                  data-testid="memory-meta"
+                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-muted"
+                >
+                  {[
+                    // Native's detail rows, in its order (AgentMemoryViews.swift:461-471).
+                    // Type mirrors the select above rather than a stored snapshot, so the
+                    // row can never contradict what a save would write.
+                    ["Type", draft.type],
+                    ["Scope", draft.scope ?? "project"],
+                    ["Created", formatMemoryTime(draft.createdAt)],
+                    ["Updated", formatMemoryTime(draft.updatedAt)],
+                    ...(draft.sourceAgentName ? [["Source", draft.sourceAgentName]] : []),
+                    ["File", draft.filePath ?? "—"],
+                  ].map(([label, value]) => (
+                    <Fragment key={label}>
+                      <dt className="font-medium text-text-secondary">{label}</dt>
+                      <dd className="truncate" title={value}>
+                        {value}
+                      </dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              ) : null}
+              <ControlTextArea
+                data-testid="memory-body"
+                className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="the durable content"
+                spellCheck={false}
+                value={draft.body}
+                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+              />
+              <div className="flex items-center justify-end gap-2">
+                <ControlButton
+                  className="rounded-capsule px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  onClick={() => setDraft(null)}
+                >
+                  Cancel
+                </ControlButton>
+                <ControlButton
+                  data-testid="memory-save"
+                  className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+                  style={{
+                    background:
+                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                    color: "var(--color-accent-foreground)",
+                  }}
+                  disabled={!draft.title.trim() || !draft.summary.trim() || !draft.body.trim()}
+                  onClick={() => void save()}
+                >
+                  Save
+                </ControlButton>
+              </div>
+            </div>
+          ) : null}
+
+          {staleSweepNotice ? (
+            <p
+              className="pb-2 text-xs text-warning"
+              role="status"
+              data-testid="memory-stale-sweep-notice"
+            >
+              {staleSweepNotice}
+            </p>
+          ) : null}
+
+          <div className="space-y-4" data-testid="memory-list">
+            {(searchResults !== null
+              ? searchResults.length
+                ? [{ status: "recall", label: "Recall results", memories: searchResults }]
+                : []
+              : groupMemoriesByStatus(memories)
+            ).map((group) => (
+              <section key={group.status} data-testid={`memory-section-${group.status}`}>
+                <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  {group.label}
+                  <span className="rounded-capsule border border-border-subtle px-1 tabular-nums normal-case">
+                    {group.memories.length}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {group.memories.map((memory) => (
+                    <div
+                      key={memory.id}
+                      data-testid={`memory-${memory.id}`}
+                      data-status={memory.status}
+                      className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+                    >
+                      <ControlButton
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                        onClick={() => startEdit(memory)}
+                      >
+                        <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                          {memory.type}
+                        </span>
+                        <span
+                          data-testid="memory-status-chip"
+                          className={cn(
+                            "rounded-capsule border px-1.5 text-micro",
+                            STATUS_STYLE[memory.status],
+                          )}
+                        >
+                          {memory.status}
+                        </span>
+                        <span className="truncate text-sm font-medium text-text-primary">
+                          {memory.title}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+                          {memory.summary}
+                        </span>
+                        {memory.sourceAgentName ? (
+                          <span
+                            data-testid={`memory-source-${memory.id}`}
+                            className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                            title={`Written by the ${memory.sourceAgentName} agent`}
+                          >
+                            {memory.sourceAgentName}
+                          </span>
+                        ) : null}
+                      </ControlButton>
+                      <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                        <ControlButton
+                          data-testid={`memory-pin-${memory.id}`}
+                          className={cn(
+                            "rounded p-1 hover:text-accent",
+                            memory.status === "pinned" ? "text-accent" : "text-text-muted",
+                          )}
+                          title={memory.status === "pinned" ? "Unpin" : "Pin"}
+                          onClick={() =>
+                            void setStatus(
+                              memory.id,
+                              memory.status === "pinned" ? "active" : "pinned",
+                            )
+                          }
+                        >
+                          <Pin size={13} />
+                        </ControlButton>
+                        {memory.status === "stale" || memory.status === "archived" ? (
+                          <ControlButton
+                            data-testid={`memory-activate-${memory.id}`}
+                            className="rounded p-1 text-text-muted hover:text-accent"
+                            title="Re-activate"
+                            onClick={() => void setStatus(memory.id, "active")}
+                          >
+                            <RotateCcw size={13} />
+                          </ControlButton>
+                        ) : (
+                          <ControlButton
+                            data-testid={`memory-archive-${memory.id}`}
+                            className="rounded p-1 text-text-muted hover:text-text-secondary"
+                            title="Archive"
+                            onClick={() => void setStatus(memory.id, "archived")}
+                          >
+                            <Archive size={13} />
+                          </ControlButton>
+                        )}
+                        <ControlButton
+                          data-testid={`memory-delete-${memory.id}`}
+                          className="rounded p-1 text-text-muted hover:text-danger"
+                          title="Delete"
+                          onClick={() => {
+                            if (confirm("Delete this memory? This removes its file from disk.")) {
+                              void remove(memory.id);
+                            }
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </ControlButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {searchResults !== null ? (
+              searchResults.length === 0 ? (
+                <div
+                  className="py-8 text-center text-sm text-text-muted"
+                  data-testid="memory-search-empty"
+                >
+                  No memories recalled for this query.
+                </div>
+              ) : null
+            ) : memories.length === 0 && !draft ? (
+              <div className="py-8 text-center text-sm text-text-muted" data-testid="memory-empty">
+                No memories yet. Agents add them as they work, or create one manually.
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

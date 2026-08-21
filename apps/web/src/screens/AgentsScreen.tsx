@@ -1,4 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -801,130 +802,135 @@ export function AgentsScreen() {
       : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1 max-[900px]:flex-col" data-testid="agents-screen">
-      {/* List pane — native fixed 42% split. */}
-      <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle max-[900px]:h-[38%] max-[900px]:w-full max-[900px]:min-w-0 max-[900px]:border-b max-[900px]:border-r-0">
-        <div className="space-y-2 px-3 pb-2 pt-3">
-          <div className="flex items-center gap-2">
-            <ControlInput
-              data-testid="agent-search"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="Search agents"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <ControlButton
-              data-testid="new-agent"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              title="New agent"
-              onClick={() => setEditing("new")}
-            >
-              <Plus size={15} />
-            </ControlButton>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {AGENT_FILTERS.map((f) => (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="agents-screen">
+      <SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" />
+      <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
+        {/* List pane — native fixed 42% split. */}
+        <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle max-[900px]:h-[38%] max-[900px]:w-full max-[900px]:min-w-0 max-[900px]:border-b max-[900px]:border-r-0">
+          <div className="space-y-2 px-3 pb-2 pt-3">
+            <div className="flex items-center gap-2">
+              <ControlInput
+                data-testid="agent-search"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="Search agents"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
               <ControlButton
-                key={f}
-                data-testid={`agent-filter-${f}`}
-                className={cn(
-                  "rounded-capsule px-2.5 py-0.5 text-xs",
-                  filter === f
-                    ? "bg-selection text-text-primary"
-                    : "text-text-muted hover:bg-hover",
-                )}
-                onClick={() => setFilter(f)}
+                data-testid="new-agent"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+                title="New agent"
+                onClick={() => setEditing("new")}
               >
-                {f}
+                <Plus size={15} />
               </ControlButton>
-            ))}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {AGENT_FILTERS.map((f) => (
+                <ControlButton
+                  key={f}
+                  data-testid={`agent-filter-${f}`}
+                  className={cn(
+                    "rounded-capsule px-2.5 py-0.5 text-xs",
+                    filter === f
+                      ? "bg-selection text-text-primary"
+                      : "text-text-muted hover:bg-hover",
+                  )}
+                  onClick={() => setFilter(f)}
+                >
+                  {f}
+                </ControlButton>
+              ))}
+            </div>
+          </div>
+          <div
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4"
+            role="listbox"
+            aria-label="Agents"
+          >
+            {SECTION_ORDER.map(({ scope, title, hint }) => {
+              const sectionAgents = visible.filter((agent) => agent.scope === scope);
+              if (sectionAgents.length === 0) return null;
+              return (
+                <div key={scope}>
+                  <div className="flex items-baseline gap-2 px-1 pb-1 pt-2">
+                    <span
+                      className="text-micro font-semibold uppercase tracking-wider"
+                      style={{ color: agentSourceColor({ scope }) }}
+                    >
+                      {title}
+                    </span>
+                    {hint ? <span className="text-micro text-text-muted">{hint}</span> : null}
+                  </div>
+                  <div className="space-y-1">
+                    {sectionAgents.map((agent) => (
+                      <AgentRow
+                        key={agent.filePath}
+                        agent={agent}
+                        selected={selectedKey === agent.filePath}
+                        onSelect={() => selectAgent(agent.filePath)}
+                        onEdit={() => {
+                          selectAgent(agent.filePath);
+                          setEditing(agent);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {visible.length === 0 ? (
+              <div className="mt-8 text-center text-sm text-text-muted">
+                No agents match this filter.
+              </div>
+            ) : null}
           </div>
         </div>
-        <div
-          className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4"
-          role="listbox"
-          aria-label="Agents"
-        >
-          {SECTION_ORDER.map(({ scope, title, hint }) => {
-            const sectionAgents = visible.filter((agent) => agent.scope === scope);
-            if (sectionAgents.length === 0) return null;
-            return (
-              <div key={scope}>
-                <div className="flex items-baseline gap-2 px-1 pb-1 pt-2">
-                  <span
-                    className="text-micro font-semibold uppercase tracking-wider"
-                    style={{ color: agentSourceColor({ scope }) }}
-                  >
-                    {title}
-                  </span>
-                  {hint ? <span className="text-micro text-text-muted">{hint}</span> : null}
-                </div>
-                <div className="space-y-1">
-                  {sectionAgents.map((agent) => (
-                    <AgentRow
-                      key={agent.filePath}
-                      agent={agent}
-                      selected={selectedKey === agent.filePath}
-                      onSelect={() => selectAgent(agent.filePath)}
-                      onEdit={() => {
-                        selectAgent(agent.filePath);
-                        setEditing(agent);
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-          {visible.length === 0 ? (
-            <div className="mt-8 text-center text-sm text-text-muted">
-              No agents match this filter.
-            </div>
-          ) : null}
-        </div>
+
+        {/* Detail pane */}
+        {selected ? (
+          <AgentDetail
+            agent={selected}
+            canCreateReplacement={
+              selected.scope === "builtin" &&
+              !selected.shadowed &&
+              !agents.some(
+                (agent) =>
+                  agent.name === selected.name &&
+                  (agent.scope === "global" || agent.scope === "project"),
+              )
+            }
+            onCreateReplacement={() => setEditing({ replacement: selected })}
+            onEdit={() => setEditing(selected)}
+            availableCustomAgentNames={[
+              ...new Set(
+                agents
+                  .filter(
+                    (agent) => agent.scope !== "builtin" && !agent.shadowed && !agent.disabled,
+                  )
+                  .map((agent) => agent.name),
+              ),
+            ]}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+            Select an agent.
+          </div>
+        )}
+
+        {editing !== null ? (
+          <AgentEditSheet
+            agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
+            createFromBuiltin={replacementSeed}
+            onClose={() => setEditing(null)}
+          />
+        ) : null}
       </div>
-
-      {/* Detail pane */}
-      {selected ? (
-        <AgentDetail
-          agent={selected}
-          canCreateReplacement={
-            selected.scope === "builtin" &&
-            !selected.shadowed &&
-            !agents.some(
-              (agent) =>
-                agent.name === selected.name &&
-                (agent.scope === "global" || agent.scope === "project"),
-            )
-          }
-          onCreateReplacement={() => setEditing({ replacement: selected })}
-          onEdit={() => setEditing(selected)}
-          availableCustomAgentNames={[
-            ...new Set(
-              agents
-                .filter((agent) => agent.scope !== "builtin" && !agent.shadowed && !agent.disabled)
-                .map((agent) => agent.name),
-            ),
-          ]}
-        />
-      ) : (
-        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          Select an agent.
-        </div>
-      )}
-
-      {editing !== null ? (
-        <AgentEditSheet
-          agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
-          createFromBuiltin={replacementSeed}
-          onClose={() => setEditing(null)}
-        />
-      ) : null}
     </div>
   );
 }

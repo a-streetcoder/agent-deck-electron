@@ -37,6 +37,7 @@
   --color-text-disabled: #696970;
   --color-text-inverse: #18181b;
   --color-text-on-accent: #ffffff;
+  --color-text-on-media: #ffffff;
 
   /* Borders and interaction */
   --color-border-subtle: rgba(255, 255, 255, 0.06);
@@ -223,6 +224,7 @@
   --color-text-disabled: #97979d;
   --color-text-inverse: #f5f5f7;
   --color-text-on-accent: var(--color-brand-accent-shadow);
+  --color-text-on-media: #ffffff;
   --color-border-subtle: rgba(0, 0, 0, 0.06);
   --color-border-strong: rgba(0, 0, 0, 0.14);
   --color-hover-fill: rgba(0, 0, 0, 0.04);

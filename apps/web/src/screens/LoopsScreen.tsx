@@ -4,19 +4,9 @@ import {
   ControlTextArea,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ArrowDown,
-  ArrowUp,
-  Copy,
-  Play,
-  Plus,
-  Repeat,
-  ShieldCheck,
-  Square,
-  Trash2,
-  X,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, Play, Plus, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import {
   canRetryLoopRun,
   isLoopRunTerminal,
@@ -1038,21 +1028,17 @@ export function LoopsScreen() {
   );
 
   return (
-    <div
-      className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5"
-      data-testid="loops-screen"
-    >
-      <div className="mx-auto min-w-0 max-w-3xl">
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2">
-            <Repeat size={16} className="text-text-secondary" aria-hidden />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              Loop Bank
-            </h2>
-          </div>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="loops-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-loops.jpg"
+        title="Loop Bank"
+        subtitle={
+          <>
+            Saved loops repeat an agent run until the validation command passes.
+            {currentProjectId ? " Run one in the current project." : " Open a project to run one."}
+          </>
+        }
+        actions={
           <ControlButton
             data-testid="new-loop"
             className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
@@ -1065,1794 +1051,1817 @@ export function LoopsScreen() {
           >
             <Plus size={13} /> New loop
           </ControlButton>
-        </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Saved loops repeat an agent run until the validation command passes.
-          {currentProjectId ? " Run one in the current project." : " Open a project to run one."}
-        </p>
-
-        {activeRun ? (
-          <div
-            className="mb-3 min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
-            data-testid="loop-run-panel"
-          >
-            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-              <div
-                className="min-w-0 max-w-full break-all text-sm font-medium text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
-                {activeRun.loopName}
-              </div>
-              <div className="flex max-w-full flex-wrap items-center gap-2">
-                <span
-                  data-testid="loop-run-status"
-                  data-status={activeRun.status}
-                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary"
-                >
-                  {RUN_STATUS_LABEL[activeRun.status]}
-                </span>
-                {isLoopRunTerminal(activeRun.status) ? (
-                  <>
-                    {canRetryLoopRun(activeRun) ? (
-                      <ControlButton
-                        ref={retryButtonRef}
-                        data-testid="loop-run-retry"
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
-                        disabled={
-                          runPending || Boolean(approvalPending) || recoveryAcknowledgementRequired
-                        }
-                        aria-describedby={
-                          recoveryAcknowledgementRequired
-                            ? "loop-checkout-recovery-notice"
-                            : undefined
-                        }
-                        onClick={openRetry}
-                      >
-                        Retry
-                      </ControlButton>
-                    ) : null}
-                    {activeRun.definitionSnapshot ? (
-                      <ControlButton
-                        data-testid="loop-save-definition"
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
-                        onClick={() => saveLoopFromRun(activeRun)}
-                      >
-                        Save Loop
-                      </ControlButton>
-                    ) : null}
-                    <ControlButton
-                      ref={dismissButtonRef}
-                      data-testid="loop-run-dismiss"
-                      className="rounded p-1 text-text-muted hover:text-text-primary"
-                      title="Dismiss"
-                      aria-label="Dismiss run"
-                      onClick={() => {
-                        runIdRef.current = null;
-                        setActiveRun(null);
-                      }}
-                    >
-                      <Trash2 size={13} />
-                    </ControlButton>
-                  </>
-                ) : (
-                  <ControlButton
-                    ref={stopButtonRef}
-                    data-testid="loop-run-stop"
-                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-danger"
-                    aria-disabled={stopPending}
-                    data-pending={stopPending ? "true" : "false"}
-                    onClick={() => void stopRun()}
-                  >
-                    <Square size={11} /> {stopPending ? "Stopping…" : "Stop"}
-                  </ControlButton>
-                )}
-              </div>
-            </div>
+        }
+      />
+      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">
+        <div className="mx-auto min-w-0 max-w-3xl">
+          {activeRun ? (
             <div
-              className="mt-1 text-detail text-text-muted"
-              data-testid="loop-run-live-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
+              className="mb-3 min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
+              data-testid="loop-run-panel"
             >
-              {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration}
-              {activeRun.maxIterations === 0 ? " · No limit" : ` / ${activeRun.maxIterations}`}
-            </div>
-            {parallelAnnouncement ? (
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                <div
+                  className="min-w-0 max-w-full break-all text-sm font-medium text-text-primary"
+                  style={{ fontStretch: "expanded" }}
+                >
+                  {activeRun.loopName}
+                </div>
+                <div className="flex max-w-full flex-wrap items-center gap-2">
+                  <span
+                    data-testid="loop-run-status"
+                    data-status={activeRun.status}
+                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary"
+                  >
+                    {RUN_STATUS_LABEL[activeRun.status]}
+                  </span>
+                  {isLoopRunTerminal(activeRun.status) ? (
+                    <>
+                      {canRetryLoopRun(activeRun) ? (
+                        <ControlButton
+                          ref={retryButtonRef}
+                          data-testid="loop-run-retry"
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                          disabled={
+                            runPending ||
+                            Boolean(approvalPending) ||
+                            recoveryAcknowledgementRequired
+                          }
+                          aria-describedby={
+                            recoveryAcknowledgementRequired
+                              ? "loop-checkout-recovery-notice"
+                              : undefined
+                          }
+                          onClick={openRetry}
+                        >
+                          Retry
+                        </ControlButton>
+                      ) : null}
+                      {activeRun.definitionSnapshot ? (
+                        <ControlButton
+                          data-testid="loop-save-definition"
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                          onClick={() => saveLoopFromRun(activeRun)}
+                        >
+                          Save Loop
+                        </ControlButton>
+                      ) : null}
+                      <ControlButton
+                        ref={dismissButtonRef}
+                        data-testid="loop-run-dismiss"
+                        className="rounded p-1 text-text-muted hover:text-text-primary"
+                        title="Dismiss"
+                        aria-label="Dismiss run"
+                        onClick={() => {
+                          runIdRef.current = null;
+                          setActiveRun(null);
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </ControlButton>
+                    </>
+                  ) : (
+                    <ControlButton
+                      ref={stopButtonRef}
+                      data-testid="loop-run-stop"
+                      className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-danger"
+                      aria-disabled={stopPending}
+                      data-pending={stopPending ? "true" : "false"}
+                      onClick={() => void stopRun()}
+                    >
+                      <Square size={11} /> {stopPending ? "Stopping…" : "Stop"}
+                    </ControlButton>
+                  )}
+                </div>
+              </div>
               <div
-                className="text-detail text-text-muted"
-                data-testid="loop-parallel-live-status"
+                className="mt-1 text-detail text-text-muted"
+                data-testid="loop-run-live-status"
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
               >
-                {parallelAnnouncement}
+                {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration}
+                {activeRun.maxIterations === 0 ? " · No limit" : ` / ${activeRun.maxIterations}`}
               </div>
-            ) : null}
-            {activeRun.stopReason ? (
-              <div className="text-detail text-text-muted">
-                {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
-              </div>
-            ) : null}
-            {activeRun.launch?.worktree ? (
-              <div
-                ref={reviewStatusPanelRef}
-                tabIndex={-1}
-                aria-label="Loop worktree review status"
-                className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-xs text-text-muted"
-                data-testid="loop-retained-worktree"
-              >
-                <strong className="text-text-secondary">
-                  {activeRun.review?.status === "discarded"
-                    ? "Worktree safely archived. Branch and artifacts retained."
-                    : activeRun.review?.status === "discardUncertain"
-                      ? "Worktree archive outcome needs inspection."
-                      : activeRun.review?.status === "applied"
-                        ? "Changes applied. Review worktree and branch retained."
-                        : activeRun.review?.status === "applyUncertain"
-                          ? "Apply outcome needs inspection."
-                          : isLoopRunTerminal(activeRun.status)
-                            ? "Review worktree retained."
-                            : "Review worktree allocated."}
-                </strong>{" "}
-                <span className="break-all">
-                  {activeRun.review?.archivedPath ?? activeRun.launch.worktree.path}
-                </span>
-                <span className="block break-all">Branch: {activeRun.launch.worktree.branch}</span>
-                {activeRun.review?.error ? (
-                  <span className="block break-words text-danger">{activeRun.review.error}</span>
-                ) : null}
-                {isLoopRunTerminal(activeRun.status) ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {!activeRun.review || activeRun.review.status === "available" ? (
-                      <ControlButton
-                        data-testid="loop-review-changes"
-                        disabled={reviewPending || worktreeRevealPending}
-                        onClick={() => void reviewWorktree(activeRun)}
-                      >
-                        {reviewPending ? "Preparing Review…" : "Review Changes"}
-                      </ControlButton>
-                    ) : null}
-                    {activeRun.review?.status !== "discarded" &&
-                    activeRun.review?.status !== "discardUncertain" ? (
-                      <ControlButton
-                        data-testid="loop-reveal-worktree"
-                        disabled={worktreeRevealPending || reviewPending}
-                        onClick={() => void revealWorktree(activeRun)}
-                      >
-                        {worktreeRevealPending ? "Revealing…" : "Reveal Worktree"}
-                      </ControlButton>
-                    ) : null}
-                  </div>
-                ) : null}
-                {worktreeActionMessage ? (
-                  <div
-                    role="status"
-                    className="mt-1 break-all"
-                    data-testid="loop-worktree-action-status"
-                  >
-                    {worktreeActionMessage}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
-              <div
-                className="mt-2 rounded-lg border border-warning px-2 py-2 text-xs"
-                role="alert"
-                data-testid="loop-human-approval-checkpoint"
-              >
-                <strong>Approval required.</strong>
-                <p className="mt-1 break-words" data-testid="loop-checkpoint-question">
-                  {activeRun.checkpointPrompt}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <ControlButton
-                    ref={approveButtonRef}
-                    data-testid="loop-approval-approve"
-                    className="rounded-capsule border border-border-strong px-2 py-1"
-                    disabled={Boolean(approvalPending)}
-                    onClick={() => void resolveHumanApproval("approve")}
-                  >
-                    {approvalPending === "approve" ? "Approving…" : "Approve"}
-                  </ControlButton>
-                  <ControlButton
-                    ref={rejectButtonRef}
-                    data-testid="loop-approval-reject"
-                    className="rounded-capsule border border-border-strong px-2 py-1 text-danger"
-                    disabled={Boolean(approvalPending)}
-                    onClick={() => void resolveHumanApproval("reject")}
-                  >
-                    {approvalPending === "reject" ? "Rejecting…" : "Reject"}
-                  </ControlButton>
+              {parallelAnnouncement ? (
+                <div
+                  className="text-detail text-text-muted"
+                  data-testid="loop-parallel-live-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {parallelAnnouncement}
                 </div>
-                {approvalError ? (
-                  <p className="mt-2 text-danger" role="alert" data-testid="loop-approval-error">
-                    {approvalError}
-                  </p>
-                ) : null}
-                <p className="mt-2 text-text-muted">
-                  A decision ends this checkpoint. Retry starts a new linked attempt; approval does
-                  not resume this run.
-                </p>
-              </div>
-            ) : null}
-            {activeRun.stopReason === "humanInputRequired" && !activeRun.checkpointPrompt ? (
-              <div className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs" role="alert">
-                <strong>Human input required.</strong>{" "}
-                {rationale(activeRun.iterations.at(-1)?.checkerOutput) ??
-                  "Review the checker report, then Retry when ready."}
-              </div>
-            ) : null}
-            {activeRun.checkpointPrompt &&
-            (activeRun.stopReason === "humanApproved" ||
-              activeRun.stopReason === "humanRejected") ? (
-              <div
-                className="mt-2 rounded-lg border border-border-strong px-2 py-2 text-xs"
-                role="status"
-                data-testid="loop-approval-resolution"
-              >
-                {activeRun.stopReason === "humanApproved" ? (
-                  <>
-                    <strong>Approval recorded.</strong> This run remains terminal. Retry creates a
-                    fresh linked checkpoint.
-                  </>
-                ) : (
-                  <>
-                    <strong>Checkpoint rejected.</strong> Work was rejected and stopped. This
-                    checkpoint is terminal and cannot continue.
-                  </>
-                )}
-              </div>
-            ) : null}
-            {activeRun.status === "interrupted" &&
-            activeRun.launch?.writeTarget === "currentCheckout" &&
-            activeRun.launch.checkoutLockKey &&
-            !activeRun.launch.checkoutAcknowledgedAt ? (
-              <div
-                id="loop-checkout-recovery-notice"
-                className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
-                role="alert"
-              >
-                <strong>Checkout locked after interruption.</strong> Ensure no old agent process
-                remains before unlocking this project checkout.
-                <ControlButton
-                  className="ml-2 rounded-capsule border border-border-strong px-2 py-0.5"
-                  data-testid="loop-recovery-acknowledge"
-                  disabled={acknowledgePending}
-                  onClick={() => void acknowledgeRecovery()}
+              ) : null}
+              {activeRun.stopReason ? (
+                <div className="text-detail text-text-muted">
+                  {STOP_REASON_LABEL[activeRun.stopReason] ?? "Run ended"}
+                </div>
+              ) : null}
+              {activeRun.launch?.worktree ? (
+                <div
+                  ref={reviewStatusPanelRef}
+                  tabIndex={-1}
+                  aria-label="Loop worktree review status"
+                  className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-xs text-text-muted"
+                  data-testid="loop-retained-worktree"
                 >
-                  <ShieldCheck size={11} aria-hidden />
-                  {acknowledgePending ? "Unlocking…" : "I checked — unlock checkout"}
-                </ControlButton>
-              </div>
-            ) : null}
-            {activeRun.artifactDirectory ? (
-              <div className="mt-2 space-y-1 text-detail" data-testid="loop-artifact-actions">
-                <ControlButton
-                  data-testid="loop-reveal-artifacts"
-                  disabled={revealPending}
-                  onClick={() => void revealArtifacts(activeRun)}
-                >
-                  {revealPending ? "Revealing…" : "Reveal Artifacts"}
-                </ControlButton>
-                {artifactActionMessage ? (
-                  <div
-                    role="status"
-                    className="break-all"
-                    data-testid="loop-artifact-action-status"
-                  >
-                    {artifactActionMessage}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {activeRun.sessionId ? (
-              <div className="mt-2 space-y-1 text-detail" data-testid="loop-session-evidence">
-                <div>Session: {activeRun.sessionId}</div>
-                <ControlButton
-                  data-testid="loop-open-session"
-                  aria-label={`Open session for ${activeRun.loopName}`}
-                  onClick={() => void openLoopSession(activeRun)}
-                >
-                  Open Session
-                </ControlButton>
-                {activeRun.manifestPath ? (
-                  <div className="break-all">Run manifest: {activeRun.manifestPath}</div>
-                ) : null}
-                {activeRun.progressPath ? (
-                  <div className="break-all">Progress report: {activeRun.progressPath}</div>
-                ) : null}
-              </div>
-            ) : null}
-            {activeRun.iterations.length > 0 ? (
-              <ol
-                className="mt-2 space-y-2"
-                data-testid="loop-run-iterations"
-                aria-label="Run timeline"
-              >
-                {activeRun.iterations.map((iteration) => (
-                  <li
-                    key={iteration.id}
-                    className="min-w-0 overflow-hidden break-words rounded-lg border border-border-subtle p-2 text-detail"
-                  >
-                    <div className="font-medium text-text-primary">
-                      Iteration {iteration.index} · Validation{" "}
-                      {iteration.validationPassed === true
-                        ? "✓ passed"
-                        : iteration.validationPassed === false
-                          ? "✗ failed"
-                          : "not run"}
-                    </div>
-                    <ol className="mt-1 min-w-0 max-w-full space-y-1 break-words">
-                      {iteration.timeline.map((event) => (
-                        <li key={event.id} data-phase={event.phase} className="text-text-secondary">
-                          <span className="font-medium">{PHASE_LABEL[event.phase]}:</span>{" "}
-                          {event.note}
-                        </li>
-                      ))}
-                    </ol>
-                    {iteration.children
-                      .filter((child) => child.phase === "triage")
-                      .map((child) => (
-                        <div key={child.id} data-testid="loop-triage-status">
-                          Triage agent {child.agentName} — {childStatusLabel(child)}
-                        </div>
-                      ))}
-                    {iteration.classificationOutput ? (
-                      <div
-                        className="mt-1 min-w-0 break-words"
-                        data-testid="loop-classification-output"
-                      >
-                        <span className="font-medium">Classification report:</span>
-                        <pre className="mt-1 max-w-full whitespace-pre-wrap break-words font-sans">
-                          {iteration.classificationOutput}
-                        </pre>
-                      </div>
-                    ) : null}
-                    {iteration.checkerDecision ? (
-                      <div data-testid="loop-checker-decision">
-                        Checker decision: {iteration.checkerDecision}
-                        {rationale(iteration.checkerOutput)
-                          ? ` — ${rationale(iteration.checkerOutput)}`
-                          : ""}
-                      </div>
-                    ) : null}
-                    {iteration.children.some((child) => child.phase === "branch") ? (
-                      <ol
-                        className="mt-1 min-w-0 space-y-1 overflow-hidden break-words"
-                        data-testid="loop-parallel-branch-statuses"
-                        aria-label="Parallel branch statuses"
-                      >
-                        {iteration.children
-                          .filter((child) => child.phase === "branch")
-                          .sort((a, b) => (a.branchIndex ?? 0) - (b.branchIndex ?? 0))
-                          .map((child) => (
-                            <li key={child.id} data-branch-index={child.branchIndex}>
-                              Branch {(child.branchIndex ?? 0) + 1}: {child.agentName} —{" "}
-                              <span>{childStatusLabel(child)}</span>
-                              {child.output ? ` — ${child.output}` : ""}
-                              {child.error ? ` — ${child.error}` : ""}
-                            </li>
-                          ))}
-                      </ol>
-                    ) : null}
-                    {iteration.parallelBranchOutputs?.length ? (
-                      <ol
-                        className="mt-1 min-w-0 max-w-full break-all"
-                        data-testid="loop-parallel-branch-outputs"
-                      >
-                        {iteration.parallelBranchOutputs.map((branch) => (
-                          <li key={branch.id} data-branch-index={branch.branchIndex}>
-                            Configured branch {branch.branchIndex + 1}: {branch.agentName} —{" "}
-                            {branch.output ?? `Failed: ${branch.error ?? "unknown error"}`}
-                          </li>
-                        ))}
-                      </ol>
-                    ) : null}
-                    {iteration.pipelineStageOutputs?.length ? (
-                      <ol className="mt-1" data-testid="loop-pipeline-stage-outputs">
-                        {iteration.pipelineStageOutputs.map((stage) => (
-                          <li key={stage.id} data-stage-index={stage.stageIndex}>
-                            Stage {stage.stageIndex + 1}: {stage.agentName} — {stage.output}
-                          </li>
-                        ))}
-                      </ol>
-                    ) : null}
-                    {iteration.goalDecision ? (
-                      <div data-testid="loop-evaluator-decision">
-                        Goal evaluator: {iteration.goalDecision}
-                        {rationale(iteration.evaluatorOutput)
-                          ? ` — ${rationale(iteration.evaluatorOutput)}`
-                          : ""}
-                      </div>
-                    ) : null}
-                    {iteration.validationResult ? (
-                      <section
-                        data-testid="loop-validation-evidence"
-                        aria-label={`Validation for iteration ${iteration.index}`}
-                        className="space-y-1"
-                      >
-                        <div>
-                          Validation: {iteration.validationResult.command} · exit{" "}
-                          {iteration.validationResult.exitCode ?? "unavailable"} ·{" "}
-                          {iteration.validationResult.durationMs}ms ·{" "}
-                          {iteration.validationResult.classification}
-                        </div>
-                        <div className="break-all">
-                          Working directory: {iteration.validationResult.workingDirectory}
-                        </div>
-                        {iteration.artifacts.some((artifact) => artifact.phase === "validation") ? (
-                          <ul aria-label="Validation output artifacts">
-                            {iteration.artifacts
-                              .filter((artifact) => artifact.phase === "validation")
-                              .map((artifact) => (
-                                <li key={artifact.id} className="break-all">
-                                  {artifact.filename} · {artifact.bytes} bytes
-                                </li>
-                              ))}
-                          </ul>
-                        ) : null}
-                        {iteration.validationResult.stdout ? (
-                          <pre
-                            className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
-                            aria-label="Validation stdout"
-                          >
-                            {iteration.validationResult.stdout}
-                          </pre>
-                        ) : null}
-                        {iteration.validationResult.stderr ? (
-                          <pre
-                            className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
-                            aria-label="Validation stderr"
-                          >
-                            {iteration.validationResult.stderr}
-                          </pre>
-                        ) : null}
-                      </section>
-                    ) : iteration.validationEvidence ? (
-                      <div data-testid="loop-validation-evidence">
-                        Validation evidence: {iteration.validationEvidence}
-                      </div>
-                    ) : null}
-                    {iteration.manifestPath ? (
-                      <div className="break-all">Iteration manifest: {iteration.manifestPath}</div>
-                    ) : null}
-                    {iteration.changedFiles?.length ? (
-                      <ul aria-label={`Changed files for iteration ${iteration.index}`}>
-                        {iteration.changedFiles.map((change, index) => (
-                          <li
-                            key={`${change.status}-${change.path}-${index}`}
-                            className="break-all"
-                          >
-                            {change.status}: {change.oldPath ? `${change.oldPath} → ` : ""}
-                            {change.path}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div>Changed files: none</div>
-                    )}
-                    {iteration.artifacts?.length ? (
-                      <div>
-                        Report artifacts:{" "}
-                        {iteration.artifacts.map((artifact) => artifact.filename).join(", ")}
-                      </div>
-                    ) : null}
-                    {iteration.children
-                      .filter((child) => child.error)
-                      .map((child) => (
-                        <div key={child.id} role="alert" className="break-words text-danger">
-                          {child.phase === "branch"
-                            ? `Parallel branch ${child.agentName ?? (child.branchIndex ?? 0) + 1} failed: ${child.error}`
-                            : `${PHASE_LABEL[child.phase]} error: ${child.error}`}
-                        </div>
-                      ))}
-                  </li>
-                ))}
-              </ol>
-            ) : null}
-          </div>
-        ) : null}
-
-        {runs.length > 1 ? (
-          <div className="mb-3" data-testid="loop-run-history">
-            <h3 className="mb-1 text-xs font-medium text-text-secondary">Recent runs</h3>
-            <div className="flex flex-wrap gap-1">
-              {[...runs]
-                .reverse()
-                .slice(0, 12)
-                .map((run) => (
-                  <ControlButton
-                    key={run.id}
-                    data-loop-name={run.loopName}
-                    data-run-id={run.id}
-                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
-                    disabled={Boolean(anyRunActive) && run.id !== activeRun?.id}
-                    aria-pressed={run.id === activeRun?.id}
-                    onClick={() => {
-                      runIdRef.current = run.id;
-                      setActiveRun(run);
-                    }}
-                  >
-                    {run.loopName} · {RUN_STATUS_LABEL[run.status]}
-                    {run.stopReason ? ` · ${STOP_REASON_LABEL[run.stopReason] ?? "Run ended"}` : ""}
-                  </ControlButton>
-                ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-1.5" data-testid="loop-list">
-          {!loaded ? <SkeletonRows count={3} /> : null}
-          {loops.map((loop, index) => {
-            const runnable = !loopDefinitionValidationError(loop);
-            const available = currentProject
-              ? isLoopAvailableInProject(loop, currentProject.path)
-              : false;
-            const unavailableId = `loop-unavailable-${index}`;
-            return (
-              <div
-                key={loop.id}
-                data-loop-name={loop.name}
-                className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
-              >
-                <ControlButton
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => openEditor(loop)}
-                  data-testid={`loop-open-${loop.name}`}
-                >
-                  <div
-                    className="truncate text-sm font-medium text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
-                    {loop.name}
-                  </div>
-                  <div className="truncate text-detail text-text-muted">
-                    {LOOP_STRUCTURE_LABEL[loop.structure]} ·{" "}
-                    {loop.maxIterations === 0 ? "Unlimited" : `${loop.maxIterations}×`} ·{" "}
-                    {loop.description || "No description"}
-                  </div>
-                  <div className="truncate text-detail text-text-muted">
-                    {loop.availability === "allProjects"
-                      ? "Available in all projects"
-                      : `Assigned to ${loop.projectPaths.length} project${loop.projectPaths.length === 1 ? "" : "s"}`}
-                  </div>
-                  {!runnable || (currentProject && !available) ? (
-                    <div
-                      id={unavailableId}
-                      data-testid={`loop-unavailable-${loop.name}`}
-                      className="mt-1 text-detail text-text-secondary"
-                    >
-                      {!runnable
-                        ? loop.structure === "parallelAgents"
-                          ? "Parallel agents are report-only. Edit this definition to use Artifact (markdown) before saving or running."
-                          : "This structure is unavailable. Convert it before saving or running."
-                        : `Unavailable in ${currentProject?.name ?? "this project"}. Assign this Loop to the project to run it.`}
+                  <strong className="text-text-secondary">
+                    {activeRun.review?.status === "discarded"
+                      ? "Worktree safely archived. Branch and artifacts retained."
+                      : activeRun.review?.status === "discardUncertain"
+                        ? "Worktree archive outcome needs inspection."
+                        : activeRun.review?.status === "applied"
+                          ? "Changes applied. Review worktree and branch retained."
+                          : activeRun.review?.status === "applyUncertain"
+                            ? "Apply outcome needs inspection."
+                            : isLoopRunTerminal(activeRun.status)
+                              ? "Review worktree retained."
+                              : "Review worktree allocated."}
+                  </strong>{" "}
+                  <span className="break-all">
+                    {activeRun.review?.archivedPath ?? activeRun.launch.worktree.path}
+                  </span>
+                  <span className="block break-all">
+                    Branch: {activeRun.launch.worktree.branch}
+                  </span>
+                  {activeRun.review?.error ? (
+                    <span className="block break-words text-danger">{activeRun.review.error}</span>
+                  ) : null}
+                  {isLoopRunTerminal(activeRun.status) ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {!activeRun.review || activeRun.review.status === "available" ? (
+                        <ControlButton
+                          data-testid="loop-review-changes"
+                          disabled={reviewPending || worktreeRevealPending}
+                          onClick={() => void reviewWorktree(activeRun)}
+                        >
+                          {reviewPending ? "Preparing Review…" : "Review Changes"}
+                        </ControlButton>
+                      ) : null}
+                      {activeRun.review?.status !== "discarded" &&
+                      activeRun.review?.status !== "discardUncertain" ? (
+                        <ControlButton
+                          data-testid="loop-reveal-worktree"
+                          disabled={worktreeRevealPending || reviewPending}
+                          onClick={() => void revealWorktree(activeRun)}
+                        >
+                          {worktreeRevealPending ? "Revealing…" : "Reveal Worktree"}
+                        </ControlButton>
+                      ) : null}
                     </div>
                   ) : null}
-                </ControlButton>
-                <ControlButton
-                  data-testid={`loop-run-${loop.name}`}
-                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                  title={
-                    !runnable
-                      ? "Unavailable until its definition is valid"
-                      : currentProject && !available
-                        ? "Loop is not assigned to this project"
-                        : currentProjectId
-                          ? "Configure and run loop"
-                          : "Open a project to run"
-                  }
-                  aria-describedby={
-                    !runnable || (currentProject && !available) ? unavailableId : undefined
-                  }
-                  disabled={
-                    !runnable ||
-                    !available ||
-                    !currentProjectId ||
-                    runPending ||
-                    Boolean(anyRunActive)
-                  }
-                  onClick={() => openLaunch(loop)}
+                  {worktreeActionMessage ? (
+                    <div
+                      role="status"
+                      className="mt-1 break-all"
+                      data-testid="loop-worktree-action-status"
+                    >
+                      {worktreeActionMessage}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
+                <div
+                  className="mt-2 rounded-lg border border-warning px-2 py-2 text-xs"
+                  role="alert"
+                  data-testid="loop-human-approval-checkpoint"
                 >
-                  <Play size={12} /> Run
-                </ControlButton>
-                <ControlButton
-                  data-testid={`loop-duplicate-${loop.name}`}
-                  className="rounded p-1 text-text-muted hover:text-text-primary disabled:opacity-40"
-                  title={
-                    runnable ? "Duplicate loop" : "Unavailable until converted to Single agent"
-                  }
-                  aria-describedby={!runnable ? unavailableId : undefined}
-                  disabled={!runnable}
-                  onClick={() => void duplicate(loop)}
+                  <strong>Approval required.</strong>
+                  <p className="mt-1 break-words" data-testid="loop-checkpoint-question">
+                    {activeRun.checkpointPrompt}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <ControlButton
+                      ref={approveButtonRef}
+                      data-testid="loop-approval-approve"
+                      className="rounded-capsule border border-border-strong px-2 py-1"
+                      disabled={Boolean(approvalPending)}
+                      onClick={() => void resolveHumanApproval("approve")}
+                    >
+                      {approvalPending === "approve" ? "Approving…" : "Approve"}
+                    </ControlButton>
+                    <ControlButton
+                      ref={rejectButtonRef}
+                      data-testid="loop-approval-reject"
+                      className="rounded-capsule border border-border-strong px-2 py-1 text-danger"
+                      disabled={Boolean(approvalPending)}
+                      onClick={() => void resolveHumanApproval("reject")}
+                    >
+                      {approvalPending === "reject" ? "Rejecting…" : "Reject"}
+                    </ControlButton>
+                  </div>
+                  {approvalError ? (
+                    <p className="mt-2 text-danger" role="alert" data-testid="loop-approval-error">
+                      {approvalError}
+                    </p>
+                  ) : null}
+                  <p className="mt-2 text-text-muted">
+                    A decision ends this checkpoint. Retry starts a new linked attempt; approval
+                    does not resume this run.
+                  </p>
+                </div>
+              ) : null}
+              {activeRun.stopReason === "humanInputRequired" && !activeRun.checkpointPrompt ? (
+                <div
+                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
+                  role="alert"
                 >
-                  <Copy size={13} />
-                </ControlButton>
-                <ControlButton
-                  data-testid={`loop-delete-${loop.name}`}
-                  className="rounded p-1 text-text-muted hover:text-danger"
-                  title="Delete loop"
-                  onClick={() => void remove(loop)}
+                  <strong>Human input required.</strong>{" "}
+                  {rationale(activeRun.iterations.at(-1)?.checkerOutput) ??
+                    "Review the checker report, then Retry when ready."}
+                </div>
+              ) : null}
+              {activeRun.checkpointPrompt &&
+              (activeRun.stopReason === "humanApproved" ||
+                activeRun.stopReason === "humanRejected") ? (
+                <div
+                  className="mt-2 rounded-lg border border-border-strong px-2 py-2 text-xs"
+                  role="status"
+                  data-testid="loop-approval-resolution"
                 >
-                  <Trash2 size={13} />
-                </ControlButton>
-              </div>
-            );
-          })}
-          {loaded && loops.length === 0 ? (
-            <div className="py-8 text-center text-sm text-text-muted" data-testid="loop-empty">
-              No loops yet. Create one to iterate an agent toward a checked goal.
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      {reviewDialog ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-2 sm:p-6">
-          <div
-            ref={reviewDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="loop-review-title"
-            data-testid="loop-review-dialog"
-            className="flex max-h-[calc(100vh-1rem)] min-w-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
-          >
-            <div className="flex items-center justify-between gap-2 border-b border-border-subtle p-3">
-              <h3 id="loop-review-title" className="min-w-0 break-words text-sm font-semibold">
-                Review changes · {reviewDialog.run.loopName}
-              </h3>
-              <ControlButton
-                aria-label="Close worktree review"
-                onClick={closeReview}
-                disabled={Boolean(reviewActionPending)}
-              >
-                <X size={14} />
-              </ControlButton>
-            </div>
-            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
-              <h4 className="text-xs font-semibold">Changed files</h4>
-              {reviewDialog.changedFiles.length ? (
-                <ul
-                  className="mt-1 max-h-36 overflow-auto rounded border border-border-subtle p-2 text-xs"
-                  data-testid="loop-review-files"
+                  {activeRun.stopReason === "humanApproved" ? (
+                    <>
+                      <strong>Approval recorded.</strong> This run remains terminal. Retry creates a
+                      fresh linked checkpoint.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Checkpoint rejected.</strong> Work was rejected and stopped. This
+                      checkpoint is terminal and cannot continue.
+                    </>
+                  )}
+                </div>
+              ) : null}
+              {activeRun.status === "interrupted" &&
+              activeRun.launch?.writeTarget === "currentCheckout" &&
+              activeRun.launch.checkoutLockKey &&
+              !activeRun.launch.checkoutAcknowledgedAt ? (
+                <div
+                  id="loop-checkout-recovery-notice"
+                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
+                  role="alert"
                 >
-                  {reviewDialog.changedFiles.map((file, index) => (
-                    <li key={`${file.path}-${index}`} className="break-all">
-                      {file.status}: {file.oldPath ? `${file.oldPath} → ` : ""}
-                      {file.path}
+                  <strong>Checkout locked after interruption.</strong> Ensure no old agent process
+                  remains before unlocking this project checkout.
+                  <ControlButton
+                    className="ml-2 rounded-capsule border border-border-strong px-2 py-0.5"
+                    data-testid="loop-recovery-acknowledge"
+                    disabled={acknowledgePending}
+                    onClick={() => void acknowledgeRecovery()}
+                  >
+                    <ShieldCheck size={11} aria-hidden />
+                    {acknowledgePending ? "Unlocking…" : "I checked — unlock checkout"}
+                  </ControlButton>
+                </div>
+              ) : null}
+              {activeRun.artifactDirectory ? (
+                <div className="mt-2 space-y-1 text-detail" data-testid="loop-artifact-actions">
+                  <ControlButton
+                    data-testid="loop-reveal-artifacts"
+                    disabled={revealPending}
+                    onClick={() => void revealArtifacts(activeRun)}
+                  >
+                    {revealPending ? "Revealing…" : "Reveal Artifacts"}
+                  </ControlButton>
+                  {artifactActionMessage ? (
+                    <div
+                      role="status"
+                      className="break-all"
+                      data-testid="loop-artifact-action-status"
+                    >
+                      {artifactActionMessage}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {activeRun.sessionId ? (
+                <div className="mt-2 space-y-1 text-detail" data-testid="loop-session-evidence">
+                  <div>Session: {activeRun.sessionId}</div>
+                  <ControlButton
+                    data-testid="loop-open-session"
+                    aria-label={`Open session for ${activeRun.loopName}`}
+                    onClick={() => void openLoopSession(activeRun)}
+                  >
+                    Open Session
+                  </ControlButton>
+                  {activeRun.manifestPath ? (
+                    <div className="break-all">Run manifest: {activeRun.manifestPath}</div>
+                  ) : null}
+                  {activeRun.progressPath ? (
+                    <div className="break-all">Progress report: {activeRun.progressPath}</div>
+                  ) : null}
+                </div>
+              ) : null}
+              {activeRun.iterations.length > 0 ? (
+                <ol
+                  className="mt-2 space-y-2"
+                  data-testid="loop-run-iterations"
+                  aria-label="Run timeline"
+                >
+                  {activeRun.iterations.map((iteration) => (
+                    <li
+                      key={iteration.id}
+                      className="min-w-0 overflow-hidden break-words rounded-lg border border-border-subtle p-2 text-detail"
+                    >
+                      <div className="font-medium text-text-primary">
+                        Iteration {iteration.index} · Validation{" "}
+                        {iteration.validationPassed === true
+                          ? "✓ passed"
+                          : iteration.validationPassed === false
+                            ? "✗ failed"
+                            : "not run"}
+                      </div>
+                      <ol className="mt-1 min-w-0 max-w-full space-y-1 break-words">
+                        {iteration.timeline.map((event) => (
+                          <li
+                            key={event.id}
+                            data-phase={event.phase}
+                            className="text-text-secondary"
+                          >
+                            <span className="font-medium">{PHASE_LABEL[event.phase]}:</span>{" "}
+                            {event.note}
+                          </li>
+                        ))}
+                      </ol>
+                      {iteration.children
+                        .filter((child) => child.phase === "triage")
+                        .map((child) => (
+                          <div key={child.id} data-testid="loop-triage-status">
+                            Triage agent {child.agentName} — {childStatusLabel(child)}
+                          </div>
+                        ))}
+                      {iteration.classificationOutput ? (
+                        <div
+                          className="mt-1 min-w-0 break-words"
+                          data-testid="loop-classification-output"
+                        >
+                          <span className="font-medium">Classification report:</span>
+                          <pre className="mt-1 max-w-full whitespace-pre-wrap break-words font-sans">
+                            {iteration.classificationOutput}
+                          </pre>
+                        </div>
+                      ) : null}
+                      {iteration.checkerDecision ? (
+                        <div data-testid="loop-checker-decision">
+                          Checker decision: {iteration.checkerDecision}
+                          {rationale(iteration.checkerOutput)
+                            ? ` — ${rationale(iteration.checkerOutput)}`
+                            : ""}
+                        </div>
+                      ) : null}
+                      {iteration.children.some((child) => child.phase === "branch") ? (
+                        <ol
+                          className="mt-1 min-w-0 space-y-1 overflow-hidden break-words"
+                          data-testid="loop-parallel-branch-statuses"
+                          aria-label="Parallel branch statuses"
+                        >
+                          {iteration.children
+                            .filter((child) => child.phase === "branch")
+                            .sort((a, b) => (a.branchIndex ?? 0) - (b.branchIndex ?? 0))
+                            .map((child) => (
+                              <li key={child.id} data-branch-index={child.branchIndex}>
+                                Branch {(child.branchIndex ?? 0) + 1}: {child.agentName} —{" "}
+                                <span>{childStatusLabel(child)}</span>
+                                {child.output ? ` — ${child.output}` : ""}
+                                {child.error ? ` — ${child.error}` : ""}
+                              </li>
+                            ))}
+                        </ol>
+                      ) : null}
+                      {iteration.parallelBranchOutputs?.length ? (
+                        <ol
+                          className="mt-1 min-w-0 max-w-full break-all"
+                          data-testid="loop-parallel-branch-outputs"
+                        >
+                          {iteration.parallelBranchOutputs.map((branch) => (
+                            <li key={branch.id} data-branch-index={branch.branchIndex}>
+                              Configured branch {branch.branchIndex + 1}: {branch.agentName} —{" "}
+                              {branch.output ?? `Failed: ${branch.error ?? "unknown error"}`}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                      {iteration.pipelineStageOutputs?.length ? (
+                        <ol className="mt-1" data-testid="loop-pipeline-stage-outputs">
+                          {iteration.pipelineStageOutputs.map((stage) => (
+                            <li key={stage.id} data-stage-index={stage.stageIndex}>
+                              Stage {stage.stageIndex + 1}: {stage.agentName} — {stage.output}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                      {iteration.goalDecision ? (
+                        <div data-testid="loop-evaluator-decision">
+                          Goal evaluator: {iteration.goalDecision}
+                          {rationale(iteration.evaluatorOutput)
+                            ? ` — ${rationale(iteration.evaluatorOutput)}`
+                            : ""}
+                        </div>
+                      ) : null}
+                      {iteration.validationResult ? (
+                        <section
+                          data-testid="loop-validation-evidence"
+                          aria-label={`Validation for iteration ${iteration.index}`}
+                          className="space-y-1"
+                        >
+                          <div>
+                            Validation: {iteration.validationResult.command} · exit{" "}
+                            {iteration.validationResult.exitCode ?? "unavailable"} ·{" "}
+                            {iteration.validationResult.durationMs}ms ·{" "}
+                            {iteration.validationResult.classification}
+                          </div>
+                          <div className="break-all">
+                            Working directory: {iteration.validationResult.workingDirectory}
+                          </div>
+                          {iteration.artifacts.some(
+                            (artifact) => artifact.phase === "validation",
+                          ) ? (
+                            <ul aria-label="Validation output artifacts">
+                              {iteration.artifacts
+                                .filter((artifact) => artifact.phase === "validation")
+                                .map((artifact) => (
+                                  <li key={artifact.id} className="break-all">
+                                    {artifact.filename} · {artifact.bytes} bytes
+                                  </li>
+                                ))}
+                            </ul>
+                          ) : null}
+                          {iteration.validationResult.stdout ? (
+                            <pre
+                              className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
+                              aria-label="Validation stdout"
+                            >
+                              {iteration.validationResult.stdout}
+                            </pre>
+                          ) : null}
+                          {iteration.validationResult.stderr ? (
+                            <pre
+                              className="max-h-40 overflow-auto whitespace-pre-wrap break-words"
+                              aria-label="Validation stderr"
+                            >
+                              {iteration.validationResult.stderr}
+                            </pre>
+                          ) : null}
+                        </section>
+                      ) : iteration.validationEvidence ? (
+                        <div data-testid="loop-validation-evidence">
+                          Validation evidence: {iteration.validationEvidence}
+                        </div>
+                      ) : null}
+                      {iteration.manifestPath ? (
+                        <div className="break-all">
+                          Iteration manifest: {iteration.manifestPath}
+                        </div>
+                      ) : null}
+                      {iteration.changedFiles?.length ? (
+                        <ul aria-label={`Changed files for iteration ${iteration.index}`}>
+                          {iteration.changedFiles.map((change, index) => (
+                            <li
+                              key={`${change.status}-${change.path}-${index}`}
+                              className="break-all"
+                            >
+                              {change.status}: {change.oldPath ? `${change.oldPath} → ` : ""}
+                              {change.path}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div>Changed files: none</div>
+                      )}
+                      {iteration.artifacts?.length ? (
+                        <div>
+                          Report artifacts:{" "}
+                          {iteration.artifacts.map((artifact) => artifact.filename).join(", ")}
+                        </div>
+                      ) : null}
+                      {iteration.children
+                        .filter((child) => child.error)
+                        .map((child) => (
+                          <div key={child.id} role="alert" className="break-words text-danger">
+                            {child.phase === "branch"
+                              ? `Parallel branch ${child.agentName ?? (child.branchIndex ?? 0) + 1} failed: ${child.error}`
+                              : `${PHASE_LABEL[child.phase]} error: ${child.error}`}
+                          </div>
+                        ))}
                     </li>
                   ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-text-muted">No changes.</p>
-              )}
-              <h4 className="mt-3 text-xs font-semibold">Patch</h4>
-              <pre
-                className="mt-1 max-h-[38vh] min-w-0 overflow-auto whitespace-pre text-xs"
-                data-testid="loop-review-patch"
-              >
-                {reviewDialog.patch || "No patch content."}
-              </pre>
-              {reviewDialog.patchTruncated ? (
-                <p className="text-xs text-warning">
-                  Preview truncated; the complete bounded binary patch is stored in run artifacts.
-                </p>
-              ) : null}
-              <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-border-strong p-2 text-xs">
-                  <label className="flex items-start gap-2">
-                    <ControlInput
-                      type="checkbox"
-                      aria-label="Confirm applying the reviewed patch"
-                      data-testid="loop-review-apply-confirmation"
-                      checked={reviewConfirmed}
-                      onChange={(event) => setReviewConfirmed(event.target.checked)}
-                    />
-                    Apply this reviewed patch to the clean project checkout. The worktree and branch
-                    will be retained.
-                  </label>
-                  <ControlButton
-                    data-testid="loop-review-apply"
-                    className="mt-2"
-                    disabled={
-                      !reviewConfirmed ||
-                      Boolean(reviewActionPending) ||
-                      !reviewDialog.changedFiles.length
-                    }
-                    onClick={() => void decideWorktree("apply")}
-                  >
-                    {reviewActionPending === "apply" ? "Applying…" : "Apply Changes"}
-                  </ControlButton>
-                </div>
-                <div className="rounded-lg border border-danger p-2 text-xs">
-                  <p>
-                    Safely archive this owned worktree under Agent Deck's private root. Nothing is
-                    recursively deleted; the branch and artifacts remain.
-                  </p>
-                  <label className="mt-2 block">
-                    Type <strong className="break-all">{reviewDialog.run.loopName}</strong>
-                    <ControlInput
-                      data-testid="loop-discard-name"
-                      className="mt-1 w-full"
-                      value={discardName}
-                      onChange={(event) => setDiscardName(event.target.value)}
-                    />
-                  </label>
-                  <ControlButton
-                    data-testid="loop-review-discard"
-                    className="mt-2 text-danger"
-                    disabled={
-                      discardName !== reviewDialog.run.loopName || Boolean(reviewActionPending)
-                    }
-                    onClick={() => void decideWorktree("discard")}
-                  >
-                    {reviewActionPending === "discard" ? "Archiving…" : "Safely Archive Worktree"}
-                  </ControlButton>
-                </div>
-              </div>
-              {reviewError ? (
-                <p
-                  role="alert"
-                  data-testid="loop-review-error"
-                  className="mt-2 text-xs text-danger"
-                >
-                  {reviewError}
-                </p>
+                </ol>
               ) : null}
             </div>
+          ) : null}
+
+          {runs.length > 1 ? (
+            <div className="mb-3" data-testid="loop-run-history">
+              <h3 className="mb-1 text-xs font-medium text-text-secondary">Recent runs</h3>
+              <div className="flex flex-wrap gap-1">
+                {[...runs]
+                  .reverse()
+                  .slice(0, 12)
+                  .map((run) => (
+                    <ControlButton
+                      key={run.id}
+                      data-loop-name={run.loopName}
+                      data-run-id={run.id}
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail"
+                      disabled={Boolean(anyRunActive) && run.id !== activeRun?.id}
+                      aria-pressed={run.id === activeRun?.id}
+                      onClick={() => {
+                        runIdRef.current = run.id;
+                        setActiveRun(run);
+                      }}
+                    >
+                      {run.loopName} · {RUN_STATUS_LABEL[run.status]}
+                      {run.stopReason
+                        ? ` · ${STOP_REASON_LABEL[run.stopReason] ?? "Run ended"}`
+                        : ""}
+                    </ControlButton>
+                  ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5" data-testid="loop-list">
+            {!loaded ? <SkeletonRows count={3} /> : null}
+            {loops.map((loop, index) => {
+              const runnable = !loopDefinitionValidationError(loop);
+              const available = currentProject
+                ? isLoopAvailableInProject(loop, currentProject.path)
+                : false;
+              const unavailableId = `loop-unavailable-${index}`;
+              return (
+                <div
+                  key={loop.id}
+                  data-loop-name={loop.name}
+                  className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+                >
+                  <ControlButton
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => openEditor(loop)}
+                    data-testid={`loop-open-${loop.name}`}
+                  >
+                    <div
+                      className="truncate text-sm font-medium text-text-primary"
+                      style={{ fontStretch: "expanded" }}
+                    >
+                      {loop.name}
+                    </div>
+                    <div className="truncate text-detail text-text-muted">
+                      {LOOP_STRUCTURE_LABEL[loop.structure]} ·{" "}
+                      {loop.maxIterations === 0 ? "Unlimited" : `${loop.maxIterations}×`} ·{" "}
+                      {loop.description || "No description"}
+                    </div>
+                    <div className="truncate text-detail text-text-muted">
+                      {loop.availability === "allProjects"
+                        ? "Available in all projects"
+                        : `Assigned to ${loop.projectPaths.length} project${loop.projectPaths.length === 1 ? "" : "s"}`}
+                    </div>
+                    {!runnable || (currentProject && !available) ? (
+                      <div
+                        id={unavailableId}
+                        data-testid={`loop-unavailable-${loop.name}`}
+                        className="mt-1 text-detail text-text-secondary"
+                      >
+                        {!runnable
+                          ? loop.structure === "parallelAgents"
+                            ? "Parallel agents are report-only. Edit this definition to use Artifact (markdown) before saving or running."
+                            : "This structure is unavailable. Convert it before saving or running."
+                          : `Unavailable in ${currentProject?.name ?? "this project"}. Assign this Loop to the project to run it.`}
+                      </div>
+                    ) : null}
+                  </ControlButton>
+                  <ControlButton
+                    data-testid={`loop-run-${loop.name}`}
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                    title={
+                      !runnable
+                        ? "Unavailable until its definition is valid"
+                        : currentProject && !available
+                          ? "Loop is not assigned to this project"
+                          : currentProjectId
+                            ? "Configure and run loop"
+                            : "Open a project to run"
+                    }
+                    aria-describedby={
+                      !runnable || (currentProject && !available) ? unavailableId : undefined
+                    }
+                    disabled={
+                      !runnable ||
+                      !available ||
+                      !currentProjectId ||
+                      runPending ||
+                      Boolean(anyRunActive)
+                    }
+                    onClick={() => openLaunch(loop)}
+                  >
+                    <Play size={12} /> Run
+                  </ControlButton>
+                  <ControlButton
+                    data-testid={`loop-duplicate-${loop.name}`}
+                    className="rounded p-1 text-text-muted hover:text-text-primary disabled:opacity-40"
+                    title={
+                      runnable ? "Duplicate loop" : "Unavailable until converted to Single agent"
+                    }
+                    aria-describedby={!runnable ? unavailableId : undefined}
+                    disabled={!runnable}
+                    onClick={() => void duplicate(loop)}
+                  >
+                    <Copy size={13} />
+                  </ControlButton>
+                  <ControlButton
+                    data-testid={`loop-delete-${loop.name}`}
+                    className="rounded p-1 text-text-muted hover:text-danger"
+                    title="Delete loop"
+                    onClick={() => void remove(loop)}
+                  >
+                    <Trash2 size={13} />
+                  </ControlButton>
+                </div>
+              );
+            })}
+            {loaded && loops.length === 0 ? (
+              <div className="py-8 text-center text-sm text-text-muted" data-testid="loop-empty">
+                No loops yet. Create one to iterate an agent toward a checked goal.
+              </div>
+            ) : null}
           </div>
         </div>
-      ) : null}
 
-      {draft ? (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-overlay p-3 sm:p-8"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeEditor();
-          }}
-        >
-          <div
-            ref={dialogRef}
-            className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
-            data-testid="loop-editor"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="loop-editor-title"
-          >
-            <h3
-              id="loop-editor-title"
-              className="break-all text-sm font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
+        {reviewDialog ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-2 sm:p-6">
+            <div
+              ref={reviewDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="loop-review-title"
+              data-testid="loop-review-dialog"
+              className="flex max-h-[calc(100vh-1rem)] min-w-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
             >
-              {draft.original ? `Edit ${draft.original}` : "New Loop"}
-            </h3>
-            <label className="block text-xs text-text-muted">
-              Name
-              <ControlInput
-                data-testid="loop-name"
-                className={inputClass}
-                value={draft.name}
-                disabled={draft.original !== null}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              />
-            </label>
-            <label className="block text-xs text-text-muted">
-              Description
-              <ControlInput
-                className={inputClass}
-                value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-              />
-            </label>
-            <label className="block text-xs text-text-muted">
-              Goal (what each iteration should accomplish)
-              <ControlTextArea
-                data-testid="loop-goal"
-                className={`${inputClass} min-h-[100px] font-mono text-caption`}
-                value={draft.goal}
-                onChange={(event) => {
-                  const goal = event.target.value;
-                  setDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          goal,
-                          successCondition:
-                            current.successConditionSource === "goal"
-                              ? goal
-                              : current.successCondition,
+              <div className="flex items-center justify-between gap-2 border-b border-border-subtle p-3">
+                <h3 id="loop-review-title" className="min-w-0 break-words text-sm font-semibold">
+                  Review changes · {reviewDialog.run.loopName}
+                </h3>
+                <ControlButton
+                  aria-label="Close worktree review"
+                  onClick={closeReview}
+                  disabled={Boolean(reviewActionPending)}
+                >
+                  <X size={14} />
+                </ControlButton>
+              </div>
+              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
+                <h4 className="text-xs font-semibold">Changed files</h4>
+                {reviewDialog.changedFiles.length ? (
+                  <ul
+                    className="mt-1 max-h-36 overflow-auto rounded border border-border-subtle p-2 text-xs"
+                    data-testid="loop-review-files"
+                  >
+                    {reviewDialog.changedFiles.map((file, index) => (
+                      <li key={`${file.path}-${index}`} className="break-all">
+                        {file.status}: {file.oldPath ? `${file.oldPath} → ` : ""}
+                        {file.path}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-text-muted">No changes.</p>
+                )}
+                <h4 className="mt-3 text-xs font-semibold">Patch</h4>
+                <pre
+                  className="mt-1 max-h-[38vh] min-w-0 overflow-auto whitespace-pre text-xs"
+                  data-testid="loop-review-patch"
+                >
+                  {reviewDialog.patch || "No patch content."}
+                </pre>
+                {reviewDialog.patchTruncated ? (
+                  <p className="text-xs text-warning">
+                    Preview truncated; the complete bounded binary patch is stored in run artifacts.
+                  </p>
+                ) : null}
+                <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border-strong p-2 text-xs">
+                    <label className="flex items-start gap-2">
+                      <ControlInput
+                        type="checkbox"
+                        aria-label="Confirm applying the reviewed patch"
+                        data-testid="loop-review-apply-confirmation"
+                        checked={reviewConfirmed}
+                        onChange={(event) => setReviewConfirmed(event.target.checked)}
+                      />
+                      Apply this reviewed patch to the clean project checkout. The worktree and
+                      branch will be retained.
+                    </label>
+                    <ControlButton
+                      data-testid="loop-review-apply"
+                      className="mt-2"
+                      disabled={
+                        !reviewConfirmed ||
+                        Boolean(reviewActionPending) ||
+                        !reviewDialog.changedFiles.length
+                      }
+                      onClick={() => void decideWorktree("apply")}
+                    >
+                      {reviewActionPending === "apply" ? "Applying…" : "Apply Changes"}
+                    </ControlButton>
+                  </div>
+                  <div className="rounded-lg border border-danger p-2 text-xs">
+                    <p>
+                      Safely archive this owned worktree under Agent Deck's private root. Nothing is
+                      recursively deleted; the branch and artifacts remain.
+                    </p>
+                    <label className="mt-2 block">
+                      Type <strong className="break-all">{reviewDialog.run.loopName}</strong>
+                      <ControlInput
+                        data-testid="loop-discard-name"
+                        className="mt-1 w-full"
+                        value={discardName}
+                        onChange={(event) => setDiscardName(event.target.value)}
+                      />
+                    </label>
+                    <ControlButton
+                      data-testid="loop-review-discard"
+                      className="mt-2 text-danger"
+                      disabled={
+                        discardName !== reviewDialog.run.loopName || Boolean(reviewActionPending)
+                      }
+                      onClick={() => void decideWorktree("discard")}
+                    >
+                      {reviewActionPending === "discard" ? "Archiving…" : "Safely Archive Worktree"}
+                    </ControlButton>
+                  </div>
+                </div>
+                {reviewError ? (
+                  <p
+                    role="alert"
+                    data-testid="loop-review-error"
+                    className="mt-2 text-xs text-danger"
+                  >
+                    {reviewError}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {draft ? (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-overlay p-3 sm:p-8"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeEditor();
+            }}
+          >
+            <div
+              ref={dialogRef}
+              className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
+              data-testid="loop-editor"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="loop-editor-title"
+            >
+              <h3
+                id="loop-editor-title"
+                className="break-all text-sm font-semibold text-text-primary"
+                style={{ fontStretch: "expanded" }}
+              >
+                {draft.original ? `Edit ${draft.original}` : "New Loop"}
+              </h3>
+              <label className="block text-xs text-text-muted">
+                Name
+                <ControlInput
+                  data-testid="loop-name"
+                  className={inputClass}
+                  value={draft.name}
+                  disabled={draft.original !== null}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                />
+              </label>
+              <label className="block text-xs text-text-muted">
+                Description
+                <ControlInput
+                  className={inputClass}
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                />
+              </label>
+              <label className="block text-xs text-text-muted">
+                Goal (what each iteration should accomplish)
+                <ControlTextArea
+                  data-testid="loop-goal"
+                  className={`${inputClass} min-h-[100px] font-mono text-caption`}
+                  value={draft.goal}
+                  onChange={(event) => {
+                    const goal = event.target.value;
+                    setDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            goal,
+                            successCondition:
+                              current.successConditionSource === "goal"
+                                ? goal
+                                : current.successCondition,
+                          }
+                        : current,
+                    );
+                  }}
+                />
+              </label>
+              <label className="block text-xs text-text-muted">
+                Launch context / arguments
+                <ControlTextArea
+                  data-testid="loop-launch-context"
+                  className={`${inputClass} min-h-[76px]`}
+                  value={draft.launchContext}
+                  onChange={(event) => setDraft({ ...draft, launchContext: event.target.value })}
+                />
+                <span className="mt-1 block text-detail">
+                  Optional background or constraints kept separate from the Loop goal.
+                </span>
+              </label>
+              {draft.launchContext.trim() ? (
+                <label className="block text-xs text-text-muted">
+                  Context scope
+                  <ControlSelect
+                    data-testid="loop-launch-context-scope"
+                    className={inputClass}
+                    value={draft.launchContextScope}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        launchContextScope: event.target.value as LoopDraft["launchContextScope"],
+                      })
+                    }
+                  >
+                    <option value="firstIterationOnly">First iteration only</option>
+                    <option value="everyIteration">Every iteration</option>
+                  </ControlSelect>
+                </label>
+              ) : null}
+              <fieldset className="space-y-2 rounded-lg border border-border-subtle p-2">
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Project availability
+                </legend>
+                <label className="flex items-center gap-2 text-xs text-text-primary">
+                  <ControlInput
+                    type="radio"
+                    name="loop-availability"
+                    value="allProjects"
+                    checked={draft.availability === "allProjects"}
+                    onChange={() => setDraft({ ...draft, availability: "allProjects" })}
+                  />
+                  All projects
+                </label>
+                <label className="flex items-center gap-2 text-xs text-text-primary">
+                  <ControlInput
+                    type="radio"
+                    name="loop-availability"
+                    value="projectPaths"
+                    checked={draft.availability === "projectPaths"}
+                    onChange={() =>
+                      setDraft({
+                        ...draft,
+                        availability: "projectPaths",
+                        projectPaths:
+                          draft.projectPaths.length || !currentProject
+                            ? draft.projectPaths
+                            : [currentProject.path],
+                      })
+                    }
+                  />
+                  Selected registered projects
+                </label>
+                {draft.availability === "projectPaths" ? (
+                  <div className="space-y-1 pl-5" data-testid="loop-project-assignments">
+                    {projects.map((project) => (
+                      <label key={project.id} className="flex items-center gap-2 text-xs">
+                        <ControlInput
+                          type="checkbox"
+                          checked={draft.projectPaths.includes(project.path)}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              projectPaths: event.target.checked
+                                ? normalizeLoopProjectPaths([...draft.projectPaths, project.path])
+                                : draft.projectPaths.filter((path) => path !== project.path),
+                            })
+                          }
+                        />
+                        <span>{project.name}</span>
+                        {project.id === currentProjectId ? (
+                          <span className="text-text-muted">Current project</span>
+                        ) : null}
+                      </label>
+                    ))}
+                    {!projects.length ? (
+                      <p className="text-detail text-text-muted">No registered projects.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </fieldset>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="text-xs text-text-muted">
+                  Structure
+                  <ControlSelect
+                    data-testid="loop-structure"
+                    className={inputClass}
+                    value={draft.structure}
+                    onChange={(e) => {
+                      const structure = e.target.value as LoopDraft["structure"];
+                      setDraft({
+                        ...draft,
+                        structure,
+                        ...(structure === "parallelAgents"
+                          ? { writeTarget: "artifactMarkdown" as const }
+                          : {}),
+                        ...(structure === "discoveryTriage"
+                          ? {
+                              classificationPrompt: normalizeLoopClassificationPrompt(
+                                draft.classificationPrompt,
+                              ),
+                            }
+                          : {}),
+                        ...(structure === "humanApproval"
+                          ? {
+                              checkpointPrompt: normalizeLoopCheckpointPrompt(
+                                draft.checkpointPrompt,
+                              ),
+                            }
+                          : {}),
+                      });
+                      if (structure === "discoveryTriage") {
+                        requestAnimationFrame(() => triageAgentRef.current?.focus());
+                      } else if (structure === "humanApproval") {
+                        requestAnimationFrame(() => checkpointPromptRef.current?.focus());
+                      }
+                    }}
+                    aria-describedby={
+                      isRunnableLoopStructure(draft.structure)
+                        ? undefined
+                        : "loop-editor-structure-unavailable"
+                    }
+                  >
+                    {!isRunnableLoopStructure(draft.structure) ? (
+                      <option value={draft.structure} disabled>
+                        {LOOP_STRUCTURE_LABEL[draft.structure]} (unavailable)
+                      </option>
+                    ) : null}
+                    {RUNNABLE_LOOP_STRUCTURES.map((s) => (
+                      <option key={s} value={s}>
+                        {LOOP_STRUCTURE_LABEL[s]}
+                      </option>
+                    ))}
+                  </ControlSelect>
+                  {!isRunnableLoopStructure(draft.structure) ? (
+                    <span
+                      id="loop-editor-structure-unavailable"
+                      data-testid="loop-editor-structure-unavailable"
+                      className="mt-1 block text-detail text-text-secondary"
+                    >
+                      This structure cannot run here. Choose Single agent to explicitly convert it.
+                    </span>
+                  ) : null}
+                </label>
+                {draft.structure === "singleAgent" ? (
+                  <label className="text-xs text-text-muted">
+                    Agent
+                    <ControlSelect
+                      data-testid="loop-agent"
+                      className={inputClass}
+                      value={draft.agentName}
+                      aria-invalid={!availableAgentNames.has(draft.agentName)}
+                      onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
+                    >
+                      {renderAgentOptions(draft.agentName)}
+                    </ControlSelect>
+                  </label>
+                ) : null}
+              </div>
+              {draft.structure === "makerChecker" ? (
+                <div className="space-y-3" data-testid="loop-maker-checker-config">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="text-xs text-text-muted">
+                      Maker agent
+                      <ControlSelect
+                        data-testid="loop-maker"
+                        className={inputClass}
+                        value={draft.makerName}
+                        aria-invalid={!availableAgentNames.has(draft.makerName)}
+                        onChange={(e) => setDraft({ ...draft, makerName: e.target.value })}
+                      >
+                        {renderAgentOptions(draft.makerName)}
+                      </ControlSelect>
+                    </label>
+                    <label className="text-xs text-text-muted">
+                      Checker agent
+                      <ControlSelect
+                        data-testid="loop-checker"
+                        className={inputClass}
+                        value={draft.checkerName}
+                        aria-invalid={!availableAgentNames.has(draft.checkerName)}
+                        onChange={(e) => setDraft({ ...draft, checkerName: e.target.value })}
+                      >
+                        {renderAgentOptions(draft.checkerName)}
+                      </ControlSelect>
+                    </label>
+                  </div>
+                  <label className="block text-xs text-text-muted">
+                    Checker rubric
+                    <ControlTextArea
+                      data-testid="loop-checker-rubric"
+                      className={`${inputClass} min-h-[80px]`}
+                      value={draft.checkerRubric}
+                      onChange={(e) => setDraft({ ...draft, checkerRubric: e.target.value })}
+                    />
+                  </label>
+                </div>
+              ) : null}
+              {draft.structure === "agentPipeline" ? (
+                <fieldset
+                  className="space-y-2 rounded-lg border border-border-subtle p-2"
+                  data-testid="loop-pipeline-config"
+                  aria-describedby="loop-pipeline-help"
+                >
+                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                    Ordered pipeline stages
+                  </legend>
+                  <p id="loop-pipeline-help" className="text-detail text-text-muted">
+                    Stages run strictly from top to bottom each iteration. Repeated agent names are
+                    allowed; later stages receive bounded handoff reports.
+                  </p>
+                  {draft.pipelineStages.map((stage, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-1"
+                      data-testid={`loop-pipeline-stage-${index}`}
+                    >
+                      <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
+                      <ControlSelect
+                        className={inputClass}
+                        data-testid={`loop-pipeline-stage-agent-${index}`}
+                        aria-label={`Pipeline stage ${index + 1} agent`}
+                        aria-invalid={!availableAgentNames.has(stage)}
+                        disabled={saving}
+                        value={stage}
+                        onChange={(event) => {
+                          const pipelineStages = [...draft.pipelineStages];
+                          pipelineStages[index] = event.target.value;
+                          setDraft({ ...draft, pipelineStages });
+                        }}
+                      >
+                        {renderAgentOptions(stage)}
+                      </ControlSelect>
+                      <ControlButton
+                        type="button"
+                        title="Move stage up"
+                        aria-label={`Move pipeline stage ${index + 1} up`}
+                        disabled={saving || index === 0}
+                        onClick={() => {
+                          const pipelineStages = [...draft.pipelineStages];
+                          [pipelineStages[index - 1], pipelineStages[index]] = [
+                            pipelineStages[index]!,
+                            pipelineStages[index - 1]!,
+                          ];
+                          setDraft({ ...draft, pipelineStages });
+                        }}
+                      >
+                        <ArrowUp size={13} aria-hidden />
+                      </ControlButton>
+                      <ControlButton
+                        type="button"
+                        title="Move stage down"
+                        aria-label={`Move pipeline stage ${index + 1} down`}
+                        disabled={saving || index === draft.pipelineStages.length - 1}
+                        onClick={() => {
+                          const pipelineStages = [...draft.pipelineStages];
+                          [pipelineStages[index], pipelineStages[index + 1]] = [
+                            pipelineStages[index + 1]!,
+                            pipelineStages[index]!,
+                          ];
+                          setDraft({ ...draft, pipelineStages });
+                        }}
+                      >
+                        <ArrowDown size={13} aria-hidden />
+                      </ControlButton>
+                      <ControlButton
+                        type="button"
+                        title="Remove stage"
+                        aria-label={`Remove pipeline stage ${index + 1}`}
+                        disabled={saving}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            pipelineStages: draft.pipelineStages.filter(
+                              (_stage, stageIndex) => stageIndex !== index,
+                            ),
+                          })
                         }
-                      : current,
-                  );
-                }}
-              />
-            </label>
-            <label className="block text-xs text-text-muted">
-              Launch context / arguments
-              <ControlTextArea
-                data-testid="loop-launch-context"
-                className={`${inputClass} min-h-[76px]`}
-                value={draft.launchContext}
-                onChange={(event) => setDraft({ ...draft, launchContext: event.target.value })}
-              />
-              <span className="mt-1 block text-detail">
-                Optional background or constraints kept separate from the Loop goal.
-              </span>
-            </label>
-            {draft.launchContext.trim() ? (
+                      >
+                        <X size={13} aria-hidden />
+                      </ControlButton>
+                    </div>
+                  ))}
+                  <ControlButton
+                    type="button"
+                    data-testid="loop-pipeline-add-stage"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                    disabled={saving}
+                    onClick={() =>
+                      setDraft({ ...draft, pipelineStages: [...draft.pipelineStages, ""] })
+                    }
+                  >
+                    <Plus size={12} aria-hidden /> Add stage
+                  </ControlButton>
+                </fieldset>
+              ) : null}
+              {draft.structure === "parallelAgents" ? (
+                <fieldset
+                  className="space-y-2 rounded-lg border border-border-subtle p-2"
+                  data-testid="loop-parallel-config"
+                  aria-describedby="loop-parallel-help loop-parallel-safety"
+                >
+                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                    Parallel branch agents
+                  </legend>
+                  <p id="loop-parallel-help" className="text-detail text-text-muted">
+                    Branches investigate independently with at most two running concurrently. Blank
+                    entries are removed and duplicate names keep their first position.
+                  </p>
+                  <p id="loop-parallel-safety" className="text-detail text-text-secondary">
+                    Safety: Parallel agents are report-only, receive read-only tools, and always
+                    save reports to Loop-owned app data—not the project checkout or a worktree.
+                  </p>
+                  {draft.parallelBranches.map((branch, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-1"
+                      data-testid={`loop-parallel-branch-${index}`}
+                    >
+                      <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
+                      <ControlSelect
+                        className={inputClass}
+                        data-testid={`loop-parallel-branch-agent-${index}`}
+                        aria-label={`Parallel branch ${index + 1} agent`}
+                        aria-invalid={!availableAgentNames.has(branch)}
+                        disabled={saving}
+                        value={branch}
+                        onChange={(event) => {
+                          const parallelBranches = [...draft.parallelBranches];
+                          parallelBranches[index] = event.target.value;
+                          setDraft({ ...draft, parallelBranches });
+                        }}
+                      >
+                        {renderAgentOptions(branch)}
+                      </ControlSelect>
+                      <ControlButton
+                        type="button"
+                        title="Move branch up"
+                        aria-label={`Move parallel branch ${index + 1} up`}
+                        disabled={saving || index === 0}
+                        onClick={() => {
+                          const parallelBranches = [...draft.parallelBranches];
+                          [parallelBranches[index - 1], parallelBranches[index]] = [
+                            parallelBranches[index]!,
+                            parallelBranches[index - 1]!,
+                          ];
+                          setDraft({ ...draft, parallelBranches });
+                        }}
+                      >
+                        <ArrowUp size={13} aria-hidden />
+                      </ControlButton>
+                      <ControlButton
+                        type="button"
+                        title="Move branch down"
+                        aria-label={`Move parallel branch ${index + 1} down`}
+                        disabled={saving || index === draft.parallelBranches.length - 1}
+                        onClick={() => {
+                          const parallelBranches = [...draft.parallelBranches];
+                          [parallelBranches[index], parallelBranches[index + 1]] = [
+                            parallelBranches[index + 1]!,
+                            parallelBranches[index]!,
+                          ];
+                          setDraft({ ...draft, parallelBranches });
+                        }}
+                      >
+                        <ArrowDown size={13} aria-hidden />
+                      </ControlButton>
+                      <ControlButton
+                        type="button"
+                        title="Remove branch"
+                        aria-label={`Remove parallel branch ${index + 1}`}
+                        disabled={saving}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            parallelBranches: draft.parallelBranches.filter(
+                              (_branch, branchIndex) => branchIndex !== index,
+                            ),
+                          })
+                        }
+                      >
+                        <X size={13} aria-hidden />
+                      </ControlButton>
+                    </div>
+                  ))}
+                  <ControlButton
+                    type="button"
+                    data-testid="loop-parallel-add-branch"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                    disabled={saving}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        parallelBranches: [...draft.parallelBranches, ""],
+                      })
+                    }
+                  >
+                    <Plus size={12} aria-hidden /> Add branch
+                  </ControlButton>
+                </fieldset>
+              ) : null}
+              {draft.structure === "discoveryTriage" ? (
+                <fieldset
+                  className="space-y-3 rounded-lg border border-border-subtle p-2"
+                  data-testid="loop-triage-config"
+                  aria-describedby="loop-triage-help"
+                >
+                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                    Discovery and classification
+                  </legend>
+                  <p id="loop-triage-help" className="text-detail text-text-muted">
+                    The selected agent runs once per iteration. Artifact targets are report-only;
+                    checkout and worktree targets permit edits only when the goal explicitly
+                    requests implementation.
+                  </p>
+                  <label className="block text-xs text-text-muted">
+                    Triage agent
+                    <ControlSelect
+                      ref={triageAgentRef}
+                      data-testid="loop-triage-agent"
+                      className={inputClass}
+                      value={draft.triageAgent}
+                      aria-invalid={!availableAgentNames.has(draft.triageAgent)}
+                      onChange={(event) => setDraft({ ...draft, triageAgent: event.target.value })}
+                    >
+                      {renderAgentOptions(draft.triageAgent)}
+                    </ControlSelect>
+                  </label>
+                  <label className="block text-xs text-text-muted">
+                    Classification prompt
+                    <ControlTextArea
+                      data-testid="loop-classification-prompt"
+                      className={`${inputClass} min-h-[100px]`}
+                      value={draft.classificationPrompt}
+                      onChange={(event) =>
+                        setDraft({ ...draft, classificationPrompt: event.target.value })
+                      }
+                      onBlur={() => {
+                        if (!draft.classificationPrompt.trim()) {
+                          setDraft({
+                            ...draft,
+                            classificationPrompt: LOOP_DEFAULT_CLASSIFICATION_PROMPT,
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                </fieldset>
+              ) : null}
+              {draft.structure === "humanApproval" ? (
+                <fieldset
+                  className="space-y-3 rounded-lg border border-border-subtle p-2"
+                  data-testid="loop-human-approval-config"
+                  aria-describedby="loop-human-approval-help"
+                >
+                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                    Approval checkpoint
+                  </legend>
+                  <p id="loop-human-approval-help" className="text-detail text-text-muted">
+                    Launch records a terminal checkpoint without running an agent or validation.
+                    Approval records the decision; it does not resume this run. Retry starts a fresh
+                    linked checkpoint.
+                  </p>
+                  <label className="block text-xs text-text-muted">
+                    Checkpoint prompt
+                    <ControlTextArea
+                      ref={checkpointPromptRef}
+                      data-testid="loop-checkpoint-prompt"
+                      className={`${inputClass} min-h-[100px]`}
+                      value={draft.checkpointPrompt}
+                      onChange={(event) =>
+                        setDraft({ ...draft, checkpointPrompt: event.target.value })
+                      }
+                      onBlur={() => {
+                        if (!draft.checkpointPrompt.trim()) {
+                          setDraft({ ...draft, checkpointPrompt: LOOP_DEFAULT_CHECKPOINT_PROMPT });
+                        }
+                      }}
+                    />
+                  </label>
+                </fieldset>
+              ) : null}
+              {draftAgentIssues.length ? (
+                <div
+                  className="rounded-lg border border-danger px-2 py-1 text-xs text-danger"
+                  role="status"
+                  aria-live="polite"
+                  data-testid="loop-agent-role-errors"
+                >
+                  <strong>Unavailable agent roles.</strong>
+                  <ul className="list-disc pl-4">
+                    {draftAgentIssues.map((issue) => (
+                      <li key={`${issue.role}-${issue.position ?? 0}`}>
+                        {agentUnavailableText(issue)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="text-xs text-text-muted">
+                  Max iterations
+                  <ControlInput
+                    data-testid="loop-max-iterations"
+                    type="number"
+                    min={0}
+                    max={LOOP_MAX_ITERATIONS_LIMIT}
+                    step={1}
+                    className={inputClass}
+                    value={draft.maxIterations}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        maxIterations: Number.isFinite(Number(e.target.value))
+                          ? Math.min(
+                              LOOP_MAX_ITERATIONS_LIMIT,
+                              Math.max(0, Math.trunc(Number(e.target.value))),
+                            )
+                          : LOOP_DEFAULT_MAX_ITERATIONS,
+                      })
+                    }
+                  />
+                  <span className="mt-1 block text-detail">
+                    0 means no iteration limit; Stop remains available. Maximum 100.
+                  </span>
+                </label>
+                <label className="text-xs text-text-muted">
+                  Write target
+                  <ControlSelect
+                    data-testid="loop-write-target"
+                    className={inputClass}
+                    value={draft.writeTarget}
+                    disabled={saving || draft.structure === "parallelAgents"}
+                    aria-describedby={
+                      draft.structure === "parallelAgents" ? "loop-parallel-safety" : undefined
+                    }
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        writeTarget: e.target.value as LoopDraft["writeTarget"],
+                      })
+                    }
+                  >
+                    {LOOP_WRITE_TARGETS.map((t) => (
+                      <option key={t} value={t}>
+                        {LOOP_WRITE_TARGET_LABEL[t]}
+                      </option>
+                    ))}
+                  </ControlSelect>
+                  {draft.writeTarget === "artifactMarkdown" ? (
+                    <span className="mt-1 block text-detail">
+                      Report-only: agents cannot modify the project. Reports are saved in Loop-owned
+                      app data.
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+              <label className="block text-xs text-text-muted">
+                Success condition
+                <ControlTextArea
+                  data-testid="loop-success-condition"
+                  className={`${inputClass} min-h-[80px]`}
+                  value={draft.successCondition}
+                  placeholder="Defaults to the Loop goal"
+                  onChange={(event) =>
+                    setDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            successCondition: event.target.value,
+                            successConditionSource: "custom",
+                          }
+                        : current,
+                    )
+                  }
+                />
+                <span className="mt-1 flex items-center justify-between gap-2 text-detail">
+                  <span>
+                    {draft.successConditionSource === "goal"
+                      ? "Tracks the Loop goal."
+                      : "Uses an explicit custom condition."}
+                  </span>
+                  {draft.successConditionSource === "custom" ? (
+                    <ControlButton
+                      type="button"
+                      data-testid="loop-success-condition-reset"
+                      onClick={() =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                successCondition: current.goal,
+                                successConditionSource: "goal",
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      Reset to goal
+                    </ControlButton>
+                  ) : null}
+                </span>
+              </label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block text-xs text-text-muted">
+                  Evaluator model override
+                  <ControlSelect
+                    data-testid="loop-evaluator-model"
+                    className={inputClass}
+                    value={evaluatorModelValue(draft.evaluatorProvider, draft.evaluatorModel)}
+                    onChange={(event) => {
+                      const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
+                        event.target.value,
+                      );
+                      setDraft({ ...draft, evaluatorProvider, evaluatorModel });
+                    }}
+                  >
+                    {renderEvaluatorModelOptions(draft.evaluatorProvider, draft.evaluatorModel)}
+                  </ControlSelect>
+                </label>
+                <label className="block text-xs text-text-muted">
+                  Evaluator thinking override
+                  <ControlSelect
+                    data-testid="loop-evaluator-thinking"
+                    className={inputClass}
+                    value={draft.evaluatorThinkingLevel}
+                    onChange={(event) =>
+                      setDraft({ ...draft, evaluatorThinkingLevel: event.target.value })
+                    }
+                  >
+                    <option value="">Default</option>
+                    {LOOP_EVALUATOR_THINKING_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                    {draft.evaluatorThinkingLevel &&
+                    !LOOP_EVALUATOR_THINKING_LEVELS.includes(
+                      draft.evaluatorThinkingLevel as (typeof LOOP_EVALUATOR_THINKING_LEVELS)[number],
+                    ) ? (
+                      <option value={draft.evaluatorThinkingLevel} disabled>
+                        {draft.evaluatorThinkingLevel} (unavailable)
+                      </option>
+                    ) : null}
+                  </ControlSelect>
+                </label>
+              </div>
+              <label className="block text-xs text-text-muted">
+                Validation command (optional; exit 0 satisfies validation)
+                <ControlInput
+                  data-testid="loop-validation"
+                  className={`${inputClass} font-mono text-caption`}
+                  placeholder="pnpm test"
+                  value={draft.validationCommand}
+                  onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
+                />
+              </label>
+              {draftError && !saveError ? (
+                <div
+                  id="loop-draft-error"
+                  role="alert"
+                  aria-live="polite"
+                  className="text-xs text-warning"
+                >
+                  {draftError}
+                </div>
+              ) : null}
+              {saveError ? (
+                <div
+                  data-testid="loop-save-error"
+                  role="alert"
+                  aria-live="assertive"
+                  className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-text-primary"
+                >
+                  {saveError}
+                </div>
+              ) : null}
+              <div className="flex justify-end gap-2 pt-1">
+                <ControlButton
+                  data-testid="loop-cancel"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+                  onClick={closeEditor}
+                >
+                  Cancel
+                </ControlButton>
+                <ControlButton
+                  data-testid="loop-save"
+                  className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+                  style={{
+                    background:
+                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                    color: "var(--color-accent-foreground)",
+                  }}
+                  disabled={saving || Boolean(draftError)}
+                  aria-describedby={
+                    !isRunnableLoopStructure(draft.structure)
+                      ? "loop-editor-structure-unavailable"
+                      : draftError
+                        ? "loop-draft-error"
+                        : undefined
+                  }
+                  onClick={() => void save()}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </ControlButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {launchDraft ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-3 sm:p-8"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !runPending) closeLaunch();
+            }}
+          >
+            <div
+              ref={launchDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="loop-launch-title"
+              data-testid="loop-launch-dialog"
+              className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
+            >
+              <h3 id="loop-launch-title" className="text-sm font-semibold text-text-primary">
+                {launchDraft.retryOf ? "Retry" : "Run"} {launchDraft.loop.name}
+              </h3>
+              <p className="text-xs text-text-muted">
+                {LOOP_STRUCTURE_LABEL[launchDraft.loop.structure]} ·{" "}
+                {launchDraft.loop.maxIterations === 0
+                  ? "No iteration limit"
+                  : `Up to ${launchDraft.loop.maxIterations} iterations`}
+              </p>
+              <label className="block text-xs text-text-muted">
+                Run goal
+                <ControlTextArea
+                  data-testid="loop-launch-goal"
+                  className={`${inputClass} min-h-[100px]`}
+                  value={launchDraft.goal}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
+                  onChange={(event) => {
+                    const goal = event.target.value;
+                    setLaunchDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            goal,
+                            successCondition:
+                              current.successConditionSource === "goal"
+                                ? goal
+                                : current.successCondition,
+                          }
+                        : current,
+                    );
+                  }}
+                />
+              </label>
+              <label className="block text-xs text-text-muted">
+                Launch context / arguments
+                <ControlTextArea
+                  data-testid="loop-launch-context-override"
+                  className={`${inputClass} min-h-[90px]`}
+                  value={launchDraft.launchContext}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
+                  onChange={(event) => {
+                    const launchContext = event.target.value;
+                    setLaunchDraft((current) =>
+                      current ? { ...current, launchContext } : current,
+                    );
+                  }}
+                />
+              </label>
               <label className="block text-xs text-text-muted">
                 Context scope
                 <ControlSelect
-                  data-testid="loop-launch-context-scope"
+                  data-testid="loop-launch-scope-override"
                   className={inputClass}
-                  value={draft.launchContextScope}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      launchContextScope: event.target.value as LoopDraft["launchContextScope"],
-                    })
-                  }
+                  value={launchDraft.launchContextScope}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
+                  onChange={(event) => {
+                    const launchContextScope = event.target
+                      .value as LoopLaunchDraft["launchContextScope"];
+                    setLaunchDraft((current) =>
+                      current ? { ...current, launchContextScope } : current,
+                    );
+                  }}
                 >
                   <option value="firstIterationOnly">First iteration only</option>
                   <option value="everyIteration">Every iteration</option>
                 </ControlSelect>
               </label>
-            ) : null}
-            <fieldset className="space-y-2 rounded-lg border border-border-subtle p-2">
-              <legend className="px-1 text-xs font-medium text-text-secondary">
-                Project availability
-              </legend>
-              <label className="flex items-center gap-2 text-xs text-text-primary">
-                <ControlInput
-                  type="radio"
-                  name="loop-availability"
-                  value="allProjects"
-                  checked={draft.availability === "allProjects"}
-                  onChange={() => setDraft({ ...draft, availability: "allProjects" })}
-                />
-                All projects
-              </label>
-              <label className="flex items-center gap-2 text-xs text-text-primary">
-                <ControlInput
-                  type="radio"
-                  name="loop-availability"
-                  value="projectPaths"
-                  checked={draft.availability === "projectPaths"}
-                  onChange={() =>
-                    setDraft({
-                      ...draft,
-                      availability: "projectPaths",
-                      projectPaths:
-                        draft.projectPaths.length || !currentProject
-                          ? draft.projectPaths
-                          : [currentProject.path],
-                    })
-                  }
-                />
-                Selected registered projects
-              </label>
-              {draft.availability === "projectPaths" ? (
-                <div className="space-y-1 pl-5" data-testid="loop-project-assignments">
-                  {projects.map((project) => (
-                    <label key={project.id} className="flex items-center gap-2 text-xs">
-                      <ControlInput
-                        type="checkbox"
-                        checked={draft.projectPaths.includes(project.path)}
-                        onChange={(event) =>
-                          setDraft({
-                            ...draft,
-                            projectPaths: event.target.checked
-                              ? normalizeLoopProjectPaths([...draft.projectPaths, project.path])
-                              : draft.projectPaths.filter((path) => path !== project.path),
-                          })
-                        }
-                      />
-                      <span>{project.name}</span>
-                      {project.id === currentProjectId ? (
-                        <span className="text-text-muted">Current project</span>
-                      ) : null}
-                    </label>
-                  ))}
-                  {!projects.length ? (
-                    <p className="text-detail text-text-muted">No registered projects.</p>
-                  ) : null}
-                </div>
-              ) : null}
-            </fieldset>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="text-xs text-text-muted">
-                Structure
-                <ControlSelect
-                  data-testid="loop-structure"
-                  className={inputClass}
-                  value={draft.structure}
-                  onChange={(e) => {
-                    const structure = e.target.value as LoopDraft["structure"];
-                    setDraft({
-                      ...draft,
-                      structure,
-                      ...(structure === "parallelAgents"
-                        ? { writeTarget: "artifactMarkdown" as const }
-                        : {}),
-                      ...(structure === "discoveryTriage"
-                        ? {
-                            classificationPrompt: normalizeLoopClassificationPrompt(
-                              draft.classificationPrompt,
-                            ),
-                          }
-                        : {}),
-                      ...(structure === "humanApproval"
-                        ? {
-                            checkpointPrompt: normalizeLoopCheckpointPrompt(draft.checkpointPrompt),
-                          }
-                        : {}),
-                    });
-                    if (structure === "discoveryTriage") {
-                      requestAnimationFrame(() => triageAgentRef.current?.focus());
-                    } else if (structure === "humanApproval") {
-                      requestAnimationFrame(() => checkpointPromptRef.current?.focus());
-                    }
-                  }}
-                  aria-describedby={
-                    isRunnableLoopStructure(draft.structure)
-                      ? undefined
-                      : "loop-editor-structure-unavailable"
-                  }
-                >
-                  {!isRunnableLoopStructure(draft.structure) ? (
-                    <option value={draft.structure} disabled>
-                      {LOOP_STRUCTURE_LABEL[draft.structure]} (unavailable)
-                    </option>
-                  ) : null}
-                  {RUNNABLE_LOOP_STRUCTURES.map((s) => (
-                    <option key={s} value={s}>
-                      {LOOP_STRUCTURE_LABEL[s]}
-                    </option>
-                  ))}
-                </ControlSelect>
-                {!isRunnableLoopStructure(draft.structure) ? (
-                  <span
-                    id="loop-editor-structure-unavailable"
-                    data-testid="loop-editor-structure-unavailable"
-                    className="mt-1 block text-detail text-text-secondary"
-                  >
-                    This structure cannot run here. Choose Single agent to explicitly convert it.
-                  </span>
-                ) : null}
-              </label>
-              {draft.structure === "singleAgent" ? (
-                <label className="text-xs text-text-muted">
-                  Agent
-                  <ControlSelect
-                    data-testid="loop-agent"
-                    className={inputClass}
-                    value={draft.agentName}
-                    aria-invalid={!availableAgentNames.has(draft.agentName)}
-                    onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
-                  >
-                    {renderAgentOptions(draft.agentName)}
-                  </ControlSelect>
-                </label>
-              ) : null}
-            </div>
-            {draft.structure === "makerChecker" ? (
-              <div className="space-y-3" data-testid="loop-maker-checker-config">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="text-xs text-text-muted">
-                    Maker agent
-                    <ControlSelect
-                      data-testid="loop-maker"
-                      className={inputClass}
-                      value={draft.makerName}
-                      aria-invalid={!availableAgentNames.has(draft.makerName)}
-                      onChange={(e) => setDraft({ ...draft, makerName: e.target.value })}
-                    >
-                      {renderAgentOptions(draft.makerName)}
-                    </ControlSelect>
-                  </label>
-                  <label className="text-xs text-text-muted">
-                    Checker agent
-                    <ControlSelect
-                      data-testid="loop-checker"
-                      className={inputClass}
-                      value={draft.checkerName}
-                      aria-invalid={!availableAgentNames.has(draft.checkerName)}
-                      onChange={(e) => setDraft({ ...draft, checkerName: e.target.value })}
-                    >
-                      {renderAgentOptions(draft.checkerName)}
-                    </ControlSelect>
-                  </label>
-                </div>
-                <label className="block text-xs text-text-muted">
-                  Checker rubric
-                  <ControlTextArea
-                    data-testid="loop-checker-rubric"
-                    className={`${inputClass} min-h-[80px]`}
-                    value={draft.checkerRubric}
-                    onChange={(e) => setDraft({ ...draft, checkerRubric: e.target.value })}
-                  />
-                </label>
-              </div>
-            ) : null}
-            {draft.structure === "agentPipeline" ? (
-              <fieldset
-                className="space-y-2 rounded-lg border border-border-subtle p-2"
-                data-testid="loop-pipeline-config"
-                aria-describedby="loop-pipeline-help"
-              >
-                <legend className="px-1 text-xs font-medium text-text-secondary">
-                  Ordered pipeline stages
-                </legend>
-                <p id="loop-pipeline-help" className="text-detail text-text-muted">
-                  Stages run strictly from top to bottom each iteration. Repeated agent names are
-                  allowed; later stages receive bounded handoff reports.
-                </p>
-                {draft.pipelineStages.map((stage, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-1"
-                    data-testid={`loop-pipeline-stage-${index}`}
-                  >
-                    <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
-                    <ControlSelect
-                      className={inputClass}
-                      data-testid={`loop-pipeline-stage-agent-${index}`}
-                      aria-label={`Pipeline stage ${index + 1} agent`}
-                      aria-invalid={!availableAgentNames.has(stage)}
-                      disabled={saving}
-                      value={stage}
-                      onChange={(event) => {
-                        const pipelineStages = [...draft.pipelineStages];
-                        pipelineStages[index] = event.target.value;
-                        setDraft({ ...draft, pipelineStages });
-                      }}
-                    >
-                      {renderAgentOptions(stage)}
-                    </ControlSelect>
-                    <ControlButton
-                      type="button"
-                      title="Move stage up"
-                      aria-label={`Move pipeline stage ${index + 1} up`}
-                      disabled={saving || index === 0}
-                      onClick={() => {
-                        const pipelineStages = [...draft.pipelineStages];
-                        [pipelineStages[index - 1], pipelineStages[index]] = [
-                          pipelineStages[index]!,
-                          pipelineStages[index - 1]!,
-                        ];
-                        setDraft({ ...draft, pipelineStages });
-                      }}
-                    >
-                      <ArrowUp size={13} aria-hidden />
-                    </ControlButton>
-                    <ControlButton
-                      type="button"
-                      title="Move stage down"
-                      aria-label={`Move pipeline stage ${index + 1} down`}
-                      disabled={saving || index === draft.pipelineStages.length - 1}
-                      onClick={() => {
-                        const pipelineStages = [...draft.pipelineStages];
-                        [pipelineStages[index], pipelineStages[index + 1]] = [
-                          pipelineStages[index + 1]!,
-                          pipelineStages[index]!,
-                        ];
-                        setDraft({ ...draft, pipelineStages });
-                      }}
-                    >
-                      <ArrowDown size={13} aria-hidden />
-                    </ControlButton>
-                    <ControlButton
-                      type="button"
-                      title="Remove stage"
-                      aria-label={`Remove pipeline stage ${index + 1}`}
-                      disabled={saving}
-                      onClick={() =>
-                        setDraft({
-                          ...draft,
-                          pipelineStages: draft.pipelineStages.filter(
-                            (_stage, stageIndex) => stageIndex !== index,
-                          ),
-                        })
-                      }
-                    >
-                      <X size={13} aria-hidden />
-                    </ControlButton>
-                  </div>
-                ))}
-                <ControlButton
-                  type="button"
-                  data-testid="loop-pipeline-add-stage"
-                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
-                  disabled={saving}
-                  onClick={() =>
-                    setDraft({ ...draft, pipelineStages: [...draft.pipelineStages, ""] })
-                  }
-                >
-                  <Plus size={12} aria-hidden /> Add stage
-                </ControlButton>
-              </fieldset>
-            ) : null}
-            {draft.structure === "parallelAgents" ? (
-              <fieldset
-                className="space-y-2 rounded-lg border border-border-subtle p-2"
-                data-testid="loop-parallel-config"
-                aria-describedby="loop-parallel-help loop-parallel-safety"
-              >
-                <legend className="px-1 text-xs font-medium text-text-secondary">
-                  Parallel branch agents
-                </legend>
-                <p id="loop-parallel-help" className="text-detail text-text-muted">
-                  Branches investigate independently with at most two running concurrently. Blank
-                  entries are removed and duplicate names keep their first position.
-                </p>
-                <p id="loop-parallel-safety" className="text-detail text-text-secondary">
-                  Safety: Parallel agents are report-only, receive read-only tools, and always save
-                  reports to Loop-owned app data—not the project checkout or a worktree.
-                </p>
-                {draft.parallelBranches.map((branch, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-1"
-                    data-testid={`loop-parallel-branch-${index}`}
-                  >
-                    <span className="w-5 text-detail text-text-muted">{index + 1}.</span>
-                    <ControlSelect
-                      className={inputClass}
-                      data-testid={`loop-parallel-branch-agent-${index}`}
-                      aria-label={`Parallel branch ${index + 1} agent`}
-                      aria-invalid={!availableAgentNames.has(branch)}
-                      disabled={saving}
-                      value={branch}
-                      onChange={(event) => {
-                        const parallelBranches = [...draft.parallelBranches];
-                        parallelBranches[index] = event.target.value;
-                        setDraft({ ...draft, parallelBranches });
-                      }}
-                    >
-                      {renderAgentOptions(branch)}
-                    </ControlSelect>
-                    <ControlButton
-                      type="button"
-                      title="Move branch up"
-                      aria-label={`Move parallel branch ${index + 1} up`}
-                      disabled={saving || index === 0}
-                      onClick={() => {
-                        const parallelBranches = [...draft.parallelBranches];
-                        [parallelBranches[index - 1], parallelBranches[index]] = [
-                          parallelBranches[index]!,
-                          parallelBranches[index - 1]!,
-                        ];
-                        setDraft({ ...draft, parallelBranches });
-                      }}
-                    >
-                      <ArrowUp size={13} aria-hidden />
-                    </ControlButton>
-                    <ControlButton
-                      type="button"
-                      title="Move branch down"
-                      aria-label={`Move parallel branch ${index + 1} down`}
-                      disabled={saving || index === draft.parallelBranches.length - 1}
-                      onClick={() => {
-                        const parallelBranches = [...draft.parallelBranches];
-                        [parallelBranches[index], parallelBranches[index + 1]] = [
-                          parallelBranches[index + 1]!,
-                          parallelBranches[index]!,
-                        ];
-                        setDraft({ ...draft, parallelBranches });
-                      }}
-                    >
-                      <ArrowDown size={13} aria-hidden />
-                    </ControlButton>
-                    <ControlButton
-                      type="button"
-                      title="Remove branch"
-                      aria-label={`Remove parallel branch ${index + 1}`}
-                      disabled={saving}
-                      onClick={() =>
-                        setDraft({
-                          ...draft,
-                          parallelBranches: draft.parallelBranches.filter(
-                            (_branch, branchIndex) => branchIndex !== index,
-                          ),
-                        })
-                      }
-                    >
-                      <X size={13} aria-hidden />
-                    </ControlButton>
-                  </div>
-                ))}
-                <ControlButton
-                  type="button"
-                  data-testid="loop-parallel-add-branch"
-                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
-                  disabled={saving}
-                  onClick={() =>
-                    setDraft({
-                      ...draft,
-                      parallelBranches: [...draft.parallelBranches, ""],
-                    })
-                  }
-                >
-                  <Plus size={12} aria-hidden /> Add branch
-                </ControlButton>
-              </fieldset>
-            ) : null}
-            {draft.structure === "discoveryTriage" ? (
-              <fieldset
-                className="space-y-3 rounded-lg border border-border-subtle p-2"
-                data-testid="loop-triage-config"
-                aria-describedby="loop-triage-help"
-              >
-                <legend className="px-1 text-xs font-medium text-text-secondary">
-                  Discovery and classification
-                </legend>
-                <p id="loop-triage-help" className="text-detail text-text-muted">
-                  The selected agent runs once per iteration. Artifact targets are report-only;
-                  checkout and worktree targets permit edits only when the goal explicitly requests
-                  implementation.
-                </p>
-                <label className="block text-xs text-text-muted">
-                  Triage agent
-                  <ControlSelect
-                    ref={triageAgentRef}
-                    data-testid="loop-triage-agent"
-                    className={inputClass}
-                    value={draft.triageAgent}
-                    aria-invalid={!availableAgentNames.has(draft.triageAgent)}
-                    onChange={(event) => setDraft({ ...draft, triageAgent: event.target.value })}
-                  >
-                    {renderAgentOptions(draft.triageAgent)}
-                  </ControlSelect>
-                </label>
-                <label className="block text-xs text-text-muted">
-                  Classification prompt
-                  <ControlTextArea
-                    data-testid="loop-classification-prompt"
-                    className={`${inputClass} min-h-[100px]`}
-                    value={draft.classificationPrompt}
-                    onChange={(event) =>
-                      setDraft({ ...draft, classificationPrompt: event.target.value })
-                    }
-                    onBlur={() => {
-                      if (!draft.classificationPrompt.trim()) {
-                        setDraft({
-                          ...draft,
-                          classificationPrompt: LOOP_DEFAULT_CLASSIFICATION_PROMPT,
-                        });
-                      }
-                    }}
-                  />
-                </label>
-              </fieldset>
-            ) : null}
-            {draft.structure === "humanApproval" ? (
-              <fieldset
-                className="space-y-3 rounded-lg border border-border-subtle p-2"
-                data-testid="loop-human-approval-config"
-                aria-describedby="loop-human-approval-help"
-              >
-                <legend className="px-1 text-xs font-medium text-text-secondary">
-                  Approval checkpoint
-                </legend>
-                <p id="loop-human-approval-help" className="text-detail text-text-muted">
-                  Launch records a terminal checkpoint without running an agent or validation.
-                  Approval records the decision; it does not resume this run. Retry starts a fresh
-                  linked checkpoint.
-                </p>
-                <label className="block text-xs text-text-muted">
-                  Checkpoint prompt
-                  <ControlTextArea
-                    ref={checkpointPromptRef}
-                    data-testid="loop-checkpoint-prompt"
-                    className={`${inputClass} min-h-[100px]`}
-                    value={draft.checkpointPrompt}
-                    onChange={(event) =>
-                      setDraft({ ...draft, checkpointPrompt: event.target.value })
-                    }
-                    onBlur={() => {
-                      if (!draft.checkpointPrompt.trim()) {
-                        setDraft({ ...draft, checkpointPrompt: LOOP_DEFAULT_CHECKPOINT_PROMPT });
-                      }
-                    }}
-                  />
-                </label>
-              </fieldset>
-            ) : null}
-            {draftAgentIssues.length ? (
-              <div
-                className="rounded-lg border border-danger px-2 py-1 text-xs text-danger"
-                role="status"
-                aria-live="polite"
-                data-testid="loop-agent-role-errors"
-              >
-                <strong>Unavailable agent roles.</strong>
-                <ul className="list-disc pl-4">
-                  {draftAgentIssues.map((issue) => (
-                    <li key={`${issue.role}-${issue.position ?? 0}`}>
-                      {agentUnavailableText(issue)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="text-xs text-text-muted">
-                Max iterations
-                <ControlInput
-                  data-testid="loop-max-iterations"
-                  type="number"
-                  min={0}
-                  max={LOOP_MAX_ITERATIONS_LIMIT}
-                  step={1}
-                  className={inputClass}
-                  value={draft.maxIterations}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      maxIterations: Number.isFinite(Number(e.target.value))
-                        ? Math.min(
-                            LOOP_MAX_ITERATIONS_LIMIT,
-                            Math.max(0, Math.trunc(Number(e.target.value))),
-                          )
-                        : LOOP_DEFAULT_MAX_ITERATIONS,
-                    })
-                  }
-                />
-                <span className="mt-1 block text-detail">
-                  0 means no iteration limit; Stop remains available. Maximum 100.
-                </span>
-              </label>
-              <label className="text-xs text-text-muted">
-                Write target
-                <ControlSelect
-                  data-testid="loop-write-target"
-                  className={inputClass}
-                  value={draft.writeTarget}
-                  disabled={saving || draft.structure === "parallelAgents"}
-                  aria-describedby={
-                    draft.structure === "parallelAgents" ? "loop-parallel-safety" : undefined
-                  }
-                  onChange={(e) =>
-                    setDraft({ ...draft, writeTarget: e.target.value as LoopDraft["writeTarget"] })
-                  }
-                >
-                  {LOOP_WRITE_TARGETS.map((t) => (
-                    <option key={t} value={t}>
-                      {LOOP_WRITE_TARGET_LABEL[t]}
-                    </option>
-                  ))}
-                </ControlSelect>
-                {draft.writeTarget === "artifactMarkdown" ? (
-                  <span className="mt-1 block text-detail">
-                    Report-only: agents cannot modify the project. Reports are saved in Loop-owned
-                    app data.
-                  </span>
-                ) : null}
-              </label>
-            </div>
-            <label className="block text-xs text-text-muted">
-              Success condition
-              <ControlTextArea
-                data-testid="loop-success-condition"
-                className={`${inputClass} min-h-[80px]`}
-                value={draft.successCondition}
-                placeholder="Defaults to the Loop goal"
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          successCondition: event.target.value,
-                          successConditionSource: "custom",
-                        }
-                      : current,
-                  )
-                }
-              />
-              <span className="mt-1 flex items-center justify-between gap-2 text-detail">
-                <span>
-                  {draft.successConditionSource === "goal"
-                    ? "Tracks the Loop goal."
-                    : "Uses an explicit custom condition."}
-                </span>
-                {draft.successConditionSource === "custom" ? (
-                  <ControlButton
-                    type="button"
-                    data-testid="loop-success-condition-reset"
-                    onClick={() =>
-                      setDraft((current) =>
-                        current
-                          ? {
-                              ...current,
-                              successCondition: current.goal,
-                              successConditionSource: "goal",
-                            }
-                          : current,
-                      )
-                    }
-                  >
-                    Reset to goal
-                  </ControlButton>
-                ) : null}
-              </span>
-            </label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="block text-xs text-text-muted">
-                Evaluator model override
-                <ControlSelect
-                  data-testid="loop-evaluator-model"
-                  className={inputClass}
-                  value={evaluatorModelValue(draft.evaluatorProvider, draft.evaluatorModel)}
+                Success condition
+                <ControlTextArea
+                  data-testid="loop-launch-success-condition"
+                  className={`${inputClass} min-h-[80px]`}
+                  value={launchDraft.successCondition}
+                  disabled={runPending || Boolean(launchDraft.retryOf)}
                   onChange={(event) => {
-                    const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
-                      event.target.value,
+                    const successCondition = event.target.value;
+                    setLaunchDraft((current) =>
+                      current
+                        ? { ...current, successCondition, successConditionSource: "custom" }
+                        : current,
                     );
-                    setDraft({ ...draft, evaluatorProvider, evaluatorModel });
                   }}
-                >
-                  {renderEvaluatorModelOptions(draft.evaluatorProvider, draft.evaluatorModel)}
-                </ControlSelect>
-              </label>
-              <label className="block text-xs text-text-muted">
-                Evaluator thinking override
-                <ControlSelect
-                  data-testid="loop-evaluator-thinking"
-                  className={inputClass}
-                  value={draft.evaluatorThinkingLevel}
-                  onChange={(event) =>
-                    setDraft({ ...draft, evaluatorThinkingLevel: event.target.value })
-                  }
-                >
-                  <option value="">Default</option>
-                  {LOOP_EVALUATOR_THINKING_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                  {draft.evaluatorThinkingLevel &&
-                  !LOOP_EVALUATOR_THINKING_LEVELS.includes(
-                    draft.evaluatorThinkingLevel as (typeof LOOP_EVALUATOR_THINKING_LEVELS)[number],
-                  ) ? (
-                    <option value={draft.evaluatorThinkingLevel} disabled>
-                      {draft.evaluatorThinkingLevel} (unavailable)
-                    </option>
+                />
+                <span className="mt-1 flex items-center justify-between gap-2 text-detail">
+                  <span>
+                    {launchDraft.successConditionSource === "goal"
+                      ? "Tracks the effective launch goal."
+                      : "Uses an explicit custom condition."}
+                  </span>
+                  {launchDraft.successConditionSource === "custom" && !launchDraft.retryOf ? (
+                    <ControlButton
+                      type="button"
+                      data-testid="loop-launch-success-condition-reset"
+                      disabled={runPending}
+                      onClick={() =>
+                        setLaunchDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                successCondition: current.goal,
+                                successConditionSource: "goal",
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      Reset to goal
+                    </ControlButton>
                   ) : null}
-                </ControlSelect>
-              </label>
-            </div>
-            <label className="block text-xs text-text-muted">
-              Validation command (optional; exit 0 satisfies validation)
-              <ControlInput
-                data-testid="loop-validation"
-                className={`${inputClass} font-mono text-caption`}
-                placeholder="pnpm test"
-                value={draft.validationCommand}
-                onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
-              />
-            </label>
-            {draftError && !saveError ? (
-              <div
-                id="loop-draft-error"
-                role="alert"
-                aria-live="polite"
-                className="text-xs text-warning"
-              >
-                {draftError}
-              </div>
-            ) : null}
-            {saveError ? (
-              <div
-                data-testid="loop-save-error"
-                role="alert"
-                aria-live="assertive"
-                className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-text-primary"
-              >
-                {saveError}
-              </div>
-            ) : null}
-            <div className="flex justify-end gap-2 pt-1">
-              <ControlButton
-                data-testid="loop-cancel"
-                className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
-                onClick={closeEditor}
-              >
-                Cancel
-              </ControlButton>
-              <ControlButton
-                data-testid="loop-save"
-                className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
-                disabled={saving || Boolean(draftError)}
-                aria-describedby={
-                  !isRunnableLoopStructure(draft.structure)
-                    ? "loop-editor-structure-unavailable"
-                    : draftError
-                      ? "loop-draft-error"
-                      : undefined
-                }
-                onClick={() => void save()}
-              >
-                {saving ? "Saving…" : "Save"}
-              </ControlButton>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {launchDraft ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-3 sm:p-8"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !runPending) closeLaunch();
-          }}
-        >
-          <div
-            ref={launchDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="loop-launch-title"
-            data-testid="loop-launch-dialog"
-            className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
-          >
-            <h3 id="loop-launch-title" className="text-sm font-semibold text-text-primary">
-              {launchDraft.retryOf ? "Retry" : "Run"} {launchDraft.loop.name}
-            </h3>
-            <p className="text-xs text-text-muted">
-              {LOOP_STRUCTURE_LABEL[launchDraft.loop.structure]} ·{" "}
-              {launchDraft.loop.maxIterations === 0
-                ? "No iteration limit"
-                : `Up to ${launchDraft.loop.maxIterations} iterations`}
-            </p>
-            <label className="block text-xs text-text-muted">
-              Run goal
-              <ControlTextArea
-                data-testid="loop-launch-goal"
-                className={`${inputClass} min-h-[100px]`}
-                value={launchDraft.goal}
-                disabled={runPending || Boolean(launchDraft.retryOf)}
-                onChange={(event) => {
-                  const goal = event.target.value;
-                  setLaunchDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          goal,
-                          successCondition:
-                            current.successConditionSource === "goal"
-                              ? goal
-                              : current.successCondition,
-                        }
-                      : current,
-                  );
-                }}
-              />
-            </label>
-            <label className="block text-xs text-text-muted">
-              Launch context / arguments
-              <ControlTextArea
-                data-testid="loop-launch-context-override"
-                className={`${inputClass} min-h-[90px]`}
-                value={launchDraft.launchContext}
-                disabled={runPending || Boolean(launchDraft.retryOf)}
-                onChange={(event) => {
-                  const launchContext = event.target.value;
-                  setLaunchDraft((current) => (current ? { ...current, launchContext } : current));
-                }}
-              />
-            </label>
-            <label className="block text-xs text-text-muted">
-              Context scope
-              <ControlSelect
-                data-testid="loop-launch-scope-override"
-                className={inputClass}
-                value={launchDraft.launchContextScope}
-                disabled={runPending || Boolean(launchDraft.retryOf)}
-                onChange={(event) => {
-                  const launchContextScope = event.target
-                    .value as LoopLaunchDraft["launchContextScope"];
-                  setLaunchDraft((current) =>
-                    current ? { ...current, launchContextScope } : current,
-                  );
-                }}
-              >
-                <option value="firstIterationOnly">First iteration only</option>
-                <option value="everyIteration">Every iteration</option>
-              </ControlSelect>
-            </label>
-            <label className="block text-xs text-text-muted">
-              Success condition
-              <ControlTextArea
-                data-testid="loop-launch-success-condition"
-                className={`${inputClass} min-h-[80px]`}
-                value={launchDraft.successCondition}
-                disabled={runPending || Boolean(launchDraft.retryOf)}
-                onChange={(event) => {
-                  const successCondition = event.target.value;
-                  setLaunchDraft((current) =>
-                    current
-                      ? { ...current, successCondition, successConditionSource: "custom" }
-                      : current,
-                  );
-                }}
-              />
-              <span className="mt-1 flex items-center justify-between gap-2 text-detail">
-                <span>
-                  {launchDraft.successConditionSource === "goal"
-                    ? "Tracks the effective launch goal."
-                    : "Uses an explicit custom condition."}
                 </span>
-                {launchDraft.successConditionSource === "custom" && !launchDraft.retryOf ? (
-                  <ControlButton
-                    type="button"
-                    data-testid="loop-launch-success-condition-reset"
-                    disabled={runPending}
-                    onClick={() =>
+              </label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block text-xs text-text-muted">
+                  Evaluator model
+                  <ControlSelect
+                    data-testid="loop-launch-evaluator-model"
+                    className={inputClass}
+                    value={evaluatorModelValue(
+                      launchDraft.evaluatorProvider,
+                      launchDraft.evaluatorModel,
+                    )}
+                    disabled={runPending || Boolean(launchDraft.retryOf)}
+                    onChange={(event) => {
+                      const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
+                        event.target.value,
+                      );
                       setLaunchDraft((current) =>
-                        current
-                          ? {
-                              ...current,
-                              successCondition: current.goal,
-                              successConditionSource: "goal",
-                            }
-                          : current,
-                      )
-                    }
+                        current ? { ...current, evaluatorProvider, evaluatorModel } : current,
+                      );
+                    }}
                   >
-                    Reset to goal
-                  </ControlButton>
-                ) : null}
-              </span>
-            </label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="block text-xs text-text-muted">
-                Evaluator model
-                <ControlSelect
-                  data-testid="loop-launch-evaluator-model"
-                  className={inputClass}
-                  value={evaluatorModelValue(
-                    launchDraft.evaluatorProvider,
-                    launchDraft.evaluatorModel,
-                  )}
-                  disabled={runPending || Boolean(launchDraft.retryOf)}
-                  onChange={(event) => {
-                    const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
-                      event.target.value,
-                    );
-                    setLaunchDraft((current) =>
-                      current ? { ...current, evaluatorProvider, evaluatorModel } : current,
-                    );
-                  }}
-                >
-                  {renderEvaluatorModelOptions(
-                    launchDraft.evaluatorProvider,
-                    launchDraft.evaluatorModel,
-                  )}
-                </ControlSelect>
-              </label>
-              <label className="block text-xs text-text-muted">
-                Evaluator thinking
-                <ControlSelect
-                  data-testid="loop-launch-evaluator-thinking"
-                  className={inputClass}
-                  value={launchDraft.evaluatorThinkingLevel}
-                  disabled={runPending || Boolean(launchDraft.retryOf)}
-                  onChange={(event) => {
-                    const evaluatorThinkingLevel = event.target.value;
-                    setLaunchDraft((current) =>
-                      current ? { ...current, evaluatorThinkingLevel } : current,
-                    );
-                  }}
-                >
-                  <option value="">Default</option>
-                  {validThinkingLevels.slice(1).map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                  {launchEvaluatorInvalid ? (
-                    <option value={launchDraft.evaluatorThinkingLevel} disabled>
-                      {launchDraft.evaluatorThinkingLevel} (unavailable)
-                    </option>
-                  ) : null}
-                </ControlSelect>
-              </label>
-            </div>
-            {launchEvaluatorModelInvalid || launchEvaluatorInvalid ? (
-              <p role="alert" className="text-xs text-danger">
-                The saved evaluator {launchEvaluatorModelInvalid ? "model" : "thinking level"} is
-                unavailable. Repair it before launch.
-              </p>
-            ) : null}
-            {launchAgentIssues.length ? (
-              <div
-                id="loop-launch-agent-errors"
-                role="status"
-                aria-live="polite"
-                className="rounded-lg border border-danger p-2 text-xs text-danger"
-                data-testid="loop-launch-agent-errors"
-              >
-                <strong>Required agents are unavailable in this project.</strong>
-                <ul className="list-disc pl-4">
-                  {launchAgentIssues.map((issue) => (
-                    <li key={`${issue.role}-${issue.position ?? 0}`}>
-                      {agentUnavailableText(issue)}
-                    </li>
-                  ))}
-                </ul>
+                    {renderEvaluatorModelOptions(
+                      launchDraft.evaluatorProvider,
+                      launchDraft.evaluatorModel,
+                    )}
+                  </ControlSelect>
+                </label>
+                <label className="block text-xs text-text-muted">
+                  Evaluator thinking
+                  <ControlSelect
+                    data-testid="loop-launch-evaluator-thinking"
+                    className={inputClass}
+                    value={launchDraft.evaluatorThinkingLevel}
+                    disabled={runPending || Boolean(launchDraft.retryOf)}
+                    onChange={(event) => {
+                      const evaluatorThinkingLevel = event.target.value;
+                      setLaunchDraft((current) =>
+                        current ? { ...current, evaluatorThinkingLevel } : current,
+                      );
+                    }}
+                  >
+                    <option value="">Default</option>
+                    {validThinkingLevels.slice(1).map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                    {launchEvaluatorInvalid ? (
+                      <option value={launchDraft.evaluatorThinkingLevel} disabled>
+                        {launchDraft.evaluatorThinkingLevel} (unavailable)
+                      </option>
+                    ) : null}
+                  </ControlSelect>
+                </label>
               </div>
-            ) : null}
-            {launchNeedsCheckoutConfirmation ? (
-              <label
-                id="loop-current-checkout-confirmation-label"
-                className="flex items-start gap-2 rounded-lg border border-warning p-2 text-xs text-text-secondary"
-              >
-                <ControlInput
-                  type="checkbox"
-                  data-testid="loop-current-checkout-confirmation"
-                  checked={launchDraft.currentCheckoutConfirmed}
+              {launchEvaluatorModelInvalid || launchEvaluatorInvalid ? (
+                <p role="alert" className="text-xs text-danger">
+                  The saved evaluator {launchEvaluatorModelInvalid ? "model" : "thinking level"} is
+                  unavailable. Repair it before launch.
+                </p>
+              ) : null}
+              {launchAgentIssues.length ? (
+                <div
+                  id="loop-launch-agent-errors"
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-lg border border-danger p-2 text-xs text-danger"
+                  data-testid="loop-launch-agent-errors"
+                >
+                  <strong>Required agents are unavailable in this project.</strong>
+                  <ul className="list-disc pl-4">
+                    {launchAgentIssues.map((issue) => (
+                      <li key={`${issue.role}-${issue.position ?? 0}`}>
+                        {agentUnavailableText(issue)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {launchNeedsCheckoutConfirmation ? (
+                <label
+                  id="loop-current-checkout-confirmation-label"
+                  className="flex items-start gap-2 rounded-lg border border-warning p-2 text-xs text-text-secondary"
+                >
+                  <ControlInput
+                    type="checkbox"
+                    data-testid="loop-current-checkout-confirmation"
+                    checked={launchDraft.currentCheckoutConfirmed}
+                    disabled={runPending}
+                    onChange={(event) => {
+                      const currentCheckoutConfirmed = event.target.checked;
+                      setLaunchDraft((current) =>
+                        current ? { ...current, currentCheckoutConfirmed } : current,
+                      );
+                    }}
+                  />
+                  <span>
+                    I confirm this Loop may run agents directly in the current project checkout.
+                  </span>
+                </label>
+              ) : null}
+              {launchError ? (
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="rounded-lg bg-danger-subtle p-2 text-xs"
+                >
+                  {launchError}
+                </div>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <ControlButton
+                  data-testid="loop-launch-cancel"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm"
                   disabled={runPending}
-                  onChange={(event) => {
-                    const currentCheckoutConfirmed = event.target.checked;
-                    setLaunchDraft((current) =>
-                      current ? { ...current, currentCheckoutConfirmed } : current,
-                    );
-                  }}
-                />
-                <span>
-                  I confirm this Loop may run agents directly in the current project checkout.
-                </span>
-              </label>
-            ) : null}
-            {launchError ? (
-              <div
-                role="alert"
-                aria-live="assertive"
-                className="rounded-lg bg-danger-subtle p-2 text-xs"
-              >
-                {launchError}
+                  onClick={closeLaunch}
+                >
+                  Cancel
+                </ControlButton>
+                <ControlButton
+                  data-testid="loop-launch-confirm"
+                  className="rounded-capsule bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40"
+                  disabled={
+                    runPending ||
+                    launchAgentIssues.length > 0 ||
+                    launchEvaluatorModelInvalid ||
+                    launchEvaluatorInvalid ||
+                    (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim()) ||
+                    (launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed)
+                  }
+                  aria-describedby={
+                    launchAgentIssues.length
+                      ? "loop-launch-agent-errors"
+                      : launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed
+                        ? "loop-current-checkout-confirmation-label"
+                        : undefined
+                  }
+                  onClick={() => void startRun()}
+                >
+                  {runPending ? "Starting…" : launchDraft.retryOf ? "Start retry" : "Start run"}
+                </ControlButton>
               </div>
-            ) : null}
-            <div className="flex justify-end gap-2">
-              <ControlButton
-                data-testid="loop-launch-cancel"
-                className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm"
-                disabled={runPending}
-                onClick={closeLaunch}
-              >
-                Cancel
-              </ControlButton>
-              <ControlButton
-                data-testid="loop-launch-confirm"
-                className="rounded-capsule bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40"
-                disabled={
-                  runPending ||
-                  launchAgentIssues.length > 0 ||
-                  launchEvaluatorModelInvalid ||
-                  launchEvaluatorInvalid ||
-                  (launchDraft.loop.structure !== "humanApproval" && !launchDraft.goal.trim()) ||
-                  (launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed)
-                }
-                aria-describedby={
-                  launchAgentIssues.length
-                    ? "loop-launch-agent-errors"
-                    : launchNeedsCheckoutConfirmation && !launchDraft.currentCheckoutConfirmed
-                      ? "loop-current-checkout-confirmation-label"
-                      : undefined
-                }
-                onClick={() => void startRun()}
-              >
-                {runPending ? "Starting…" : launchDraft.retryOf ? "Start retry" : "Start run"}
-              </ControlButton>
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }

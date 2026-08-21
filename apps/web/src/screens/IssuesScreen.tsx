@@ -16,6 +16,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { buildIssueContext, type IssueContextRelationships } from "./issueContext.ts";
@@ -541,21 +542,21 @@ export function IssuesScreen() {
 
   if (!project) {
     return (
-      <div
-        className="flex min-h-0 flex-1 items-center justify-center px-6 py-5 text-center"
-        data-testid="issues-screen"
-      >
-        <div className="max-w-sm text-sm text-text-muted" data-testid="issues-no-project">
-          Issues are project-scoped. Select a project with a GitHub remote to see its issues.
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="issues-screen">
+        <SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-5 text-center">
+          <div className="max-w-sm text-sm text-text-muted" data-testid="issues-no-project">
+            Issues are project-scoped. Select a project with a GitHub remote to see its issues.
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6" data-testid="issues-screen">
-      <div className="mx-auto max-w-3xl">
-        {detailNumber !== null ? (
+  if (detailNumber !== null) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6" data-testid="issues-screen">
+        <div className="mx-auto max-w-3xl">
           <div data-testid="issue-detail">
             <ControlButton
               data-testid="issue-detail-back"
@@ -821,381 +822,380 @@ export function IssuesScreen() {
               </>
             )}
           </div>
-        ) : (
-          <>
-            <div className="flex flex-col items-stretch gap-2 pb-1 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-2">
-                <CircleDot size={16} className="text-text-secondary" aria-hidden />
-                <h2
-                  className="min-w-0 break-words text-base font-semibold text-text-primary"
-                  style={{ fontStretch: "expanded" }}
-                >
-                  {project.name} · Issues
-                </h2>
-              </div>
-              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                <div
-                  className="flex origin-left scale-[0.85] items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5 sm:scale-100"
-                  role="group"
-                  aria-label="Filter issues by state"
-                >
-                  {(["open", "closed", "all"] as const).map((s) => (
-                    <ControlButton
-                      key={s}
-                      data-testid={`issues-state-${s}`}
-                      aria-pressed={stateFilter === s}
-                      className={cn(
-                        "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
-                        stateFilter === s
-                          ? "bg-selection text-text-primary"
-                          : "text-text-muted hover:text-text-primary",
-                      )}
-                      onClick={() => {
-                        if (s === stateFilter) return;
-                        // Clear synchronously with the query change rather than
-                        // leaving the previous state's notice until the effect runs.
-                        setIncompleteResults(false);
-                        // the close-reason facet is scoped to the closed board
-                        setReasonFilter(null);
-                        setStateFilter(s);
-                      }}
-                    >
-                      {s}
-                    </ControlButton>
-                  ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="issues-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-issues.jpg"
+        title={`${project.name} · Issues`}
+        actions={
+          <div
+            className="flex origin-left items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+            role="group"
+            aria-label="Filter issues by state"
+          >
+            {(["open", "closed", "all"] as const).map((s) => (
+              <ControlButton
+                key={s}
+                data-testid={`issues-state-${s}`}
+                aria-pressed={stateFilter === s}
+                className={cn(
+                  "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
+                  stateFilter === s
+                    ? "bg-selection text-text-primary"
+                    : "text-text-muted hover:text-text-primary",
+                )}
+                onClick={() => {
+                  if (s === stateFilter) return;
+                  // Clear synchronously with the query change rather than
+                  // leaving the previous state's notice until the effect runs.
+                  setIncompleteResults(false);
+                  // the close-reason facet is scoped to the closed board
+                  setReasonFilter(null);
+                  setStateFilter(s);
+                }}
+              >
+                {s}
+              </ControlButton>
+            ))}
+          </div>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6">
+        <div className="mx-auto max-w-3xl">
+          <div className="flex flex-col items-start gap-2 pb-1 sm:flex-row sm:items-center sm:justify-end">
+            <span
+              data-testid="issues-connection"
+              role="status"
+              aria-live="polite"
+              className={cn(
+                "rounded-capsule border px-2 py-0.5 text-detail",
+                connection && !connection.connected
+                  ? "border-warning/55 bg-warning/10 text-warning"
+                  : "border-border-subtle text-text-muted",
+              )}
+              title={
+                connection?.connected
+                  ? "The gh CLI is signed in — issues use its authentication"
+                  : (connection?.error ?? "Checking GitHub connection…")
+              }
+            >
+              {connection === null
+                ? "GitHub …"
+                : connection.connected
+                  ? `GitHub · ${connection.login ?? "signed in"}`
+                  : (connection.error ?? "GitHub disconnected")}
+            </span>
+            <ControlButton
+              data-testid="issues-scope-all"
+              aria-pressed={allProjects}
+              className={cn(
+                "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                allProjects
+                  ? "border-border-strong bg-selection text-text-primary"
+                  : "border-border-subtle text-text-muted hover:text-text-primary",
+              )}
+              title="Search across every registered project's repository (native aggregate board)"
+              onClick={() => {
+                setIncompleteResults(false);
+                // leaving the aggregate scope drops its PR mode too (Codex)
+                setAllProjects((v) => {
+                  if (v) setSearchKind("issues");
+                  return !v;
+                });
+              }}
+            >
+              All projects
+            </ControlButton>
+            {allProjects ? (
+              <ControlButton
+                data-testid="issues-kind-toggle"
+                aria-pressed={searchKind === "prs"}
+                className={cn(
+                  "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                  searchKind === "prs"
+                    ? "border-border-strong bg-selection text-text-primary"
+                    : "border-border-subtle text-text-muted hover:text-text-primary",
+                )}
+                title="Search pull requests instead of issues (native broader PR search)"
+                onClick={() => {
+                  setIncompleteResults(false);
+                  // issue-only facets have no meaning over PR rows (Codex)
+                  setTypeFilter(null);
+                  setReasonFilter(null);
+                  setSearchKind((k) => (k === "prs" ? "issues" : "prs"));
+                }}
+              >
+                PRs
+              </ControlButton>
+            ) : null}
+            <ControlButton
+              data-testid="issues-refresh"
+              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+              disabled={loading}
+              onClick={() => currentProjectId && void load(currentProjectId)}
+            >
+              <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
+            </ControlButton>
+          </div>
+          <p className="pb-3 text-xs text-text-muted">
+            {stateFilter === "all"
+              ? "All GitHub issues for this project."
+              : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
+            Select one to start a session on it.
+          </p>
+
+          {/* Native free-text search (searchableHaystack): filters the loaded
+                board client-side by title / #number / labels / assignees. */}
+          {!error ? (
+            <ControlInput
+              data-testid="issues-search"
+              className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+              placeholder="Search issues by title, #number, label, assignee, or author…"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+          ) : null}
+
+          {incompleteResults && !loading && !error ? (
+            <div
+              className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-xs text-text-secondary"
+              data-testid="issues-incomplete-results"
+              role="status"
+              aria-live="polite"
+            >
+              Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
+              type, and close-reason filters apply only to these results.
+            </div>
+          ) : null}
+
+          {/* Native label + assignee + author facet filters (client-side over
+                the loaded board). Only shown when the board offers a facet. */}
+          {!error &&
+          (availableLabels.length > 0 ||
+            availableAssignees.length > 0 ||
+            availableAuthors.length > 0 ||
+            availableTypes.length > 0 ||
+            availableReasons.length > 0) ? (
+            <div className="flex flex-wrap items-center gap-1.5 pb-3" data-testid="issues-facets">
+              {availableTypes.length > 0 ? (
+                <div className="flex items-center gap-1" data-testid="issues-type-filter">
+                  <CircleDot size={12} className="text-text-muted" aria-hidden />
+                  {availableTypes.map((issueType) => {
+                    const on = typeFilter === issueType;
+                    return (
+                      <ControlButton
+                        key={issueType}
+                        data-testid={`issues-type-${issueType}`}
+                        aria-pressed={on}
+                        className={cn(
+                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                          on
+                            ? "border-border-strong bg-selection text-text-primary"
+                            : "border-border-subtle text-text-muted hover:text-text-primary",
+                        )}
+                        onClick={() => setTypeFilter(on ? null : issueType)}
+                      >
+                        {issueType}
+                      </ControlButton>
+                    );
+                  })}
                 </div>
-                <span
-                  data-testid="issues-connection"
-                  role="status"
-                  aria-live="polite"
-                  className={cn(
-                    "rounded-capsule border px-2 py-0.5 text-detail",
-                    connection && !connection.connected
-                      ? "border-warning/55 bg-warning/10 text-warning"
-                      : "border-border-subtle text-text-muted",
-                  )}
-                  title={
-                    connection?.connected
-                      ? "The gh CLI is signed in — issues use its authentication"
-                      : (connection?.error ?? "Checking GitHub connection…")
-                  }
-                >
-                  {connection === null
-                    ? "GitHub …"
-                    : connection.connected
-                      ? `GitHub · ${connection.login ?? "signed in"}`
-                      : (connection.error ?? "GitHub disconnected")}
-                </span>
-                <ControlButton
-                  data-testid="issues-scope-all"
-                  aria-pressed={allProjects}
-                  className={cn(
-                    "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
-                    allProjects
-                      ? "border-border-strong bg-selection text-text-primary"
-                      : "border-border-subtle text-text-muted hover:text-text-primary",
-                  )}
-                  title="Search across every registered project's repository (native aggregate board)"
-                  onClick={() => {
-                    setIncompleteResults(false);
-                    // leaving the aggregate scope drops its PR mode too (Codex)
-                    setAllProjects((v) => {
-                      if (v) setSearchKind("issues");
-                      return !v;
-                    });
-                  }}
-                >
-                  All projects
-                </ControlButton>
-                {allProjects ? (
+              ) : null}
+              {availableReasons.length > 0 ? (
+                <div className="flex items-center gap-1" data-testid="issues-reason-filter">
+                  <CheckCircle2 size={12} className="text-text-muted" aria-hidden />
+                  {availableReasons.map((reason) => {
+                    const on = reasonFilter === reason;
+                    return (
+                      <ControlButton
+                        key={reason}
+                        data-testid={`issues-reason-${reason}`}
+                        aria-pressed={on}
+                        className={cn(
+                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                          on
+                            ? "border-border-strong bg-selection text-text-primary"
+                            : "border-border-subtle text-text-muted hover:text-text-primary",
+                        )}
+                        onClick={() => setReasonFilter(on ? null : reason)}
+                      >
+                        {reason.toLowerCase().replaceAll("_", " ")}
+                      </ControlButton>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {availableAuthors.length > 0 ? (
+                <div className="flex items-center gap-1" data-testid="issues-author-filter">
+                  <PenLine size={12} className="text-text-muted" aria-hidden />
+                  {availableAuthors.map((author) => {
+                    const on = authorFilter === author;
+                    return (
+                      <ControlButton
+                        key={author}
+                        data-testid={`issues-author-${author}`}
+                        aria-pressed={on}
+                        className={cn(
+                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                          on
+                            ? "border-border-strong bg-selection text-text-primary"
+                            : "border-border-subtle text-text-muted hover:text-text-primary",
+                        )}
+                        onClick={() => setAuthorFilter(on ? null : author)}
+                      >
+                        {author}
+                      </ControlButton>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {availableAssignees.length > 0 ? (
+                <div className="flex items-center gap-1" data-testid="issues-assignee-filter">
+                  <User size={12} className="text-text-muted" aria-hidden />
+                  {availableAssignees.map((assignee) => {
+                    const on = assigneeFilter === assignee;
+                    return (
+                      <ControlButton
+                        key={assignee}
+                        data-testid={`issues-assignee-${assignee}`}
+                        aria-pressed={on}
+                        className={cn(
+                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                          on
+                            ? "border-border-strong bg-selection text-text-primary"
+                            : "border-border-subtle text-text-muted hover:text-text-primary",
+                        )}
+                        onClick={() => setAssigneeFilter(on ? null : assignee)}
+                      >
+                        {assignee}
+                      </ControlButton>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {availableLabels.map((label) => {
+                const on = labelFilters.includes(label);
+                return (
                   <ControlButton
-                    data-testid="issues-kind-toggle"
-                    aria-pressed={searchKind === "prs"}
+                    key={label}
+                    data-testid={`issues-label-${label}`}
+                    aria-pressed={on}
                     className={cn(
-                      "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
-                      searchKind === "prs"
+                      "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                      on
                         ? "border-border-strong bg-selection text-text-primary"
                         : "border-border-subtle text-text-muted hover:text-text-primary",
                     )}
-                    title="Search pull requests instead of issues (native broader PR search)"
-                    onClick={() => {
-                      setIncompleteResults(false);
-                      // issue-only facets have no meaning over PR rows (Codex)
-                      setTypeFilter(null);
-                      setReasonFilter(null);
-                      setSearchKind((k) => (k === "prs" ? "issues" : "prs"));
-                    }}
+                    onClick={() =>
+                      setLabelFilters((prev) =>
+                        prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label],
+                      )
+                    }
                   >
-                    PRs
+                    {label}
                   </ControlButton>
-                ) : null}
+                );
+              })}
+              {filtersActive ? (
                 <ControlButton
-                  data-testid="issues-refresh"
-                  className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                  disabled={loading}
-                  onClick={() => currentProjectId && void load(currentProjectId)}
+                  data-testid="issues-clear-filters"
+                  className="rounded-capsule px-2 py-0.5 text-detail text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
+                  onClick={clearFilters}
                 >
-                  <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
+                  Clear filters
                 </ControlButton>
-              </div>
+              ) : null}
             </div>
-            <p className="pb-3 text-xs text-text-muted">
-              {stateFilter === "all"
-                ? "All GitHub issues for this project."
-                : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
-              Select one to start a session on it.
-            </p>
+          ) : null}
 
-            {/* Native free-text search (searchableHaystack): filters the loaded
-                board client-side by title / #number / labels / assignees. */}
-            {!error ? (
-              <ControlInput
-                data-testid="issues-search"
-                className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                placeholder="Search issues by title, #number, label, assignee, or author…"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-            ) : null}
-
-            {incompleteResults && !loading && !error ? (
-              <div
-                className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-xs text-text-secondary"
-                data-testid="issues-incomplete-results"
-                role="status"
-                aria-live="polite"
-              >
-                Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
-                type, and close-reason filters apply only to these results.
-              </div>
-            ) : null}
-
-            {/* Native label + assignee + author facet filters (client-side over
-                the loaded board). Only shown when the board offers a facet. */}
-            {!error &&
-            (availableLabels.length > 0 ||
-              availableAssignees.length > 0 ||
-              availableAuthors.length > 0 ||
-              availableTypes.length > 0 ||
-              availableReasons.length > 0) ? (
-              <div className="flex flex-wrap items-center gap-1.5 pb-3" data-testid="issues-facets">
-                {availableTypes.length > 0 ? (
-                  <div className="flex items-center gap-1" data-testid="issues-type-filter">
-                    <CircleDot size={12} className="text-text-muted" aria-hidden />
-                    {availableTypes.map((issueType) => {
-                      const on = typeFilter === issueType;
-                      return (
-                        <ControlButton
-                          key={issueType}
-                          data-testid={`issues-type-${issueType}`}
-                          aria-pressed={on}
-                          className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                            on
-                              ? "border-border-strong bg-selection text-text-primary"
-                              : "border-border-subtle text-text-muted hover:text-text-primary",
-                          )}
-                          onClick={() => setTypeFilter(on ? null : issueType)}
-                        >
-                          {issueType}
-                        </ControlButton>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {availableReasons.length > 0 ? (
-                  <div className="flex items-center gap-1" data-testid="issues-reason-filter">
-                    <CheckCircle2 size={12} className="text-text-muted" aria-hidden />
-                    {availableReasons.map((reason) => {
-                      const on = reasonFilter === reason;
-                      return (
-                        <ControlButton
-                          key={reason}
-                          data-testid={`issues-reason-${reason}`}
-                          aria-pressed={on}
-                          className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                            on
-                              ? "border-border-strong bg-selection text-text-primary"
-                              : "border-border-subtle text-text-muted hover:text-text-primary",
-                          )}
-                          onClick={() => setReasonFilter(on ? null : reason)}
-                        >
-                          {reason.toLowerCase().replaceAll("_", " ")}
-                        </ControlButton>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {availableAuthors.length > 0 ? (
-                  <div className="flex items-center gap-1" data-testid="issues-author-filter">
-                    <PenLine size={12} className="text-text-muted" aria-hidden />
-                    {availableAuthors.map((author) => {
-                      const on = authorFilter === author;
-                      return (
-                        <ControlButton
-                          key={author}
-                          data-testid={`issues-author-${author}`}
-                          aria-pressed={on}
-                          className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                            on
-                              ? "border-border-strong bg-selection text-text-primary"
-                              : "border-border-subtle text-text-muted hover:text-text-primary",
-                          )}
-                          onClick={() => setAuthorFilter(on ? null : author)}
-                        >
-                          {author}
-                        </ControlButton>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {availableAssignees.length > 0 ? (
-                  <div className="flex items-center gap-1" data-testid="issues-assignee-filter">
-                    <User size={12} className="text-text-muted" aria-hidden />
-                    {availableAssignees.map((assignee) => {
-                      const on = assigneeFilter === assignee;
-                      return (
-                        <ControlButton
-                          key={assignee}
-                          data-testid={`issues-assignee-${assignee}`}
-                          aria-pressed={on}
-                          className={cn(
-                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                            on
-                              ? "border-border-strong bg-selection text-text-primary"
-                              : "border-border-subtle text-text-muted hover:text-text-primary",
-                          )}
-                          onClick={() => setAssigneeFilter(on ? null : assignee)}
-                        >
-                          {assignee}
-                        </ControlButton>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {availableLabels.map((label) => {
-                  const on = labelFilters.includes(label);
-                  return (
-                    <ControlButton
+          {error ? (
+            <div
+              className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-sm text-text-muted"
+              data-testid="issues-error"
+            >
+              {error}
+            </div>
+          ) : (
+            <div className="space-y-1.5" data-testid="issues-list">
+              {visibleIssues.map((issue) => (
+                <ControlButton
+                  key={`${issue.repository ?? ""}#${issue.number}`}
+                  data-testid={`issue-${issue.number}`}
+                  className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
+                  onClick={() => {
+                    // a PR row has no issue detail — open it on GitHub (the
+                    // main-window policy routes _blank/window.open externally)
+                    if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
+                      window.open(issue.url, "_blank", "noreferrer");
+                      return;
+                    }
+                    void openDetail(issue.number, issue.projectId ?? undefined);
+                  }}
+                >
+                  <span className="font-mono text-xs text-text-muted">
+                    {issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}
+                  </span>
+                  <span
+                    className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary"
+                    style={{ fontStretch: "expanded" }}
+                  >
+                    {issue.title}
+                  </span>
+                  {/* Native list-row meta leads with the author (GitHubIssuesViews
+                        .swift:143-145): who filed the issue. */}
+                  {issue.author ? (
+                    <span
+                      data-testid="issue-author"
+                      className="flex shrink-0 items-center gap-1 text-detail text-text-muted"
+                    >
+                      <User size={11} className="shrink-0" />
+                      <span className="max-w-[16ch] truncate">{issue.author}</span>
+                    </span>
+                  ) : null}
+                  {/* Relative last-updated time (native meta row, after author). */}
+                  {issue.updatedAt ? (
+                    <span
+                      data-testid="issue-updated"
+                      className="shrink-0 whitespace-nowrap text-detail text-text-muted"
+                      title={formatDate(issue.updatedAt)}
+                    >
+                      {formatRelative(issue.updatedAt)}
+                    </span>
+                  ) : null}
+                  {issue.labels.slice(0, 3).map((label) => (
+                    <span
                       key={label}
-                      data-testid={`issues-label-${label}`}
-                      aria-pressed={on}
-                      className={cn(
-                        "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                        on
-                          ? "border-border-strong bg-selection text-text-primary"
-                          : "border-border-subtle text-text-muted hover:text-text-primary",
-                      )}
-                      onClick={() =>
-                        setLabelFilters((prev) =>
-                          prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label],
-                        )
-                      }
+                      className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
                     >
                       {label}
-                    </ControlButton>
-                  );
-                })}
-                {filtersActive ? (
-                  <ControlButton
-                    data-testid="issues-clear-filters"
-                    className="rounded-capsule px-2 py-0.5 text-detail text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
-                    onClick={clearFilters}
-                  >
-                    Clear filters
-                  </ControlButton>
-                ) : null}
-              </div>
-            ) : null}
-
-            {error ? (
-              <div
-                className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-sm text-text-muted"
-                data-testid="issues-error"
-              >
-                {error}
-              </div>
-            ) : (
-              <div className="space-y-1.5" data-testid="issues-list">
-                {visibleIssues.map((issue) => (
-                  <ControlButton
-                    key={`${issue.repository ?? ""}#${issue.number}`}
-                    data-testid={`issue-${issue.number}`}
-                    className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
-                    onClick={() => {
-                      // a PR row has no issue detail — open it on GitHub (the
-                      // main-window policy routes _blank/window.open externally)
-                      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
-                        window.open(issue.url, "_blank", "noreferrer");
-                        return;
-                      }
-                      void openDetail(issue.number, issue.projectId ?? undefined);
-                    }}
-                  >
-                    <span className="font-mono text-xs text-text-muted">
-                      {issue.repository
-                        ? `${issue.repository}#${issue.number}`
-                        : `#${issue.number}`}
                     </span>
-                    <span
-                      className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
-                      {issue.title}
-                    </span>
-                    {/* Native list-row meta leads with the author (GitHubIssuesViews
-                        .swift:143-145): who filed the issue. */}
-                    {issue.author ? (
-                      <span
-                        data-testid="issue-author"
-                        className="flex shrink-0 items-center gap-1 text-detail text-text-muted"
-                      >
-                        <User size={11} className="shrink-0" />
-                        <span className="max-w-[16ch] truncate">{issue.author}</span>
-                      </span>
-                    ) : null}
-                    {/* Relative last-updated time (native meta row, after author). */}
-                    {issue.updatedAt ? (
-                      <span
-                        data-testid="issue-updated"
-                        className="shrink-0 whitespace-nowrap text-detail text-text-muted"
-                        title={formatDate(issue.updatedAt)}
-                      >
-                        {formatRelative(issue.updatedAt)}
-                      </span>
-                    ) : null}
-                    {issue.labels.slice(0, 3).map((label) => (
-                      <span
-                        key={label}
-                        className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                      >
-                        {label}
-                      </span>
-                    ))}
-                  </ControlButton>
-                ))}
-                {visibleIssues.length === 0 && !loading ? (
-                  <div
-                    className="py-8 text-center text-sm text-text-muted"
-                    data-testid="issues-empty"
-                  >
-                    {/* Native emptyStateMessage priority: search query wins,
+                  ))}
+                </ControlButton>
+              ))}
+              {visibleIssues.length === 0 && !loading ? (
+                <div
+                  className="py-8 text-center text-sm text-text-muted"
+                  data-testid="issues-empty"
+                >
+                  {/* Native emptyStateMessage priority: search query wins,
                         then active facets, then the plain no-issues copy. */}
-                    {search
-                      ? `No issues match “${searchQuery.trim()}”.`
-                      : filtersActive
-                        ? "Try clearing the filters or changing the state."
-                        : stateFilter === "all"
-                          ? "No issues."
-                          : `No ${stateFilter} issues.`}
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </>
-        )}
+                  {search
+                    ? `No issues match “${searchQuery.trim()}”.`
+                    : filtersActive
+                      ? "Try clearing the filters or changing the state."
+                      : stateFilter === "all"
+                        ? "No issues."
+                        : `No ${stateFilter} issues.`}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

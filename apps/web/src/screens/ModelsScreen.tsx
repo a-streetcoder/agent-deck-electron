@@ -1,6 +1,7 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Cpu, Eye, EyeOff, Sparkles, Zap } from "lucide-react";
+import { Check, Eye, EyeOff, Sparkles, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -241,212 +242,212 @@ export function ModelsScreen() {
     : discoveryState === "success" && models.length > 0;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="models-screen">
-      <div className="mx-auto max-w-3xl">
-        <div className="flex items-center gap-2 pb-1">
-          <Cpu size={16} className="text-text-secondary" aria-hidden />
-          <h2
-            className="text-base font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            Models
-          </h2>
-        </div>
-        <p className="pb-3 text-xs text-text-muted">
-          {sessionId
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="models-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-models.jpg"
+        title="Models"
+        subtitle={
+          sessionId
             ? "Models available to the current session. Select one to make it active."
-            : "Browse and curate available models now. Start a session to activate a model."}
-        </p>
-
-        {!sessionId && discoveryState === "loading" ? (
-          <div
-            className="py-8 text-center text-sm text-text-muted"
-            role="status"
-            data-testid="models-loading"
-          >
-            Discovering available models…
-          </div>
-        ) : !sessionId && discoveryState === "error" ? (
-          <div
-            className="py-8 text-center text-sm text-text-muted"
-            role="alert"
-            data-testid="models-error"
-          >
-            <p>Models could not be discovered.</p>
-            <ControlButton
-              type="button"
-              data-testid="models-retry"
-              className="mt-3 rounded-capsule border border-border-strong px-3 py-1 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
-              onClick={() => loadSource(true)}
+            : "Browse and curate available models now. Start a session to activate a model."
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-3xl">
+          {!sessionId && discoveryState === "loading" ? (
+            <div
+              className="py-8 text-center text-sm text-text-muted"
+              role="status"
+              data-testid="models-loading"
             >
-              Retry
-            </ControlButton>
-          </div>
-        ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
-          (sessionId && models.length === 0) ? (
-          <div
-            className="py-8 text-center text-sm text-text-muted"
-            role="status"
-            data-testid="models-empty"
-          >
-            No models available — check your provider configuration in Environment.
-          </div>
-        ) : showCatalog ? (
-          <>
-            <ControlInput
-              ref={searchInput}
-              data-testid="models-search"
-              className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-              placeholder="Search models by name, id, or provider…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            {filtered.length === 0 ? (
-              <div
-                className="py-8 text-center text-sm text-text-muted"
-                data-testid="models-search-empty"
+              Discovering available models…
+            </div>
+          ) : !sessionId && discoveryState === "error" ? (
+            <div
+              className="py-8 text-center text-sm text-text-muted"
+              role="alert"
+              data-testid="models-error"
+            >
+              <p>Models could not be discovered.</p>
+              <ControlButton
+                type="button"
+                data-testid="models-retry"
+                className="mt-3 rounded-capsule border border-border-strong px-3 py-1 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                onClick={() => loadSource(true)}
               >
-                No models match your search.
-              </div>
-            ) : null}
-            <div className="space-y-4">
-              {[...byProvider.entries()].map(([provider, providerModels]) => (
-                <div key={provider}>
-                  <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                    <ProviderLogo providerId={provider} size={13} className="text-text-secondary" />
-                    {provider}
-                  </div>
-                  <div className="space-y-1.5">
-                    {providerModels.map((model) => {
-                      const isActive =
-                        Boolean(sessionId) &&
-                        active?.provider === provider &&
-                        active?.id === model.id;
-                      const modelKey = `${model.provider}:${model.id}`;
-                      const isCurationPending = pendingCuration.has(modelKey);
-                      const ctx = formatTokens(model.contextWindow);
-                      const out = formatTokens(model.maxTokens);
-                      return (
-                        <div
-                          key={model.id}
-                          data-testid={`model-${model.id}`}
-                          data-active={isActive}
-                          data-disabled={model.disabled ? "true" : "false"}
-                          className={cn(
-                            "flex items-center gap-1 rounded-xl border transition-colors",
-                            isActive
-                              ? "border-accent bg-selection"
-                              : "border-border-subtle bg-surface",
-                          )}
-                        >
-                          <ControlButton
-                            type="button"
-                            data-testid={`model-select-${model.id}`}
-                            disabled={!sessionId || model.disabled}
-                            title={
-                              !sessionId ? "Start a session to activate this model" : undefined
-                            }
+                Retry
+              </ControlButton>
+            </div>
+          ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
+            (sessionId && models.length === 0) ? (
+            <div
+              className="py-8 text-center text-sm text-text-muted"
+              role="status"
+              data-testid="models-empty"
+            >
+              No models available — check your provider configuration in Environment.
+            </div>
+          ) : showCatalog ? (
+            <>
+              <ControlInput
+                ref={searchInput}
+                data-testid="models-search"
+                className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                placeholder="Search models by name, id, or provider…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              {filtered.length === 0 ? (
+                <div
+                  className="py-8 text-center text-sm text-text-muted"
+                  data-testid="models-search-empty"
+                >
+                  No models match your search.
+                </div>
+              ) : null}
+              <div className="space-y-4">
+                {[...byProvider.entries()].map(([provider, providerModels]) => (
+                  <div key={provider}>
+                    <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      <ProviderLogo
+                        providerId={provider}
+                        size={13}
+                        className="text-text-secondary"
+                      />
+                      {provider}
+                    </div>
+                    <div className="space-y-1.5">
+                      {providerModels.map((model) => {
+                        const isActive =
+                          Boolean(sessionId) &&
+                          active?.provider === provider &&
+                          active?.id === model.id;
+                        const modelKey = `${model.provider}:${model.id}`;
+                        const isCurationPending = pendingCuration.has(modelKey);
+                        const ctx = formatTokens(model.contextWindow);
+                        const out = formatTokens(model.maxTokens);
+                        return (
+                          <div
+                            key={model.id}
+                            data-testid={`model-${model.id}`}
+                            data-active={isActive}
+                            data-disabled={model.disabled ? "true" : "false"}
                             className={cn(
-                              "flex min-w-0 flex-1 items-center gap-3 rounded-l-[14px] px-3.5 py-2.5 text-left",
-                              sessionId && !model.disabled && !isActive && "hover:bg-hover",
-                              (!sessionId || model.disabled) && "cursor-default",
+                              "flex items-center gap-1 rounded-xl border transition-colors",
+                              isActive
+                                ? "border-accent bg-selection"
+                                : "border-border-subtle bg-surface",
                             )}
-                            onClick={() => select(model)}
                           >
-                            <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className="truncate text-sm font-medium text-text-primary"
-                                  style={{ fontStretch: "expanded" }}
-                                >
-                                  {model.name ?? model.id}
-                                </span>
-                                {model.reasoning ? (
-                                  <span
-                                    data-testid="reasoning-badge"
-                                    className="flex items-center gap-0.5 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-secondary"
-                                  >
-                                    <Sparkles size={9} aria-hidden /> reasoning
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="truncate font-mono text-detail text-text-muted">
-                                {model.id}
-                              </div>
-                            </div>
-                            <div
-                              className={cn(
-                                "flex shrink-0 items-center gap-3 text-detail text-text-muted",
-                                model.disabled && "opacity-60",
-                              )}
-                            >
-                              {ctx ? <span title="Context window">{ctx} ctx</span> : null}
-                              {out ? <span title="Max output tokens">{out} out</span> : null}
-                              {model.input?.includes("image") ? <span>image</span> : null}
-                              {!sessionId ? (
-                                <span data-testid={`model-activation-help-${model.id}`}>
-                                  Browse only · Start a session to activate
-                                </span>
-                              ) : null}
-                              {isActive ? (
-                                <Check
-                                  size={15}
-                                  style={{ color: "var(--color-brand-accent)" }}
-                                  aria-label="Active model"
-                                />
-                              ) : null}
-                            </div>
-                          </ControlButton>
-                          <ControlButton
-                            type="button"
-                            data-testid={`model-toggle-${model.id}`}
-                            aria-label={model.disabled ? "Enable model" : "Disable model"}
-                            aria-busy={isCurationPending}
-                            title={model.disabled ? "Show in picker" : "Hide from picker"}
-                            disabled={isCurationPending}
-                            className="flex shrink-0 items-center gap-1.5 rounded-r-[14px] px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
-                            onClick={() => void toggleDisabled(model)}
-                          >
-                            {model.disabled ? (
-                              <EyeOff size={15} aria-hidden />
-                            ) : (
-                              <Eye size={15} aria-hidden />
-                            )}
-                            <span>
-                              {model.disabled ? "Hidden from pickers" : "Shown in pickers"}
-                            </span>
-                          </ControlButton>
-                          {model.fastEligible ? (
                             <ControlButton
                               type="button"
-                              data-testid={`model-fast-${model.id}`}
-                              aria-label={model.fast ? "Turn off Fast" : "Turn on Fast"}
-                              aria-pressed={model.fast === true}
-                              aria-busy={isCurationPending}
-                              title="Ask OpenAI for the priority service tier on this model"
-                              disabled={isCurationPending}
-                              className="flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
-                              onClick={() => void toggleFast(model)}
+                              data-testid={`model-select-${model.id}`}
+                              disabled={!sessionId || model.disabled}
+                              title={
+                                !sessionId ? "Start a session to activate this model" : undefined
+                              }
+                              className={cn(
+                                "flex min-w-0 flex-1 items-center gap-3 rounded-l-[14px] px-3.5 py-2.5 text-left",
+                                sessionId && !model.disabled && !isActive && "hover:bg-hover",
+                                (!sessionId || model.disabled) && "cursor-default",
+                              )}
+                              onClick={() => select(model)}
                             >
-                              <Zap
-                                size={15}
-                                aria-hidden
-                                style={
-                                  model.fast ? { color: "var(--color-brand-accent)" } : undefined
-                                }
-                              />
-                              <span>{model.fast ? "Fast" : "Standard"}</span>
+                              <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className="truncate text-sm font-medium text-text-primary"
+                                    style={{ fontStretch: "expanded" }}
+                                  >
+                                    {model.name ?? model.id}
+                                  </span>
+                                  {model.reasoning ? (
+                                    <span
+                                      data-testid="reasoning-badge"
+                                      className="flex items-center gap-0.5 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-secondary"
+                                    >
+                                      <Sparkles size={9} aria-hidden /> reasoning
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="truncate font-mono text-detail text-text-muted">
+                                  {model.id}
+                                </div>
+                              </div>
+                              <div
+                                className={cn(
+                                  "flex shrink-0 items-center gap-3 text-detail text-text-muted",
+                                  model.disabled && "opacity-60",
+                                )}
+                              >
+                                {ctx ? <span title="Context window">{ctx} ctx</span> : null}
+                                {out ? <span title="Max output tokens">{out} out</span> : null}
+                                {model.input?.includes("image") ? <span>image</span> : null}
+                                {!sessionId ? (
+                                  <span data-testid={`model-activation-help-${model.id}`}>
+                                    Browse only · Start a session to activate
+                                  </span>
+                                ) : null}
+                                {isActive ? (
+                                  <Check
+                                    size={15}
+                                    style={{ color: "var(--color-brand-accent)" }}
+                                    aria-label="Active model"
+                                  />
+                                ) : null}
+                              </div>
                             </ControlButton>
-                          ) : null}
-                        </div>
-                      );
-                    })}
+                            <ControlButton
+                              type="button"
+                              data-testid={`model-toggle-${model.id}`}
+                              aria-label={model.disabled ? "Enable model" : "Disable model"}
+                              aria-busy={isCurationPending}
+                              title={model.disabled ? "Show in picker" : "Hide from picker"}
+                              disabled={isCurationPending}
+                              className="flex shrink-0 items-center gap-1.5 rounded-r-[14px] px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
+                              onClick={() => void toggleDisabled(model)}
+                            >
+                              {model.disabled ? (
+                                <EyeOff size={15} aria-hidden />
+                              ) : (
+                                <Eye size={15} aria-hidden />
+                              )}
+                              <span>
+                                {model.disabled ? "Hidden from pickers" : "Shown in pickers"}
+                              </span>
+                            </ControlButton>
+                            {model.fastEligible ? (
+                              <ControlButton
+                                type="button"
+                                data-testid={`model-fast-${model.id}`}
+                                aria-label={model.fast ? "Turn off Fast" : "Turn on Fast"}
+                                aria-pressed={model.fast === true}
+                                aria-busy={isCurationPending}
+                                title="Ask OpenAI for the priority service tier on this model"
+                                disabled={isCurationPending}
+                                className="flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
+                                onClick={() => void toggleFast(model)}
+                              >
+                                <Zap
+                                  size={15}
+                                  aria-hidden
+                                  style={
+                                    model.fast ? { color: "var(--color-brand-accent)" } : undefined
+                                  }
+                                />
+                                <span>{model.fast ? "Fast" : "Standard"}</span>
+                              </ControlButton>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );

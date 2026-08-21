@@ -65,6 +65,7 @@ interface SkillRepo {
   unavailable?: { code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE"; message: string };
   pendingMerges?: SkillMergeConflict[];
 }
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { deleteSkill, renameSkill, setSkillDisabled, updateProject } from "../state/wsBridge.ts";
@@ -1550,671 +1551,353 @@ export function SkillsScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1" data-testid="skills-screen">
-      {/* List pane */}
-      <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle">
-        <div className="flex items-center gap-2 px-3 pb-2 pt-3">
-          <ControlInput
-            data-testid="skill-search"
-            className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-            placeholder="Search skills"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <ControlButton
-            data-testid="new-skill"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
-            title="New skill"
-            onClick={() =>
-              setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
-            }
-          >
-            <Plus size={15} />
-          </ControlButton>
-          <ControlButton
-            data-testid="skill-import"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-            title="Import skills from a local folder or .md file"
-            onClick={() => void doLocalFolderImport()}
-          >
-            <FolderInput size={15} />
-          </ControlButton>
-          <ControlButton
-            data-testid="skill-scan-known"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-            title="Scan Claude and Codex skill folders"
-            onClick={() => void doKnownScan()}
-          >
-            <FolderSearch size={15} />
-          </ControlButton>
-          <ControlButton
-            data-testid="skill-import-git"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-            title="Import skills from a git repository"
-            onClick={() => setGitUrl((v) => (v === null ? "" : null))}
-          >
-            <GitBranch size={15} />
-          </ControlButton>
-        </div>
-        {importPath !== null ? (
-          <div className="mx-3 mb-2 flex gap-2">
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="skills-screen">
+      <SectionHero imageSrc="/screen-art/screen-art-skills.jpg" title="Skills" />
+      <div className="flex min-h-0 flex-1">
+        {/* List pane */}
+        <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle">
+          <div className="flex items-center gap-2 px-3 pb-2 pt-3">
             <ControlInput
-              autoFocus
-              data-testid="skill-import-path"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="/path/to/skill.md"
-              value={importPath}
-              onChange={(event) => setImportPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void doImport();
-                if (event.key === "Escape") setImportPath(null);
-              }}
+              data-testid="skill-search"
+              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+              placeholder="Search skills"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
             />
             <ControlButton
-              data-testid="skill-import-confirm"
-              className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={!importPath.trim()}
-              onClick={() => void doImport()}
-            >
-              Import
-            </ControlButton>
-          </div>
-        ) : null}
-        {gitUrl !== null ? (
-          <div className="mx-3 mb-2 flex gap-2">
-            <ControlInput
-              autoFocus
-              data-testid="skill-import-git-url"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="owner/repo, skills.sh/…, or a git URL"
-              value={gitUrl}
-              onChange={(event) => setGitUrl(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void doGitInspect();
-                if (event.key === "Escape") {
-                  inspectSeq.current++; // an in-flight preview must not reopen a dismissed row
-                  setGitUrl(null);
-                }
+              data-testid="new-skill"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-capsule"
+              style={{
+                background:
+                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                color: "var(--color-accent-foreground)",
               }}
-            />
-            <ControlButton
-              data-testid="skill-import-git-confirm"
-              className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={!gitUrl.trim() || gitImporting}
-              onClick={() => void doGitInspect()}
+              title="New skill"
+              onClick={() =>
+                setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
+              }
             >
-              {gitImporting ? "Fetching…" : "Preview"}
-            </ControlButton>
-          </div>
-        ) : null}
-        {compare ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
-            <div
-              data-testid="skill-compare-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label={`Compare copies of ${compare.left.name}`}
-              tabIndex={-1}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setCompare(null);
-              }}
-              className="flex max-h-[85vh] w-[900px] max-w-full flex-col rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
-            >
-              <div className="border-b border-border-subtle px-5 py-4">
-                <div className="text-sm font-semibold text-text-primary">Compare skills</div>
-                <div className="text-xs text-text-muted">
-                  Review both copies of &quot;{compare.left.name}&quot; before choosing which one to
-                  keep.
-                </div>
-              </div>
-              <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border-subtle">
-                {[compare.left, compare.right].map((side) => (
-                  <div key={side.filePath} className="flex min-h-0 min-w-0 flex-col">
-                    <div className="border-b border-border-subtle px-4 py-2">
-                      <div
-                        className="truncate font-mono text-micro text-text-secondary"
-                        title={side.filePath}
-                      >
-                        {side.filePath}
-                      </div>
-                      <ScopeChip scope={side.scope} />
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                      <MarkdownDocument source={side.body || "_(empty)_"} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end border-t border-border-subtle px-5 py-3">
-                <ControlButton
-                  data-testid="skill-compare-done"
-                  className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary"
-                  onClick={() => setCompare(null)}
-                >
-                  Done
-                </ControlButton>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        {gitPreview ? (
-          <SkillImportPreviewDialog
-            sourceLabel={gitPreview.url}
-            sourceKind="git"
-            skills={gitPreview.skills}
-            defaultSelected={gitPreview.defaultSelected}
-            onImport={confirmGitImport}
-            onCancel={cancelGitPreview}
-          />
-        ) : null}
-        {localPreview ? (
-          <SkillImportPreviewDialog
-            sourceLabel={localPreview.path}
-            sourceKind="local"
-            skills={localPreview.skills}
-            onImport={confirmLocalImport}
-            onCancel={() => setLocalPreview(null)}
-          />
-        ) : null}
-        {knownPreview ? (
-          <SkillImportPreviewDialog
-            sourceLabel={
-              knownPreview.failures.length > 0
-                ? `Claude & Codex folders · couldn't read: ${knownPreview.failures.join(", ")}`
-                : "Claude & Codex folders"
-            }
-            sourceKind="known"
-            skills={knownPreview.items}
-            defaultSelected={knownPreview.defaultSelected}
-            onImport={confirmKnownImport}
-            onCancel={() => setKnownPreview(null)}
-          />
-        ) : null}
-        {packageWarnings.length > 0 ? (
-          <div
-            data-testid="skill-package-warnings"
-            className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
-            role="status"
-          >
-            {packageWarnings.map((warning) => (
-              <div key={warning} className="truncate" title={warning}>
-                {warning}
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {pluginRefs.length > 0 ? (
-          <div
-            data-testid="skill-plugin-refs"
-            className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
-          >
-            <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
-              Codex plugin references
-            </div>
-            {pluginRefs.map((ref) => {
-              const key = `${ref.marketplace}::${ref.plugin}::${ref.relPath}`;
-              return (
-                <div key={key} className="flex items-center justify-between gap-2">
-                  <span className="truncate" title={key}>
-                    {ref.plugin} · {ref.relPath}{" "}
-                    <span className="text-text-muted">({ref.marketplace})</span>
-                  </span>
-                  <ControlButton
-                    data-testid={`skill-plugin-ref-remove-${key}`}
-                    className="rounded-capsule border border-border-strong px-2 text-micro text-text-secondary hover:text-text-primary"
-                    onClick={() => void removePluginRef(ref)}
-                  >
-                    Remove
-                  </ControlButton>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-        <div
-          data-testid="skill-repo-record-removal-status"
-          className="sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {repoRecordRemovalAnnouncement}
-        </div>
-        <div className="sr-only" role="status" aria-live="polite">
-          {recoveryAnnouncement}
-        </div>
-        {recoveries.length > 0 || repos.length > 0 ? (
-          <div
-            data-testid="skill-management-panels"
-            className="mx-3 mb-2 max-h-[min(36vh,20rem)] min-h-0 shrink-0 space-y-2 overflow-y-auto overscroll-contain"
-          >
-            {recoveries.length > 0 ? (
-              <div className="space-y-1" data-testid="skill-recoveries">
-                <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
-                  Safe recovery
-                </div>
-                {recoveries.map((recovery) => {
-                  const busy = recoveryBusy[recovery.token];
-                  return (
-                    <div
-                      key={recovery.token}
-                      className="rounded-lg border border-warning bg-surface px-2.5 py-2"
-                      aria-busy={busy !== undefined}
-                      data-testid={`skill-recovery-${recovery.skillName}`}
-                    >
-                      <div className="font-mono text-detail text-text-primary">
-                        {recovery.skillName}
-                      </div>
-                      <p className="text-micro text-text-muted">
-                        {busy === "trash"
-                          ? "This completed-update backup is being moved to OS Trash automatically."
-                          : "A displaced or interrupted tree was retained safely. Restore is available only while the active skill is absent, or move this retained tree to OS Trash."}
-                      </p>
-                      {busy === "trash" ? null : (
-                        <div className="mt-1 flex gap-1">
-                          <ControlButton
-                            ref={(element) => {
-                              if (element) recoveryActionRefs.current.set(recovery.token, element);
-                              else recoveryActionRefs.current.delete(recovery.token);
-                            }}
-                            disabled={busy !== undefined}
-                            onClick={() => void moveRecoveryToTrash(recovery)}
-                            data-testid={`skill-recovery-trash-${recovery.skillName}`}
-                          >
-                            Move to Trash
-                          </ControlButton>
-                          <ControlButton
-                            ref={(element) => {
-                              const key = `${recovery.token}:restore`;
-                              if (element) recoveryActionRefs.current.set(key, element);
-                              else recoveryActionRefs.current.delete(key);
-                            }}
-                            disabled={busy !== undefined}
-                            onClick={() => void restoreRecovery(recovery)}
-                            data-testid={`skill-recovery-restore-${recovery.skillName}`}
-                          >
-                            {busy === "restore" ? "Restoring…" : "Restore"}
-                          </ControlButton>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-            {repos.length > 0 ? (
-              <div className="space-y-1" data-testid="skill-repos">
-                <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
-                  Imported repositories
-                </div>
-                {repos.map((repo) => (
-                  <div key={repo.id}>
-                    <div
-                      data-testid={`skill-repo-${repo.id}`}
-                      className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
-                      aria-busy={repoBusy[repo.id] !== undefined}
-                    >
-                      <GitBranch size={12} className="shrink-0 text-text-secondary" />
-                      <span
-                        className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
-                        title={repo.remoteUrl}
-                      >
-                        {repoLabel(repo)}
-                      </span>
-                      {repo.ref ? (
-                        <span
-                          className="max-w-24 shrink-0 truncate font-mono text-micro text-text-muted"
-                          title={repo.ref}
-                        >
-                          @{repo.ref}
-                        </span>
-                      ) : null}
-                      {repo.subdir ? (
-                        <span
-                          className="max-w-32 shrink-0 truncate font-mono text-micro text-text-muted"
-                          title={repo.subdir}
-                        >
-                          /{repo.subdir}
-                        </span>
-                      ) : null}
-                      {repo.available === false ? (
-                        <span
-                          data-testid={`skill-repo-unavailable-${repo.id}`}
-                          className="rounded-capsule border border-warning/55 bg-warning/10 px-1.5 py-0.5 text-micro font-medium text-warning"
-                        >
-                          Unavailable
-                        </span>
-                      ) : null}
-                      {repo.available !== false && updatable.has(repo.id) ? (
-                        <span
-                          data-testid={`skill-repo-updatable-${repo.id}`}
-                          className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
-                          style={{
-                            background: "var(--color-selection-fill)",
-                            color: "var(--color-brand-accent)",
-                          }}
-                        >
-                          Update available
-                        </span>
-                      ) : null}
-                      <ControlButton
-                        data-testid={`skill-repo-add-${repo.id}`}
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                        title="Preview this repository and add more of its skills to the collection"
-                        disabled={
-                          !repo.remoteUrl ||
-                          repo.available === false ||
-                          repoBusy[repo.id] !== undefined
-                        }
-                        onClick={() =>
-                          void doGitInspect({
-                            url: repo.remoteUrl,
-                            ref: repo.ref,
-                            subdir: repo.subdir,
-                          })
-                        }
-                      >
-                        Add skills
-                      </ControlButton>
-                      <ControlButton
-                        ref={(element) => {
-                          if (element) repoUpdateRefs.current.set(repo.id, element);
-                          else repoUpdateRefs.current.delete(repo.id);
-                        }}
-                        data-testid={`skill-repo-update-${repo.id}`}
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                        disabled={repo.available === false || repoBusy[repo.id] !== undefined}
-                        onClick={() => void updateRepo(repo.id)}
-                      >
-                        {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
-                      </ControlButton>
-                      <ControlButton
-                        data-testid={`skill-repo-forget-${repo.id}`}
-                        className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
-                        title={
-                          repo.storageMode === "collection-v1"
-                            ? "Forget this repository and remove its managed skill collection"
-                            : "Forget this repository (keeps the imported skills)"
-                        }
-                        aria-label={
-                          repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
-                        }
-                        disabled={repo.available === false || repoBusy[repo.id] !== undefined}
-                        onClick={() => void forgetRepo(repo.id)}
-                      >
-                        <X size={12} />
-                      </ControlButton>
-                      {repo.available === false ? (
-                        <ControlButton
-                          ref={(element) => {
-                            if (element) repoRemoveRecordRefs.current.set(repo.id, element);
-                            else repoRemoveRecordRefs.current.delete(repo.id);
-                          }}
-                          data-testid={`skill-repo-remove-record-${repo.id}`}
-                          className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
-                          disabled={repoBusy[repo.id] !== undefined}
-                          onClick={() => void removeUnavailableRecord(repo)}
-                        >
-                          {repoBusy[repo.id] === "remove-record"
-                            ? "Removing…"
-                            : "Remove record only"}
-                        </ControlButton>
-                      ) : null}
-                    </div>
-                    {repo.available === false ? (
-                      <div
-                        data-testid={`skill-repo-unavailable-guidance-${repo.id}`}
-                        className="px-2.5 py-1 text-micro text-text-muted"
-                        role="status"
-                      >
-                        Restore the original managed repository folder, then restart Agent Deck to
-                        recover it. “Remove record only” leaves all clone files untouched.
-                      </div>
-                    ) : null}
-                    {(conflicts[repo.id] ?? []).length > 0 ? (
-                      <div
-                        data-testid={`skill-repo-conflicts-${repo.id}`}
-                        className="mt-1 space-y-1 rounded-lg border border-warning bg-surface px-2.5 py-1.5"
-                      >
-                        <div className="text-micro text-text-muted" role="status">
-                          Non-overlapping changes were merged. Review overlapping paths; Keep Mine
-                          is the default.
-                        </div>
-                        {conflicts[repo.id]!.map((conflict) => {
-                          const key = `${repo.id}\0${conflict.mergeId}`;
-                          const conflictBusy = resolvingConflicts[key] !== undefined;
-                          return (
-                            <div
-                              key={conflict.mergeId}
-                              className="space-y-1"
-                              aria-busy={conflictBusy}
-                            >
-                              <div
-                                className="truncate font-mono text-detail text-text-primary"
-                                title={conflict.name}
-                              >
-                                {conflict.name}
-                              </div>
-                              <div
-                                className="max-h-40 space-y-1 overflow-auto"
-                                role="group"
-                                aria-label={`Conflicting paths for ${conflict.name}`}
-                              >
-                                {conflict.paths.map((item) => {
-                                  const choiceKey = `${key}\0${item.path}`;
-                                  const choice = conflictChoices[choiceKey] ?? "mine";
-                                  return (
-                                    <fieldset
-                                      key={item.path}
-                                      className="flex min-w-0 items-center gap-2 text-micro"
-                                      disabled={conflictBusy}
-                                    >
-                                      <legend className="sr-only">
-                                        Resolution for {item.path}
-                                      </legend>
-                                      <span
-                                        className="min-w-0 flex-1 truncate font-mono"
-                                        title={item.path}
-                                      >
-                                        {item.path}
-                                      </span>
-                                      <span className="text-text-muted">
-                                        {item.local} → {item.remote}
-                                      </span>
-                                      {(["mine", "remote"] as const).map((value) => (
-                                        <label
-                                          key={value}
-                                          className="flex items-center gap-1 whitespace-nowrap"
-                                        >
-                                          <ControlInput
-                                            type="radio"
-                                            name={choiceKey}
-                                            checked={choice === value}
-                                            aria-label={`${value === "mine" ? "Keep Mine" : "Take Remote"} for ${item.path}`}
-                                            onChange={() =>
-                                              setConflictChoices((current) => ({
-                                                ...current,
-                                                [choiceKey]: value,
-                                              }))
-                                            }
-                                          />
-                                          {value === "mine" ? "Keep Mine" : "Take Remote"}
-                                        </label>
-                                      ))}
-                                    </fieldset>
-                                  );
-                                })}
-                              </div>
-                              {staleConflicts[key] ? (
-                                <ControlButton
-                                  data-testid={`skill-conflict-refresh-${repo.id}-${conflict.name}`}
-                                  disabled={conflictBusy}
-                                  onClick={() => void refreshConflict(repo.id, conflict)}
-                                >
-                                  {resolvingConflicts[key] === "refresh"
-                                    ? "Refreshing…"
-                                    : "Refresh review"}
-                                </ControlButton>
-                              ) : null}
-                              <ControlButton
-                                ref={(element) => {
-                                  if (element) conflictActionRefs.current.set(key, element);
-                                  else conflictActionRefs.current.delete(key);
-                                }}
-                                data-conflict-primary="true"
-                                data-testid={`skill-conflict-apply-${repo.id}-${conflict.name}`}
-                                className="sticky bottom-0 rounded-capsule border border-border-strong bg-surface px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                                disabled={conflictBusy}
-                                onClick={() => void resolveConflict(repo.id, conflict)}
-                              >
-                                {conflictBusy ? "Applying…" : "Apply choices"}
-                              </ControlButton>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="sr-only" role="status" aria-live="polite" data-testid="skill-merge-status">
-          {mergeAnnouncement}
-        </div>
-        {checkedSkills.length > 0 ? (
-          <div
-            className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border-strong bg-surface-elevated px-2.5 py-1.5 text-xs"
-            data-testid="skills-bulk-bar"
-          >
-            <span className="flex-1 text-text-secondary">{checkedSkills.length} selected</span>
-            <ControlButton
-              data-testid="skills-bulk-clear"
-              className="rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary"
-              onClick={() => setChecked(new Set())}
-            >
-              Clear
+              <Plus size={15} />
             </ControlButton>
             <ControlButton
-              data-testid="skills-bulk-delete"
-              className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-text-muted hover:text-danger"
-              onClick={() => {
-                const n = checkedSkills.length;
-                if (confirm(`Delete ${n} skill${n === 1 ? "" : "s"}? This removes their files.`)) {
-                  void bulkDelete();
-                }
-              }}
+              data-testid="skill-import"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
+              title="Import skills from a local folder or .md file"
+              onClick={() => void doLocalFolderImport()}
             >
-              <Trash2 size={12} /> Delete
+              <FolderInput size={15} />
+            </ControlButton>
+            <ControlButton
+              data-testid="skill-scan-known"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
+              title="Scan Claude and Codex skill folders"
+              onClick={() => void doKnownScan()}
+            >
+              <FolderSearch size={15} />
+            </ControlButton>
+            <ControlButton
+              data-testid="skill-import-git"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
+              title="Import skills from a git repository"
+              onClick={() => setGitUrl((v) => (v === null ? "" : null))}
+            >
+              <GitBranch size={15} />
             </ControlButton>
           </div>
-        ) : null}
-        <div
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4"
-          role="listbox"
-          aria-label="Skills"
-        >
-          {visible.map((skill) => {
-            const isSelected = selected?.filePath === skill.filePath;
-            const isAssigned = assignedNames.has(skill.name);
-            return (
-              <div
-                key={skill.filePath}
-                className={cn(
-                  "group flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
-                  isSelected
-                    ? "border-selection-stroke bg-selection"
-                    : "border-transparent hover:bg-hover",
-                  skill.disabled && "opacity-60 saturate-50",
-                )}
-                data-testid="skill-row"
-                data-skill-name={skill.name}
-                role="option"
-                aria-selected={isSelected}
-                tabIndex={0}
-                onClick={() => selectSkill(skill.filePath)}
+          {importPath !== null ? (
+            <div className="mx-3 mb-2 flex gap-2">
+              <ControlInput
+                autoFocus
+                data-testid="skill-import-path"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                placeholder="/path/to/skill.md"
+                value={importPath}
+                onChange={(event) => setImportPath(event.target.value)}
                 onKeyDown={(event) => {
-                  // Ignore keys bubbled from the checkbox (its own Space toggles
-                  // it) — only the row's own Enter/Space opens the detail.
-                  if (event.target !== event.currentTarget) return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    selectSkill(skill.filePath);
+                  if (event.key === "Enter") void doImport();
+                  if (event.key === "Escape") setImportPath(null);
+                }}
+              />
+              <ControlButton
+                data-testid="skill-import-confirm"
+                className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                disabled={!importPath.trim()}
+                onClick={() => void doImport()}
+              >
+                Import
+              </ControlButton>
+            </div>
+          ) : null}
+          {gitUrl !== null ? (
+            <div className="mx-3 mb-2 flex gap-2">
+              <ControlInput
+                autoFocus
+                data-testid="skill-import-git-url"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                placeholder="owner/repo, skills.sh/…, or a git URL"
+                value={gitUrl}
+                onChange={(event) => setGitUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void doGitInspect();
+                  if (event.key === "Escape") {
+                    inspectSeq.current++; // an in-flight preview must not reopen a dismissed row
+                    setGitUrl(null);
                   }
                 }}
+              />
+              <ControlButton
+                data-testid="skill-import-git-confirm"
+                className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                disabled={!gitUrl.trim() || gitImporting}
+                onClick={() => void doGitInspect()}
               >
-                {!isReadOnlyScope(skill.scope) ? (
-                  <ControlInput
-                    type="checkbox"
-                    data-testid={`skill-check-${skill.name}`}
-                    aria-label={`Select ${skill.name}`}
-                    className="shrink-0 accent-[var(--color-brand-accent)]"
-                    checked={checked.has(skill.filePath)}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={() => toggleCheck(skill.filePath)}
-                  />
-                ) : null}
-                <WandSparkles
-                  size={17}
-                  className="shrink-0"
-                  style={{
-                    color: isAssigned ? "var(--color-source-project)" : "var(--color-text-muted)",
-                  }}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="truncate text-sm font-semibold text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
-                      {skill.name}
-                    </span>
-                    <ScopeChip scope={skill.scope} />
-                    {skill.disabled ? (
-                      <span
-                        className="rounded-capsule border px-1.5 text-micro"
-                        style={{
-                          color: "var(--color-text-muted)",
-                          borderColor: "var(--color-border-strong)",
-                        }}
-                        data-testid="skill-disabled-badge"
-                      >
-                        disabled
-                      </span>
-                    ) : null}
+                {gitImporting ? "Fetching…" : "Preview"}
+              </ControlButton>
+            </div>
+          ) : null}
+          {compare ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+              <div
+                data-testid="skill-compare-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Compare copies of ${compare.left.name}`}
+                tabIndex={-1}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setCompare(null);
+                }}
+                className="flex max-h-[85vh] w-[900px] max-w-full flex-col rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
+              >
+                <div className="border-b border-border-subtle px-5 py-4">
+                  <div className="text-sm font-semibold text-text-primary">Compare skills</div>
+                  <div className="text-xs text-text-muted">
+                    Review both copies of &quot;{compare.left.name}&quot; before choosing which one
+                    to keep.
                   </div>
-                  <div className="truncate text-xs text-text-secondary">{skill.description}</div>
-                  {isReadOnlyScope(skill.scope) ? (
-                    <div
-                      className="truncate font-mono text-micro text-text-muted"
-                      title={skill.filePath}
-                      data-testid={`skill-source-${skill.name}`}
-                    >
-                      {skill.filePath}
+                </div>
+                <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border-subtle">
+                  {[compare.left, compare.right].map((side) => (
+                    <div key={side.filePath} className="flex min-h-0 min-w-0 flex-col">
+                      <div className="border-b border-border-subtle px-4 py-2">
+                        <div
+                          className="truncate font-mono text-micro text-text-secondary"
+                          title={side.filePath}
+                        >
+                          {side.filePath}
+                        </div>
+                        <ScopeChip scope={side.scope} />
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                        <MarkdownDocument source={side.body || "_(empty)_"} />
+                      </div>
                     </div>
-                  ) : null}
-                  {(() => {
-                    // SKL-12: native's synced-repository binding, inline on the row
-                    const repo = collectionFor(skill);
-                    if (!repo) return null;
+                  ))}
+                </div>
+                <div className="flex justify-end border-t border-border-subtle px-5 py-3">
+                  <ControlButton
+                    data-testid="skill-compare-done"
+                    className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary"
+                    onClick={() => setCompare(null)}
+                  >
+                    Done
+                  </ControlButton>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {gitPreview ? (
+            <SkillImportPreviewDialog
+              sourceLabel={gitPreview.url}
+              sourceKind="git"
+              skills={gitPreview.skills}
+              defaultSelected={gitPreview.defaultSelected}
+              onImport={confirmGitImport}
+              onCancel={cancelGitPreview}
+            />
+          ) : null}
+          {localPreview ? (
+            <SkillImportPreviewDialog
+              sourceLabel={localPreview.path}
+              sourceKind="local"
+              skills={localPreview.skills}
+              onImport={confirmLocalImport}
+              onCancel={() => setLocalPreview(null)}
+            />
+          ) : null}
+          {knownPreview ? (
+            <SkillImportPreviewDialog
+              sourceLabel={
+                knownPreview.failures.length > 0
+                  ? `Claude & Codex folders · couldn't read: ${knownPreview.failures.join(", ")}`
+                  : "Claude & Codex folders"
+              }
+              sourceKind="known"
+              skills={knownPreview.items}
+              defaultSelected={knownPreview.defaultSelected}
+              onImport={confirmKnownImport}
+              onCancel={() => setKnownPreview(null)}
+            />
+          ) : null}
+          {packageWarnings.length > 0 ? (
+            <div
+              data-testid="skill-package-warnings"
+              className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+              role="status"
+            >
+              {packageWarnings.map((warning) => (
+                <div key={warning} className="truncate" title={warning}>
+                  {warning}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {pluginRefs.length > 0 ? (
+            <div
+              data-testid="skill-plugin-refs"
+              className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+            >
+              <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                Codex plugin references
+              </div>
+              {pluginRefs.map((ref) => {
+                const key = `${ref.marketplace}::${ref.plugin}::${ref.relPath}`;
+                return (
+                  <div key={key} className="flex items-center justify-between gap-2">
+                    <span className="truncate" title={key}>
+                      {ref.plugin} · {ref.relPath}{" "}
+                      <span className="text-text-muted">({ref.marketplace})</span>
+                    </span>
+                    <ControlButton
+                      data-testid={`skill-plugin-ref-remove-${key}`}
+                      className="rounded-capsule border border-border-strong px-2 text-micro text-text-secondary hover:text-text-primary"
+                      onClick={() => void removePluginRef(ref)}
+                    >
+                      Remove
+                    </ControlButton>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          <div
+            data-testid="skill-repo-record-removal-status"
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {repoRecordRemovalAnnouncement}
+          </div>
+          <div className="sr-only" role="status" aria-live="polite">
+            {recoveryAnnouncement}
+          </div>
+          {recoveries.length > 0 || repos.length > 0 ? (
+            <div
+              data-testid="skill-management-panels"
+              className="mx-3 mb-2 max-h-[min(36vh,20rem)] min-h-0 shrink-0 space-y-2 overflow-y-auto overscroll-contain"
+            >
+              {recoveries.length > 0 ? (
+                <div className="space-y-1" data-testid="skill-recoveries">
+                  <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                    Safe recovery
+                  </div>
+                  {recoveries.map((recovery) => {
+                    const busy = recoveryBusy[recovery.token];
                     return (
                       <div
-                        className="flex min-w-0 items-center gap-1.5 truncate text-micro text-text-muted"
-                        data-testid={`skill-collection-${skill.name}`}
-                        title={repo.remoteUrl}
+                        key={recovery.token}
+                        className="rounded-lg border border-warning bg-surface px-2.5 py-2"
+                        aria-busy={busy !== undefined}
+                        data-testid={`skill-recovery-${recovery.skillName}`}
                       >
-                        <span className="truncate">Synced · {repoLabel(repo)}</span>
+                        <div className="font-mono text-detail text-text-primary">
+                          {recovery.skillName}
+                        </div>
+                        <p className="text-micro text-text-muted">
+                          {busy === "trash"
+                            ? "This completed-update backup is being moved to OS Trash automatically."
+                            : "A displaced or interrupted tree was retained safely. Restore is available only while the active skill is absent, or move this retained tree to OS Trash."}
+                        </p>
+                        {busy === "trash" ? null : (
+                          <div className="mt-1 flex gap-1">
+                            <ControlButton
+                              ref={(element) => {
+                                if (element)
+                                  recoveryActionRefs.current.set(recovery.token, element);
+                                else recoveryActionRefs.current.delete(recovery.token);
+                              }}
+                              disabled={busy !== undefined}
+                              onClick={() => void moveRecoveryToTrash(recovery)}
+                              data-testid={`skill-recovery-trash-${recovery.skillName}`}
+                            >
+                              Move to Trash
+                            </ControlButton>
+                            <ControlButton
+                              ref={(element) => {
+                                const key = `${recovery.token}:restore`;
+                                if (element) recoveryActionRefs.current.set(key, element);
+                                else recoveryActionRefs.current.delete(key);
+                              }}
+                              disabled={busy !== undefined}
+                              onClick={() => void restoreRecovery(recovery)}
+                              data-testid={`skill-recovery-restore-${recovery.skillName}`}
+                            >
+                              {busy === "restore" ? "Restoring…" : "Restore"}
+                            </ControlButton>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {repos.length > 0 ? (
+                <div className="space-y-1" data-testid="skill-repos">
+                  <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                    Imported repositories
+                  </div>
+                  {repos.map((repo) => (
+                    <div key={repo.id}>
+                      <div
+                        data-testid={`skill-repo-${repo.id}`}
+                        className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
+                        aria-busy={repoBusy[repo.id] !== undefined}
+                      >
+                        <GitBranch size={12} className="shrink-0 text-text-secondary" />
+                        <span
+                          className="min-w-0 flex-1 truncate font-mono text-detail text-text-primary"
+                          title={repo.remoteUrl}
+                        >
+                          {repoLabel(repo)}
+                        </span>
+                        {repo.ref ? (
+                          <span
+                            className="max-w-24 shrink-0 truncate font-mono text-micro text-text-muted"
+                            title={repo.ref}
+                          >
+                            @{repo.ref}
+                          </span>
+                        ) : null}
+                        {repo.subdir ? (
+                          <span
+                            className="max-w-32 shrink-0 truncate font-mono text-micro text-text-muted"
+                            title={repo.subdir}
+                          >
+                            /{repo.subdir}
+                          </span>
+                        ) : null}
+                        {repo.available === false ? (
+                          <span
+                            data-testid={`skill-repo-unavailable-${repo.id}`}
+                            className="rounded-capsule border border-warning/55 bg-warning/10 px-1.5 py-0.5 text-micro font-medium text-warning"
+                          >
+                            Unavailable
+                          </span>
+                        ) : null}
                         {repo.available !== false && updatable.has(repo.id) ? (
                           <span
-                            data-testid={`skill-collection-update-${skill.name}`}
-                            className="shrink-0 rounded-capsule px-1.5 text-micro font-medium"
+                            data-testid={`skill-repo-updatable-${repo.id}`}
+                            className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
                             style={{
                               background: "var(--color-selection-fill)",
                               color: "var(--color-brand-accent)",
@@ -2223,307 +1906,639 @@ export function SkillsScreen() {
                             Update available
                           </span>
                         ) : null}
+                        <ControlButton
+                          data-testid={`skill-repo-add-${repo.id}`}
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                          title="Preview this repository and add more of its skills to the collection"
+                          disabled={
+                            !repo.remoteUrl ||
+                            repo.available === false ||
+                            repoBusy[repo.id] !== undefined
+                          }
+                          onClick={() =>
+                            void doGitInspect({
+                              url: repo.remoteUrl,
+                              ref: repo.ref,
+                              subdir: repo.subdir,
+                            })
+                          }
+                        >
+                          Add skills
+                        </ControlButton>
+                        <ControlButton
+                          ref={(element) => {
+                            if (element) repoUpdateRefs.current.set(repo.id, element);
+                            else repoUpdateRefs.current.delete(repo.id);
+                          }}
+                          data-testid={`skill-repo-update-${repo.id}`}
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                          disabled={repo.available === false || repoBusy[repo.id] !== undefined}
+                          onClick={() => void updateRepo(repo.id)}
+                        >
+                          {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
+                        </ControlButton>
+                        <ControlButton
+                          data-testid={`skill-repo-forget-${repo.id}`}
+                          className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
+                          title={
+                            repo.storageMode === "collection-v1"
+                              ? "Forget this repository and remove its managed skill collection"
+                              : "Forget this repository (keeps the imported skills)"
+                          }
+                          aria-label={
+                            repoBusy[repo.id] === "forget" ? "Forgetting…" : "Forget repository"
+                          }
+                          disabled={repo.available === false || repoBusy[repo.id] !== undefined}
+                          onClick={() => void forgetRepo(repo.id)}
+                        >
+                          <X size={12} />
+                        </ControlButton>
+                        {repo.available === false ? (
+                          <ControlButton
+                            ref={(element) => {
+                              if (element) repoRemoveRecordRefs.current.set(repo.id, element);
+                              else repoRemoveRecordRefs.current.delete(repo.id);
+                            }}
+                            data-testid={`skill-repo-remove-record-${repo.id}`}
+                            className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
+                            disabled={repoBusy[repo.id] !== undefined}
+                            onClick={() => void removeUnavailableRecord(repo)}
+                          >
+                            {repoBusy[repo.id] === "remove-record"
+                              ? "Removing…"
+                              : "Remove record only"}
+                          </ControlButton>
+                        ) : null}
                       </div>
-                    );
-                  })()}
+                      {repo.available === false ? (
+                        <div
+                          data-testid={`skill-repo-unavailable-guidance-${repo.id}`}
+                          className="px-2.5 py-1 text-micro text-text-muted"
+                          role="status"
+                        >
+                          Restore the original managed repository folder, then restart Agent Deck to
+                          recover it. “Remove record only” leaves all clone files untouched.
+                        </div>
+                      ) : null}
+                      {(conflicts[repo.id] ?? []).length > 0 ? (
+                        <div
+                          data-testid={`skill-repo-conflicts-${repo.id}`}
+                          className="mt-1 space-y-1 rounded-lg border border-warning bg-surface px-2.5 py-1.5"
+                        >
+                          <div className="text-micro text-text-muted" role="status">
+                            Non-overlapping changes were merged. Review overlapping paths; Keep Mine
+                            is the default.
+                          </div>
+                          {conflicts[repo.id]!.map((conflict) => {
+                            const key = `${repo.id}\0${conflict.mergeId}`;
+                            const conflictBusy = resolvingConflicts[key] !== undefined;
+                            return (
+                              <div
+                                key={conflict.mergeId}
+                                className="space-y-1"
+                                aria-busy={conflictBusy}
+                              >
+                                <div
+                                  className="truncate font-mono text-detail text-text-primary"
+                                  title={conflict.name}
+                                >
+                                  {conflict.name}
+                                </div>
+                                <div
+                                  className="max-h-40 space-y-1 overflow-auto"
+                                  role="group"
+                                  aria-label={`Conflicting paths for ${conflict.name}`}
+                                >
+                                  {conflict.paths.map((item) => {
+                                    const choiceKey = `${key}\0${item.path}`;
+                                    const choice = conflictChoices[choiceKey] ?? "mine";
+                                    return (
+                                      <fieldset
+                                        key={item.path}
+                                        className="flex min-w-0 items-center gap-2 text-micro"
+                                        disabled={conflictBusy}
+                                      >
+                                        <legend className="sr-only">
+                                          Resolution for {item.path}
+                                        </legend>
+                                        <span
+                                          className="min-w-0 flex-1 truncate font-mono"
+                                          title={item.path}
+                                        >
+                                          {item.path}
+                                        </span>
+                                        <span className="text-text-muted">
+                                          {item.local} → {item.remote}
+                                        </span>
+                                        {(["mine", "remote"] as const).map((value) => (
+                                          <label
+                                            key={value}
+                                            className="flex items-center gap-1 whitespace-nowrap"
+                                          >
+                                            <ControlInput
+                                              type="radio"
+                                              name={choiceKey}
+                                              checked={choice === value}
+                                              aria-label={`${value === "mine" ? "Keep Mine" : "Take Remote"} for ${item.path}`}
+                                              onChange={() =>
+                                                setConflictChoices((current) => ({
+                                                  ...current,
+                                                  [choiceKey]: value,
+                                                }))
+                                              }
+                                            />
+                                            {value === "mine" ? "Keep Mine" : "Take Remote"}
+                                          </label>
+                                        ))}
+                                      </fieldset>
+                                    );
+                                  })}
+                                </div>
+                                {staleConflicts[key] ? (
+                                  <ControlButton
+                                    data-testid={`skill-conflict-refresh-${repo.id}-${conflict.name}`}
+                                    disabled={conflictBusy}
+                                    onClick={() => void refreshConflict(repo.id, conflict)}
+                                  >
+                                    {resolvingConflicts[key] === "refresh"
+                                      ? "Refreshing…"
+                                      : "Refresh review"}
+                                  </ControlButton>
+                                ) : null}
+                                <ControlButton
+                                  ref={(element) => {
+                                    if (element) conflictActionRefs.current.set(key, element);
+                                    else conflictActionRefs.current.delete(key);
+                                  }}
+                                  data-conflict-primary="true"
+                                  data-testid={`skill-conflict-apply-${repo.id}-${conflict.name}`}
+                                  className="sticky bottom-0 rounded-capsule border border-border-strong bg-surface px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                                  disabled={conflictBusy}
+                                  onClick={() => void resolveConflict(repo.id, conflict)}
+                                >
+                                  {conflictBusy ? "Applying…" : "Apply choices"}
+                                </ControlButton>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
-                {!isReadOnlyScope(skill.scope) ? (
-                  <ControlButton
-                    className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      selectSkill(skill.filePath);
-                      setEditing(editDraft(skill));
-                    }}
-                  >
-                    Edit
-                  </ControlButton>
-                ) : null}
-              </div>
-            );
-          })}
-          {visible.length === 0 ? (
-            <div className="mt-8 text-center text-sm text-text-muted">
-              No skills found in ~/.pi/agent/skills or this project's .pi/skills.
+              ) : null}
             </div>
           ) : null}
-        </div>
-      </div>
-
-      {/* Detail pane */}
-      {selected ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="skill-detail">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-source-project-stroke bg-source-project-subtle text-source-project">
-              <WandSparkles size={17} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                {renameValue !== null ? (
-                  <>
+          <div
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            data-testid="skill-merge-status"
+          >
+            {mergeAnnouncement}
+          </div>
+          {checkedSkills.length > 0 ? (
+            <div
+              className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border-strong bg-surface-elevated px-2.5 py-1.5 text-xs"
+              data-testid="skills-bulk-bar"
+            >
+              <span className="flex-1 text-text-secondary">{checkedSkills.length} selected</span>
+              <ControlButton
+                data-testid="skills-bulk-clear"
+                className="rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary"
+                onClick={() => setChecked(new Set())}
+              >
+                Clear
+              </ControlButton>
+              <ControlButton
+                data-testid="skills-bulk-delete"
+                className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-text-muted hover:text-danger"
+                onClick={() => {
+                  const n = checkedSkills.length;
+                  if (
+                    confirm(`Delete ${n} skill${n === 1 ? "" : "s"}? This removes their files.`)
+                  ) {
+                    void bulkDelete();
+                  }
+                }}
+              >
+                <Trash2 size={12} /> Delete
+              </ControlButton>
+            </div>
+          ) : null}
+          <div
+            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4"
+            role="listbox"
+            aria-label="Skills"
+          >
+            {visible.map((skill) => {
+              const isSelected = selected?.filePath === skill.filePath;
+              const isAssigned = assignedNames.has(skill.name);
+              return (
+                <div
+                  key={skill.filePath}
+                  className={cn(
+                    "group flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus",
+                    isSelected
+                      ? "border-selection-stroke bg-selection"
+                      : "border-transparent hover:bg-hover",
+                    skill.disabled && "opacity-60 saturate-50",
+                  )}
+                  data-testid="skill-row"
+                  data-skill-name={skill.name}
+                  role="option"
+                  aria-selected={isSelected}
+                  tabIndex={0}
+                  onClick={() => selectSkill(skill.filePath)}
+                  onKeyDown={(event) => {
+                    // Ignore keys bubbled from the checkbox (its own Space toggles
+                    // it) — only the row's own Enter/Space opens the detail.
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      selectSkill(skill.filePath);
+                    }
+                  }}
+                >
+                  {!isReadOnlyScope(skill.scope) ? (
                     <ControlInput
-                      autoFocus
-                      data-testid="skill-rename-input"
-                      className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-lg font-bold text-text-primary outline-none focus:border-accent"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void submitRename(selected);
-                        if (e.key === "Escape") setRenameValue(null);
-                      }}
+                      type="checkbox"
+                      data-testid={`skill-check-${skill.name}`}
+                      aria-label={`Select ${skill.name}`}
+                      className="shrink-0 accent-[var(--color-brand-accent)]"
+                      checked={checked.has(skill.filePath)}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => toggleCheck(skill.filePath)}
                     />
+                  ) : null}
+                  <WandSparkles
+                    size={17}
+                    className="shrink-0"
+                    style={{
+                      color: isAssigned ? "var(--color-source-project)" : "var(--color-text-muted)",
+                    }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="truncate text-sm font-semibold text-text-primary"
+                        style={{ fontStretch: "expanded" }}
+                      >
+                        {skill.name}
+                      </span>
+                      <ScopeChip scope={skill.scope} />
+                      {skill.disabled ? (
+                        <span
+                          className="rounded-capsule border px-1.5 text-micro"
+                          style={{
+                            color: "var(--color-text-muted)",
+                            borderColor: "var(--color-border-strong)",
+                          }}
+                          data-testid="skill-disabled-badge"
+                        >
+                          disabled
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="truncate text-xs text-text-secondary">{skill.description}</div>
+                    {isReadOnlyScope(skill.scope) ? (
+                      <div
+                        className="truncate font-mono text-micro text-text-muted"
+                        title={skill.filePath}
+                        data-testid={`skill-source-${skill.name}`}
+                      >
+                        {skill.filePath}
+                      </div>
+                    ) : null}
+                    {(() => {
+                      // SKL-12: native's synced-repository binding, inline on the row
+                      const repo = collectionFor(skill);
+                      if (!repo) return null;
+                      return (
+                        <div
+                          className="flex min-w-0 items-center gap-1.5 truncate text-micro text-text-muted"
+                          data-testid={`skill-collection-${skill.name}`}
+                          title={repo.remoteUrl}
+                        >
+                          <span className="truncate">Synced · {repoLabel(repo)}</span>
+                          {repo.available !== false && updatable.has(repo.id) ? (
+                            <span
+                              data-testid={`skill-collection-update-${skill.name}`}
+                              className="shrink-0 rounded-capsule px-1.5 text-micro font-medium"
+                              style={{
+                                background: "var(--color-selection-fill)",
+                                color: "var(--color-brand-accent)",
+                              }}
+                            >
+                              Update available
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {!isReadOnlyScope(skill.scope) ? (
                     <ControlButton
-                      data-testid="skill-rename-confirm"
-                      className="rounded p-1 text-text-muted hover:text-accent"
-                      title="Rename"
-                      onClick={() => void submitRename(selected)}
+                      className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        selectSkill(skill.filePath);
+                        setEditing(editDraft(skill));
+                      }}
                     >
-                      <Check size={16} />
+                      Edit
                     </ControlButton>
-                    <ControlButton
-                      data-testid="skill-rename-cancel"
-                      className="rounded p-1 text-text-muted hover:text-text-primary"
-                      title="Cancel"
-                      onClick={() => setRenameValue(null)}
-                    >
-                      <X size={16} />
-                    </ControlButton>
-                  </>
-                ) : (
-                  <h2
-                    className="truncate text-xl font-bold text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
-                    {selected.name}
-                  </h2>
-                )}
-                <ScopeChip scope={selected.scope} />
-                {selected.disableModelInvocation ? (
-                  <span
-                    data-testid="skill-manual-only-badge"
-                    className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                    title="disable-model-invocation is set: the model won't auto-invoke this skill. It's only used when invoked explicitly (e.g. via the composer's / menu)."
-                  >
-                    manual only
-                  </span>
-                ) : null}
+                  ) : null}
+                </div>
+              );
+            })}
+            {visible.length === 0 ? (
+              <div className="mt-8 text-center text-sm text-text-muted">
+                No skills found in ~/.pi/agent/skills or this project's .pi/skills.
               </div>
-              <p className="mt-0.5 text-sm text-text-secondary">{selected.description}</p>
-              {/* How pi invokes this skill explicitly (agent-session _expandSkillCommand
+            ) : null}
+          </div>
+        </div>
+
+        {/* Detail pane */}
+        {selected ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="skill-detail">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-source-project-stroke bg-source-project-subtle text-source-project">
+                <WandSparkles size={17} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  {renameValue !== null ? (
+                    <>
+                      <ControlInput
+                        autoFocus
+                        data-testid="skill-rename-input"
+                        className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-lg font-bold text-text-primary outline-none focus:border-accent"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void submitRename(selected);
+                          if (e.key === "Escape") setRenameValue(null);
+                        }}
+                      />
+                      <ControlButton
+                        data-testid="skill-rename-confirm"
+                        className="rounded p-1 text-text-muted hover:text-accent"
+                        title="Rename"
+                        onClick={() => void submitRename(selected)}
+                      >
+                        <Check size={16} />
+                      </ControlButton>
+                      <ControlButton
+                        data-testid="skill-rename-cancel"
+                        className="rounded p-1 text-text-muted hover:text-text-primary"
+                        title="Cancel"
+                        onClick={() => setRenameValue(null)}
+                      >
+                        <X size={16} />
+                      </ControlButton>
+                    </>
+                  ) : (
+                    <h2
+                      className="truncate text-xl font-bold text-text-primary"
+                      style={{ fontStretch: "expanded" }}
+                    >
+                      {selected.name}
+                    </h2>
+                  )}
+                  <ScopeChip scope={selected.scope} />
+                  {selected.disableModelInvocation ? (
+                    <span
+                      data-testid="skill-manual-only-badge"
+                      className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                      title="disable-model-invocation is set: the model won't auto-invoke this skill. It's only used when invoked explicitly (e.g. via the composer's / menu)."
+                    >
+                      manual only
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 text-sm text-text-secondary">{selected.description}</p>
+                {/* How pi invokes this skill explicitly (agent-session _expandSkillCommand
                   matches `/skill:<name>`, where name is pi's resolved skill name —
                   frontmatter `name` or the directory basename — which is exactly
                   SkillInfo.name). Distinct from prompts' `/name` form. Only shown
                   for a pi-valid name (isValidSkillCommandName) so the displayed
                   command always resolves; pi warns on — but still loads — names
                   it considers invalid, which wouldn't invoke as typed. */}
-              {isValidSkillCommandName(selected.name) ? (
-                <code
-                  data-testid="skill-invocation"
-                  className="mt-1 inline-block font-mono text-xs text-text-muted"
-                >
-                  /skill:{selected.name}
-                </code>
-              ) : null}
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {!isReadOnlyScope(selected.scope) ? (
+                {isValidSkillCommandName(selected.name) ? (
+                  <code
+                    data-testid="skill-invocation"
+                    className="mt-1 inline-block font-mono text-xs text-text-muted"
+                  >
+                    /skill:{selected.name}
+                  </code>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {!isReadOnlyScope(selected.scope) ? (
+                  <ControlButton
+                    data-testid="skill-rename"
+                    className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                    onClick={() => setRenameValue(selected.name)}
+                  >
+                    <Tag size={12} />
+                    Rename
+                  </ControlButton>
+                ) : null}
                 <ControlButton
-                  data-testid="skill-rename"
+                  data-testid="skill-disable"
                   className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                  onClick={() => setRenameValue(selected.name)}
+                  onClick={() => void setSkillDisabled(selected.name, !selected.disabled)}
                 >
-                  <Tag size={12} />
-                  Rename
+                  {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
+                  {selected.disabled ? "Enable" : "Disable"}
                 </ControlButton>
-              ) : null}
-              <ControlButton
-                data-testid="skill-disable"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
-                onClick={() => void setSkillDisabled(selected.name, !selected.disabled)}
-              >
-                {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
-                {selected.disabled ? "Enable" : "Disable"}
-              </ControlButton>
-              {!isReadOnlyScope(selected.scope) ? (
-                <>
-                  <ControlButton
-                    data-testid="skill-edit"
-                    className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-                    style={{
-                      background:
-                        "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                      color: "var(--color-accent-foreground)",
-                    }}
-                    onClick={() => setEditing(editDraft(selected))}
-                  >
-                    <Pencil size={12} />
-                    Edit SKILL.md
-                  </ControlButton>
-                  <ControlButton
-                    data-testid="skill-delete"
-                    className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
-                    title="Delete skill"
-                    onClick={() => {
-                      if (confirm(`Delete skill "${selected.name}"? This removes its SKILL.md.`)) {
-                        void deleteSkill(selected.scope, selected.name);
-                      }
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </ControlButton>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="mt-5 space-y-4">
-            <AssignmentCard skill={selected} />
-            {(() => {
-              const s = skillSummary[summaryKey(selected)];
-              return (
-                <div
-                  data-testid="skill-detail-summary"
-                  className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-                >
-                  <div className="flex items-center justify-between pb-2">
-                    <span className="text-micro font-semibold uppercase tracking-wider text-text-muted">
-                      AI summary
-                    </span>
+                {!isReadOnlyScope(selected.scope) ? (
+                  <>
                     <ControlButton
-                      data-testid="skill-summarize"
-                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                      disabled={s?.busy === true}
-                      onClick={() => void doSummarize(selected)}
+                      data-testid="skill-edit"
+                      className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+                      style={{
+                        background:
+                          "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                        color: "var(--color-accent-foreground)",
+                      }}
+                      onClick={() => setEditing(editDraft(selected))}
                     >
-                      {s?.busy ? "Summarizing…" : s?.text ? "Regenerate" : "Summarize"}
+                      <Pencil size={12} />
+                      Edit SKILL.md
                     </ControlButton>
-                  </div>
-                  {s?.text ? <div className="text-xs text-text-secondary">{s.text}</div> : null}
-                  {s?.error ? <div className="text-xs text-danger">{s.error}</div> : null}
-                  {!s?.text && !s?.error && !s?.busy ? (
-                    <div className="text-xs text-text-muted">
-                      Ask the configured model what this skill does and when to reach for it.
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })()}
-            {(() => {
-              // SKL-21: same-name copies (native duplicate diagnostic + compare sheet)
-              const copies = skillCandidates.filter(
-                (c) => c.name === selected.name && c.filePath !== selected.filePath,
-              );
-              if (copies.length === 0) return null;
-              return (
-                <div
-                  data-testid="skill-duplicates"
-                  className="rounded-xl border border-warning/55 bg-warning/10 px-4 py-3"
-                >
-                  <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                    Duplicate copies
-                  </div>
-                  <div className="space-y-1.5">
-                    {copies.map((copy, index) => (
-                      <div key={copy.filePath} className="flex items-center gap-2 text-xs">
-                        <span
-                          className="min-w-0 flex-1 truncate font-mono text-text-secondary"
-                          title={copy.filePath}
-                        >
-                          {copy.filePath}
-                        </span>
-                        <ScopeChip scope={copy.scope} />
-                        <ControlButton
-                          data-testid={`skill-compare-${index}`}
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
-                          onClick={() => setCompare({ left: selected, right: copy })}
-                        >
-                          Compare
-                        </ControlButton>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-            {(() => {
-              // SKL-12: native's "Synced Repository" card — this skill's managed collection,
-              // with the update action wired to the same repo endpoint the panel uses.
-              const repo = collectionFor(selected);
-              if (!repo) return null;
-              return (
-                <div
-                  data-testid="skill-detail-collection"
-                  className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-                >
-                  <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                    Synced collection
-                  </div>
-                  <div className="space-y-1 text-xs text-text-secondary">
-                    <div className="truncate" title={repo.remoteUrl}>
-                      <span className="text-text-muted">Source</span> · {repoLabel(repo)}
-                    </div>
-                    {repo.ref ? (
-                      <div>
-                        <span className="text-text-muted">Ref</span> · {repo.ref}
-                      </div>
-                    ) : null}
-                    {repo.subdir ? (
-                      <div className="truncate" title={repo.subdir}>
-                        <span className="text-text-muted">Subdir</span> · {repo.subdir}
-                      </div>
-                    ) : null}
-                    <div className="truncate" title={repo.skillNames.join(", ")}>
-                      <span className="text-text-muted">Selection</span> · {repo.skillNames.length}{" "}
-                      skill{repo.skillNames.length === 1 ? "" : "s"} · {repo.skillNames.join(", ")}
-                    </div>
-                    {repo.storageMode === "collection-v1" ? (
-                      <div>
-                        <span className="text-text-muted">Storage</span> · Managed collection
-                      </div>
-                    ) : null}
-                  </div>
-                  {repo.available !== false && updatable.has(repo.id) ? (
-                    <div className="mt-2 flex items-center gap-2">
-                      <span
-                        className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
-                        style={{
-                          background: "var(--color-selection-fill)",
-                          color: "var(--color-brand-accent)",
-                        }}
-                      >
-                        Update available
+                    <ControlButton
+                      data-testid="skill-delete"
+                      className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
+                      title="Delete skill"
+                      onClick={() => {
+                        if (
+                          confirm(`Delete skill "${selected.name}"? This removes its SKILL.md.`)
+                        ) {
+                          void deleteSkill(selected.scope, selected.name);
+                        }
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </ControlButton>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <AssignmentCard skill={selected} />
+              {(() => {
+                const s = skillSummary[summaryKey(selected)];
+                return (
+                  <div
+                    data-testid="skill-detail-summary"
+                    className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                  >
+                    <div className="flex items-center justify-between pb-2">
+                      <span className="text-micro font-semibold uppercase tracking-wider text-text-muted">
+                        AI summary
                       </span>
                       <ControlButton
-                        data-testid="skill-detail-collection-update"
+                        data-testid="skill-summarize"
                         className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-                        disabled={repoBusy[repo.id] !== undefined}
-                        onClick={() => void updateRepo(repo.id)}
+                        disabled={s?.busy === true}
+                        onClick={() => void doSummarize(selected)}
                       >
-                        {repoBusy[repo.id] === "update" ? "Updating…" : "Update collection"}
+                        {s?.busy ? "Summarizing…" : s?.text ? "Regenerate" : "Summarize"}
                       </ControlButton>
                     </div>
-                  ) : null}
+                    {s?.text ? <div className="text-xs text-text-secondary">{s.text}</div> : null}
+                    {s?.error ? <div className="text-xs text-danger">{s.error}</div> : null}
+                    {!s?.text && !s?.error && !s?.busy ? (
+                      <div className="text-xs text-text-muted">
+                        Ask the configured model what this skill does and when to reach for it.
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
+              {(() => {
+                // SKL-21: same-name copies (native duplicate diagnostic + compare sheet)
+                const copies = skillCandidates.filter(
+                  (c) => c.name === selected.name && c.filePath !== selected.filePath,
+                );
+                if (copies.length === 0) return null;
+                return (
+                  <div
+                    data-testid="skill-duplicates"
+                    className="rounded-xl border border-warning/55 bg-warning/10 px-4 py-3"
+                  >
+                    <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      Duplicate copies
+                    </div>
+                    <div className="space-y-1.5">
+                      {copies.map((copy, index) => (
+                        <div key={copy.filePath} className="flex items-center gap-2 text-xs">
+                          <span
+                            className="min-w-0 flex-1 truncate font-mono text-text-secondary"
+                            title={copy.filePath}
+                          >
+                            {copy.filePath}
+                          </span>
+                          <ScopeChip scope={copy.scope} />
+                          <ControlButton
+                            data-testid={`skill-compare-${index}`}
+                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            onClick={() => setCompare({ left: selected, right: copy })}
+                          >
+                            Compare
+                          </ControlButton>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+              {(() => {
+                // SKL-12: native's "Synced Repository" card — this skill's managed collection,
+                // with the update action wired to the same repo endpoint the panel uses.
+                const repo = collectionFor(selected);
+                if (!repo) return null;
+                return (
+                  <div
+                    data-testid="skill-detail-collection"
+                    className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                  >
+                    <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      Synced collection
+                    </div>
+                    <div className="space-y-1 text-xs text-text-secondary">
+                      <div className="truncate" title={repo.remoteUrl}>
+                        <span className="text-text-muted">Source</span> · {repoLabel(repo)}
+                      </div>
+                      {repo.ref ? (
+                        <div>
+                          <span className="text-text-muted">Ref</span> · {repo.ref}
+                        </div>
+                      ) : null}
+                      {repo.subdir ? (
+                        <div className="truncate" title={repo.subdir}>
+                          <span className="text-text-muted">Subdir</span> · {repo.subdir}
+                        </div>
+                      ) : null}
+                      <div className="truncate" title={repo.skillNames.join(", ")}>
+                        <span className="text-text-muted">Selection</span> ·{" "}
+                        {repo.skillNames.length} skill{repo.skillNames.length === 1 ? "" : "s"} ·{" "}
+                        {repo.skillNames.join(", ")}
+                      </div>
+                      {repo.storageMode === "collection-v1" ? (
+                        <div>
+                          <span className="text-text-muted">Storage</span> · Managed collection
+                        </div>
+                      ) : null}
+                    </div>
+                    {repo.available !== false && updatable.has(repo.id) ? (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span
+                          className="rounded-capsule px-1.5 py-0.5 text-micro font-medium"
+                          style={{
+                            background: "var(--color-selection-fill)",
+                            color: "var(--color-brand-accent)",
+                          }}
+                        >
+                          Update available
+                        </span>
+                        <ControlButton
+                          data-testid="skill-detail-collection-update"
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                          disabled={repoBusy[repo.id] !== undefined}
+                          onClick={() => void updateRepo(repo.id)}
+                        >
+                          {repoBusy[repo.id] === "update" ? "Updating…" : "Update collection"}
+                        </ControlButton>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
+              <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
+                <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  SKILL.md
                 </div>
-              );
-            })()}
-            <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-              <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
-                SKILL.md
+                <MarkdownDocument source={selected.body || "_(empty)_"} />
               </div>
-              <MarkdownDocument source={selected.body || "_(empty)_"} />
-            </div>
-            <div className="truncate text-xs text-text-muted" title={selected.filePath}>
-              {selected.filePath}
+              <div className="truncate text-xs text-text-muted" title={selected.filePath}>
+                {selected.filePath}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          Select a skill.
-        </div>
-      )}
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+            Select a skill.
+          </div>
+        )}
 
-      {editing ? <SkillEditSheet draft={editing} onClose={() => setEditing(null)} /> : null}
+        {editing ? <SkillEditSheet draft={editing} onClose={() => setEditing(null)} /> : null}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useState } from "react";
 import {
   EyeOff,
@@ -324,197 +325,200 @@ export function ProjectsScreen() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="projects-screen">
-      <DiscoveryPanel />
-      <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
-        <div className="flex items-center justify-between pb-1">
-          <h2
-            className="text-base font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            Library
-          </h2>
-          <div className="flex items-center gap-2">
-            {/* Segmented filter (native All / Enabled / Disabled). */}
-            <div className="flex rounded-capsule border border-border-subtle p-0.5">
-              {(["all", "enabled", "disabled"] as Filter[]).map((f) => (
-                <ControlButton
-                  key={f}
-                  data-testid={`project-filter-${f}`}
-                  className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-xs capitalize",
-                    filter === f
-                      ? "bg-selection text-text-primary"
-                      : "text-text-muted hover:text-text-primary",
-                  )}
-                  onClick={() => setFilter(f)}
-                >
-                  {f}
-                </ControlButton>
-              ))}
-            </div>
-            <ControlButton
-              data-testid="projects-add"
-              className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              title="Add project"
-              onClick={() => void startAdd()}
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="projects-screen">
+      <SectionHero imageSrc="/screen-art/screen-art-projects.jpg" title="Projects" />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <DiscoveryPanel />
+        <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
+          <div className="flex items-center justify-between pb-1">
+            <h2
+              className="text-base font-semibold text-text-primary"
+              style={{ fontStretch: "expanded" }}
             >
-              <Plus size={14} />
-            </ControlButton>
+              Library
+            </h2>
+            <div className="flex items-center gap-2">
+              {/* Segmented filter (native All / Enabled / Disabled). */}
+              <div className="flex rounded-capsule border border-border-subtle p-0.5">
+                {(["all", "enabled", "disabled"] as Filter[]).map((f) => (
+                  <ControlButton
+                    key={f}
+                    data-testid={`project-filter-${f}`}
+                    className={cn(
+                      "rounded-capsule px-2.5 py-0.5 text-xs capitalize",
+                      filter === f
+                        ? "bg-selection text-text-primary"
+                        : "text-text-muted hover:text-text-primary",
+                    )}
+                    onClick={() => setFilter(f)}
+                  >
+                    {f}
+                  </ControlButton>
+                ))}
+              </div>
+              <ControlButton
+                data-testid="projects-add"
+                className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+                title="Add project"
+                onClick={() => void startAdd()}
+              >
+                <Plus size={14} />
+              </ControlButton>
+            </div>
           </div>
-        </div>
-        <p className="pb-3 text-xs text-text-muted">
-          Registered project folders. Disabled projects are hidden from the sidebar and can't host
-          new sessions; hiding removes the entry without touching files.
-        </p>
+          <p className="pb-3 text-xs text-text-muted">
+            Registered project folders. Disabled projects are hidden from the sidebar and can't host
+            new sessions; hiding removes the entry without touching files.
+          </p>
 
-        {adding ? (
-          <div className="mb-3 flex gap-2">
-            <ControlInput
-              autoFocus
-              data-testid="projects-add-path"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-              placeholder="/path/to/project"
-              value={draftPath}
-              onChange={(event) => setDraftPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && draftPath.trim()) {
+          {adding ? (
+            <div className="mb-3 flex gap-2">
+              <ControlInput
+                autoFocus
+                data-testid="projects-add-path"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                placeholder="/path/to/project"
+                value={draftPath}
+                onChange={(event) => setDraftPath(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && draftPath.trim()) {
+                    void addProject(draftPath.trim()).then(() => {
+                      setDraftPath("");
+                      setAdding(false);
+                    });
+                  }
+                  if (event.key === "Escape") setAdding(false);
+                }}
+              />
+              <ControlButton
+                data-testid="projects-add-confirm"
+                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+                disabled={!draftPath.trim()}
+                onClick={() =>
                   void addProject(draftPath.trim()).then(() => {
                     setDraftPath("");
                     setAdding(false);
-                  });
+                  })
                 }
-                if (event.key === "Escape") setAdding(false);
-              }}
-            />
-            <ControlButton
-              data-testid="projects-add-confirm"
-              className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              disabled={!draftPath.trim()}
-              onClick={() =>
-                void addProject(draftPath.trim()).then(() => {
-                  setDraftPath("");
-                  setAdding(false);
-                })
-              }
-            >
-              Add
-            </ControlButton>
-          </div>
-        ) : null}
-
-        <div className="space-y-2">
-          {visible.map((project) => {
-            const enabled = isEnabled(project);
-            const active = project.id === currentProjectId;
-            return (
-              <div
-                key={project.id}
-                className={cn(
-                  "flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5",
-                  !enabled && "opacity-60 saturate-50",
-                )}
-                data-testid="project-row"
-                data-project-name={project.name}
               >
-                <ProjectTypeIcon
-                  type={project.type}
-                  size={20}
-                  className="shrink-0 text-text-secondary"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="truncate text-sm font-semibold text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
-                      {project.name}
-                    </span>
-                    {project.type && project.type !== "unknown" && project.type !== "git" ? (
-                      <span
-                        className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                        data-testid="project-type-badge"
-                      >
-                        {project.type}
-                      </span>
-                    ) : null}
-                    {project.path.includes("github") ? <Github size={12} /> : null}
-                    {active ? (
-                      <span
-                        className="rounded-capsule border px-1.5 py-0 text-micro font-medium"
-                        style={{
-                          color: "var(--color-brand-accent)",
-                          borderColor: "var(--color-brand-accent)",
-                        }}
-                        data-testid="project-active-tag"
-                      >
-                        Active
-                      </span>
-                    ) : null}
-                  </div>
-                  <div
-                    className="truncate font-mono text-detail text-text-muted"
-                    style={{ direction: "rtl", textAlign: "left" }}
-                    title={project.path}
-                  >
-                    {project.path}
-                  </div>
-                </div>
-                <RecapButton
-                  icon={Send}
-                  title="Active-session default agent"
-                  count={project.defaultAgentName ? 1 : 0}
-                />
-                <RecapButton
-                  icon={Users}
-                  title={
-                    project.assignedAgentNames === undefined
-                      ? "Assigned agents (legacy open catalog)"
-                      : "Assigned custom agents"
-                  }
-                  count={project.assignedAgentNames?.length ?? 0}
-                />
-                <RecapButton
-                  icon={WandSparkles}
-                  title="Assigned skills"
-                  count={project.assignedSkills?.length ?? 0}
-                />
-                {/* The active session's project can't be disabled or hidden. */}
-                <span title={active ? "Can't change the active project" : undefined}>
-                  <Switch
-                    checked={enabled}
-                    disabled={active}
-                    testid={`project-enabled-${project.name}`}
-                    onChange={(next) => void updateProject(project.id, { enabled: next })}
-                  />
-                </span>
-                <ControlButton
-                  data-testid={`project-hide-${project.name}`}
-                  className="rounded-capsule p-1.5 text-text-muted hover:text-danger disabled:opacity-30 disabled:hover:text-text-muted"
-                  title={active ? "Can't hide the active project" : "Hide from list"}
-                  disabled={active}
-                  onClick={() => void hide(project)}
-                >
-                  <EyeOff size={14} />
-                </ControlButton>
-              </div>
-            );
-          })}
-          {visible.length === 0 ? (
-            <div className="py-6 text-center text-sm text-text-muted">
-              No projects {filter !== "all" ? `(${filter})` : ""} — add one with +.
+                Add
+              </ControlButton>
             </div>
           ) : null}
+
+          <div className="space-y-2">
+            {visible.map((project) => {
+              const enabled = isEnabled(project);
+              const active = project.id === currentProjectId;
+              return (
+                <div
+                  key={project.id}
+                  className={cn(
+                    "flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5",
+                    !enabled && "opacity-60 saturate-50",
+                  )}
+                  data-testid="project-row"
+                  data-project-name={project.name}
+                >
+                  <ProjectTypeIcon
+                    type={project.type}
+                    size={20}
+                    className="shrink-0 text-text-secondary"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="truncate text-sm font-semibold text-text-primary"
+                        style={{ fontStretch: "expanded" }}
+                      >
+                        {project.name}
+                      </span>
+                      {project.type && project.type !== "unknown" && project.type !== "git" ? (
+                        <span
+                          className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                          data-testid="project-type-badge"
+                        >
+                          {project.type}
+                        </span>
+                      ) : null}
+                      {project.path.includes("github") ? <Github size={12} /> : null}
+                      {active ? (
+                        <span
+                          className="rounded-capsule border px-1.5 py-0 text-micro font-medium"
+                          style={{
+                            color: "var(--color-brand-accent)",
+                            borderColor: "var(--color-brand-accent)",
+                          }}
+                          data-testid="project-active-tag"
+                        >
+                          Active
+                        </span>
+                      ) : null}
+                    </div>
+                    <div
+                      className="truncate font-mono text-detail text-text-muted"
+                      style={{ direction: "rtl", textAlign: "left" }}
+                      title={project.path}
+                    >
+                      {project.path}
+                    </div>
+                  </div>
+                  <RecapButton
+                    icon={Send}
+                    title="Active-session default agent"
+                    count={project.defaultAgentName ? 1 : 0}
+                  />
+                  <RecapButton
+                    icon={Users}
+                    title={
+                      project.assignedAgentNames === undefined
+                        ? "Assigned agents (legacy open catalog)"
+                        : "Assigned custom agents"
+                    }
+                    count={project.assignedAgentNames?.length ?? 0}
+                  />
+                  <RecapButton
+                    icon={WandSparkles}
+                    title="Assigned skills"
+                    count={project.assignedSkills?.length ?? 0}
+                  />
+                  {/* The active session's project can't be disabled or hidden. */}
+                  <span title={active ? "Can't change the active project" : undefined}>
+                    <Switch
+                      checked={enabled}
+                      disabled={active}
+                      testid={`project-enabled-${project.name}`}
+                      onChange={(next) => void updateProject(project.id, { enabled: next })}
+                    />
+                  </span>
+                  <ControlButton
+                    data-testid={`project-hide-${project.name}`}
+                    className="rounded-capsule p-1.5 text-text-muted hover:text-danger disabled:opacity-30 disabled:hover:text-text-muted"
+                    title={active ? "Can't hide the active project" : "Hide from list"}
+                    disabled={active}
+                    onClick={() => void hide(project)}
+                  >
+                    <EyeOff size={14} />
+                  </ControlButton>
+                </div>
+              );
+            })}
+            {visible.length === 0 ? (
+              <div className="py-6 text-center text-sm text-text-muted">
+                No projects {filter !== "all" ? `(${filter})` : ""} — add one with +.
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

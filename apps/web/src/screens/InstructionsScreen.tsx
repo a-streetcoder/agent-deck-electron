@@ -1,6 +1,6 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
@@ -265,55 +265,58 @@ export function InstructionsScreen() {
   const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? fallbackName) : fallbackName;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="instructions-screen">
-      <div className="mx-auto flex h-full max-w-3xl flex-col">
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2">
-            <FileText size={16} className="text-text-secondary" aria-hidden />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="instructions-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-instructions.jpg"
+        title={
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <span>
               {scope === "global" ? "Global" : (project?.name ?? "Project")} · {fileName}
-            </h2>
+            </span>
             {statusChip ? (
               <span
                 data-testid="instructions-status"
-                className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                className="rounded-capsule border border-on-media/30 px-1.5 text-micro font-normal text-on-media/80"
               >
                 {statusChip}
               </span>
             ) : null}
+          </span>
+        }
+        actions={
+          <div
+            className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+            role="group"
+            aria-label="Instruction file"
+          >
+            {(
+              [
+                ["context", "Context"],
+                ["system", "Base prompt"],
+                ["append", "Append"],
+              ] as const
+            ).map(([kind, label]) => (
+              <ControlButton
+                key={kind}
+                data-testid={`instructions-file-${kind}`}
+                aria-pressed={fileKind === kind}
+                className={cn(
+                  "rounded-capsule px-2.5 py-0.5 text-xs transition-colors",
+                  fileKind === kind
+                    ? "bg-selection text-text-primary"
+                    : "text-text-muted hover:text-text-primary",
+                )}
+                onClick={() => setFileKind(kind)}
+              >
+                {label}
+              </ControlButton>
+            ))}
           </div>
-          <div className="flex items-center gap-2">
-            <div
-              className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
-              role="group"
-              aria-label="Instruction file"
-            >
-              {(
-                [
-                  ["context", "Context"],
-                  ["system", "Base prompt"],
-                  ["append", "Append"],
-                ] as const
-              ).map(([kind, label]) => (
-                <ControlButton
-                  key={kind}
-                  data-testid={`instructions-file-${kind}`}
-                  aria-pressed={fileKind === kind}
-                  className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-xs transition-colors",
-                    fileKind === kind
-                      ? "bg-selection text-text-primary"
-                      : "text-text-muted hover:text-text-primary",
-                  )}
-                  onClick={() => setFileKind(kind)}
-                >
-                  {label}
-                </ControlButton>
-              ))}
-            </div>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto flex h-full max-w-3xl flex-col">
+          <div className="flex flex-wrap items-center justify-end gap-2 pb-3">
             <div
               className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
               role="group"
@@ -373,123 +376,127 @@ export function InstructionsScreen() {
               {saving ? "Saving…" : dirty ? "Save" : "Saved"}
             </ControlButton>
           </div>
-        </div>
 
-        {needsProject ? (
-          <div
-            className="flex min-h-0 flex-1 items-center justify-center px-6 text-center"
-            data-testid="instructions-no-project"
-          >
-            <div className="max-w-sm text-sm text-text-muted">
-              Select a project in the sidebar to edit its{" "}
-              <code className="rounded bg-surface px-1 font-mono text-xs">{fallbackName}</code>, or
-              switch to <b>Global</b> to edit the instructions that apply to every session.
+          {needsProject ? (
+            <div
+              className="flex min-h-0 flex-1 items-center justify-center px-6 text-center"
+              data-testid="instructions-no-project"
+            >
+              <div className="max-w-sm text-sm text-text-muted">
+                Select a project in the sidebar to edit its{" "}
+                <code className="rounded bg-surface px-1 font-mono text-xs">{fallbackName}</code>,
+                or switch to <b>Global</b> to edit the instructions that apply to every session.
+              </div>
             </div>
-          </div>
-        ) : (
-          <>
-            <p className="truncate pb-3 font-mono text-detail text-text-muted" title={filePath}>
-              {filePath}
-            </p>
-            {fileKind === "system" ? (
-              <p className="pb-3 text-xs text-text-muted" data-testid="instructions-system-note">
-                {fileExists
-                  ? "This file REPLACES pi's built-in base prompt for this scope."
-                  : scope === "project"
-                    ? "Creating SYSTEM.md overrides pi's base prompt for this project (it wins over the global SYSTEM.md)."
-                    : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
+          ) : (
+            <>
+              <p className="truncate pb-3 font-mono text-detail text-text-muted" title={filePath}>
+                {filePath}
               </p>
-            ) : null}
-            {fileKind === "append" ? (
-              <p className="pb-3 text-xs text-text-muted" data-testid="instructions-append-note">
-                {scope === "project"
-                  ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
-                  : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
-              </p>
-            ) : null}
-            {preview ? (
-              <div
-                data-testid="instructions-preview"
-                className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border px-2.5 py-1.5"
-              >
-                {preview.map((section, index) => (
-                  <div key={`${section.kind}-${index}`}>
-                    <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
-                      {section.title}
-                      {section.contentTruncated ? " (truncated)" : ""}
-                    </div>
-                    {section.path ? (
-                      <div
-                        className="truncate font-mono text-micro text-text-muted"
-                        title={section.path}
-                      >
-                        {section.path}
-                      </div>
-                    ) : null}
-                    <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-text-secondary">
-                      {section.content ?? ""}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {contextShadowed ? (
-              <p
-                className="pb-3 text-xs text-text-muted"
-                data-testid="instructions-context-shadowed"
-              >
-                Shadowed in this folder (AGENTS.md wins): {contextShadowed}
-              </p>
-            ) : null}
-            {showAncestors && ancestors.length > 0 ? (
-              <div
-                data-testid="instructions-ancestors"
-                className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
-              >
-                <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
-                  Inherited context
-                </div>
-                <p className="pb-1 text-micro text-text-muted">
-                  pi also loads these ancestor files, outermost first, before the project's own
-                  context.
-                  {ancestorsTruncated
-                    ? " Outermost ancestors beyond the depth limit are omitted."
-                    : ""}
+              {fileKind === "system" ? (
+                <p className="pb-3 text-xs text-text-muted" data-testid="instructions-system-note">
+                  {fileExists
+                    ? "This file REPLACES pi's built-in base prompt for this scope."
+                    : scope === "project"
+                      ? "Creating SYSTEM.md overrides pi's base prompt for this project (it wins over the global SYSTEM.md)."
+                      : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
                 </p>
-                {ancestors.map((item) => (
-                  <div key={item.path} className="truncate font-mono text-micro" title={item.path}>
-                    {item.path}
+              ) : null}
+              {fileKind === "append" ? (
+                <p className="pb-3 text-xs text-text-muted" data-testid="instructions-append-note">
+                  {scope === "project"
+                    ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
+                    : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
+                </p>
+              ) : null}
+              {preview ? (
+                <div
+                  data-testid="instructions-preview"
+                  className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border px-2.5 py-1.5"
+                >
+                  {preview.map((section, index) => (
+                    <div key={`${section.kind}-${index}`}>
+                      <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                        {section.title}
+                        {section.contentTruncated ? " (truncated)" : ""}
+                      </div>
+                      {section.path ? (
+                        <div
+                          className="truncate font-mono text-micro text-text-muted"
+                          title={section.path}
+                        >
+                          {section.path}
+                        </div>
+                      ) : null}
+                      <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-text-secondary">
+                        {section.content ?? ""}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {contextShadowed ? (
+                <p
+                  className="pb-3 text-xs text-text-muted"
+                  data-testid="instructions-context-shadowed"
+                >
+                  Shadowed in this folder (AGENTS.md wins): {contextShadowed}
+                </p>
+              ) : null}
+              {showAncestors && ancestors.length > 0 ? (
+                <div
+                  data-testid="instructions-ancestors"
+                  className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+                >
+                  <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                    Inherited context
                   </div>
-                ))}
-              </div>
-            ) : null}
-            {loaded ? (
-              <ControlTextArea
-                data-testid="instructions-editor"
-                className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-sm text-text-primary outline-none focus:border-accent"
-                placeholder={
-                  fileKind === "system"
-                    ? "The replacement base prompt. Leave the override removed to keep pi's default."
-                    : fileKind === "append"
-                      ? "Extra instructions appended after the base prompt — house rules, tone, policies."
-                      : scope === "global"
-                        ? "Global context pi reads for every session. Markdown."
-                        : "Project context pi reads on every turn. Markdown."
-                }
-                spellCheck={false}
-                value={content}
-                onChange={(event) => setContent(event.target.value)}
-              />
-            ) : (
-              <div
-                className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-border-subtle text-sm text-text-muted"
-                data-testid="instructions-loading"
-              >
-                Loading…
-              </div>
-            )}
-          </>
-        )}
+                  <p className="pb-1 text-micro text-text-muted">
+                    pi also loads these ancestor files, outermost first, before the project's own
+                    context.
+                    {ancestorsTruncated
+                      ? " Outermost ancestors beyond the depth limit are omitted."
+                      : ""}
+                  </p>
+                  {ancestors.map((item) => (
+                    <div
+                      key={item.path}
+                      className="truncate font-mono text-micro"
+                      title={item.path}
+                    >
+                      {item.path}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {loaded ? (
+                <ControlTextArea
+                  data-testid="instructions-editor"
+                  className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                  placeholder={
+                    fileKind === "system"
+                      ? "The replacement base prompt. Leave the override removed to keep pi's default."
+                      : fileKind === "append"
+                        ? "Extra instructions appended after the base prompt — house rules, tone, policies."
+                        : scope === "global"
+                          ? "Global context pi reads for every session. Markdown."
+                          : "Project context pi reads on every turn. Markdown."
+                  }
+                  spellCheck={false}
+                  value={content}
+                  onChange={(event) => setContent(event.target.value)}
+                />
+              ) : (
+                <div
+                  className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-border-subtle text-sm text-text-muted"
+                  data-testid="instructions-loading"
+                >
+                  Loading…
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

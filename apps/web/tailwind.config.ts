@@ -23,6 +23,7 @@ const config: Config = {
         "primary-hover": tokenColor("--color-primary-hover"),
         accent: tokenColor("--color-accent"),
         "on-accent": tokenColor("--color-text-on-accent"),
+        "on-media": tokenColor("--color-text-on-media"),
         "text-primary": tokenColor("--color-text-primary"),
         "text-secondary": tokenColor("--color-text-secondary"),
         "text-muted": tokenColor("--color-text-muted"),

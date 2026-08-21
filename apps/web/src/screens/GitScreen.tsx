@@ -1,7 +1,8 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { GitBranch, Sparkles, Tag } from "lucide-react";
+import { Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
 
@@ -600,397 +601,402 @@ export function GitScreen() {
 
   if (!currentProjectId) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="git-screen">
-        <div
-          className="mx-auto max-w-3xl py-10 text-center text-sm text-text-muted"
-          data-testid="git-no-project"
-        >
-          Git is project-scoped. Open a project to see its changes and commit.
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="git-screen">
+        <SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" />
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div
+            className="mx-auto max-w-3xl py-10 text-center text-sm text-text-muted"
+            data-testid="git-no-project"
+          >
+            Git is project-scoped. Open a project to see its changes and commit.
+          </div>
         </div>
       </div>
     );
   }
 
+  const gitHeroActions =
+    (statusReady && status?.repo && status.branch) ||
+    (gitActions === true && statusReady && status?.repo && !releaseOpen) ? (
+      <div className="flex items-center gap-2">
+        {statusReady && status?.repo && status.branch ? (
+          <span
+            data-testid="git-branch"
+            className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-detail text-text-secondary"
+          >
+            {status.branch}
+          </span>
+        ) : null}
+        {gitActions === true && statusReady && status?.repo && !releaseOpen ? (
+          <ControlButton
+            ref={releaseTriggerRef}
+            data-testid="git-release"
+            className="flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+            disabled={preflighting}
+            onClick={() => void openRelease()}
+            title="Tag a version and generate release notes"
+          >
+            <Tag size={12} /> {preflighting ? "Preparing…" : "Release"}
+          </ControlButton>
+        ) : null}
+      </div>
+    ) : undefined;
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="git-screen">
-      <div className="mx-auto max-w-3xl">
-        <div className="flex items-center gap-2 pb-1">
-          <GitBranch size={16} className="text-text-secondary" aria-hidden />
-          <h2
-            className="text-base font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            Git
-          </h2>
-          {statusReady && status?.repo && status.branch ? (
-            <span
-              data-testid="git-branch"
-              className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-detail text-text-secondary"
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="git-screen">
+      <SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" actions={gitHeroActions} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-3xl">
+          {releaseOpen ? (
+            <div
+              data-testid="git-release-panel"
+              aria-busy={preflighting}
+              className="mb-3 mt-2 flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface px-3.5 py-3"
             >
-              {status.branch}
-            </span>
-          ) : null}
-          {gitActions === true && statusReady && status?.repo && !releaseOpen ? (
-            <ControlButton
-              ref={releaseTriggerRef}
-              data-testid="git-release"
-              className="ml-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={preflighting}
-              onClick={() => void openRelease()}
-              title="Tag a version and generate release notes"
-            >
-              <Tag size={12} /> {preflighting ? "Preparing…" : "Release"}
-            </ControlButton>
-          ) : null}
-        </div>
-
-        {releaseOpen ? (
-          <div
-            data-testid="git-release-panel"
-            aria-busy={preflighting}
-            className="mb-3 mt-2 flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface px-3.5 py-3"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-xs text-text-secondary">
-                {preflighting ? (
-                  "Checking release history…"
-                ) : preflight?.latestTag ? (
-                  <>
-                    Latest release{" "}
-                    <span className="font-mono text-text-primary">{preflight.latestTag}</span>
-                  </>
-                ) : preflight ? (
-                  "No releases yet — this will be the first."
-                ) : (
-                  "Release synchronization unavailable."
-                )}
-              </div>
-              <ControlButton
-                ref={releaseCancelRef}
-                data-testid="git-release-close"
-                className="text-xs text-text-muted hover:text-text-primary"
-                onClick={() => closeRelease(true)}
-              >
-                Cancel
-              </ControlButton>
-            </div>
-
-            {preflighting ? (
-              <div
-                data-testid="git-release-sync-loading"
-                role="status"
-                aria-live="polite"
-                className="rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
-              >
-                Checking branch and remote synchronization…
-              </div>
-            ) : preflight ? (
-              <div
-                data-testid="git-release-sync"
-                role="status"
-                aria-live="polite"
-                className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
-              >
-                {preflight.branch ? (
-                  <>
-                    <span className="font-mono text-text-primary">{preflight.branch}</span>
-                    {preflight.upstream ? (
-                      <>
-                        {" "}
-                        tracks{" "}
-                        <span className="font-mono text-text-primary">{preflight.upstream}</span>
-                        {preflight.remote ? ` on ${preflight.remote}` : ""}.{" "}
-                        {preflight.ahead ?? "–"} ahead, {preflight.behind ?? "–"} behind.
-                      </>
-                    ) : null}
-                  </>
-                ) : (
-                  "No attached release branch."
-                )}
-              </div>
-            ) : null}
-
-            {preflight?.blocker ? (
-              <div
-                data-testid="git-release-blocker"
-                role="alert"
-                className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
-              >
-                {preflight.blocker.message}
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Version bump">
-              {(["patch", "minor", "major"] as const).map((kind) => (
-                <ControlButton
-                  key={kind}
-                  ref={(element) => {
-                    bumpButtonRefs.current[kind] = element;
-                  }}
-                  data-testid={`git-release-version-${kind}`}
-                  aria-pressed={bump === kind}
-                  className={`flex-1 rounded-md border px-2.5 py-1.5 text-left text-xs ${
-                    bump === kind
-                      ? "border-accent text-text-primary"
-                      : "border-border-subtle text-text-secondary hover:text-text-primary"
-                  }`}
-                  onClick={() => setBump(kind)}
-                >
-                  <div className="capitalize">{kind}</div>
-                  <div className="font-mono text-detail text-text-muted">
-                    {preflight?.nextVersions[kind] ?? "…"}
-                  </div>
-                </ControlButton>
-              ))}
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label
-                htmlFor="git-release-notes"
-                className="text-xs font-medium text-text-secondary"
-              >
-                Release notes
-              </label>
-              <ControlTextArea
-                id="git-release-notes"
-                data-testid="git-release-notes"
-                className="min-h-[112px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                placeholder="Release notes (optional — Generate drafts them from your commits)"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-              <div className="flex items-center justify-end gap-2">
-                <ControlButton
-                  data-testid="git-release-generate"
-                  className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                  disabled={draftingNotes || releasing || preflighting || !preflight}
-                  onClick={() => void draftNotes()}
-                  title="Draft release notes from commits since the last tag"
-                >
-                  <Sparkles size={12} /> {draftingNotes ? "Drafting…" : "Generate notes"}
-                </ControlButton>
-                <ControlButton
-                  data-testid="git-release-confirm"
-                  className="rounded-capsule px-4 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-                  style={{
-                    background:
-                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                    color: "var(--color-accent-foreground)",
-                  }}
-                  disabled={releasing || preflighting || preflight?.state !== "ready"}
-                  onClick={() => void release()}
-                >
-                  {releasing ? "Releasing…" : `Release ${preflight?.nextVersions[bump] ?? ""}`}
-                </ControlButton>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <section
-          data-testid="git-worktree-preferences"
-          aria-busy={savingWorktreePreference}
-          className="mb-3 mt-2 rounded-lg border border-border-subtle bg-surface px-3 py-3"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-medium text-text-primary">Session worktrees</h3>
-            {savingWorktreePreference ? (
-              <span
-                data-testid="git-worktree-preferences-saving"
-                className="text-detail text-text-muted"
-                role="status"
-                aria-live="polite"
-              >
-                Saving…
-              </span>
-            ) : null}
-          </div>
-          {settingsLoadFailed ? (
-            <p className="mt-1 text-xs text-text-muted" role="alert">
-              Worktree preferences could not be loaded. Reload the Git screen to try again.
-            </p>
-          ) : worktreeIsolation === null || keepWorktreeAfterMerge === null ? (
-            <p className="mt-1 text-xs text-text-muted" role="status">
-              Loading worktree preferences…
-            </p>
-          ) : (
-            <div className="mt-2 space-y-3">
-              <WorktreePreferenceSwitch
-                testId="git-pref-worktree-isolation"
-                label="Isolate new sessions in a worktree"
-                help="New project sessions use a separate checkout. Existing sessions are unchanged."
-                checked={worktreeIsolation}
-                disabled={savingWorktreePreference}
-                onChange={(checked) => void saveWorktreePreference({ worktreeIsolation: checked })}
-              />
-              <WorktreePreferenceSwitch
-                testId="git-pref-keep-worktree"
-                label="Keep worktree and branch after a successful merge"
-                help="Applies only when isolation is on. On by default so you can keep iterating and merge again. Turn off to remove the proven worktree and its Agent Deck branch only after a successful merge. Deleting a session removes its worktree regardless of this setting."
-                checked={keepWorktreeAfterMerge}
-                disabled={!worktreeIsolation || savingWorktreePreference}
-                onChange={(checked) =>
-                  void saveWorktreePreference({ keepWorktreeAfterMerge: checked })
-                }
-              />
-            </div>
-          )}
-        </section>
-
-        {session?.loopReviewRunId ? (
-          <div
-            data-testid="git-loop-review-banner"
-            className="mb-3 mt-1 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-xs text-text-secondary"
-            role="status"
-          >
-            Read-only Loop review. Merge, apply, and discard actions are unavailable here.
-          </div>
-        ) : null}
-
-        {gitActions === true &&
-        statusReady &&
-        !session?.loopReviewRunId &&
-        session?.worktreeBranch &&
-        session.worktreeSourceBranch ? (
-          <div
-            data-testid="git-worktree-banner"
-            className="mb-3 mt-1 flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
-          >
-            <div className="min-w-0 text-xs text-text-secondary">
-              This session is isolated on{" "}
-              <span className="font-mono text-text-primary">{session.worktreeBranch}</span>. Merge
-              brings its commits back into{" "}
-              <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
-            </div>
-            <ControlButton
-              data-testid="git-merge"
-              className="shrink-0 rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              disabled={merging || agentRunning}
-              title={agentRunning ? "Wait for the current turn to finish" : undefined}
-              onClick={() => void merge()}
-            >
-              {merging ? "Merging…" : `Merge to ${session.worktreeSourceBranch}`}
-            </ControlButton>
-          </div>
-        ) : null}
-
-        {statusFailed ? (
-          <div
-            className="py-10 text-center text-sm text-text-muted"
-            data-testid="git-status-error"
-            role="alert"
-          >
-            Git status could not be loaded. Mutation actions are unavailable.
-          </div>
-        ) : !statusReady || !status ? (
-          <div
-            className="py-10 text-center text-sm text-text-muted"
-            data-testid="git-status-loading"
-            role="status"
-          >
-            Loading Git status…
-          </div>
-        ) : !status.repo ? (
-          <div className="py-10 text-center text-sm text-text-muted" data-testid="git-not-repo">
-            This project isn&apos;t a git repository.
-          </div>
-        ) : (
-          <>
-            <p className="pb-3 text-xs text-text-muted">
-              Uncommitted changes in the project working tree. Commit stages everything (git add -A)
-              and commits with your message.
-            </p>
-
-            <div className="space-y-1" data-testid="git-file-list">
-              {status.files.map((file) => (
-                <div
-                  key={file.path}
-                  data-git-path={file.path}
-                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5"
-                >
-                  <span className="w-6 shrink-0 font-mono text-detail text-accent">
-                    {file.status.trim() || "•"}
-                  </span>
-                  <span className="truncate font-mono text-caption text-text-primary">
-                    {file.path}
-                  </span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-text-secondary">
+                  {preflighting ? (
+                    "Checking release history…"
+                  ) : preflight?.latestTag ? (
+                    <>
+                      Latest release{" "}
+                      <span className="font-mono text-text-primary">{preflight.latestTag}</span>
+                    </>
+                  ) : preflight ? (
+                    "No releases yet — this will be the first."
+                  ) : (
+                    "Release synchronization unavailable."
+                  )}
                 </div>
-              ))}
-              {status.clean ? (
-                <div className="py-8 text-center text-sm text-text-muted" data-testid="git-clean">
-                  Working tree clean — nothing to commit.
+                <ControlButton
+                  ref={releaseCancelRef}
+                  data-testid="git-release-close"
+                  className="text-xs text-text-muted hover:text-text-primary"
+                  onClick={() => closeRelease(true)}
+                >
+                  Cancel
+                </ControlButton>
+              </div>
+
+              {preflighting ? (
+                <div
+                  data-testid="git-release-sync-loading"
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
+                >
+                  Checking branch and remote synchronization…
+                </div>
+              ) : preflight ? (
+                <div
+                  data-testid="git-release-sync"
+                  role="status"
+                  aria-live="polite"
+                  className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
+                >
+                  {preflight.branch ? (
+                    <>
+                      <span className="font-mono text-text-primary">{preflight.branch}</span>
+                      {preflight.upstream ? (
+                        <>
+                          {" "}
+                          tracks{" "}
+                          <span className="font-mono text-text-primary">{preflight.upstream}</span>
+                          {preflight.remote ? ` on ${preflight.remote}` : ""}.{" "}
+                          {preflight.ahead ?? "–"} ahead, {preflight.behind ?? "–"} behind.
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    "No attached release branch."
+                  )}
                 </div>
               ) : null}
-            </div>
 
-            {gitActions === false ? (
-              <div
-                data-testid="git-actions-off"
-                className="mt-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-xs text-text-muted"
-              >
-                Git actions are turned off. Enable Commit / Push actions in the welcome flow&apos;s
-                Preferences to commit from here.
+              {preflight?.blocker ? (
+                <div
+                  data-testid="git-release-blocker"
+                  role="alert"
+                  className="break-words rounded-md border border-border-subtle bg-surface-subtle px-2.5 py-2 text-xs text-text-muted"
+                >
+                  {preflight.blocker.message}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Version bump">
+                {(["patch", "minor", "major"] as const).map((kind) => (
+                  <ControlButton
+                    key={kind}
+                    ref={(element) => {
+                      bumpButtonRefs.current[kind] = element;
+                    }}
+                    data-testid={`git-release-version-${kind}`}
+                    aria-pressed={bump === kind}
+                    className={`flex-1 rounded-md border px-2.5 py-1.5 text-left text-xs ${
+                      bump === kind
+                        ? "border-accent text-text-primary"
+                        : "border-border-subtle text-text-secondary hover:text-text-primary"
+                    }`}
+                    onClick={() => setBump(kind)}
+                  >
+                    <div className="capitalize">{kind}</div>
+                    <div className="font-mono text-detail text-text-muted">
+                      {preflight?.nextVersions[kind] ?? "…"}
+                    </div>
+                  </ControlButton>
+                ))}
               </div>
-            ) : gitActions === null ? null : (
-              <div className="mt-4 flex flex-col gap-2">
+
+              <div className="flex flex-col gap-2">
+                <label
+                  htmlFor="git-release-notes"
+                  className="text-xs font-medium text-text-secondary"
+                >
+                  Release notes
+                </label>
                 <ControlTextArea
-                  ref={commitMessageRef}
-                  data-testid="git-commit-message"
-                  className="min-h-[64px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                  placeholder="Commit message"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
+                  id="git-release-notes"
+                  data-testid="git-release-notes"
+                  className="min-h-[112px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                  placeholder="Release notes (optional — Generate drafts them from your commits)"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
                 />
                 <div className="flex items-center justify-end gap-2">
                   <ControlButton
-                    data-testid="git-generate-message"
-                    className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={generating || committing || status.clean}
-                    onClick={() => void generateMessage()}
-                    title="Draft a commit message from your changes"
+                    data-testid="git-release-generate"
+                    className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                    disabled={draftingNotes || releasing || preflighting || !preflight}
+                    onClick={() => void draftNotes()}
+                    title="Draft release notes from commits since the last tag"
                   >
-                    <Sparkles size={12} /> {generating ? "Generating…" : "Generate"}
+                    <Sparkles size={12} /> {draftingNotes ? "Drafting…" : "Generate notes"}
                   </ControlButton>
                   <ControlButton
-                    data-testid="git-push"
-                    className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={committing || pushing}
-                    onClick={() => void push()}
-                    title="Push the current branch's commits"
-                  >
-                    {pushing ? "Pushing…" : "Push"}
-                  </ControlButton>
-                  <ControlButton
-                    data-testid="git-commit"
-                    className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
-                    disabled={committing || status.clean || !message.trim()}
-                    onClick={() => void commit(false)}
-                  >
-                    {committing ? "Committing…" : "Commit all"}
-                  </ControlButton>
-                  <ControlButton
-                    data-testid="git-commit-push"
-                    className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+                    data-testid="git-release-confirm"
+                    className="rounded-capsule px-4 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
                     style={{
                       background:
                         "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
                       color: "var(--color-accent-foreground)",
                     }}
-                    disabled={committing || status.clean || !message.trim()}
-                    onClick={() => void commit(true)}
+                    disabled={releasing || preflighting || preflight?.state !== "ready"}
+                    onClick={() => void release()}
                   >
-                    Commit &amp; Push
+                    {releasing ? "Releasing…" : `Release ${preflight?.nextVersions[bump] ?? ""}`}
                   </ControlButton>
                 </div>
               </div>
+            </div>
+          ) : null}
+
+          <section
+            data-testid="git-worktree-preferences"
+            aria-busy={savingWorktreePreference}
+            className="mb-3 mt-2 rounded-lg border border-border-subtle bg-surface px-3 py-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-medium text-text-primary">Session worktrees</h3>
+              {savingWorktreePreference ? (
+                <span
+                  data-testid="git-worktree-preferences-saving"
+                  className="text-detail text-text-muted"
+                  role="status"
+                  aria-live="polite"
+                >
+                  Saving…
+                </span>
+              ) : null}
+            </div>
+            {settingsLoadFailed ? (
+              <p className="mt-1 text-xs text-text-muted" role="alert">
+                Worktree preferences could not be loaded. Reload the Git screen to try again.
+              </p>
+            ) : worktreeIsolation === null || keepWorktreeAfterMerge === null ? (
+              <p className="mt-1 text-xs text-text-muted" role="status">
+                Loading worktree preferences…
+              </p>
+            ) : (
+              <div className="mt-2 space-y-3">
+                <WorktreePreferenceSwitch
+                  testId="git-pref-worktree-isolation"
+                  label="Isolate new sessions in a worktree"
+                  help="New project sessions use a separate checkout. Existing sessions are unchanged."
+                  checked={worktreeIsolation}
+                  disabled={savingWorktreePreference}
+                  onChange={(checked) =>
+                    void saveWorktreePreference({ worktreeIsolation: checked })
+                  }
+                />
+                <WorktreePreferenceSwitch
+                  testId="git-pref-keep-worktree"
+                  label="Keep worktree and branch after a successful merge"
+                  help="Applies only when isolation is on. On by default so you can keep iterating and merge again. Turn off to remove the proven worktree and its Agent Deck branch only after a successful merge. Deleting a session removes its worktree regardless of this setting."
+                  checked={keepWorktreeAfterMerge}
+                  disabled={!worktreeIsolation || savingWorktreePreference}
+                  onChange={(checked) =>
+                    void saveWorktreePreference({ keepWorktreeAfterMerge: checked })
+                  }
+                />
+              </div>
             )}
-          </>
-        )}
+          </section>
+
+          {session?.loopReviewRunId ? (
+            <div
+              data-testid="git-loop-review-banner"
+              className="mb-3 mt-1 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-xs text-text-secondary"
+              role="status"
+            >
+              Read-only Loop review. Merge, apply, and discard actions are unavailable here.
+            </div>
+          ) : null}
+
+          {gitActions === true &&
+          statusReady &&
+          !session?.loopReviewRunId &&
+          session?.worktreeBranch &&
+          session.worktreeSourceBranch ? (
+            <div
+              data-testid="git-worktree-banner"
+              className="mb-3 mt-1 flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
+            >
+              <div className="min-w-0 text-xs text-text-secondary">
+                This session is isolated on{" "}
+                <span className="font-mono text-text-primary">{session.worktreeBranch}</span>. Merge
+                brings its commits back into{" "}
+                <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
+              </div>
+              <ControlButton
+                data-testid="git-merge"
+                className="shrink-0 rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                style={{
+                  background:
+                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                  color: "var(--color-accent-foreground)",
+                }}
+                disabled={merging || agentRunning}
+                title={agentRunning ? "Wait for the current turn to finish" : undefined}
+                onClick={() => void merge()}
+              >
+                {merging ? "Merging…" : `Merge to ${session.worktreeSourceBranch}`}
+              </ControlButton>
+            </div>
+          ) : null}
+
+          {statusFailed ? (
+            <div
+              className="py-10 text-center text-sm text-text-muted"
+              data-testid="git-status-error"
+              role="alert"
+            >
+              Git status could not be loaded. Mutation actions are unavailable.
+            </div>
+          ) : !statusReady || !status ? (
+            <div
+              className="py-10 text-center text-sm text-text-muted"
+              data-testid="git-status-loading"
+              role="status"
+            >
+              Loading Git status…
+            </div>
+          ) : !status.repo ? (
+            <div className="py-10 text-center text-sm text-text-muted" data-testid="git-not-repo">
+              This project isn&apos;t a git repository.
+            </div>
+          ) : (
+            <>
+              <p className="pb-3 text-xs text-text-muted">
+                Uncommitted changes in the project working tree. Commit stages everything (git add
+                -A) and commits with your message.
+              </p>
+
+              <div className="space-y-1" data-testid="git-file-list">
+                {status.files.map((file) => (
+                  <div
+                    key={file.path}
+                    data-git-path={file.path}
+                    className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5"
+                  >
+                    <span className="w-6 shrink-0 font-mono text-detail text-accent">
+                      {file.status.trim() || "•"}
+                    </span>
+                    <span className="truncate font-mono text-caption text-text-primary">
+                      {file.path}
+                    </span>
+                  </div>
+                ))}
+                {status.clean ? (
+                  <div className="py-8 text-center text-sm text-text-muted" data-testid="git-clean">
+                    Working tree clean — nothing to commit.
+                  </div>
+                ) : null}
+              </div>
+
+              {gitActions === false ? (
+                <div
+                  data-testid="git-actions-off"
+                  className="mt-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-xs text-text-muted"
+                >
+                  Git actions are turned off. Enable Commit / Push actions in the welcome
+                  flow&apos;s Preferences to commit from here.
+                </div>
+              ) : gitActions === null ? null : (
+                <div className="mt-4 flex flex-col gap-2">
+                  <ControlTextArea
+                    ref={commitMessageRef}
+                    data-testid="git-commit-message"
+                    className="min-h-[64px] w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                    placeholder="Commit message"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <ControlButton
+                      data-testid="git-generate-message"
+                      className="mr-auto flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+                      disabled={generating || committing || status.clean}
+                      onClick={() => void generateMessage()}
+                      title="Draft a commit message from your changes"
+                    >
+                      <Sparkles size={12} /> {generating ? "Generating…" : "Generate"}
+                    </ControlButton>
+                    <ControlButton
+                      data-testid="git-push"
+                      className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+                      disabled={committing || pushing}
+                      onClick={() => void push()}
+                      title="Push the current branch's commits"
+                    >
+                      {pushing ? "Pushing…" : "Push"}
+                    </ControlButton>
+                    <ControlButton
+                      data-testid="git-commit"
+                      className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+                      disabled={committing || status.clean || !message.trim()}
+                      onClick={() => void commit(false)}
+                    >
+                      {committing ? "Committing…" : "Commit all"}
+                    </ControlButton>
+                    <ControlButton
+                      data-testid="git-commit-push"
+                      className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+                      style={{
+                        background:
+                          "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                        color: "var(--color-accent-foreground)",
+                      }}
+                      disabled={committing || status.clean || !message.trim()}
+                      onClick={() => void commit(true)}
+                    >
+                      Commit &amp; Push
+                    </ControlButton>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

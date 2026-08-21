@@ -1,11 +1,12 @@
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import {
   ControlButton,
   ControlInput,
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderOpen, LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { FolderOpen, LogIn, LogOut, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { openExternal, revealResourceFile } from "@/lib/native";
@@ -864,18 +865,11 @@ export function McpScreen() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="mcp-screen">
-      <div className="mx-auto max-w-3xl">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
-          <div className="flex items-center gap-2">
-            <Server size={16} className="text-text-secondary" aria-hidden />
-            <h2
-              className="text-base font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              MCP servers
-            </h2>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="mcp-screen">
+      <SectionHero
+        imageSrc="/screen-art/screen-art-mcp.jpg"
+        title="MCP servers"
+        actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-border-subtle px-2.5 py-1 text-xs text-text-secondary">
               <ControlInput
@@ -928,736 +922,757 @@ export function McpScreen() {
               <Plus size={13} /> Add server
             </ControlButton>
           </div>
-        </div>
-        <p id="mcp-policy-help" className="break-words text-xs text-text-muted">
-          Pausing removes MCP from model runtimes while keeping servers, All Projects/project/agent
-          assignments, and sign-ins unchanged.
-        </p>
-        <div
-          id="mcp-policy-status"
-          data-testid="mcp-policy-status"
-          aria-live="polite"
-          className={cn(
-            "min-h-4 pb-1 text-xs",
-            policyError ? "text-text-primary" : "text-text-muted",
-          )}
-        >
-          {policyError ??
-            (policySaving
-              ? "Saving MCP availability…"
-              : mcpEnabled === null
-                ? "Loading MCP availability…"
-                : mcpEnabled
-                  ? "MCP is on."
-                  : "MCP is paused.")}
-        </div>
-        <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
-          {selectedProject
-            ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
-            : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
-        </p>
-
-        {formOpen ? (
-          <form
-            className="mb-3 flex flex-col gap-2"
-            data-testid={editing ? "mcp-edit-form" : "mcp-add-form"}
-            aria-label={editing ? `Edit MCP server ${editingId}` : "Add MCP server"}
-            aria-busy={saving}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (editing) void saveEdit();
-              else void add();
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              event.preventDefault();
-              if (saving) return;
-              if (editing) {
-                closeEditor(true);
-                return;
-              }
-              setAdding(false);
-              requestAnimationFrame(() => addToggleRef.current?.focus());
-            }}
-          >
-            {editing ? (
-              <p className="text-xs text-text-muted" data-testid="mcp-editing-label">
-                Editing {editingId}
-              </p>
-            ) : null}
-            {!editing ? (
-              <div data-testid="mcp-input-mode">
-                <AppSegmentedPicker
-                  aria-label="MCP input mode"
-                  size="sm"
-                  value={inputMode}
-                  onChange={(next) => setInputMode(next)}
-                  disabled={saving}
-                  options={MCP_INPUT_MODE_OPTIONS}
-                />
-              </div>
-            ) : null}
-            {pasting ? (
-              <label className="flex min-w-0 flex-col gap-1">
-                <span className="text-xs font-medium text-text-secondary">
-                  Paste a server&apos;s config, or a claude/codex mcp add command
-                </span>
-                <ControlTextArea
-                  autoFocus
-                  data-testid="mcp-paste"
-                  rows={4}
-                  className="min-w-0 w-full resize-y rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
-                  placeholder={
-                    '{ "mcpServers": { "amplitude": { "url": "https://mcp.amplitude.com/mcp" } } }'
-                  }
-                  value={pasteText}
-                  disabled={saving}
-                  onChange={(event) => setPasteText(event.target.value)}
-                />
-                <span className="text-xs text-text-muted">
-                  We parse it and add the server(s). Switch to Manual to fill the fields yourself.
-                </span>
-              </label>
-            ) : (
-              <div data-testid="mcp-transport">
-                <AppSegmentedPicker
-                  aria-label="MCP server type"
-                  size="sm"
-                  value={transport}
-                  onChange={(next) => setTransport(next)}
-                  disabled={saving}
-                  options={MCP_TRANSPORT_OPTIONS}
-                />
-              </div>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-3xl">
+          <p id="mcp-policy-help" className="break-words text-xs text-text-muted">
+            Pausing removes MCP from model runtimes while keeping servers, All
+            Projects/project/agent assignments, and sign-ins unchanged.
+          </p>
+          <div
+            id="mcp-policy-status"
+            data-testid="mcp-policy-status"
+            aria-live="polite"
+            className={cn(
+              "min-h-4 pb-1 text-xs",
+              policyError ? "text-text-primary" : "text-text-muted",
             )}
-            <label className={cn("flex flex-col gap-1", pasting && "hidden")}>
-              <span className="text-xs font-medium text-text-secondary">Name</span>
-              <ControlInput
-                autoFocus={!editing}
-                data-testid="mcp-name"
-                className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-55"
-                placeholder="filesystem"
-                aria-invalid={duplicateName || undefined}
-                aria-describedby={duplicateName ? "mcp-add-hint" : undefined}
-                value={name}
-                disabled={editing || saving}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <div className={cn("flex flex-col gap-2", pasting && "hidden")}>
-              {transport === "stdio" ? (
-                <>
-                  <label className="flex min-w-0 flex-col gap-1">
-                    <span className="text-xs font-medium text-text-secondary">Command</span>
+          >
+            {policyError ??
+              (policySaving
+                ? "Saving MCP availability…"
+                : mcpEnabled === null
+                  ? "Loading MCP availability…"
+                  : mcpEnabled
+                    ? "MCP is on."
+                    : "MCP is paused.")}
+          </div>
+          <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
+            {selectedProject
+              ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
+              : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
+          </p>
+
+          {formOpen ? (
+            <form
+              className="mb-3 flex flex-col gap-2"
+              data-testid={editing ? "mcp-edit-form" : "mcp-add-form"}
+              aria-label={editing ? `Edit MCP server ${editingId}` : "Add MCP server"}
+              aria-busy={saving}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (editing) void saveEdit();
+                else void add();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                if (saving) return;
+                if (editing) {
+                  closeEditor(true);
+                  return;
+                }
+                setAdding(false);
+                requestAnimationFrame(() => addToggleRef.current?.focus());
+              }}
+            >
+              {editing ? (
+                <p className="text-xs text-text-muted" data-testid="mcp-editing-label">
+                  Editing {editingId}
+                </p>
+              ) : null}
+              {!editing ? (
+                <div data-testid="mcp-input-mode">
+                  <AppSegmentedPicker
+                    aria-label="MCP input mode"
+                    size="sm"
+                    value={inputMode}
+                    onChange={(next) => setInputMode(next)}
+                    disabled={saving}
+                    options={MCP_INPUT_MODE_OPTIONS}
+                  />
+                </div>
+              ) : null}
+              {pasting ? (
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-xs font-medium text-text-secondary">
+                    Paste a server&apos;s config, or a claude/codex mcp add command
+                  </span>
+                  <ControlTextArea
+                    autoFocus
+                    data-testid="mcp-paste"
+                    rows={4}
+                    className="min-w-0 w-full resize-y rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                    placeholder={
+                      '{ "mcpServers": { "amplitude": { "url": "https://mcp.amplitude.com/mcp" } } }'
+                    }
+                    value={pasteText}
+                    disabled={saving}
+                    onChange={(event) => setPasteText(event.target.value)}
+                  />
+                  <span className="text-xs text-text-muted">
+                    We parse it and add the server(s). Switch to Manual to fill the fields yourself.
+                  </span>
+                </label>
+              ) : (
+                <div data-testid="mcp-transport">
+                  <AppSegmentedPicker
+                    aria-label="MCP server type"
+                    size="sm"
+                    value={transport}
+                    onChange={(next) => setTransport(next)}
+                    disabled={saving}
+                    options={MCP_TRANSPORT_OPTIONS}
+                  />
+                </div>
+              )}
+              <label className={cn("flex flex-col gap-1", pasting && "hidden")}>
+                <span className="text-xs font-medium text-text-secondary">Name</span>
+                <ControlInput
+                  autoFocus={!editing}
+                  data-testid="mcp-name"
+                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                  placeholder="filesystem"
+                  aria-invalid={duplicateName || undefined}
+                  aria-describedby={duplicateName ? "mcp-add-hint" : undefined}
+                  value={name}
+                  disabled={editing || saving}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <div className={cn("flex flex-col gap-2", pasting && "hidden")}>
+                {transport === "stdio" ? (
+                  <>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <span className="text-xs font-medium text-text-secondary">Command</span>
+                      <ControlInput
+                        autoFocus={editing}
+                        data-testid="mcp-command"
+                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                        placeholder="npx"
+                        value={command}
+                        disabled={saving}
+                        onChange={(e) => setCommand(e.target.value)}
+                      />
+                    </label>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <span className="text-xs font-medium text-text-secondary">Arguments</span>
+                      <ControlInput
+                        data-testid="mcp-args"
+                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                        placeholder='-y server-fs "/path with spaces"'
+                        value={argsText}
+                        disabled={saving}
+                        onChange={(e) => setArgsText(e.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <label className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-xs font-medium text-text-secondary">URL</span>
                     <ControlInput
                       autoFocus={editing}
-                      data-testid="mcp-command"
+                      data-testid="mcp-url"
                       className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
-                      placeholder="npx"
-                      value={command}
+                      placeholder="https://mcp.example.com/mcp"
+                      aria-invalid={
+                        (Boolean(trimmedUrl) && !isValidHttpUrl(trimmedUrl)) || undefined
+                      }
+                      aria-describedby={
+                        trimmedUrl && !isValidHttpUrl(trimmedUrl) ? "mcp-add-hint" : undefined
+                      }
+                      value={url}
                       disabled={saving}
-                      onChange={(e) => setCommand(e.target.value)}
+                      onChange={(e) => setUrl(e.target.value)}
                     />
                   </label>
-                  <label className="flex min-w-0 flex-col gap-1">
-                    <span className="text-xs font-medium text-text-secondary">Arguments</span>
-                    <ControlInput
-                      data-testid="mcp-args"
-                      className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
-                      placeholder='-y server-fs "/path with spaces"'
-                      value={argsText}
-                      disabled={saving}
-                      onChange={(e) => setArgsText(e.target.value)}
-                    />
-                  </label>
-                </>
-              ) : (
-                <label className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="text-xs font-medium text-text-secondary">URL</span>
-                  <ControlInput
-                    autoFocus={editing}
-                    data-testid="mcp-url"
-                    className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
-                    placeholder="https://mcp.example.com/mcp"
-                    aria-invalid={(Boolean(trimmedUrl) && !isValidHttpUrl(trimmedUrl)) || undefined}
-                    aria-describedby={
-                      trimmedUrl && !isValidHttpUrl(trimmedUrl) ? "mcp-add-hint" : undefined
-                    }
-                    value={url}
-                    disabled={saving}
-                    onChange={(e) => setUrl(e.target.value)}
-                  />
-                </label>
-              )}
-            </div>
-            <div className="flex items-center justify-end">
-              <ControlButton
-                type="submit"
-                data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
-                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-                style={{
-                  background:
-                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                  color: "var(--color-accent-foreground)",
-                }}
-                disabled={!canSubmit}
-              >
-                {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
-              </ControlButton>
-            </div>
-            {replacedByPaste.length > 0 ? (
-              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
-                Adding replaces the existing {replacedByPaste.join(", ")}.
-              </p>
-            ) : duplicateName ? (
-              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
-                A server named {trimmedName} already exists.
-              </p>
-            ) : transport === "http" && trimmedUrl && !isValidHttpUrl(trimmedUrl) ? (
-              <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
-                Enter an http:// or https:// URL.
-              </p>
-            ) : null}
-          </form>
-        ) : null}
+                )}
+              </div>
+              <div className="flex items-center justify-end">
+                <ControlButton
+                  type="submit"
+                  data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
+                  className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                  style={{
+                    background:
+                      "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                    color: "var(--color-accent-foreground)",
+                  }}
+                  disabled={!canSubmit}
+                >
+                  {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
+                </ControlButton>
+              </div>
+              {replacedByPaste.length > 0 ? (
+                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                  Adding replaces the existing {replacedByPaste.join(", ")}.
+                </p>
+              ) : duplicateName ? (
+                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                  A server named {trimmedName} already exists.
+                </p>
+              ) : transport === "http" && trimmedUrl && !isValidHttpUrl(trimmedUrl) ? (
+                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                  Enter an http:// or https:// URL.
+                </p>
+              ) : null}
+            </form>
+          ) : null}
 
-        <div
-          className="space-y-1.5"
-          data-testid="mcp-list"
-          aria-busy={loading || savingAssignments.size > 0}
-        >
-          {loading ? (
-            <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-loading">
-              Loading MCP servers…
-            </div>
-          ) : null}
-          {!loading && catalogLoadFailed ? (
-            <div
-              className="py-8 text-center text-sm text-danger"
-              data-testid="mcp-load-error"
-              role="alert"
-            >
-              MCP servers could not be loaded. Reload the catalog to try again.
-            </div>
-          ) : null}
-          {!loading &&
-            !catalogLoadFailed &&
-            servers.map((server) => {
-              const tools =
-                server.tools ?? server.toolNames.map((name) => ({ name, description: undefined }));
-              const toolsExpanded = expandedToolServers.has(server.id);
-              const toolsRegionId = `mcp-tools-region-${server.id}`;
-              return (
-                <div key={server.id}>
-                  <div
-                    data-testid={`mcp-${server.id}`}
-                    data-connected={server.connected ? "true" : "false"}
-                    data-assigned={
-                      defaultAssignedServerIds.includes(server.id) ||
-                      assignedServerIds.includes(server.id)
-                        ? "true"
-                        : "false"
-                    }
-                    className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
-                    aria-busy={
-                      savingAssignments.has(server.id) ||
-                      savingAssignments.has(`default:${server.id}`)
-                    }
-                  >
-                    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-                      <label className="flex items-center gap-1.5 text-detail text-text-muted">
-                        <ControlInput
-                          type="checkbox"
-                          className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          ref={(element) => {
-                            if (element) defaultAssignmentInputs.current.set(server.id, element);
-                            else defaultAssignmentInputs.current.delete(server.id);
-                          }}
-                          data-testid={`mcp-assign-all-${server.id}`}
-                          aria-label={`All Projects MCP assignment for ${server.id}`}
-                          aria-busy={savingAssignments.has(`default:${server.id}`)}
-                          checked={defaultAssignedServerIds.includes(server.id)}
-                          disabled={savingAssignments.size > 0}
-                          onChange={(event) => void assignDefault(server.id, event.target.checked)}
-                        />
-                        <span aria-live="polite">
-                          {savingAssignments.has(`default:${server.id}`)
-                            ? "Saving All Projects…"
-                            : "All Projects"}
-                        </span>
-                      </label>
-                      {currentProjectId ? (
+          <div
+            className="space-y-1.5"
+            data-testid="mcp-list"
+            aria-busy={loading || savingAssignments.size > 0}
+          >
+            {loading ? (
+              <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-loading">
+                Loading MCP servers…
+              </div>
+            ) : null}
+            {!loading && catalogLoadFailed ? (
+              <div
+                className="py-8 text-center text-sm text-danger"
+                data-testid="mcp-load-error"
+                role="alert"
+              >
+                MCP servers could not be loaded. Reload the catalog to try again.
+              </div>
+            ) : null}
+            {!loading &&
+              !catalogLoadFailed &&
+              servers.map((server) => {
+                const tools =
+                  server.tools ??
+                  server.toolNames.map((name) => ({ name, description: undefined }));
+                const toolsExpanded = expandedToolServers.has(server.id);
+                const toolsRegionId = `mcp-tools-region-${server.id}`;
+                return (
+                  <div key={server.id}>
+                    <div
+                      data-testid={`mcp-${server.id}`}
+                      data-connected={server.connected ? "true" : "false"}
+                      data-assigned={
+                        defaultAssignedServerIds.includes(server.id) ||
+                        assignedServerIds.includes(server.id)
+                          ? "true"
+                          : "false"
+                      }
+                      className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5"
+                      aria-busy={
+                        savingAssignments.has(server.id) ||
+                        savingAssignments.has(`default:${server.id}`)
+                      }
+                    >
+                      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
                         <label className="flex items-center gap-1.5 text-detail text-text-muted">
                           <ControlInput
                             type="checkbox"
                             className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                             ref={(element) => {
-                              if (element) assignmentInputs.current.set(server.id, element);
-                              else assignmentInputs.current.delete(server.id);
+                              if (element) defaultAssignmentInputs.current.set(server.id, element);
+                              else defaultAssignmentInputs.current.delete(server.id);
                             }}
-                            data-testid={`mcp-assign-${server.id}`}
-                            aria-busy={savingAssignments.has(server.id)}
-                            aria-label={
-                              defaultAssignedServerIds.includes(server.id)
-                                ? `${server.id} is inherited from All Projects for ${selectedProject?.name ?? "project"}; explicit project assignment is ${assignedServerIds.includes(server.id) ? "retained" : "not set"}`
-                                : `Assign ${server.id} to ${selectedProject?.name ?? "project"}`
+                            data-testid={`mcp-assign-all-${server.id}`}
+                            aria-label={`All Projects MCP assignment for ${server.id}`}
+                            aria-busy={savingAssignments.has(`default:${server.id}`)}
+                            checked={defaultAssignedServerIds.includes(server.id)}
+                            disabled={savingAssignments.size > 0}
+                            onChange={(event) =>
+                              void assignDefault(server.id, event.target.checked)
                             }
-                            aria-describedby={
-                              defaultAssignedServerIds.includes(server.id)
-                                ? `mcp-inherited-${server.id}`
-                                : undefined
-                            }
-                            checked={
-                              defaultAssignedServerIds.includes(server.id) ||
-                              assignedServerIds.includes(server.id)
-                            }
-                            disabled={
-                              defaultAssignedServerIds.includes(server.id) ||
-                              savingAssignments.size > 0
-                            }
-                            onChange={(event) => void assign(server.id, event.target.checked)}
                           />
                           <span aria-live="polite">
-                            {defaultAssignedServerIds.includes(server.id)
-                              ? assignedServerIds.includes(server.id)
-                                ? "Inherited · explicit assignment preserved"
-                                : "Inherited · no explicit assignment"
-                              : savingAssignments.has(server.id)
-                                ? "Saving this project…"
-                                : assignedServerIds.includes(server.id)
-                                  ? "Assigned"
-                                  : "This project"}
+                            {savingAssignments.has(`default:${server.id}`)
+                              ? "Saving All Projects…"
+                              : "All Projects"}
                           </span>
-                          {defaultAssignedServerIds.includes(server.id) ? (
-                            <span id={`mcp-inherited-${server.id}`} className="sr-only">
-                              The project control is disabled while All Projects is enabled.
-                              {assignedServerIds.includes(server.id)
-                                ? " Its explicit project assignment is preserved."
-                                : " It has no explicit project assignment."}
-                            </span>
-                          ) : null}
                         </label>
-                      ) : null}
-                    </div>
-                    <div className="min-w-0 basis-40 flex-1">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden">
-                        <span
-                          className="truncate text-sm font-medium text-text-primary"
-                          style={{ fontStretch: "expanded" }}
-                        >
-                          {server.id}
-                        </span>
-                        <span
-                          data-testid={`mcp-status-${server.id}`}
-                          className={cn(
-                            "rounded-capsule border px-1.5 text-micro",
-                            !mcpEnabled
-                              ? "border-border-subtle text-text-muted"
+                        {currentProjectId ? (
+                          <label className="flex items-center gap-1.5 text-detail text-text-muted">
+                            <ControlInput
+                              type="checkbox"
+                              className="h-4 w-4 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              ref={(element) => {
+                                if (element) assignmentInputs.current.set(server.id, element);
+                                else assignmentInputs.current.delete(server.id);
+                              }}
+                              data-testid={`mcp-assign-${server.id}`}
+                              aria-busy={savingAssignments.has(server.id)}
+                              aria-label={
+                                defaultAssignedServerIds.includes(server.id)
+                                  ? `${server.id} is inherited from All Projects for ${selectedProject?.name ?? "project"}; explicit project assignment is ${assignedServerIds.includes(server.id) ? "retained" : "not set"}`
+                                  : `Assign ${server.id} to ${selectedProject?.name ?? "project"}`
+                              }
+                              aria-describedby={
+                                defaultAssignedServerIds.includes(server.id)
+                                  ? `mcp-inherited-${server.id}`
+                                  : undefined
+                              }
+                              checked={
+                                defaultAssignedServerIds.includes(server.id) ||
+                                assignedServerIds.includes(server.id)
+                              }
+                              disabled={
+                                defaultAssignedServerIds.includes(server.id) ||
+                                savingAssignments.size > 0
+                              }
+                              onChange={(event) => void assign(server.id, event.target.checked)}
+                            />
+                            <span aria-live="polite">
+                              {defaultAssignedServerIds.includes(server.id)
+                                ? assignedServerIds.includes(server.id)
+                                  ? "Inherited · explicit assignment preserved"
+                                  : "Inherited · no explicit assignment"
+                                : savingAssignments.has(server.id)
+                                  ? "Saving this project…"
+                                  : assignedServerIds.includes(server.id)
+                                    ? "Assigned"
+                                    : "This project"}
+                            </span>
+                            {defaultAssignedServerIds.includes(server.id) ? (
+                              <span id={`mcp-inherited-${server.id}`} className="sr-only">
+                                The project control is disabled while All Projects is enabled.
+                                {assignedServerIds.includes(server.id)
+                                  ? " Its explicit project assignment is preserved."
+                                  : " It has no explicit project assignment."}
+                              </span>
+                            ) : null}
+                          </label>
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 basis-40 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden">
+                          <span
+                            className="truncate text-sm font-medium text-text-primary"
+                            style={{ fontStretch: "expanded" }}
+                          >
+                            {server.id}
+                          </span>
+                          <span
+                            data-testid={`mcp-status-${server.id}`}
+                            className={cn(
+                              "rounded-capsule border px-1.5 text-micro",
+                              !mcpEnabled
+                                ? "border-border-subtle text-text-muted"
+                                : server.connected
+                                  ? "border-success text-success"
+                                  : currentProjectId &&
+                                      !defaultAssignedServerIds.includes(server.id) &&
+                                      !assignedServerIds.includes(server.id)
+                                    ? "border-border-subtle text-text-muted"
+                                    : "border-danger text-danger",
+                            )}
+                          >
+                            {!mcpEnabled
+                              ? "paused"
                               : server.connected
-                                ? "border-success text-success"
+                                ? "connected"
                                 : currentProjectId &&
                                     !defaultAssignedServerIds.includes(server.id) &&
                                     !assignedServerIds.includes(server.id)
-                                  ? "border-border-subtle text-text-muted"
-                                  : "border-danger text-danger",
-                          )}
-                        >
-                          {!mcpEnabled
-                            ? "paused"
-                            : server.connected
-                              ? "connected"
-                              : currentProjectId &&
-                                  !defaultAssignedServerIds.includes(server.id) &&
-                                  !assignedServerIds.includes(server.id)
-                                ? "available"
-                                : "disconnected"}
-                        </span>
-                        <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
-                          {server.transport}
-                        </span>
-                        {server.transport === "http" &&
-                        server.auth &&
-                        server.auth.status !== "none" ? (
-                          <span
-                            data-testid={`mcp-auth-${server.id}`}
-                            data-auth={server.auth.status}
-                            className={cn(
-                              "rounded-capsule border px-1.5 text-micro",
-                              server.auth.status === "authorized"
-                                ? "border-success text-success"
-                                : "border-border-subtle text-text-muted",
-                            )}
-                          >
-                            {server.auth.status === "authorized" ? "signed in" : "sign-in required"}
+                                  ? "available"
+                                  : "disconnected"}
                           </span>
-                        ) : null}
-                        <ControlButton
-                          data-testid={`mcp-tools-toggle-${server.id}`}
-                          className="rounded-capsule px-1.5 py-0.5 text-detail text-text-muted hover:bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          aria-label={`${toolsExpanded ? "Hide" : "Show"} tools for ${server.id} (${tools.length})`}
-                          aria-expanded={toolsExpanded}
-                          aria-controls={toolsRegionId}
-                          onClick={() =>
-                            setExpandedToolServers((current) => {
-                              const next = new Set(current);
-                              if (next.has(server.id)) next.delete(server.id);
-                              else next.add(server.id);
-                              return next;
-                            })
-                          }
-                        >
-                          Tools ({tools.length})
-                        </ControlButton>
-                      </div>
-                      <McpProvenance server={server} />
-                      {!mcpEnabled ? (
-                        <div className="truncate text-detail text-text-muted">
-                          Paused globally; configuration and sign-ins are preserved.
-                        </div>
-                      ) : server.error ? (
-                        <div
-                          className="truncate text-detail text-danger"
-                          title="Connection failed. Review this server definition and reconnect."
-                        >
-                          {server.error}
-                        </div>
-                      ) : null}
-                    </div>
-                    {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
-                      server.auth.status === "authorized" ? (
-                        <ControlButton
-                          data-testid={`mcp-logout-${server.id}`}
-                          className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          title="Sign out"
-                          aria-label={`Sign out of ${server.id}`}
-                          onClick={() => void logout(server.id)}
-                        >
-                          <LogOut size={13} />
-                        </ControlButton>
-                      ) : (
-                        <ControlButton
-                          ref={(element) => {
-                            if (element) loginButtonRefs.current.set(server.id, element);
-                            else loginButtonRefs.current.delete(server.id);
-                          }}
-                          data-testid={`mcp-login-${server.id}`}
-                          className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          title="Sign in"
-                          aria-label={`Sign in to ${server.id}`}
-                          aria-busy={loginPendingId === server.id}
-                          disabled={loginPendingId === server.id}
-                          onClick={() => void beginLogin(server.id)}
-                        >
-                          <LogIn size={12} />
-                          {loginPendingId === server.id ? "Starting…" : "Sign in"}
-                        </ControlButton>
-                      )
-                    ) : null}
-                    <ControlButton
-                      data-testid={`mcp-refresh-${server.id}`}
-                      className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                      title={mcpEnabled ? "Reconnect" : "MCP is paused; turn it on to reconnect"}
-                      aria-label={
-                        mcpEnabled
-                          ? `Reconnect ${server.id}`
-                          : `Reconnect ${server.id} unavailable while MCP is paused`
-                      }
-                      aria-busy={loginPendingId === server.id || login?.id === server.id}
-                      disabled={
-                        !mcpEnabled || loginPendingId === server.id || login?.id === server.id
-                      }
-                      onClick={() => void refresh(server.id)}
-                    >
-                      <RefreshCw size={13} />
-                    </ControlButton>
-                    {server.provenance && "path" in server.provenance ? (
-                      <ControlButton
-                        data-testid={`mcp-reveal-${server.id}`}
-                        className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                        title="Reveal config file"
-                        aria-label={`Reveal MCP config file for ${server.id}`}
-                        onClick={() => {
-                          const provenance = server.provenance;
-                          if (provenance && "path" in provenance) {
-                            void revealConfig(provenance.path);
-                          }
-                        }}
-                      >
-                        <FolderOpen size={13} />
-                      </ControlButton>
-                    ) : null}
-                    {server.editable === true ? (
-                      <ControlButton
-                        ref={(element) => {
-                          if (element) editToggleRefs.current.set(server.id, element);
-                          else editToggleRefs.current.delete(server.id);
-                        }}
-                        data-testid={`mcp-edit-${server.id}`}
-                        className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                        title={editingId === server.id ? "Close editor" : "Edit global definition"}
-                        aria-label={
-                          editingId === server.id
-                            ? `Close MCP editor for ${server.id}`
-                            : `Edit global MCP definition ${server.id}`
-                        }
-                        aria-expanded={editingId === server.id}
-                        disabled={saving}
-                        onClick={() => startEdit(server)}
-                      >
-                        <Pencil size={13} />
-                      </ControlButton>
-                    ) : null}
-                    {server.editable === true ? (
-                      <ControlButton
-                        data-testid={`mcp-remove-${server.id}`}
-                        className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                        title="Remove global definition"
-                        aria-label={`Remove global MCP definition ${server.id}`}
-                        onClick={() => {
-                          if (
-                            confirm(
-                              `Remove global MCP definition "${server.id}"? Existing assignments will show as missing unless another effective definition exists.`,
-                            )
-                          ) {
-                            void remove(server.id);
-                          }
-                        }}
-                      >
-                        <Trash2 size={13} />
-                      </ControlButton>
-                    ) : null}
-                  </div>
-                  {toolsExpanded ? (
-                    <div
-                      id={toolsRegionId}
-                      data-testid={`mcp-tools-${server.id}`}
-                      role="region"
-                      aria-label={`Tools for ${server.id}`}
-                      className="mt-1 min-w-0 overflow-hidden rounded-xl border border-border-subtle bg-surface-subtle px-3.5"
-                    >
-                      {tools.length > 0 ? (
-                        <div className="divide-y divide-border-subtle">
-                          {tools.map((tool, index) => (
-                            <div key={`${tool.name}-${index}`} className="min-w-0 py-2.5">
-                              <div className="break-words font-mono text-sm font-medium text-text-primary">
-                                {stripBidiControlCharacters(tool.name)}
-                              </div>
-                              {tool.description ? (
-                                <div className="mt-0.5 min-w-0 whitespace-pre-wrap break-words text-detail text-text-muted [overflow-wrap:anywhere]">
-                                  {stripBidiControlCharacters(tool.description)}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="py-2.5 text-detail text-text-muted">
-                          {server.connected
-                            ? "This server reported no tools."
-                            : "Connect this server to load its tools."}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-                  {login?.id === server.id ? (
-                    <div
-                      data-testid={`mcp-login-panel-${server.id}`}
-                      aria-busy={loginSubmitting}
-                      className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
-                    >
-                      <div className="text-detail text-text-muted" role="status" aria-live="polite">
-                        {loginSubmitting
-                          ? "Submitting authorization code…"
-                          : server.auth?.status === "error"
-                            ? "Sign-in stopped."
-                            : login.automatic
-                              ? "Waiting for authorization in your browser…"
-                              : "Open the authorization page and approve access:"}
-                      </div>
-                      <a
-                        data-testid={`mcp-login-url-${server.id}`}
-                        href={login.authUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="truncate font-mono text-detail text-accent underline"
-                      >
-                        {login.authUrl}
-                      </a>
-                      {server.auth?.notice ? (
-                        <div className="text-detail text-warning" role="status">
-                          {server.auth.notice}
-                        </div>
-                      ) : null}
-                      {server.auth?.status === "error" && server.auth.error ? (
-                        <div className="flex flex-col items-start gap-2">
-                          <div className="text-detail text-danger" role="alert">
-                            {server.auth.error}
-                          </div>
+                          <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                            {server.transport}
+                          </span>
+                          {server.transport === "http" &&
+                          server.auth &&
+                          server.auth.status !== "none" ? (
+                            <span
+                              data-testid={`mcp-auth-${server.id}`}
+                              data-auth={server.auth.status}
+                              className={cn(
+                                "rounded-capsule border px-1.5 text-micro",
+                                server.auth.status === "authorized"
+                                  ? "border-success text-success"
+                                  : "border-border-subtle text-text-muted",
+                              )}
+                            >
+                              {server.auth.status === "authorized"
+                                ? "signed in"
+                                : "sign-in required"}
+                            </span>
+                          ) : null}
                           <ControlButton
-                            data-testid={`mcp-login-restart-${server.id}`}
-                            className="rounded-capsule px-3 py-1.5 text-xs font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            onClick={() => void beginLogin(server.id)}
+                            data-testid={`mcp-tools-toggle-${server.id}`}
+                            className="rounded-capsule px-1.5 py-0.5 text-detail text-text-muted hover:bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            aria-label={`${toolsExpanded ? "Hide" : "Show"} tools for ${server.id} (${tools.length})`}
+                            aria-expanded={toolsExpanded}
+                            aria-controls={toolsRegionId}
+                            onClick={() =>
+                              setExpandedToolServers((current) => {
+                                const next = new Set(current);
+                                if (next.has(server.id)) next.delete(server.id);
+                                else next.add(server.id);
+                                return next;
+                              })
+                            }
                           >
-                            Restart sign in
+                            Tools ({tools.length})
                           </ControlButton>
                         </div>
-                      ) : login.manual ? (
-                        <>
-                          <div className="text-detail text-text-muted">
-                            Paste the code you were shown (or the full redirect URL):
+                        <McpProvenance server={server} />
+                        {!mcpEnabled ? (
+                          <div className="truncate text-detail text-text-muted">
+                            Paused globally; configuration and sign-ins are preserved.
                           </div>
-                          <div className="flex gap-2">
-                            <ControlInput
-                              autoFocus
-                              data-testid={`mcp-login-code-${server.id}`}
-                              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
-                              placeholder="authorization code"
-                              value={code}
-                              onChange={(e) => setCode(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") void submitCode();
-                                if (e.key === "Escape") void cancelLogin();
-                              }}
-                            />
+                        ) : server.error ? (
+                          <div
+                            className="truncate text-detail text-danger"
+                            title="Connection failed. Review this server definition and reconnect."
+                          >
+                            {server.error}
+                          </div>
+                        ) : null}
+                      </div>
+                      {server.transport === "http" &&
+                      server.auth &&
+                      server.auth.status !== "none" ? (
+                        server.auth.status === "authorized" ? (
+                          <ControlButton
+                            data-testid={`mcp-logout-${server.id}`}
+                            className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            title="Sign out"
+                            aria-label={`Sign out of ${server.id}`}
+                            onClick={() => void logout(server.id)}
+                          >
+                            <LogOut size={13} />
+                          </ControlButton>
+                        ) : (
+                          <ControlButton
+                            ref={(element) => {
+                              if (element) loginButtonRefs.current.set(server.id, element);
+                              else loginButtonRefs.current.delete(server.id);
+                            }}
+                            data-testid={`mcp-login-${server.id}`}
+                            className="flex items-center gap-1 rounded-capsule px-2 py-1 text-detail font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            title="Sign in"
+                            aria-label={`Sign in to ${server.id}`}
+                            aria-busy={loginPendingId === server.id}
+                            disabled={loginPendingId === server.id}
+                            onClick={() => void beginLogin(server.id)}
+                          >
+                            <LogIn size={12} />
+                            {loginPendingId === server.id ? "Starting…" : "Sign in"}
+                          </ControlButton>
+                        )
+                      ) : null}
+                      <ControlButton
+                        data-testid={`mcp-refresh-${server.id}`}
+                        className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        title={mcpEnabled ? "Reconnect" : "MCP is paused; turn it on to reconnect"}
+                        aria-label={
+                          mcpEnabled
+                            ? `Reconnect ${server.id}`
+                            : `Reconnect ${server.id} unavailable while MCP is paused`
+                        }
+                        aria-busy={loginPendingId === server.id || login?.id === server.id}
+                        disabled={
+                          !mcpEnabled || loginPendingId === server.id || login?.id === server.id
+                        }
+                        onClick={() => void refresh(server.id)}
+                      >
+                        <RefreshCw size={13} />
+                      </ControlButton>
+                      {server.provenance && "path" in server.provenance ? (
+                        <ControlButton
+                          data-testid={`mcp-reveal-${server.id}`}
+                          className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          title="Reveal config file"
+                          aria-label={`Reveal MCP config file for ${server.id}`}
+                          onClick={() => {
+                            const provenance = server.provenance;
+                            if (provenance && "path" in provenance) {
+                              void revealConfig(provenance.path);
+                            }
+                          }}
+                        >
+                          <FolderOpen size={13} />
+                        </ControlButton>
+                      ) : null}
+                      {server.editable === true ? (
+                        <ControlButton
+                          ref={(element) => {
+                            if (element) editToggleRefs.current.set(server.id, element);
+                            else editToggleRefs.current.delete(server.id);
+                          }}
+                          data-testid={`mcp-edit-${server.id}`}
+                          className="rounded p-1 text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          title={
+                            editingId === server.id ? "Close editor" : "Edit global definition"
+                          }
+                          aria-label={
+                            editingId === server.id
+                              ? `Close MCP editor for ${server.id}`
+                              : `Edit global MCP definition ${server.id}`
+                          }
+                          aria-expanded={editingId === server.id}
+                          disabled={saving}
+                          onClick={() => startEdit(server)}
+                        >
+                          <Pencil size={13} />
+                        </ControlButton>
+                      ) : null}
+                      {server.editable === true ? (
+                        <ControlButton
+                          data-testid={`mcp-remove-${server.id}`}
+                          className="rounded p-1 text-text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          title="Remove global definition"
+                          aria-label={`Remove global MCP definition ${server.id}`}
+                          onClick={() => {
+                            if (
+                              confirm(
+                                `Remove global MCP definition "${server.id}"? Existing assignments will show as missing unless another effective definition exists.`,
+                              )
+                            ) {
+                              void remove(server.id);
+                            }
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </ControlButton>
+                      ) : null}
+                    </div>
+                    {toolsExpanded ? (
+                      <div
+                        id={toolsRegionId}
+                        data-testid={`mcp-tools-${server.id}`}
+                        role="region"
+                        aria-label={`Tools for ${server.id}`}
+                        className="mt-1 min-w-0 overflow-hidden rounded-xl border border-border-subtle bg-surface-subtle px-3.5"
+                      >
+                        {tools.length > 0 ? (
+                          <div className="divide-y divide-border-subtle">
+                            {tools.map((tool, index) => (
+                              <div key={`${tool.name}-${index}`} className="min-w-0 py-2.5">
+                                <div className="break-words font-mono text-sm font-medium text-text-primary">
+                                  {stripBidiControlCharacters(tool.name)}
+                                </div>
+                                {tool.description ? (
+                                  <div className="mt-0.5 min-w-0 whitespace-pre-wrap break-words text-detail text-text-muted [overflow-wrap:anywhere]">
+                                    {stripBidiControlCharacters(tool.description)}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="py-2.5 text-detail text-text-muted">
+                            {server.connected
+                              ? "This server reported no tools."
+                              : "Connect this server to load its tools."}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {login?.id === server.id ? (
+                      <div
+                        data-testid={`mcp-login-panel-${server.id}`}
+                        aria-busy={loginSubmitting}
+                        className="mt-1 flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-subtle px-3.5 py-3"
+                      >
+                        <div
+                          className="text-detail text-text-muted"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {loginSubmitting
+                            ? "Submitting authorization code…"
+                            : server.auth?.status === "error"
+                              ? "Sign-in stopped."
+                              : login.automatic
+                                ? "Waiting for authorization in your browser…"
+                                : "Open the authorization page and approve access:"}
+                        </div>
+                        <a
+                          data-testid={`mcp-login-url-${server.id}`}
+                          href={login.authUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate font-mono text-detail text-accent underline"
+                        >
+                          {login.authUrl}
+                        </a>
+                        {server.auth?.notice ? (
+                          <div className="text-detail text-warning" role="status">
+                            {server.auth.notice}
+                          </div>
+                        ) : null}
+                        {server.auth?.status === "error" && server.auth.error ? (
+                          <div className="flex flex-col items-start gap-2">
+                            <div className="text-detail text-danger" role="alert">
+                              {server.auth.error}
+                            </div>
                             <ControlButton
-                              data-testid={`mcp-login-submit-${server.id}`}
-                              className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
-                              style={{
-                                background:
-                                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                                color: "var(--color-accent-foreground)",
-                              }}
-                              disabled={!code.trim() || loginSubmitting}
-                              onClick={() => void submitCode()}
+                              data-testid={`mcp-login-restart-${server.id}`}
+                              className="rounded-capsule px-3 py-1.5 text-xs font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              onClick={() => void beginLogin(server.id)}
                             >
-                              Connect
+                              Restart sign in
+                            </ControlButton>
+                          </div>
+                        ) : login.manual ? (
+                          <>
+                            <div className="text-detail text-text-muted">
+                              Paste the code you were shown (or the full redirect URL):
+                            </div>
+                            <div className="flex gap-2">
+                              <ControlInput
+                                autoFocus
+                                data-testid={`mcp-login-code-${server.id}`}
+                                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                                placeholder="authorization code"
+                                value={code}
+                                onChange={(e) => setCode(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") void submitCode();
+                                  if (e.key === "Escape") void cancelLogin();
+                                }}
+                              />
+                              <ControlButton
+                                data-testid={`mcp-login-submit-${server.id}`}
+                                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                                style={{
+                                  background:
+                                    "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
+                                  color: "var(--color-accent-foreground)",
+                                }}
+                                disabled={!code.trim() || loginSubmitting}
+                                onClick={() => void submitCode()}
+                              >
+                                Connect
+                              </ControlButton>
+                              <ControlButton
+                                data-testid={`mcp-login-cancel-${server.id}`}
+                                className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                                disabled={loginSubmitting}
+                                onClick={() => void cancelLogin()}
+                              >
+                                Cancel
+                              </ControlButton>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex gap-2">
+                            <ControlButton
+                              data-testid={`mcp-login-manual-${server.id}`}
+                              className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              disabled={loginSubmitting}
+                              onClick={showManualLogin}
+                            >
+                              Enter code manually
                             </ControlButton>
                             <ControlButton
                               data-testid={`mcp-login-cancel-${server.id}`}
                               className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                              disabled={loginSubmitting}
                               onClick={() => void cancelLogin()}
                             >
                               Cancel
                             </ControlButton>
                           </div>
-                        </>
-                      ) : (
-                        <div className="flex gap-2">
-                          <ControlButton
-                            data-testid={`mcp-login-manual-${server.id}`}
-                            className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            disabled={loginSubmitting}
-                            onClick={showManualLogin}
-                          >
-                            Enter code manually
-                          </ControlButton>
-                          <ControlButton
-                            data-testid={`mcp-login-cancel-${server.id}`}
-                            className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            onClick={() => void cancelLogin()}
-                          >
-                            Cancel
-                          </ControlButton>
-                        </div>
-                      )}
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            {!loading &&
+              !catalogLoadFailed &&
+              missingDefaultAssignedServerIds.map((id) => (
+                <div
+                  key={`missing-default-${id}`}
+                  className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
+                  data-testid={`mcp-missing-default-${id}`}
+                  aria-busy={savingAssignments.has(`default:${id}`)}
+                >
+                  <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                    <ControlInput
+                      type="checkbox"
+                      checked
+                      ref={(element) => {
+                        if (element) defaultAssignmentInputs.current.set(id, element);
+                        else defaultAssignmentInputs.current.delete(id);
+                      }}
+                      disabled={savingAssignments.size > 0}
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label={`Remove missing All Projects MCP assignment ${id}`}
+                      onChange={() => void assignDefault(id, false)}
+                    />
+                    <span>
+                      {savingAssignments.has(`default:${id}`) ? "Saving…" : "All Projects"}
+                    </span>
+                  </label>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                      {id}
                     </div>
-                  ) : null}
+                    <div className="break-words text-detail text-danger">
+                      Default assignment is missing a configured definition and grants no tools. Add
+                      the definition or remove this All Projects assignment.
+                    </div>
+                  </div>
                 </div>
-              );
-            })}
-          {!loading &&
+              ))}
+            {!loading &&
+              !catalogLoadFailed &&
+              missingAssignedServerIds.map((id) => (
+                <div
+                  key={`missing-${id}`}
+                  className="flex items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
+                  data-testid={`mcp-missing-${id}`}
+                  aria-busy={savingAssignments.has(id)}
+                >
+                  <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
+                    <ControlInput
+                      type="checkbox"
+                      checked
+                      ref={(element) => {
+                        if (element) assignmentInputs.current.set(id, element);
+                        else assignmentInputs.current.delete(id);
+                      }}
+                      disabled={defaultAssignedServerIds.includes(id) || savingAssignments.size > 0}
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label={
+                        defaultAssignedServerIds.includes(id)
+                          ? `${id} is inherited from All Projects; its missing explicit project assignment is retained`
+                          : `Remove missing MCP assignment ${id}`
+                      }
+                      onChange={() => void assign(id, false)}
+                    />
+                    <span>
+                      {defaultAssignedServerIds.includes(id)
+                        ? "Inherited · explicit assignment preserved"
+                        : savingAssignments.has(id)
+                          ? "Saving…"
+                          : "This project"}
+                    </span>
+                  </label>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                      {id}
+                    </div>
+                    <div className="text-detail text-danger">
+                      Assigned definition is missing. Add it to global or project .pi/mcp.json, or
+                      unassign it.
+                    </div>
+                  </div>
+                </div>
+              ))}
+            {!loading &&
             !catalogLoadFailed &&
-            missingDefaultAssignedServerIds.map((id) => (
-              <div
-                key={`missing-default-${id}`}
-                className="flex min-w-0 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
-                data-testid={`mcp-missing-default-${id}`}
-                aria-busy={savingAssignments.has(`default:${id}`)}
-              >
-                <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
-                  <ControlInput
-                    type="checkbox"
-                    checked
-                    ref={(element) => {
-                      if (element) defaultAssignmentInputs.current.set(id, element);
-                      else defaultAssignmentInputs.current.delete(id);
-                    }}
-                    disabled={savingAssignments.size > 0}
-                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    aria-label={`Remove missing All Projects MCP assignment ${id}`}
-                    onChange={() => void assignDefault(id, false)}
-                  />
-                  <span>{savingAssignments.has(`default:${id}`) ? "Saving…" : "All Projects"}</span>
-                </label>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-text-primary" title={id}>
-                    {id}
-                  </div>
-                  <div className="break-words text-detail text-danger">
-                    Default assignment is missing a configured definition and grants no tools. Add
-                    the definition or remove this All Projects assignment.
-                  </div>
-                </div>
+            servers.length === 0 &&
+            missingAssignedServerIds.length === 0 &&
+            missingDefaultAssignedServerIds.length === 0 &&
+            !adding ? (
+              <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-empty">
+                {currentProjectId
+                  ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
+                  : "No global MCP servers. Add one to assign it to All Projects or specific projects."}
               </div>
-            ))}
-          {!loading &&
-            !catalogLoadFailed &&
-            missingAssignedServerIds.map((id) => (
-              <div
-                key={`missing-${id}`}
-                className="flex items-center gap-3 overflow-hidden rounded-xl border border-danger bg-surface px-3.5 py-2.5"
-                data-testid={`mcp-missing-${id}`}
-                aria-busy={savingAssignments.has(id)}
-              >
-                <label className="flex shrink-0 items-center gap-1.5 text-detail text-text-muted">
-                  <ControlInput
-                    type="checkbox"
-                    checked
-                    ref={(element) => {
-                      if (element) assignmentInputs.current.set(id, element);
-                      else assignmentInputs.current.delete(id);
-                    }}
-                    disabled={defaultAssignedServerIds.includes(id) || savingAssignments.size > 0}
-                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    aria-label={
-                      defaultAssignedServerIds.includes(id)
-                        ? `${id} is inherited from All Projects; its missing explicit project assignment is retained`
-                        : `Remove missing MCP assignment ${id}`
-                    }
-                    onChange={() => void assign(id, false)}
-                  />
-                  <span>
-                    {defaultAssignedServerIds.includes(id)
-                      ? "Inherited · explicit assignment preserved"
-                      : savingAssignments.has(id)
-                        ? "Saving…"
-                        : "This project"}
-                  </span>
-                </label>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-text-primary" title={id}>
-                    {id}
-                  </div>
-                  <div className="text-detail text-danger">
-                    Assigned definition is missing. Add it to global or project .pi/mcp.json, or
-                    unassign it.
-                  </div>
-                </div>
-              </div>
-            ))}
-          {!loading &&
-          !catalogLoadFailed &&
-          servers.length === 0 &&
-          missingAssignedServerIds.length === 0 &&
-          missingDefaultAssignedServerIds.length === 0 &&
-          !adding ? (
-            <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-empty">
-              {currentProjectId
-                ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
-                : "No global MCP servers. Add one to assign it to All Projects or specific projects."}
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

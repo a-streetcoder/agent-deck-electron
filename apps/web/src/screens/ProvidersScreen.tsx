@@ -1,14 +1,7 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  CheckCircle2,
-  ChevronRight,
-  KeyRound,
-  LogOut,
-  Search,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react";
+import { CheckCircle2, ChevronRight, KeyRound, LogOut, Search, UserRound } from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
 import { AppScrollView } from "../design-system/components/AppScrollView.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
@@ -94,108 +87,107 @@ export function ProvidersScreen({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-hidden px-6 py-5" data-testid="providers-screen">
-      <div className="mx-auto flex h-full max-w-3xl flex-col">
-        <div className="flex items-center gap-2 pb-1">
-          <ShieldCheck size={16} className="text-text-secondary" aria-hidden />
-          <h2 className="text-base font-semibold text-text-primary">Connect an AI provider</h2>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="providers-screen">
+      <SectionHero
+        imageSrc="/onboarding/pop-hero.jpg"
+        title="Providers"
+        subtitle="Use an existing subscription or an API key. Credentials are handled by Pi and stored in your private Agent Deck configuration."
+      />
+      <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
+        <div className="mx-auto flex h-full max-w-3xl flex-col">
+          <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
+            <Search size={14} className="text-text-muted" />
+            <ControlInput
+              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
+              placeholder="Search providers"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+
+          <AppScrollView className="flex-1" testId="provider-scroll-area">
+            {!loaded ? <SkeletonRows count={5} /> : null}
+            <ProviderGroup
+              title="Subscriptions"
+              providers={subscriptions}
+              onSelect={selectProvider}
+              onSignOut={(provider) => void signOutProvider(provider)}
+              disconnectingId={disconnectingId}
+            />
+            <ProviderGroup
+              title="API key"
+              providers={apiKeyOnly}
+              onSelect={selectProvider}
+              onSignOut={(provider) => void signOutProvider(provider)}
+              disconnectingId={disconnectingId}
+            />
+            {loaded && visible.length === 0 ? (
+              <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
+            ) : null}
+          </AppScrollView>
         </div>
-        <p className="pb-4 text-xs text-text-muted">
-          Use an existing subscription or an API key. Credentials are handled by Pi and stored in
-          your private Agent Deck configuration.
-        </p>
-        <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
-          <Search size={14} className="text-text-muted" />
-          <ControlInput
-            className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
-            placeholder="Search providers"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </label>
 
-        <AppScrollView className="flex-1" testId="provider-scroll-area">
-          {!loaded ? <SkeletonRows count={5} /> : null}
-          <ProviderGroup
-            title="Subscriptions"
-            providers={subscriptions}
-            onSelect={selectProvider}
-            onSignOut={(provider) => void signOutProvider(provider)}
-            disconnectingId={disconnectingId}
-          />
-          <ProviderGroup
-            title="API key"
-            providers={apiKeyOnly}
-            onSelect={selectProvider}
-            onSignOut={(provider) => void signOutProvider(provider)}
-            disconnectingId={disconnectingId}
-          />
-          {loaded && visible.length === 0 ? (
-            <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
-          ) : null}
-        </AppScrollView>
-      </div>
-
-      {methodProvider ? (
-        <div
-          className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-overlay p-4 sm:p-8"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setMethodProvider(null);
-          }}
-        >
+        {methodProvider ? (
           <div
-            className="app-modal-panel w-full max-w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="provider-method-title"
+            className="app-modal-backdrop fixed inset-0 z-40 flex items-center justify-center bg-overlay p-4 sm:p-8"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setMethodProvider(null);
+            }}
           >
-            <h3 id="provider-method-title" className="text-sm font-semibold text-text-primary">
-              Connect {methodProvider.name}
-            </h3>
-            <p className="mt-1 text-xs text-text-muted">Choose how you want to connect.</p>
-            <div className="mt-4 space-y-2">
-              <MethodButton
-                icon={UserRound}
-                title="Use a subscription"
-                detail={`Sign in with your ${methodProvider.name} account.`}
-                onClick={() => {
-                  setLogin({ provider: methodProvider, authType: "oauth" });
-                  setMethodProvider(null);
-                }}
-              />
-              <MethodButton
-                icon={KeyRound}
-                title="Use an API key"
-                detail="Paste an API key for this provider."
-                onClick={() => {
-                  setLogin({ provider: methodProvider, authType: "api_key" });
-                  setMethodProvider(null);
-                }}
-              />
-            </div>
-            <div className="mt-4 flex justify-end">
-              <ControlButton
-                type="button"
-                className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
-                onClick={() => setMethodProvider(null)}
-              >
-                Cancel
-              </ControlButton>
+            <div
+              className="app-modal-panel w-full max-w-[460px] rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="provider-method-title"
+            >
+              <h3 id="provider-method-title" className="text-sm font-semibold text-text-primary">
+                Connect {methodProvider.name}
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">Choose how you want to connect.</p>
+              <div className="mt-4 space-y-2">
+                <MethodButton
+                  icon={UserRound}
+                  title="Use a subscription"
+                  detail={`Sign in with your ${methodProvider.name} account.`}
+                  onClick={() => {
+                    setLogin({ provider: methodProvider, authType: "oauth" });
+                    setMethodProvider(null);
+                  }}
+                />
+                <MethodButton
+                  icon={KeyRound}
+                  title="Use an API key"
+                  detail="Paste an API key for this provider."
+                  onClick={() => {
+                    setLogin({ provider: methodProvider, authType: "api_key" });
+                    setMethodProvider(null);
+                  }}
+                />
+              </div>
+              <div className="mt-4 flex justify-end">
+                <ControlButton
+                  type="button"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+                  onClick={() => setMethodProvider(null)}
+                >
+                  Cancel
+                </ControlButton>
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
-      {login ? (
-        <ProviderLoginSheet
-          provider={login.provider}
-          authType={login.authType}
-          onClose={() => setLogin(null)}
-          onDone={() => {
-            void load();
-            onProviderConnected?.();
-          }}
-        />
-      ) : null}
+        ) : null}
+        {login ? (
+          <ProviderLoginSheet
+            provider={login.provider}
+            authType={login.authType}
+            onClose={() => setLogin(null)}
+            onDone={() => {
+              void load();
+              onProviderConnected?.();
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
