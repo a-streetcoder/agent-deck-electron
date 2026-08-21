@@ -19,7 +19,7 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
   return (
     <div
       className={cn(
-        "relative h-48 shrink-0 overflow-hidden",
+        "relative h-section-hero shrink-0 overflow-hidden",
         macDesktop && "[-webkit-app-region:drag]",
       )}
     >

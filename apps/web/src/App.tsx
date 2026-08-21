@@ -199,13 +199,7 @@ export function App() {
         ) : null}
         <div
           className={cn(
-            "flex min-w-0 flex-1 flex-col",
-            integratedDesktopChrome &&
-              sidebarVisible &&
-              "overflow-hidden rounded-tl-[14px] border-l border-t border-border-strong bg-surface shadow-card",
-            integratedDesktopChrome &&
-              !sidebarVisible &&
-              "overflow-hidden border-t border-border-strong bg-surface",
+            "flex min-w-0 flex-1 flex-col overflow-hidden bg-surface",
           )}
           data-testid="workspace-shell"
         >

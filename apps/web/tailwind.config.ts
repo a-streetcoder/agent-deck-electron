@@ -97,6 +97,7 @@ const config: Config = {
         "control-md": "var(--size-control-md)",
         "control-lg": "var(--size-control-lg)",
         titlebar: "var(--size-titlebar)",
+        "section-hero": "var(--size-section-hero)",
         sheet: "var(--space-sheet)",
       },
       maxWidth: {

@@ -18,7 +18,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { hasIntegratedDesktopChrome, isMacDesktop } from "@/lib/native";
+import { isMacDesktop } from "@/lib/native";
 import { useAppStore, type AppView } from "../state/store.ts";
 import {
   PANEL_FADE,
@@ -68,7 +68,7 @@ export function Sidebar({ width }: { width?: number }) {
   // On the macOS desktop build the window's traffic lights overlap the top-left,
   // so drop the wordmark below them and make the strip a drag region.
   const macDesktop = isMacDesktop();
-  const integratedDesktopChrome = hasIntegratedDesktopChrome();
+  const isChat = view === "chat";
 
   const rowClass = (active: boolean): string =>
     cn(
@@ -85,8 +85,10 @@ export function Sidebar({ width }: { width?: number }) {
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col overflow-hidden bg-surface-elevated",
-        !integratedDesktopChrome && "border-r border-border-subtle",
+        "relative flex shrink-0 flex-col overflow-hidden bg-surface-elevated",
+        isChat
+          ? "border-r border-border-subtle"
+          : "after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-section-hero after:w-px after:bg-border-subtle",
       )}
       style={{ width: `${width ?? 280}px` }}
       data-testid="sidebar"
