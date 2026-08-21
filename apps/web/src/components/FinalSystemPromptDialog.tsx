@@ -50,7 +50,7 @@ function PromptDialog({ audit, onClose }: { audit: FinalSystemPromptAudit; onClo
             <h2 id="final-system-prompt-title" className="font-medium text-text-primary">
               Final system prompt
             </h2>
-            <p className="text-xs text-text-muted">
+            <p className="text-caption text-text-muted">
               Captured <time dateTime={audit.capturedAt}>{timestamp}</time>
             </p>
           </div>
@@ -74,18 +74,18 @@ function PromptDialog({ audit, onClose }: { audit: FinalSystemPromptAudit; onClo
         </header>
         <p
           id="final-system-prompt-privacy"
-          className="border-b border-border px-4 py-2 text-xs text-text-muted"
+          className="border-b border-border px-4 py-2 text-detail text-text-muted"
         >
           Private to this device. This may include project instructions or secrets and is not
           synced.
         </p>
         {captureAnnouncement ? (
-          <p className="px-4 pt-3 text-xs text-text-muted" role="status" aria-live="polite">
+          <p className="px-4 pt-3 text-caption text-text-muted" role="status" aria-live="polite">
             {captureAnnouncement}
           </p>
         ) : null}
         {copyError ? (
-          <p className="px-4 pt-3 text-xs text-danger" role="status">
+          <p className="px-4 pt-3 text-caption text-danger" role="status">
             Could not copy. Select the text manually.
           </p>
         ) : null}
@@ -96,11 +96,13 @@ function PromptDialog({ audit, onClose }: { audit: FinalSystemPromptAudit; onClo
           aria-label="Final system prompt content"
         >
           {audit.text.length > 0 ? (
-            <pre className="whitespace-pre-wrap break-words font-mono text-sm text-text-secondary">
+            <pre className="whitespace-pre-wrap break-words font-mono text-code text-text-secondary">
               {audit.text}
             </pre>
           ) : (
-            <p className="text-sm text-text-muted">Pi used an empty system prompt for this turn.</p>
+            <p className="text-body text-text-muted">
+              Pi used an empty system prompt for this turn.
+            </p>
           )}
         </div>
       </div>

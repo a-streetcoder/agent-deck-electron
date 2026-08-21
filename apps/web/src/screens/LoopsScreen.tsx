@@ -105,7 +105,7 @@ const rationale = (value?: string): string | undefined => {
   return text || undefined;
 };
 const inputClass =
-  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
+  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent";
 
 interface LoopDraft {
   id?: string;
@@ -1057,7 +1057,7 @@ export function LoopsScreen() {
             >
               <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <div
-                  className="min-w-0 max-w-full break-all text-sm font-medium text-text-primary"
+                  className="min-w-0 max-w-full break-all text-label font-medium text-text-primary"
                   style={{ fontStretch: "expanded" }}
                 >
                   {activeRun.loopName}
@@ -1160,7 +1160,7 @@ export function LoopsScreen() {
                   ref={reviewStatusPanelRef}
                   tabIndex={-1}
                   aria-label="Loop worktree review status"
-                  className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-xs text-text-muted"
+                  className="mt-2 rounded-lg border border-border-strong px-2 py-1 text-detail text-text-muted"
                   data-testid="loop-retained-worktree"
                 >
                   <strong className="text-text-secondary">
@@ -1221,7 +1221,7 @@ export function LoopsScreen() {
               ) : null}
               {activeRun.checkpointPrompt && activeRun.stopReason === "humanInputRequired" ? (
                 <div
-                  className="mt-2 rounded-lg border border-warning px-2 py-2 text-xs"
+                  className="mt-2 rounded-lg border border-warning px-2 py-2 text-detail"
                   role="alert"
                   data-testid="loop-human-approval-checkpoint"
                 >
@@ -1262,7 +1262,7 @@ export function LoopsScreen() {
               ) : null}
               {activeRun.stopReason === "humanInputRequired" && !activeRun.checkpointPrompt ? (
                 <div
-                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
+                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-detail"
                   role="alert"
                 >
                   <strong>Human input required.</strong>{" "}
@@ -1274,7 +1274,7 @@ export function LoopsScreen() {
               (activeRun.stopReason === "humanApproved" ||
                 activeRun.stopReason === "humanRejected") ? (
                 <div
-                  className="mt-2 rounded-lg border border-border-strong px-2 py-2 text-xs"
+                  className="mt-2 rounded-lg border border-border-strong px-2 py-2 text-detail"
                   role="status"
                   data-testid="loop-approval-resolution"
                 >
@@ -1297,7 +1297,7 @@ export function LoopsScreen() {
               !activeRun.launch.checkoutAcknowledgedAt ? (
                 <div
                   id="loop-checkout-recovery-notice"
-                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-xs"
+                  className="mt-2 rounded-lg border border-warning px-2 py-1 text-detail"
                   role="alert"
                 >
                   <strong>Checkout locked after interruption.</strong> Ensure no old agent process
@@ -1551,7 +1551,7 @@ export function LoopsScreen() {
 
           {runs.length > 1 ? (
             <div className="mb-3" data-testid="loop-run-history">
-              <h3 className="mb-1 text-xs font-medium text-text-secondary">Recent runs</h3>
+              <h3 className="mb-1 text-caption font-medium text-text-secondary">Recent runs</h3>
               <div className="flex flex-wrap gap-1">
                 {[...runs]
                   .reverse()
@@ -1599,7 +1599,7 @@ export function LoopsScreen() {
                     data-testid={`loop-open-${loop.name}`}
                   >
                     <div
-                      className="truncate text-sm font-medium text-text-primary"
+                      className="truncate text-label font-medium text-text-primary"
                       style={{ fontStretch: "expanded" }}
                     >
                       {loop.name}
@@ -1630,7 +1630,7 @@ export function LoopsScreen() {
                   </ControlButton>
                   <ControlButton
                     data-testid={`loop-run-${loop.name}`}
-                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                     title={
                       !runnable
                         ? "Unavailable until its definition is valid"
@@ -1678,7 +1678,7 @@ export function LoopsScreen() {
               );
             })}
             {loaded && loops.length === 0 ? (
-              <div className="py-8 text-center text-sm text-text-muted" data-testid="loop-empty">
+              <div className="py-8 text-center text-body text-text-muted" data-testid="loop-empty">
                 No loops yet. Create one to iterate an agent toward a checked goal.
               </div>
             ) : null}
@@ -1696,7 +1696,7 @@ export function LoopsScreen() {
               className="flex max-h-[calc(100vh-1rem)] min-w-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
             >
               <div className="flex items-center justify-between gap-2 border-b border-border-subtle p-3">
-                <h3 id="loop-review-title" className="min-w-0 break-words text-sm font-semibold">
+                <h3 id="loop-review-title" className="min-w-0 break-words text-label font-semibold">
                   Review changes · {reviewDialog.run.loopName}
                 </h3>
                 <ControlButton
@@ -1708,10 +1708,10 @@ export function LoopsScreen() {
                 </ControlButton>
               </div>
               <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
-                <h4 className="text-xs font-semibold">Changed files</h4>
+                <h4 className="text-detail font-semibold">Changed files</h4>
                 {reviewDialog.changedFiles.length ? (
                   <ul
-                    className="mt-1 max-h-36 overflow-auto rounded border border-border-subtle p-2 text-xs"
+                    className="mt-1 max-h-36 overflow-auto rounded border border-border-subtle p-2 text-detail"
                     data-testid="loop-review-files"
                   >
                     {reviewDialog.changedFiles.map((file, index) => (
@@ -1722,22 +1722,22 @@ export function LoopsScreen() {
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-xs text-text-muted">No changes.</p>
+                  <p className="text-caption text-text-muted">No changes.</p>
                 )}
-                <h4 className="mt-3 text-xs font-semibold">Patch</h4>
+                <h4 className="mt-3 text-detail font-semibold">Patch</h4>
                 <pre
-                  className="mt-1 max-h-[38vh] min-w-0 overflow-auto whitespace-pre text-xs"
+                  className="mt-1 max-h-[38vh] min-w-0 overflow-auto whitespace-pre text-detail"
                   data-testid="loop-review-patch"
                 >
                   {reviewDialog.patch || "No patch content."}
                 </pre>
                 {reviewDialog.patchTruncated ? (
-                  <p className="text-xs text-warning">
+                  <p className="text-caption text-warning">
                     Preview truncated; the complete bounded binary patch is stored in run artifacts.
                   </p>
                 ) : null}
                 <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
-                  <div className="rounded-lg border border-border-strong p-2 text-xs">
+                  <div className="rounded-lg border border-border-strong p-2 text-detail">
                     <label className="flex items-start gap-2">
                       <ControlInput
                         type="checkbox"
@@ -1762,7 +1762,7 @@ export function LoopsScreen() {
                       {reviewActionPending === "apply" ? "Applying…" : "Apply Changes"}
                     </ControlButton>
                   </div>
-                  <div className="rounded-lg border border-danger p-2 text-xs">
+                  <div className="rounded-lg border border-danger p-2 text-detail">
                     <p>
                       Safely archive this owned worktree under Agent Deck's private root. Nothing is
                       recursively deleted; the branch and artifacts remain.
@@ -1792,7 +1792,7 @@ export function LoopsScreen() {
                   <p
                     role="alert"
                     data-testid="loop-review-error"
-                    className="mt-2 text-xs text-danger"
+                    className="mt-2 text-detail text-danger"
                   >
                     {reviewError}
                   </p>
@@ -1819,12 +1819,12 @@ export function LoopsScreen() {
             >
               <h3
                 id="loop-editor-title"
-                className="break-all text-sm font-semibold text-text-primary"
+                className="break-all text-label font-semibold text-text-primary"
                 style={{ fontStretch: "expanded" }}
               >
                 {draft.original ? `Edit ${draft.original}` : "New Loop"}
               </h3>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Name
                 <ControlInput
                   data-testid="loop-name"
@@ -1834,7 +1834,7 @@ export function LoopsScreen() {
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Description
                 <ControlInput
                   className={inputClass}
@@ -1842,11 +1842,11 @@ export function LoopsScreen() {
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Goal (what each iteration should accomplish)
                 <ControlTextArea
                   data-testid="loop-goal"
-                  className={`${inputClass} min-h-[100px] font-mono text-caption`}
+                  className={`${inputClass} min-h-[100px] font-mono text-code`}
                   value={draft.goal}
                   onChange={(event) => {
                     const goal = event.target.value;
@@ -1865,7 +1865,7 @@ export function LoopsScreen() {
                   }}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Launch context / arguments
                 <ControlTextArea
                   data-testid="loop-launch-context"
@@ -1878,7 +1878,7 @@ export function LoopsScreen() {
                 </span>
               </label>
               {draft.launchContext.trim() ? (
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Context scope
                   <ControlSelect
                     data-testid="loop-launch-context-scope"
@@ -1897,10 +1897,10 @@ export function LoopsScreen() {
                 </label>
               ) : null}
               <fieldset className="space-y-2 rounded-lg border border-border-subtle p-2">
-                <legend className="px-1 text-xs font-medium text-text-secondary">
+                <legend className="px-1 text-caption font-medium text-text-secondary">
                   Project availability
                 </legend>
-                <label className="flex items-center gap-2 text-xs text-text-primary">
+                <label className="flex items-center gap-2 text-caption font-medium text-text-primary">
                   <ControlInput
                     type="radio"
                     name="loop-availability"
@@ -1910,7 +1910,7 @@ export function LoopsScreen() {
                   />
                   All projects
                 </label>
-                <label className="flex items-center gap-2 text-xs text-text-primary">
+                <label className="flex items-center gap-2 text-caption font-medium text-text-primary">
                   <ControlInput
                     type="radio"
                     name="loop-availability"
@@ -1932,7 +1932,10 @@ export function LoopsScreen() {
                 {draft.availability === "projectPaths" ? (
                   <div className="space-y-1 pl-5" data-testid="loop-project-assignments">
                     {projects.map((project) => (
-                      <label key={project.id} className="flex items-center gap-2 text-xs">
+                      <label
+                        key={project.id}
+                        className="flex items-center gap-2 text-caption font-medium"
+                      >
                         <ControlInput
                           type="checkbox"
                           checked={draft.projectPaths.includes(project.path)}
@@ -1958,7 +1961,7 @@ export function LoopsScreen() {
                 ) : null}
               </fieldset>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="text-xs text-text-muted">
+                <label className="text-caption font-medium text-text-muted">
                   Structure
                   <ControlSelect
                     data-testid="loop-structure"
@@ -2021,7 +2024,7 @@ export function LoopsScreen() {
                   ) : null}
                 </label>
                 {draft.structure === "singleAgent" ? (
-                  <label className="text-xs text-text-muted">
+                  <label className="text-caption font-medium text-text-muted">
                     Agent
                     <ControlSelect
                       data-testid="loop-agent"
@@ -2038,7 +2041,7 @@ export function LoopsScreen() {
               {draft.structure === "makerChecker" ? (
                 <div className="space-y-3" data-testid="loop-maker-checker-config">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="text-xs text-text-muted">
+                    <label className="text-caption font-medium text-text-muted">
                       Maker agent
                       <ControlSelect
                         data-testid="loop-maker"
@@ -2050,7 +2053,7 @@ export function LoopsScreen() {
                         {renderAgentOptions(draft.makerName)}
                       </ControlSelect>
                     </label>
-                    <label className="text-xs text-text-muted">
+                    <label className="text-caption font-medium text-text-muted">
                       Checker agent
                       <ControlSelect
                         data-testid="loop-checker"
@@ -2063,7 +2066,7 @@ export function LoopsScreen() {
                       </ControlSelect>
                     </label>
                   </div>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Checker rubric
                     <ControlTextArea
                       data-testid="loop-checker-rubric"
@@ -2080,7 +2083,7 @@ export function LoopsScreen() {
                   data-testid="loop-pipeline-config"
                   aria-describedby="loop-pipeline-help"
                 >
-                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                  <legend className="px-1 text-caption font-medium text-text-secondary">
                     Ordered pipeline stages
                   </legend>
                   <p id="loop-pipeline-help" className="text-detail text-text-muted">
@@ -2162,7 +2165,7 @@ export function LoopsScreen() {
                   <ControlButton
                     type="button"
                     data-testid="loop-pipeline-add-stage"
-                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-detail"
                     disabled={saving}
                     onClick={() =>
                       setDraft({ ...draft, pipelineStages: [...draft.pipelineStages, ""] })
@@ -2178,7 +2181,7 @@ export function LoopsScreen() {
                   data-testid="loop-parallel-config"
                   aria-describedby="loop-parallel-help loop-parallel-safety"
                 >
-                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                  <legend className="px-1 text-caption font-medium text-text-secondary">
                     Parallel branch agents
                   </legend>
                   <p id="loop-parallel-help" className="text-detail text-text-muted">
@@ -2264,7 +2267,7 @@ export function LoopsScreen() {
                   <ControlButton
                     type="button"
                     data-testid="loop-parallel-add-branch"
-                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-xs"
+                    className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-1 text-detail"
                     disabled={saving}
                     onClick={() =>
                       setDraft({
@@ -2283,7 +2286,7 @@ export function LoopsScreen() {
                   data-testid="loop-triage-config"
                   aria-describedby="loop-triage-help"
                 >
-                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                  <legend className="px-1 text-caption font-medium text-text-secondary">
                     Discovery and classification
                   </legend>
                   <p id="loop-triage-help" className="text-detail text-text-muted">
@@ -2291,7 +2294,7 @@ export function LoopsScreen() {
                     checkout and worktree targets permit edits only when the goal explicitly
                     requests implementation.
                   </p>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Triage agent
                     <ControlSelect
                       ref={triageAgentRef}
@@ -2304,7 +2307,7 @@ export function LoopsScreen() {
                       {renderAgentOptions(draft.triageAgent)}
                     </ControlSelect>
                   </label>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Classification prompt
                     <ControlTextArea
                       data-testid="loop-classification-prompt"
@@ -2331,7 +2334,7 @@ export function LoopsScreen() {
                   data-testid="loop-human-approval-config"
                   aria-describedby="loop-human-approval-help"
                 >
-                  <legend className="px-1 text-xs font-medium text-text-secondary">
+                  <legend className="px-1 text-caption font-medium text-text-secondary">
                     Approval checkpoint
                   </legend>
                   <p id="loop-human-approval-help" className="text-detail text-text-muted">
@@ -2339,7 +2342,7 @@ export function LoopsScreen() {
                     Approval records the decision; it does not resume this run. Retry starts a fresh
                     linked checkpoint.
                   </p>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Checkpoint prompt
                     <ControlTextArea
                       ref={checkpointPromptRef}
@@ -2360,7 +2363,7 @@ export function LoopsScreen() {
               ) : null}
               {draftAgentIssues.length ? (
                 <div
-                  className="rounded-lg border border-danger px-2 py-1 text-xs text-danger"
+                  className="rounded-lg border border-danger px-2 py-1 text-detail text-danger"
                   role="status"
                   aria-live="polite"
                   data-testid="loop-agent-role-errors"
@@ -2376,7 +2379,7 @@ export function LoopsScreen() {
                 </div>
               ) : null}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="text-xs text-text-muted">
+                <label className="text-caption font-medium text-text-muted">
                   Max iterations
                   <ControlInput
                     data-testid="loop-max-iterations"
@@ -2402,7 +2405,7 @@ export function LoopsScreen() {
                     0 means no iteration limit; Stop remains available. Maximum 100.
                   </span>
                 </label>
-                <label className="text-xs text-text-muted">
+                <label className="text-caption font-medium text-text-muted">
                   Write target
                   <ControlSelect
                     data-testid="loop-write-target"
@@ -2433,7 +2436,7 @@ export function LoopsScreen() {
                   ) : null}
                 </label>
               </div>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Success condition
                 <ControlTextArea
                   data-testid="loop-success-condition"
@@ -2480,7 +2483,7 @@ export function LoopsScreen() {
                 </span>
               </label>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Evaluator model override
                   <ControlSelect
                     data-testid="loop-evaluator-model"
@@ -2496,7 +2499,7 @@ export function LoopsScreen() {
                     {renderEvaluatorModelOptions(draft.evaluatorProvider, draft.evaluatorModel)}
                   </ControlSelect>
                 </label>
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Evaluator thinking override
                   <ControlSelect
                     data-testid="loop-evaluator-thinking"
@@ -2523,11 +2526,11 @@ export function LoopsScreen() {
                   </ControlSelect>
                 </label>
               </div>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Validation command (optional; exit 0 satisfies validation)
                 <ControlInput
                   data-testid="loop-validation"
-                  className={`${inputClass} font-mono text-caption`}
+                  className={`${inputClass} font-mono text-code`}
                   placeholder="pnpm test"
                   value={draft.validationCommand}
                   onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
@@ -2538,7 +2541,7 @@ export function LoopsScreen() {
                   id="loop-draft-error"
                   role="alert"
                   aria-live="polite"
-                  className="text-xs text-warning"
+                  className="text-detail text-warning"
                 >
                   {draftError}
                 </div>
@@ -2548,7 +2551,7 @@ export function LoopsScreen() {
                   data-testid="loop-save-error"
                   role="alert"
                   aria-live="assertive"
-                  className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-text-primary"
+                  className="rounded-lg bg-danger-subtle px-3 py-2 text-detail text-text-primary"
                 >
                   {saveError}
                 </div>
@@ -2556,14 +2559,14 @@ export function LoopsScreen() {
               <div className="flex justify-end gap-2 pt-1">
                 <ControlButton
                   data-testid="loop-cancel"
-                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
                   onClick={closeEditor}
                 >
                   Cancel
                 </ControlButton>
                 <ControlButton
                   data-testid="loop-save"
-                  className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+                  className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
                   style={{
                     background:
                       "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -2601,16 +2604,16 @@ export function LoopsScreen() {
               data-testid="loop-launch-dialog"
               className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-[560px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-strong bg-surface-elevated p-4 shadow-elevated sm:max-h-[85vh]"
             >
-              <h3 id="loop-launch-title" className="text-sm font-semibold text-text-primary">
+              <h3 id="loop-launch-title" className="text-label font-semibold text-text-primary">
                 {launchDraft.retryOf ? "Retry" : "Run"} {launchDraft.loop.name}
               </h3>
-              <p className="text-xs text-text-muted">
+              <p className="text-caption text-text-muted">
                 {LOOP_STRUCTURE_LABEL[launchDraft.loop.structure]} ·{" "}
                 {launchDraft.loop.maxIterations === 0
                   ? "No iteration limit"
                   : `Up to ${launchDraft.loop.maxIterations} iterations`}
               </p>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Run goal
                 <ControlTextArea
                   data-testid="loop-launch-goal"
@@ -2634,7 +2637,7 @@ export function LoopsScreen() {
                   }}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Launch context / arguments
                 <ControlTextArea
                   data-testid="loop-launch-context-override"
@@ -2649,7 +2652,7 @@ export function LoopsScreen() {
                   }}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Context scope
                 <ControlSelect
                   data-testid="loop-launch-scope-override"
@@ -2668,7 +2671,7 @@ export function LoopsScreen() {
                   <option value="everyIteration">Every iteration</option>
                 </ControlSelect>
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Success condition
                 <ControlTextArea
                   data-testid="loop-launch-success-condition"
@@ -2713,7 +2716,7 @@ export function LoopsScreen() {
                 </span>
               </label>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Evaluator model
                   <ControlSelect
                     data-testid="loop-launch-evaluator-model"
@@ -2738,7 +2741,7 @@ export function LoopsScreen() {
                     )}
                   </ControlSelect>
                 </label>
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Evaluator thinking
                   <ControlSelect
                     data-testid="loop-launch-evaluator-thinking"
@@ -2767,7 +2770,7 @@ export function LoopsScreen() {
                 </label>
               </div>
               {launchEvaluatorModelInvalid || launchEvaluatorInvalid ? (
-                <p role="alert" className="text-xs text-danger">
+                <p role="alert" className="text-caption text-danger">
                   The saved evaluator {launchEvaluatorModelInvalid ? "model" : "thinking level"} is
                   unavailable. Repair it before launch.
                 </p>
@@ -2777,7 +2780,7 @@ export function LoopsScreen() {
                   id="loop-launch-agent-errors"
                   role="status"
                   aria-live="polite"
-                  className="rounded-lg border border-danger p-2 text-xs text-danger"
+                  className="rounded-lg border border-danger p-2 text-detail text-danger"
                   data-testid="loop-launch-agent-errors"
                 >
                   <strong>Required agents are unavailable in this project.</strong>
@@ -2793,7 +2796,7 @@ export function LoopsScreen() {
               {launchNeedsCheckoutConfirmation ? (
                 <label
                   id="loop-current-checkout-confirmation-label"
-                  className="flex items-start gap-2 rounded-lg border border-warning p-2 text-xs text-text-secondary"
+                  className="flex items-start gap-2 rounded-lg border border-warning p-2 text-detail text-text-secondary"
                 >
                   <ControlInput
                     type="checkbox"
@@ -2816,7 +2819,7 @@ export function LoopsScreen() {
                 <div
                   role="alert"
                   aria-live="assertive"
-                  className="rounded-lg bg-danger-subtle p-2 text-xs"
+                  className="rounded-lg bg-danger-subtle p-2 text-detail"
                 >
                   {launchError}
                 </div>
@@ -2824,7 +2827,7 @@ export function LoopsScreen() {
               <div className="flex justify-end gap-2">
                 <ControlButton
                   data-testid="loop-launch-cancel"
-                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-label"
                   disabled={runPending}
                   onClick={closeLaunch}
                 >
@@ -2832,7 +2835,7 @@ export function LoopsScreen() {
                 </ControlButton>
                 <ControlButton
                   data-testid="loop-launch-confirm"
-                  className="rounded-capsule bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40"
+                  className="rounded-capsule bg-accent px-4 py-1.5 text-label font-medium text-accent-foreground disabled:opacity-40"
                   disabled={
                     runPending ||
                     launchAgentIssues.length > 0 ||

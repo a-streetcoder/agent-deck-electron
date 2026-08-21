@@ -545,7 +545,7 @@ export function IssuesScreen() {
       <div className="flex min-h-0 flex-1 flex-col" data-testid="issues-screen">
         <SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-5 text-center">
-          <div className="max-w-sm text-sm text-text-muted" data-testid="issues-no-project">
+          <div className="max-w-sm text-body text-text-muted" data-testid="issues-no-project">
             Issues are project-scoped. Select a project with a GitHub remote to see its issues.
           </div>
         </div>
@@ -560,20 +560,20 @@ export function IssuesScreen() {
           <div data-testid="issue-detail">
             <ControlButton
               data-testid="issue-detail-back"
-              className="flex items-center gap-1 pb-3 text-xs text-text-muted hover:text-text-primary"
+              className="flex items-center gap-1 pb-3 text-detail text-text-muted hover:text-text-primary"
               onClick={closeDetail}
             >
               <ArrowLeft size={13} /> Back to issues
             </ControlButton>
             {detailError ? (
               <div
-                className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-sm text-text-muted"
+                className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-body text-text-muted"
                 data-testid="issue-detail-error"
               >
                 {detailError}
               </div>
             ) : !detail ? (
-              <div className="py-8 text-center text-sm text-text-muted">
+              <div className="py-8 text-center text-body text-text-muted">
                 Loading issue #{detailNumber}…
               </div>
             ) : (
@@ -607,10 +607,10 @@ export function IssuesScreen() {
                       {detail.type}
                     </span>
                   ) : null}
-                  <span className="font-mono text-xs text-text-muted">#{detail.number}</span>
+                  <span className="font-mono text-code-sm text-text-muted">#{detail.number}</span>
                 </div>
                 <h2
-                  className="text-lg font-semibold text-text-primary"
+                  className="text-title font-semibold tracking-title text-text-primary"
                   style={{ fontStretch: "expanded" }}
                 >
                   {detail.title}
@@ -638,7 +638,7 @@ export function IssuesScreen() {
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <ControlButton
                     data-testid="issue-open-in-pi"
-                    className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+                    className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
                     style={{
                       background:
                         "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -652,14 +652,14 @@ export function IssuesScreen() {
                     <>
                       <ControlButton
                         data-testid="issue-close-completed"
-                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                         onClick={() => void closeIssue("completed")}
                       >
                         <CheckCircle2 size={13} /> Close as completed
                       </ControlButton>
                       <ControlButton
                         data-testid="issue-close-not-planned"
-                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-text-primary"
+                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-muted hover:text-text-primary"
                         onClick={() => void closeIssue("not_planned")}
                       >
                         <CircleSlash size={13} /> Not planned
@@ -668,7 +668,7 @@ export function IssuesScreen() {
                   ) : (
                     <ControlButton
                       data-testid="issue-reopen"
-                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                       onClick={() => void reopenIssue()}
                     >
                       <CircleDot size={13} /> Reopen
@@ -711,12 +711,12 @@ export function IssuesScreen() {
                       data-testid="issue-relationships"
                       className="mt-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                     >
-                      <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
                         Relationships
                       </div>
                       <div className="space-y-1.5">
                         {groups.map(([title, refs]) => (
-                          <div key={title} className="text-xs">
+                          <div key={title} className="text-detail">
                             <span className="text-text-muted">{title}</span>
                             {refs.map((ref) => (
                               <div
@@ -738,14 +738,14 @@ export function IssuesScreen() {
                 })()}
 
                 <div className="mt-5" data-testid="issue-comments">
-                  <div className="flex items-center gap-1.5 pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  <div className="flex items-center gap-1.5 pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
                     <MessageSquare size={12} /> Comments
                     <span className="rounded-capsule border border-border-subtle px-1 tabular-nums">
                       {detail.comments.length}
                     </span>
                   </div>
                   {detail.comments.length === 0 ? (
-                    <div className="text-xs text-text-muted">No comments yet.</div>
+                    <div className="text-detail text-text-muted">No comments yet.</div>
                   ) : (
                     <div className="space-y-2">
                       {detail.comments.map((comment, i) => (
@@ -801,7 +801,7 @@ export function IssuesScreen() {
                   <div className="mt-3 space-y-1.5" data-testid="issue-reply">
                     <ControlTextArea
                       data-testid="issue-reply-body"
-                      className="min-h-20 w-full rounded-xl border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted"
+                      className="min-h-20 w-full rounded-xl border border-border-subtle bg-surface px-3 py-2 text-body text-text-primary placeholder:text-text-muted"
                       placeholder="Write a reply (Markdown)…"
                       value={replyDraft}
                       disabled={replyBusy}
@@ -810,7 +810,7 @@ export function IssuesScreen() {
                     <div className="flex justify-end">
                       <ControlButton
                         data-testid="issue-reply-post"
-                        className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        className="rounded-capsule border border-border-strong px-3 py-1 text-label text-text-secondary hover:text-text-primary disabled:opacity-40"
                         disabled={replyBusy || replyDraft.trim() === ""}
                         onClick={() => void postComment()}
                       >
@@ -891,7 +891,7 @@ export function IssuesScreen() {
               data-testid="issues-scope-all"
               aria-pressed={allProjects}
               className={cn(
-                "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                "rounded-capsule border px-2.5 py-0.5 text-detail transition-colors",
                 allProjects
                   ? "border-border-strong bg-selection text-text-primary"
                   : "border-border-subtle text-text-muted hover:text-text-primary",
@@ -913,7 +913,7 @@ export function IssuesScreen() {
                 data-testid="issues-kind-toggle"
                 aria-pressed={searchKind === "prs"}
                 className={cn(
-                  "rounded-capsule border px-2.5 py-0.5 text-xs transition-colors",
+                  "rounded-capsule border px-2.5 py-0.5 text-detail transition-colors",
                   searchKind === "prs"
                     ? "border-border-strong bg-selection text-text-primary"
                     : "border-border-subtle text-text-muted hover:text-text-primary",
@@ -932,14 +932,14 @@ export function IssuesScreen() {
             ) : null}
             <ControlButton
               data-testid="issues-refresh"
-              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={loading}
               onClick={() => currentProjectId && void load(currentProjectId)}
             >
               <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
             </ControlButton>
           </div>
-          <p className="pb-3 text-xs text-text-muted">
+          <p className="pb-3 text-caption text-text-muted">
             {stateFilter === "all"
               ? "All GitHub issues for this project."
               : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
@@ -951,7 +951,7 @@ export function IssuesScreen() {
           {!error ? (
             <ControlInput
               data-testid="issues-search"
-              className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+              className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
               placeholder="Search issues by title, #number, label, assignee, or author…"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
@@ -960,7 +960,7 @@ export function IssuesScreen() {
 
           {incompleteResults && !loading && !error ? (
             <div
-              className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-xs text-text-secondary"
+              className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-detail text-text-secondary"
               data-testid="issues-incomplete-results"
               role="status"
               aria-live="polite"
@@ -1112,7 +1112,7 @@ export function IssuesScreen() {
 
           {error ? (
             <div
-              className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-sm text-text-muted"
+              className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-body text-text-muted"
               data-testid="issues-error"
             >
               {error}
@@ -1134,11 +1134,11 @@ export function IssuesScreen() {
                     void openDetail(issue.number, issue.projectId ?? undefined);
                   }}
                 >
-                  <span className="font-mono text-xs text-text-muted">
+                  <span className="font-mono text-code text-text-muted">
                     {issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}
                   </span>
                   <span
-                    className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary"
+                    className="min-w-0 flex-1 truncate text-label font-medium text-text-primary"
                     style={{ fontStretch: "expanded" }}
                   >
                     {issue.title}
@@ -1176,7 +1176,7 @@ export function IssuesScreen() {
               ))}
               {visibleIssues.length === 0 && !loading ? (
                 <div
-                  className="py-8 text-center text-sm text-text-muted"
+                  className="py-8 text-center text-body text-text-muted"
                   data-testid="issues-empty"
                 >
                   {/* Native emptyStateMessage priority: search query wins,

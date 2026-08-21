@@ -16,7 +16,7 @@ interface AgentEditorProps {
 }
 
 const inputClass =
-  "w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
+  "w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent";
 
 export function AgentEditor({ agent, onClose }: AgentEditorProps) {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
@@ -81,13 +81,13 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         <div className="font-medium text-text-primary">
           {agent ? `Edit ${agent.name}` : "New agent"}
           {isBuiltin ? (
-            <span className="ml-2 text-xs" style={{ color: "var(--color-warning)" }}>
+            <span className="ml-2 text-detail" style={{ color: "var(--color-warning)" }}>
               builtin — saved as override, file untouched
             </span>
           ) : null}
         </div>
         <ControlButton
-          className="text-sm text-text-muted hover:text-text-primary"
+          className="text-label text-text-muted hover:text-text-primary"
           onClick={onClose}
         >
           Close
@@ -96,7 +96,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
       <div className="grid grid-cols-2 gap-3">
         {!agent ? (
           <>
-            <label className="text-xs text-text-muted">
+            <label className="text-caption font-medium text-text-muted">
               Name
               <ControlInput
                 data-testid="editor-name"
@@ -105,7 +105,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <label className="text-xs text-text-muted">
+            <label className="text-caption font-medium text-text-muted">
               Scope
               <ControlSelect
                 data-testid="editor-scope"
@@ -119,7 +119,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             </label>
           </>
         ) : null}
-        <label className="col-span-2 text-xs text-text-muted">
+        <label className="col-span-2 text-caption font-medium text-text-muted">
           Description
           <ControlInput
             data-testid="editor-description"
@@ -128,7 +128,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             onChange={(e) => setDescription(e.target.value)}
           />
         </label>
-        <label className="col-span-2 text-xs text-text-muted">
+        <label className="col-span-2 text-caption font-medium text-text-muted">
           When to use
           <ControlInput
             className={inputClass}
@@ -136,7 +136,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             onChange={(e) => setWhenToUse(e.target.value)}
           />
         </label>
-        <label className="text-xs text-text-muted">
+        <label className="text-caption font-medium text-text-muted">
           Model
           <ControlInput
             className={inputClass}
@@ -144,7 +144,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             onChange={(e) => setModel(e.target.value)}
           />
         </label>
-        <label className="text-xs text-text-muted">
+        <label className="text-caption font-medium text-text-muted">
           Thinking
           <ControlSelect
             className={inputClass}
@@ -159,7 +159,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             ))}
           </ControlSelect>
         </label>
-        <label className="text-xs text-text-muted">
+        <label className="text-caption font-medium text-text-muted">
           Tools (comma-separated)
           <ControlInput
             data-testid="editor-tools"
@@ -168,7 +168,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             onChange={(e) => setTools(e.target.value)}
           />
         </label>
-        <label className="text-xs text-text-muted">
+        <label className="text-caption font-medium text-text-muted">
           Skills (comma-separated)
           <ControlInput
             className={inputClass}
@@ -176,7 +176,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             onChange={(e) => setSkills(e.target.value)}
           />
         </label>
-        <label className="text-xs text-text-muted">
+        <label className="text-caption font-medium text-text-muted">
           System prompt mode
           <ControlSelect
             className={inputClass}
@@ -187,7 +187,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
             <option value="append">append</option>
           </ControlSelect>
         </label>
-        <label className="col-span-2 text-xs text-text-muted">
+        <label className="col-span-2 text-caption font-medium text-text-muted">
           System prompt (markdown body)
           <ControlTextArea
             data-testid="editor-body"
@@ -198,14 +198,14 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </label>
       </div>
       {error ? (
-        <div className="mt-2 text-sm" style={{ color: "var(--color-role-error)" }}>
+        <div className="mt-2 text-label" style={{ color: "var(--color-role-error)" }}>
           {error}
         </div>
       ) : null}
       <div className="mt-3 flex justify-end gap-2">
         <ControlButton
           data-testid="editor-save"
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium disabled:opacity-40"
+          className="rounded-md bg-primary px-4 py-2 text-label font-medium disabled:opacity-40"
           style={{ color: "var(--color-accent-foreground)" }}
           disabled={saving || (!agent && !name.trim())}
           onClick={() => void save()}

@@ -871,7 +871,7 @@ export function McpScreen() {
         title="MCP servers"
         actions={
           <>
-            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-on-media/30 bg-media-overlay px-2.5 py-1 text-xs text-on-media">
+            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-on-media/30 bg-media-overlay px-2.5 py-1 text-detail text-on-media">
               <ControlInput
                 ref={policySwitchRef}
                 type="checkbox"
@@ -921,7 +921,7 @@ export function McpScreen() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl">
-          <p id="mcp-policy-help" className="break-words text-xs text-text-muted">
+          <p id="mcp-policy-help" className="break-words text-caption text-text-muted">
             Pausing removes MCP from model runtimes while keeping servers, All
             Projects/project/agent assignments, and sign-ins unchanged.
           </p>
@@ -930,7 +930,7 @@ export function McpScreen() {
             data-testid="mcp-policy-status"
             aria-live="polite"
             className={cn(
-              "min-h-4 pb-1 text-xs",
+              "min-h-4 pb-1 text-detail",
               policyError ? "text-text-primary" : "text-text-muted",
             )}
           >
@@ -943,7 +943,7 @@ export function McpScreen() {
                     ? "MCP is on."
                     : "MCP is paused.")}
           </div>
-          <p className="break-words pb-3 text-xs text-text-muted" data-testid="mcp-trust-copy">
+          <p className="break-words pb-3 text-caption text-text-muted" data-testid="mcp-trust-copy">
             {selectedProject
               ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
               : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
@@ -973,7 +973,7 @@ export function McpScreen() {
               }}
             >
               {editing ? (
-                <p className="text-xs text-text-muted" data-testid="mcp-editing-label">
+                <p className="text-caption text-text-muted" data-testid="mcp-editing-label">
                   Editing {editingId}
                 </p>
               ) : null}
@@ -991,14 +991,14 @@ export function McpScreen() {
               ) : null}
               {pasting ? (
                 <label className="flex min-w-0 flex-col gap-1">
-                  <span className="text-xs font-medium text-text-secondary">
+                  <span className="text-caption font-medium text-text-secondary">
                     Paste a server&apos;s config, or a claude/codex mcp add command
                   </span>
                   <ControlTextArea
                     autoFocus
                     data-testid="mcp-paste"
                     rows={4}
-                    className="min-w-0 w-full resize-y rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                    className="min-w-0 w-full resize-y rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-55"
                     placeholder={
                       '{ "mcpServers": { "amplitude": { "url": "https://mcp.amplitude.com/mcp" } } }'
                     }
@@ -1006,7 +1006,7 @@ export function McpScreen() {
                     disabled={saving}
                     onChange={(event) => setPasteText(event.target.value)}
                   />
-                  <span className="text-xs text-text-muted">
+                  <span className="text-caption text-text-muted">
                     We parse it and add the server(s). Switch to Manual to fill the fields yourself.
                   </span>
                 </label>
@@ -1023,11 +1023,11 @@ export function McpScreen() {
                 </div>
               )}
               <label className={cn("flex flex-col gap-1", pasting && "hidden")}>
-                <span className="text-xs font-medium text-text-secondary">Name</span>
+                <span className="text-caption font-medium text-text-secondary">Name</span>
                 <ControlInput
                   autoFocus={!editing}
                   data-testid="mcp-name"
-                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent disabled:opacity-55"
                   placeholder="filesystem"
                   aria-invalid={duplicateName || undefined}
                   aria-describedby={duplicateName ? "mcp-add-hint" : undefined}
@@ -1040,11 +1040,11 @@ export function McpScreen() {
                 {transport === "stdio" ? (
                   <>
                     <label className="flex min-w-0 flex-col gap-1">
-                      <span className="text-xs font-medium text-text-secondary">Command</span>
+                      <span className="text-caption font-medium text-text-secondary">Command</span>
                       <ControlInput
                         autoFocus={editing}
                         data-testid="mcp-command"
-                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-55"
                         placeholder="npx"
                         value={command}
                         disabled={saving}
@@ -1052,10 +1052,12 @@ export function McpScreen() {
                       />
                     </label>
                     <label className="flex min-w-0 flex-col gap-1">
-                      <span className="text-xs font-medium text-text-secondary">Arguments</span>
+                      <span className="text-caption font-medium text-text-secondary">
+                        Arguments
+                      </span>
                       <ControlInput
                         data-testid="mcp-args"
-                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                        className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-55"
                         placeholder='-y server-fs "/path with spaces"'
                         value={argsText}
                         disabled={saving}
@@ -1065,11 +1067,11 @@ export function McpScreen() {
                   </>
                 ) : (
                   <label className="flex min-w-0 flex-1 flex-col gap-1">
-                    <span className="text-xs font-medium text-text-secondary">URL</span>
+                    <span className="text-caption font-medium text-text-secondary">URL</span>
                     <ControlInput
                       autoFocus={editing}
                       data-testid="mcp-url"
-                      className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent disabled:opacity-55"
+                      className="min-w-0 w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-55"
                       placeholder="https://mcp.example.com/mcp"
                       aria-invalid={
                         (Boolean(trimmedUrl) && !isValidHttpUrl(trimmedUrl)) || undefined
@@ -1088,7 +1090,7 @@ export function McpScreen() {
                 <ControlButton
                   type="submit"
                   data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
-                  className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                  className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
                   style={{
                     background:
                       "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -1100,15 +1102,27 @@ export function McpScreen() {
                 </ControlButton>
               </div>
               {replacedByPaste.length > 0 ? (
-                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                <p
+                  id="mcp-add-hint"
+                  className="text-caption text-warning"
+                  data-testid="mcp-add-hint"
+                >
                   Adding replaces the existing {replacedByPaste.join(", ")}.
                 </p>
               ) : duplicateName ? (
-                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                <p
+                  id="mcp-add-hint"
+                  className="text-caption text-warning"
+                  data-testid="mcp-add-hint"
+                >
                   A server named {trimmedName} already exists.
                 </p>
               ) : transport === "http" && trimmedUrl && !isValidHttpUrl(trimmedUrl) ? (
-                <p id="mcp-add-hint" className="text-xs text-warning" data-testid="mcp-add-hint">
+                <p
+                  id="mcp-add-hint"
+                  className="text-caption text-warning"
+                  data-testid="mcp-add-hint"
+                >
                   Enter an http:// or https:// URL.
                 </p>
               ) : null}
@@ -1121,13 +1135,13 @@ export function McpScreen() {
             aria-busy={loading || savingAssignments.size > 0}
           >
             {loading ? (
-              <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-loading">
+              <div className="py-8 text-center text-body text-text-muted" data-testid="mcp-loading">
                 Loading MCP servers…
               </div>
             ) : null}
             {!loading && catalogLoadFailed ? (
               <div
-                className="py-8 text-center text-sm text-danger"
+                className="py-8 text-center text-body text-danger"
                 data-testid="mcp-load-error"
                 role="alert"
               >
@@ -1239,7 +1253,7 @@ export function McpScreen() {
                       <div className="min-w-0 basis-40 flex-1">
                         <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden">
                           <span
-                            className="truncate text-sm font-medium text-text-primary"
+                            className="truncate text-label font-medium text-text-primary"
                             style={{ fontStretch: "expanded" }}
                           >
                             {server.id}
@@ -1442,7 +1456,7 @@ export function McpScreen() {
                           <div className="divide-y divide-border-subtle">
                             {tools.map((tool, index) => (
                               <div key={`${tool.name}-${index}`} className="min-w-0 py-2.5">
-                                <div className="break-words font-mono text-sm font-medium text-text-primary">
+                                <div className="break-words font-mono text-code font-medium text-text-primary">
                                   {stripBidiControlCharacters(tool.name)}
                                 </div>
                                 {tool.description ? (
@@ -1502,7 +1516,7 @@ export function McpScreen() {
                             </div>
                             <ControlButton
                               data-testid={`mcp-login-restart-${server.id}`}
-                              className="rounded-capsule px-3 py-1.5 text-xs font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              className="rounded-capsule px-3 py-1.5 text-detail font-medium text-accent hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                               onClick={() => void beginLogin(server.id)}
                             >
                               Restart sign in
@@ -1517,7 +1531,7 @@ export function McpScreen() {
                               <ControlInput
                                 autoFocus
                                 data-testid={`mcp-login-code-${server.id}`}
-                                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                                 placeholder="authorization code"
                                 value={code}
                                 onChange={(e) => setCode(e.target.value)}
@@ -1528,7 +1542,7 @@ export function McpScreen() {
                               />
                               <ControlButton
                                 data-testid={`mcp-login-submit-${server.id}`}
-                                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                                className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
                                 style={{
                                   background:
                                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -1541,7 +1555,7 @@ export function McpScreen() {
                               </ControlButton>
                               <ControlButton
                                 data-testid={`mcp-login-cancel-${server.id}`}
-                                className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                                className="rounded-capsule px-2 py-1.5 text-detail text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                                 disabled={loginSubmitting}
                                 onClick={() => void cancelLogin()}
                               >
@@ -1553,7 +1567,7 @@ export function McpScreen() {
                           <div className="flex gap-2">
                             <ControlButton
                               data-testid={`mcp-login-manual-${server.id}`}
-                              className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              className="rounded-capsule px-2 py-1.5 text-detail text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                               disabled={loginSubmitting}
                               onClick={showManualLogin}
                             >
@@ -1561,7 +1575,7 @@ export function McpScreen() {
                             </ControlButton>
                             <ControlButton
                               data-testid={`mcp-login-cancel-${server.id}`}
-                              className="rounded-capsule px-2 py-1.5 text-xs text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              className="rounded-capsule px-2 py-1.5 text-detail text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                               onClick={() => void cancelLogin()}
                             >
                               Cancel
@@ -1600,7 +1614,7 @@ export function McpScreen() {
                     </span>
                   </label>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                    <div className="truncate text-label font-medium text-text-primary" title={id}>
                       {id}
                     </div>
                     <div className="break-words text-detail text-danger">
@@ -1645,7 +1659,7 @@ export function McpScreen() {
                     </span>
                   </label>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-text-primary" title={id}>
+                    <div className="truncate text-label font-medium text-text-primary" title={id}>
                       {id}
                     </div>
                     <div className="text-detail text-danger">
@@ -1661,7 +1675,7 @@ export function McpScreen() {
             missingAssignedServerIds.length === 0 &&
             missingDefaultAssignedServerIds.length === 0 &&
             !adding ? (
-              <div className="py-8 text-center text-sm text-text-muted" data-testid="mcp-empty">
+              <div className="py-8 text-center text-body text-text-muted" data-testid="mcp-empty">
                 {currentProjectId
                   ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
                   : "No global MCP servers. Add one to assign it to All Projects or specific projects."}

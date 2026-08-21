@@ -123,11 +123,11 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
     const entries = commands.filter((command) => command.source === source);
     return (
       <div data-testid={`command-group-${source}`}>
-        <div className="pb-1.5 text-detail font-medium uppercase tracking-wide text-text-muted">
+        <div className="pb-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
           {label}
         </div>
         {entries.length === 0 ? (
-          <div className="rounded-xl border border-border-subtle px-3.5 py-4 text-sm text-text-muted">
+          <div className="rounded-xl border border-border-subtle px-3.5 py-4 text-body text-text-muted">
             {source === "library" ? "No imported commands." : "No bundled commands available."}
           </div>
         ) : (
@@ -146,10 +146,10 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm font-medium text-text-primary">
+                      <span className="font-mono text-code font-medium text-text-primary">
                         {command.slashName}
                       </span>
-                      <span className="text-xs text-text-secondary">{command.title}</span>
+                      <span className="text-caption text-text-secondary">{command.title}</span>
                       <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                         {source === "built-in" ? "bundled with Agent Deck" : "Agent Deck library"}
                       </span>
@@ -161,7 +161,7 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
                       data-testid={`command-toggle-${command.id}`}
                       aria-label={`${enabled ? "Disable" : "Enable"} ${command.slashName}`}
                       disabled={busy !== null}
-                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary disabled:opacity-40"
+                      className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary disabled:opacity-40"
                       onClick={() => void mutate(command, "toggle")}
                     >
                       {busy === command.id ? "Saving…" : enabled ? "Disable" : "Enable"}
@@ -193,14 +193,14 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div className="flex items-center gap-2">
           <FileCode2 size={15} className="text-text-secondary" aria-hidden />
-          <h3 id="commands-heading" className="text-sm font-semibold text-text-primary">
+          <h3 id="commands-heading" className="text-label font-semibold text-text-primary">
             Commands
           </h3>
         </div>
         <ControlButton
           data-testid="command-import"
           disabled={busy !== null}
-          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary disabled:opacity-40"
           onClick={() => inputRef.current?.click()}
         >
           <Upload size={12} aria-hidden /> {busy === "import" ? "Importing…" : "Import command"}
@@ -218,25 +218,25 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
           }}
         />
       </div>
-      <p className="pb-2 text-xs text-text-muted">
+      <p className="pb-2 text-caption text-text-muted">
         App-managed slash commands for ordinary project sessions. Imported files are copied into
         Agent Deck and start disabled; their original path is never retained.
       </p>
       <p
         role="note"
-        className="mb-3 rounded-lg border border-warning bg-surface-subtle px-3 py-2 text-xs font-medium text-text-primary"
+        className="mb-3 rounded-lg border border-warning bg-surface-subtle px-3 py-2 text-detail font-medium text-text-primary"
       >
         Trust enabled imports: they execute as Pi extensions with extension-runtime capabilities.
         Use ordinary Extensions for privileged code that does more than register one command.
       </p>
       {catalogState === "loading" ? (
-        <div role="status" className="py-5 text-center text-sm text-text-muted">
+        <div role="status" className="py-5 text-center text-body text-text-muted">
           Loading commands…
         </div>
       ) : catalogState === "error" ? (
         <div
           role="alert"
-          className="rounded-xl border border-danger px-3.5 py-4 text-sm text-danger"
+          className="rounded-xl border border-danger px-3.5 py-4 text-label text-danger"
         >
           Commands are unavailable. Retry when Agent Deck reports the catalog is ready.
         </div>
@@ -495,7 +495,7 @@ export function ExtensionsScreen() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl">
-          <p className="pb-3 text-xs text-text-muted">
+          <p className="pb-3 text-caption text-text-muted">
             pi extension files loaded into every new session. Disabled ones stay listed but
             don&apos;t load.
           </p>
@@ -504,7 +504,7 @@ export function ExtensionsScreen() {
 
           {bridges.length > 0 ? (
             <div className="mb-4" data-testid="app-bridges">
-              <div className="pb-1.5 text-detail font-medium uppercase tracking-wide text-text-muted">
+              <div className="pb-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Agent Deck bridges
               </div>
               <p className="pb-2 text-detail text-text-muted">
@@ -523,7 +523,7 @@ export function ExtensionsScreen() {
                   >
                     <div className="flex items-center gap-2">
                       <span
-                        className="text-sm font-medium text-text-primary"
+                        className="text-label font-medium text-text-primary"
                         style={{ fontStretch: "expanded" }}
                       >
                         {b.displayName}
@@ -559,7 +559,7 @@ export function ExtensionsScreen() {
               <ControlInput
                 autoFocus
                 data-testid="extension-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="/path/to/extension.ts"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -570,7 +570,7 @@ export function ExtensionsScreen() {
               />
               <ControlButton
                 data-testid="extension-add-confirm"
-                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -589,7 +589,7 @@ export function ExtensionsScreen() {
           {loadingMode !== null ? (
             <div className="mb-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-medium text-text-primary">Loading mode</span>
+                <span className="text-detail font-medium text-text-primary">Loading mode</span>
                 <div
                   className="flex rounded-capsule border border-border-subtle p-0.5"
                   role="group"
@@ -670,7 +670,7 @@ export function ExtensionsScreen() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span
-                        className="truncate text-sm font-medium text-text-primary"
+                        className="truncate text-label font-medium text-text-primary"
                         style={{ fontStretch: "expanded" }}
                       >
                         {ext.name}
@@ -724,7 +724,7 @@ export function ExtensionsScreen() {
                   <ControlButton
                     data-testid={`extension-toggle-${ext.name}`}
                     data-enabled={!ext.disabled}
-                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                    className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                     disabled={controlsBusy}
                     onClick={() => void toggle(ext)}
                   >
@@ -756,7 +756,7 @@ export function ExtensionsScreen() {
               );
             })}
             {extensions.length === 0 && !adding ? (
-              <div className="py-8 text-center text-sm text-text-muted">
+              <div className="py-8 text-center text-body text-text-muted">
                 No extensions added. Point at a pi extension file to load it into sessions.
               </div>
             ) : null}

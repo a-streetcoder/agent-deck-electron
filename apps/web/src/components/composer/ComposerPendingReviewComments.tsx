@@ -41,7 +41,7 @@ export function ComposerPendingReviewComments({
             tabIndex={0}
             data-testid="pending-comment-card"
             data-path={comment.filePath}
-            className="group flex max-w-full cursor-pointer items-center gap-1.5 rounded-lg border border-border-strong bg-surface py-1 pl-2 pr-1 text-xs text-text-secondary transition-colors hover:border-accent/40 hover:text-text-primary"
+            className="group flex max-w-full cursor-pointer items-center gap-1.5 rounded-lg border border-border-strong bg-surface py-1 pl-2 pr-1 text-detail text-text-secondary transition-colors hover:border-accent/40 hover:text-text-primary"
             title={`${label}\n${comment.text}`}
             onClick={() => onJump(comment)}
             onKeyDown={(event) => {

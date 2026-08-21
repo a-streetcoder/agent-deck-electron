@@ -76,7 +76,7 @@ function NoticeBar({ children }: { children: string }) {
 function CenteredState({ children, testId }: { children: string; testId: string }) {
   return (
     <div
-      className="flex flex-1 items-center justify-center px-5 text-center text-xs text-text-muted"
+      className="flex flex-1 items-center justify-center px-5 text-center text-detail text-text-muted"
       data-testid={testId}
     >
       {children}

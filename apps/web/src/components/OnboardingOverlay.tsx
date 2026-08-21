@@ -352,7 +352,7 @@ function PrefModelPicker({
         aria-busy={disabled || undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-sm text-text-primary outline-none focus:border-accent disabled:opacity-40"
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-label text-text-primary outline-none focus:border-accent disabled:opacity-40"
         onClick={() => setOpen(true)}
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -393,7 +393,7 @@ function PrefModelPicker({
                       type="button"
                       data-testid="pref-model-option-default"
                       className={cn(
-                        "flex w-full items-center gap-2 truncate rounded-md px-2 py-2 text-left text-sm",
+                        "flex w-full items-center gap-2 truncate rounded-md px-2 py-2 text-left text-label",
                         !value
                           ? "bg-selection text-text-primary"
                           : "text-text-secondary hover:bg-hover",
@@ -411,7 +411,7 @@ function PrefModelPicker({
                       <ControlButton
                         type="button"
                         data-testid={`pref-model-option-${value}`}
-                        className="block w-full truncate rounded-md bg-selection px-2 py-2 text-left text-sm text-text-primary"
+                        className="block w-full truncate rounded-md bg-selection px-2 py-2 text-left text-label text-text-primary"
                         onClick={() => select(value)}
                       >
                         {value} (saved)
@@ -422,7 +422,7 @@ function PrefModelPicker({
                         key={provider}
                         type="button"
                         data-testid={`pref-model-provider-${provider}`}
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-label text-text-secondary hover:bg-hover hover:text-text-primary"
                         onClick={() => setProviderId(provider)}
                       >
                         <ProviderLogo
@@ -430,7 +430,7 @@ function PrefModelPicker({
                           size={18}
                           className="text-text-secondary"
                         />
-                        <span className="text-micro font-semibold uppercase tracking-wider">
+                        <span className="text-micro font-semibold uppercase tracking-overline">
                           {provider}
                         </span>
                       </ControlButton>
@@ -438,7 +438,7 @@ function PrefModelPicker({
                   </div>
                 ) : (
                   <>
-                    <SheetHeader className="text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    <SheetHeader className="text-micro font-semibold uppercase tracking-overline text-text-muted">
                       <ProviderLogo
                         providerId={providerId}
                         size={16}
@@ -456,7 +456,7 @@ function PrefModelPicker({
                             type="button"
                             data-testid={`pref-model-option-${optionValue}`}
                             className={cn(
-                              "block w-full truncate rounded-md px-2 py-2 text-left text-sm",
+                              "block w-full truncate rounded-md px-2 py-2 text-left text-label",
                               active
                                 ? "bg-selection text-text-primary"
                                 : "text-text-secondary hover:bg-hover",
@@ -856,14 +856,12 @@ export function OnboardingOverlay() {
                 <div key={tourPage.image} className="onboarding-slide-copy">
                   <h2
                     data-testid="onboarding-title"
-                    className="text-2xl font-semibold"
+                    className="text-heading font-semibold tracking-heading"
                     style={{ fontStretch: "expanded" }}
                   >
                     {tourPage.title}
                   </h2>
-                  <p className="mt-2 text-sm leading-relaxed text-white/80">
-                    {tourPage.description}
-                  </p>
+                  <p className="mt-2 text-body text-white/80">{tourPage.description}</p>
                 </div>
                 <div className="flex items-center gap-2 pt-1" aria-label="Carousel controls">
                   {PAGES.map((p, i) => (
@@ -901,7 +899,7 @@ export function OnboardingOverlay() {
             >
               <SheetContainer className="flex-1 py-5">
                 <div className="mb-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                  <div className="flex items-center gap-2 text-label font-semibold text-text-primary">
                     {checksLoading ? (
                       <RefreshCw size={15} className="animate-spin text-accent" />
                     ) : (
@@ -913,7 +911,7 @@ export function OnboardingOverlay() {
                         ? "Agent Deck is ready"
                         : "Almost ready"}
                   </div>
-                  <p className="mt-1 text-xs text-text-muted">
+                  <p className="mt-1 text-caption text-text-muted">
                     {setupReady
                       ? "Everything needed to start is ready."
                       : "One quick setup step still needs your attention."}
@@ -949,11 +947,11 @@ export function OnboardingOverlay() {
                           <Icon size={14} style={{ color }} className="mt-0.5 shrink-0" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="truncate text-xs font-medium text-text-primary">
+                              <span className="truncate text-detail font-medium text-text-primary">
                                 {summaryCheckLabel(check.id)}
                               </span>
                               <span
-                                className="text-overline uppercase tracking-wide"
+                                className="text-micro font-semibold uppercase tracking-overline"
                                 style={{ color }}
                               >
                                 {statusLabel}
@@ -1003,7 +1001,7 @@ export function OnboardingOverlay() {
                 <div className="flex items-center gap-2">
                   <Stethoscope size={16} className="text-text-secondary" />
                   <h2
-                    className="text-base font-semibold text-text-primary"
+                    className="text-title font-semibold tracking-title text-text-primary"
                     style={{ fontStretch: "expanded" }}
                   >
                     Finish setup
@@ -1011,7 +1009,7 @@ export function OnboardingOverlay() {
                 </div>
                 <ControlButton
                   data-testid="onboarding-recheck"
-                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  className="flex items-center gap-1 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                   disabled={checksLoading}
                   onClick={runChecks}
                 >
@@ -1019,12 +1017,12 @@ export function OnboardingOverlay() {
                   {checksLoading ? "Checking…" : "Re-check"}
                 </ControlButton>
               </div>
-              <p className="mb-4 text-sm text-text-secondary">
+              <p className="mb-4 text-body text-text-secondary">
                 Complete the item below, then ask Agent Deck to check again.
               </p>
               <div className="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-y-auto pb-3 md:grid-cols-2">
                 {checks.length === 0 && checksLoading ? (
-                  <div className="py-6 text-center text-sm text-text-muted">
+                  <div className="py-6 text-center text-body text-text-muted">
                     Checking your setup…
                   </div>
                 ) : null}
@@ -1044,10 +1042,13 @@ export function OnboardingOverlay() {
                         <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-text-primary">
+                            <span className="text-label font-medium text-text-primary">
                               {check.label}
                             </span>
-                            <span className="text-micro uppercase tracking-wide" style={{ color }}>
+                            <span
+                              className="text-micro font-semibold uppercase tracking-overline"
+                              style={{ color }}
+                            >
                               {label}
                             </span>
                           </div>
@@ -1122,7 +1123,7 @@ export function OnboardingOverlay() {
                 </Button>
               }
               trailing={
-                <span className="text-xs text-text-muted">
+                <span className="text-caption text-text-muted">
                   Connect at least one provider to continue.
                 </span>
               }
@@ -1140,13 +1141,13 @@ export function OnboardingOverlay() {
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal size={16} className="text-text-secondary" />
                   <h2
-                    className="text-base font-semibold text-text-primary"
+                    className="text-title font-semibold tracking-title text-text-primary"
                     style={{ fontStretch: "expanded" }}
                   >
                     Preferences
                   </h2>
                 </div>
-                <p className="text-xs text-text-muted">
+                <p className="text-caption text-text-muted">
                   Defaults for new sessions — you can change these anytime later.
                 </p>
               </div>
@@ -1192,7 +1193,10 @@ export function OnboardingOverlay() {
                     onChange={(v) => patchPref({ gitAutomation: v })}
                   />
                   <div className="flex flex-col gap-1 pt-1">
-                    <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
+                    <label
+                      className="text-label font-medium text-text-primary"
+                      htmlFor="pref-model"
+                    >
                       Default model
                     </label>
                     <PrefModelPicker
@@ -1233,7 +1237,7 @@ export function OnboardingOverlay() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <label
-                      className="text-sm font-medium text-text-primary"
+                      className="text-label font-medium text-text-primary"
                       htmlFor="pref-thinking"
                     >
                       Default thinking
@@ -1241,7 +1245,7 @@ export function OnboardingOverlay() {
                     <ControlSelect
                       id="pref-thinking"
                       data-testid="pref-thinking"
-                      className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                      className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                       value={prefs.defaultThinking ?? ""}
                       onChange={(event) =>
                         patchPref({ defaultThinking: event.target.value || null })
@@ -1254,13 +1258,15 @@ export function OnboardingOverlay() {
                         </option>
                       ))}
                     </ControlSelect>
-                    <p className="mt-1 text-xs text-text-muted">
+                    <p className="mt-1 text-caption text-text-muted">
                       Applied when supported by the selected model; Pi may clamp unsupported levels.
                     </p>
                   </div>
                 </>
               ) : (
-                <div className="py-6 text-center text-sm text-text-muted">Loading preferences…</div>
+                <div className="py-6 text-center text-body text-text-muted">
+                  Loading preferences…
+                </div>
               )}
             </SheetContainer>
             <SheetFooter
@@ -1302,12 +1308,12 @@ export function OnboardingOverlay() {
           <div className="flex h-full min-h-0 flex-col pt-titlebar" data-testid="onboarding-final">
             <SheetContainer className="flex flex-1 flex-col justify-center gap-3 py-5">
               <h2
-                className="text-base font-semibold text-text-primary"
+                className="text-title font-semibold tracking-title text-text-primary"
                 style={{ fontStretch: "expanded" }}
               >
                 {routed.view === "chat" && !modelsPending ? "You're all set" : "Almost there"}
               </h2>
-              <p className="text-sm leading-relaxed text-text-secondary">
+              <p className="text-body text-text-secondary">
                 {piMissing
                   ? "Pi isn't ready yet — review setup to finish installing it."
                   : providerMissing
@@ -1384,8 +1390,8 @@ function PrefToggle({
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-sm font-medium text-text-primary">{label}</div>
-        <div id={descriptionId} className="text-xs text-text-muted">
+        <div className="text-label font-medium text-text-primary">{label}</div>
+        <div id={descriptionId} className="text-caption text-text-muted">
           {description}
           {disabled && disabledDescription ? ` ${disabledDescription}` : ""}
         </div>
@@ -1417,7 +1423,7 @@ function PrefToggle({
 
 function FinalGate({ label, ok }: { label: string; ok: boolean }) {
   return (
-    <div className="flex items-center gap-2 text-xs" data-testid="onboarding-gate" data-ok={ok}>
+    <div className="flex items-center gap-2 text-detail" data-testid="onboarding-gate" data-ok={ok}>
       {ok ? (
         <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
       ) : (

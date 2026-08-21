@@ -17,6 +17,7 @@ import {
   Stethoscope,
   WandSparkles,
 } from "lucide-react";
+import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { isMacDesktop } from "@/lib/native";
 import { useAppStore, type AppView } from "../state/store.ts";
@@ -77,9 +78,7 @@ export function Sidebar({ width }: { width?: number }) {
     );
 
   const sectionHeader = (label: string) => (
-    <div className="px-4 pb-1 pt-3 text-micro font-semibold uppercase tracking-wider text-text-muted">
-      {label}
-    </div>
+    <div className={cn("px-4 pb-1 pt-3", sectionHeaderClass, "text-text-muted")}>{label}</div>
   );
 
   return (

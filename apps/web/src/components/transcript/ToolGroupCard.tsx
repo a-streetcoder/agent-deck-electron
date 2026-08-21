@@ -130,9 +130,7 @@ export const ToolGroupCard = forwardRef<HTMLDivElement, ToolGroupCardProps>(func
         )}
       >
         <Icon className="h-4 w-4 shrink-0 text-text-secondary" />
-        <span className="font-mono text-caption font-semibold text-text-primary truncate">
-          {name}
-        </span>
+        <span className="font-mono text-code font-semibold text-text-primary truncate">{name}</span>
         <AppLabelTag variant={STATUS_TAG[status]} className="shrink-0">
           {STATUS_LABEL[status]}
         </AppLabelTag>

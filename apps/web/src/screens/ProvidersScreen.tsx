@@ -98,7 +98,7 @@ export function ProvidersScreen({
           <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
             <Search size={14} className="text-text-muted" />
             <ControlInput
-              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
+              className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none"
               placeholder="Search providers"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -122,7 +122,9 @@ export function ProvidersScreen({
               disconnectingId={disconnectingId}
             />
             {loaded && visible.length === 0 ? (
-              <div className="py-8 text-center text-sm text-text-muted">No matching providers.</div>
+              <div className="py-8 text-center text-body text-text-muted">
+                No matching providers.
+              </div>
             ) : null}
           </AppScrollView>
         </div>
@@ -140,10 +142,10 @@ export function ProvidersScreen({
               aria-modal="true"
               aria-labelledby="provider-method-title"
             >
-              <h3 id="provider-method-title" className="text-sm font-semibold text-text-primary">
+              <h3 id="provider-method-title" className="text-label font-semibold text-text-primary">
                 Connect {methodProvider.name}
               </h3>
-              <p className="mt-1 text-xs text-text-muted">Choose how you want to connect.</p>
+              <p className="mt-1 text-caption text-text-muted">Choose how you want to connect.</p>
               <div className="mt-4 space-y-2">
                 <MethodButton
                   icon={UserRound}
@@ -167,7 +169,7 @@ export function ProvidersScreen({
               <div className="mt-4 flex justify-end">
                 <ControlButton
                   type="button"
-                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
                   onClick={() => setMethodProvider(null)}
                 >
                   Cancel
@@ -208,7 +210,7 @@ function ProviderGroup({
   if (providers.length === 0) return null;
   return (
     <section className="mb-5">
-      <h3 className="mb-1 px-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+      <h3 className="mb-1 px-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
         {title}
       </h3>
       <div className="space-y-1" data-testid="provider-list">
@@ -222,7 +224,7 @@ function ProviderGroup({
               onClick={() => onSelect(provider)}
             >
               <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+              <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
                 {provider.name}
               </span>
               {provider.configured ? (
@@ -235,7 +237,7 @@ function ProviderGroup({
               <ControlButton
                 type="button"
                 data-testid={`provider-signout-${provider.id}`}
-                className="mr-2 flex shrink-0 items-center gap-1 rounded-capsule bg-primary/20 px-2.5 py-1 text-xs font-medium text-accent hover:bg-primary/30 disabled:cursor-wait disabled:opacity-50"
+                className="mr-2 flex shrink-0 items-center gap-1 rounded-capsule bg-primary/20 px-2.5 py-1 text-detail font-medium text-accent hover:bg-primary/30 disabled:cursor-wait disabled:opacity-50"
                 aria-label={`Sign out of ${provider.name}`}
                 title={`Sign out of ${provider.name} and remove its stored credentials`}
                 disabled={disconnectingId !== null}
@@ -270,8 +272,8 @@ function MethodButton({
     >
       <Icon size={18} className="text-accent" />
       <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium text-text-primary">{title}</span>
-        <span className="block text-xs text-text-muted">{detail}</span>
+        <span className="block text-label font-medium text-text-primary">{title}</span>
+        <span className="block text-caption text-text-muted">{detail}</span>
       </span>
       <ChevronRight size={14} className="text-text-muted" />
     </ControlButton>

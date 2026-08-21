@@ -93,7 +93,7 @@ export function TabStrip(props: {
             <div
               key={kind}
               className={cn(
-                "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
+                "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-detail",
                 active
                   ? "bg-selection text-text-primary"
                   : "text-text-muted hover:bg-hover hover:text-text-primary",
@@ -174,7 +174,7 @@ export function TabStrip(props: {
                   disabled={!enabled}
                   title={!enabled ? DISABLED_REASON[kind] : undefined}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-detail",
                     enabled
                       ? "text-text-secondary hover:bg-hover hover:text-text-primary"
                       : "cursor-not-allowed text-text-muted opacity-40",
@@ -280,7 +280,7 @@ function TabContextMenu(props: {
           data-testid={item.testId}
           disabled={item.disabled}
           className={cn(
-            "flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs",
+            "flex w-full items-center rounded-md px-2 py-1.5 text-left text-detail",
             item.disabled
               ? "cursor-not-allowed text-text-muted opacity-40"
               : "text-text-secondary hover:bg-hover hover:text-text-primary",

@@ -95,7 +95,7 @@ export function ChatToolbar() {
             <GitCompareArrows className="h-4 w-4" />
             {diffFileCount > 0 ? (
               <span
-                className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
+                className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-micro font-semibold leading-[14px] text-on-accent"
                 data-testid="diff-badge"
               >
                 {diffFileCount}
@@ -119,7 +119,7 @@ export function ChatToolbar() {
             <History className="h-4 w-4" />
             {checkpointCount > 0 ? (
               <span
-                className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
+                className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-micro font-semibold leading-[14px] text-on-accent"
                 data-testid="checkpoints-badge"
               >
                 {checkpointCount}

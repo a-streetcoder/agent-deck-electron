@@ -23,9 +23,9 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 }
 
 const sizeClasses: Record<NonNullable<TextFieldProps["size"]>, string> = {
-  sm: "h-7 text-xs px-2",
-  md: "h-8 text-sm px-2.5",
-  lg: "h-10 text-sm px-3",
+  sm: "h-7 text-detail px-2",
+  md: "h-8 text-label px-2.5",
+  lg: "h-10 text-label px-3",
 };
 
 /**
@@ -83,7 +83,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
   return (
     <div className={cn("flex flex-col gap-1", fullWidth && "w-full")}>
       {label ? (
-        <label htmlFor={inputId} className="text-xs font-medium text-text-secondary">
+        <label htmlFor={inputId} className="text-caption font-medium text-text-secondary">
           {label}
         </label>
       ) : null}
@@ -126,11 +126,11 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
       </div>
 
       {errorMessage ? (
-        <p id={errorId} role="alert" className="text-xs text-danger">
+        <p id={errorId} role="alert" className="text-caption text-danger">
           {errorMessage}
         </p>
       ) : description ? (
-        <p id={describedById} className="text-xs text-text-muted">
+        <p id={describedById} className="text-caption text-text-muted">
           {description}
         </p>
       ) : null}

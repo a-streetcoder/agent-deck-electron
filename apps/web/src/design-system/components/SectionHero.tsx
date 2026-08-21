@@ -28,7 +28,7 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
       <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 px-6 pb-4 pt-8">
         <div className="min-w-0">
           <h2
-            className="text-heading font-semibold text-on-media"
+            className="text-heading font-semibold tracking-heading text-on-media"
             style={{ fontStretch: "expanded" }}
             data-testid="app-view-title"
           >

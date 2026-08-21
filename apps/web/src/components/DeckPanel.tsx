@@ -38,7 +38,7 @@ function RunDetail({ detail }: { detail: DeckRunDetail }) {
       data-testid="deck-run-detail"
     >
       <div
-        className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-detail text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         data-testid="deck-run-task"
         tabIndex={0}
       >
@@ -117,7 +117,7 @@ function RunRow({
       >
         <div className="flex items-center justify-between gap-2">
           <span
-            className="rounded-capsule px-2 py-0.5 text-micro font-medium uppercase tracking-wide"
+            className="rounded-capsule px-2 py-0.5 text-micro font-semibold uppercase tracking-overline"
             style={{
               color: STATUS_COLOR[run.status],
               border: `1px solid ${STATUS_COLOR[run.status]}`,
@@ -139,7 +139,7 @@ function RunRow({
             </span>
           ) : null}
         </div>
-        <div className={`mt-1.5 text-xs text-text-secondary ${expanded ? "" : "line-clamp-3"}`}>
+        <div className={`mt-1.5 text-detail text-text-secondary ${expanded ? "" : "line-clamp-3"}`}>
           {run.task}
         </div>
         <RunMeta
@@ -194,12 +194,12 @@ export function DeckPanel() {
     >
       <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5">
         <span
-          className="text-xs font-semibold uppercase tracking-wide text-text-primary"
+          className="text-micro font-semibold uppercase tracking-overline text-text-primary"
           style={{ fontStretch: "expanded" }}
         >
           Deck
         </span>
-        <span className="text-xs tabular-nums text-text-muted" data-testid="deck-count">
+        <span className="text-caption tabular-nums text-text-muted" data-testid="deck-count">
           {active > 0 ? `${active} active · ` : ""}
           {runs.length}
         </span>

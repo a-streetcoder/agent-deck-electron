@@ -55,8 +55,8 @@ export const AppEmptyState = forwardRef<HTMLDivElement, AppEmptyStateProps>(func
         <div className="flex h-10 w-10 items-center justify-center text-text-muted">{icon}</div>
       ) : null}
       <div className="flex flex-col gap-1">
-        <div className="text-sm font-semibold text-text-primary">{heading}</div>
-        {body ? <div className="text-sm text-text-muted">{body}</div> : null}
+        <div className="text-label font-semibold text-text-primary">{heading}</div>
+        {body ? <div className="text-caption text-text-muted">{body}</div> : null}
       </div>
       {action ? (
         <Button variant={action.variant ?? "primary"} onClick={action.onClick} size="sm">

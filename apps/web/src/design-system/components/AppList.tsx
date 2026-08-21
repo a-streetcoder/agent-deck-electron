@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "../../lib/cn";
+import { sectionHeaderClass } from "../styles";
 
 export interface AppListSection<T> {
   /** Stable section id. */
@@ -214,10 +215,7 @@ export function AppList<T>({
                 (section.title ? (
                   <div
                     id={labelId}
-                    className={cn(
-                      "px-2 pb-1 pt-2",
-                      "text-micro font-semibold uppercase tracking-wider text-text-muted",
-                    )}
+                    className={cn("px-2 pb-1 pt-2", sectionHeaderClass, "text-text-muted")}
                   >
                     {section.title}
                   </div>
@@ -227,7 +225,7 @@ export function AppList<T>({
                   // SwiftUI parity: the empty-state row uses
                   // `verticalPadding + 2` (≈ `py-2`), giving it a touch more
                   // breathing room than the regular `py-1.5` rows.
-                  <li role="presentation" className="px-2 py-2 text-sm text-text-muted">
+                  <li role="presentation" className="px-2 py-2 text-caption text-text-muted">
                     {section.emptyMessage}
                   </li>
                 ) : null}
@@ -248,7 +246,7 @@ export function AppList<T>({
                         handleSelect(id, event);
                       }}
                       className={cn(
-                        "cursor-pointer select-none rounded-md px-2 py-1.5 text-sm",
+                        "cursor-pointer select-none rounded-md px-2 py-1.5 text-label",
                         // SwiftUI-parity: hover / selection fill swaps instantly
                         // (no transition), matching the native List highlight.
                         "transition-none",
@@ -263,7 +261,7 @@ export function AppList<T>({
                 })}
               </ul>
               {section.footer ? (
-                <div className="px-2 pt-1 text-xs text-text-muted">{section.footer}</div>
+                <div className="px-2 pt-1 text-detail text-text-muted">{section.footer}</div>
               ) : null}
             </div>
           </li>

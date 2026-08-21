@@ -99,7 +99,7 @@ export function EnvironmentScreen() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
-          <p className="pb-3 text-xs text-text-muted">
+          <p className="pb-3 text-caption text-text-muted">
             Variables from ~/.pi/agent/.env and this project's .pi/.env. Values are masked; editing
             replaces the whole value.
           </p>
@@ -108,21 +108,21 @@ export function EnvironmentScreen() {
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border-strong bg-surface p-2">
               <ControlInput
                 data-testid="env-new-key"
-                className="min-w-[10ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-[10ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="KEY"
                 value={newKey}
                 onChange={(e) => setNewKey(e.target.value)}
               />
               <ControlInput
                 data-testid="env-new-value"
-                className="min-w-[12ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-[12ch] flex-1 rounded border border-border-strong bg-surface px-2 py-1 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="value"
                 value={newValue}
                 onChange={(e) => setNewValue(e.target.value)}
               />
               <ControlSelect
                 data-testid="env-new-scope"
-                className="rounded border border-border-strong bg-surface px-2 py-1 text-xs text-text-primary"
+                className="rounded border border-border-strong bg-surface px-2 py-1 text-detail text-text-primary"
                 value={newScope}
                 onChange={(e) => setNewScope(e.target.value as EnvScope)}
               >
@@ -131,7 +131,7 @@ export function EnvironmentScreen() {
               </ControlSelect>
               <ControlButton
                 data-testid="env-new-save"
-                className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+                className="rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -166,7 +166,9 @@ export function EnvironmentScreen() {
                   data-env-scope={entry.scope}
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-sm text-text-primary">{entry.key}</div>
+                    <div className="truncate font-mono text-code text-text-primary">
+                      {entry.key}
+                    </div>
                     <div
                       className="truncate font-mono text-micro text-text-muted"
                       data-testid="env-source"
@@ -179,7 +181,7 @@ export function EnvironmentScreen() {
                     <ControlInput
                       autoFocus
                       data-testid={`env-edit-input-${entry.key}`}
-                      className="w-40 rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                      className="w-40 rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                       placeholder="new value"
                       value={draftValue}
                       onChange={(e) => setDraftValue(e.target.value)}
@@ -194,7 +196,7 @@ export function EnvironmentScreen() {
                       onBlur={() => setEditing(null)}
                     />
                   ) : (
-                    <span className="font-mono text-xs text-text-muted">
+                    <span className="font-mono text-code text-text-muted">
                       {entry.masked || "(empty)"}
                     </span>
                   )}
@@ -229,7 +231,7 @@ export function EnvironmentScreen() {
               );
             })}
             {entries.length === 0 ? (
-              <div className="py-6 text-center text-sm text-text-muted">
+              <div className="py-6 text-center text-body text-text-muted">
                 No environment variables found.
               </div>
             ) : null}
@@ -505,14 +507,14 @@ export function DoctorScreen() {
           </div>
           {loadError ? (
             <div
-              className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-sm text-text-primary"
+              className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-label text-text-primary"
               role="alert"
               data-testid="doctor-error"
             >
               <span>{loadError}</span>
               <ControlButton
                 type="button"
-                className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+                className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
                 onClick={() => refresh(true)}
               >
                 Retry
@@ -538,12 +540,12 @@ export function DoctorScreen() {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2">
-                      <div className="text-sm font-medium text-text-primary">{check.label}</div>
+                      <div className="text-label font-medium text-text-primary">{check.label}</div>
                       <span className="text-micro font-medium uppercase text-text-secondary">
                         {label}
                       </span>
                     </div>
-                    <div className="break-words font-mono text-xs text-text-muted">
+                    <div className="break-words font-mono text-code text-text-muted">
                       {check.detail}
                     </div>
                   </div>
@@ -573,7 +575,7 @@ export function DoctorScreen() {
             >
               <h3
                 id="doctor-warnings-heading"
-                className="pb-2 text-sm font-semibold text-text-primary"
+                className="pb-2 text-label font-semibold text-text-primary"
               >
                 Warnings
               </h3>
@@ -589,7 +591,7 @@ export function DoctorScreen() {
                       size={16}
                       className="mt-0.5 shrink-0 text-warning"
                     />
-                    <div className="min-w-0 flex-1 break-words text-xs text-text-secondary">
+                    <div className="min-w-0 flex-1 break-words text-detail text-text-secondary">
                       {warning.message}
                     </div>
                   </div>

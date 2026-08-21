@@ -100,13 +100,13 @@ export function ExpandedImageDialog({
           <X size={15} />
         </ControlButton>
         {loadState === "loading" ? (
-          <p className="p-8 text-sm text-white/80" role="status">
+          <p className="p-8 text-body text-white/80" role="status">
             Loading image…
           </p>
         ) : null}
         {loadState === "error" ? (
           <div
-            className="flex h-64 w-64 items-center justify-center rounded-lg border border-border-strong bg-surface text-sm text-text-muted"
+            className="flex h-64 w-64 items-center justify-center rounded-lg border border-border-strong bg-surface text-label text-text-muted"
             role="img"
             aria-label={`${item.name} unavailable`}
           >
@@ -123,7 +123,7 @@ export function ExpandedImageDialog({
           onLoad={() => setLoadState("loaded")}
           onError={() => setLoadState("error")}
         />
-        <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-white/80">
+        <p className="mt-2 max-w-[92vw] truncate text-center text-detail text-white/80">
           {item.name}
           {count > 1 ? ` (${index + 1}/${count})` : ""}
         </p>

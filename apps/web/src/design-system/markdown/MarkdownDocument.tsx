@@ -29,14 +29,14 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
 /** Tailwind utilities that style the rendered HTML tree. */
 const BLOCK_STYLES = [
   // Layout / typography baseline
-  "text-sm leading-relaxed text-text-primary",
-  // Headings — match macOS `headlineSize / title3 + bold`
-  "[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-bold",
-  "[&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold",
-  "[&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-base [&_h3]:font-semibold",
-  "[&_h4]:mt-3 [&_h4]:mb-1 [&_h4]:text-sm [&_h4]:font-semibold",
-  "[&_h5]:mt-3 [&_h5]:mb-1 [&_h5]:text-sm [&_h5]:font-semibold",
-  "[&_h6]:mt-3 [&_h6]:mb-1 [&_h6]:text-xs [&_h6]:font-semibold",
+  "text-body text-text-primary",
+  // Headings — compact document scale on the semantic ramp
+  "[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-title [&_h1]:font-semibold",
+  "[&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-label [&_h2]:font-semibold",
+  "[&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-caption [&_h3]:font-semibold",
+  "[&_h4]:mt-3 [&_h4]:mb-1 [&_h4]:text-detail [&_h4]:font-semibold",
+  "[&_h5]:mt-3 [&_h5]:mb-1 [&_h5]:text-detail [&_h5]:font-semibold",
+  "[&_h6]:mt-3 [&_h6]:mb-1 [&_h6]:text-detail [&_h6]:font-semibold",
   // Paragraphs / breaks
   "[&_p]:mb-3 [&_p:last-child]:mb-0",
   // Lists

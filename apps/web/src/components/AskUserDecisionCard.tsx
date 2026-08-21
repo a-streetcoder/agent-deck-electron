@@ -74,25 +74,25 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
       data-status={cell.status}
       aria-labelledby={`${groupId}-title`}
     >
-      <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
+      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
         Agent needs your input
       </div>
       <h3 id={`${groupId}-title`} className="mt-1 font-medium text-text-primary">
         {cell.question}
       </h3>
       {cell.context ? (
-        <div className="mt-2 whitespace-pre-wrap text-sm text-text-secondary">{cell.context}</div>
+        <div className="mt-2 whitespace-pre-wrap text-body text-text-secondary">{cell.context}</div>
       ) : null}
 
       {cell.status === "answered" ? (
-        <div className="mt-3 text-sm text-text-muted" data-testid="ask-user-audit">
+        <div className="mt-3 text-body text-text-muted" data-testid="ask-user-audit">
           Answered
           {cell.answer?.selections.length ? `: ${cell.answer.selections.join(", ")}` : ""}
           {cell.answer?.freeform ? ` — ${cell.answer.freeform}` : ""}
           {cell.answer?.comment ? ` (${cell.answer.comment})` : ""}
         </div>
       ) : resolved ? (
-        <div className="mt-3 text-sm text-text-muted" data-testid="ask-user-audit">
+        <div className="mt-3 text-body text-text-muted" data-testid="ask-user-audit">
           {cell.status === "timed_out" ? "Timed out" : "Cancelled"}: {cell.closedReason}
         </div>
       ) : (
@@ -103,7 +103,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
               {cell.options.map((option) => (
                 <label
                   key={option.title}
-                  className="flex cursor-pointer items-start gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm"
+                  className="flex cursor-pointer items-start gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 text-label"
                 >
                   <ControlInput
                     type={cell.allowMultiple ? "checkbox" : "radio"}
@@ -126,13 +126,13 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
             <div>
               <label
                 htmlFor={`${groupId}-freeform`}
-                className="text-sm font-medium text-text-primary"
+                className="text-label font-medium text-text-primary"
               >
                 {cell.options.length ? "Or write your own answer" : "Your answer"}
               </label>
               <ControlTextArea
                 id={`${groupId}-freeform`}
-                className="mt-1 min-h-20 w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="mt-1 min-h-20 w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 value={freeform}
                 onChange={(event) => {
                   setFreeform(event.currentTarget.value);
@@ -145,13 +145,13 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
             <div>
               <label
                 htmlFor={`${groupId}-comment`}
-                className="text-sm font-medium text-text-primary"
+                className="text-label font-medium text-text-primary"
               >
                 Optional comment
               </label>
               <ControlInput
                 id={`${groupId}-comment`}
-                className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 value={comment}
                 onChange={(event) => setComment(event.currentTarget.value)}
               />
@@ -160,7 +160,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
           <div className="flex justify-end gap-2">
             <ControlButton
               type="button"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm disabled:opacity-50"
+              className="rounded-capsule border border-border-strong px-3 py-1.5 text-label disabled:opacity-50"
               disabled={busy !== null}
               onClick={() => void cancel()}
             >
@@ -168,14 +168,14 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
             </ControlButton>
             <ControlButton
               type="submit"
-              className="rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+              className="rounded-capsule bg-primary px-3 py-1.5 text-label font-medium disabled:opacity-50"
               style={{ color: "var(--color-accent-foreground)" }}
               disabled={!canAnswer || busy !== null}
             >
               {busy === "answer" ? "Answering…" : "Answer"}
             </ControlButton>
           </div>
-          <div className="min-h-5 text-sm text-text-muted" role="status" aria-live="polite">
+          <div className="min-h-5 text-body text-text-muted" role="status" aria-live="polite">
             {status}
           </div>
         </form>

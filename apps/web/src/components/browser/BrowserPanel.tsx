@@ -168,7 +168,7 @@ function BrowserPlaceholder(): ReactElement {
       data-testid="browser-placeholder"
     >
       <Globe className="h-8 w-8 text-text-muted" aria-hidden />
-      <p className="max-w-xs text-sm text-text-secondary">
+      <p className="max-w-xs text-body text-text-secondary">
         The browser is available in the desktop app.
       </p>
     </div>
@@ -505,7 +505,7 @@ function DesktopBrowser(): ReactElement {
               <div
                 key={page.id}
                 className={cn(
-                  "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
+                  "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-detail",
                   active
                     ? "bg-selection text-text-primary"
                     : "text-text-muted hover:bg-hover hover:text-text-primary",
@@ -772,7 +772,7 @@ function BrowserPageView(props: {
       />
       {page.error ? (
         <div
-          className="pointer-events-none absolute inset-x-0 top-0 bg-danger-subtle px-3 py-2 text-center text-xs text-danger"
+          className="pointer-events-none absolute inset-x-0 top-0 bg-danger-subtle px-3 py-2 text-center text-detail text-danger"
           data-testid="browser-error"
         >
           {page.error}

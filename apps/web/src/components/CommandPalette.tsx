@@ -6,6 +6,7 @@ import {
   type KeybindingCommand,
 } from "@agent-deck/contracts";
 import { ArrowRight, Folder, MessageSquareText, Search, Zap } from "lucide-react";
+import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { detectPlatform } from "@/lib/platform";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
@@ -194,7 +195,7 @@ export function CommandPalette() {
             }}
             onKeyDown={onKeyDown}
             placeholder="Search commands, sessions, and projects…"
-            className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+            className="w-full bg-transparent text-label text-text-primary placeholder:text-text-muted focus:outline-none"
             data-testid="command-palette-input"
             spellCheck={false}
             autoComplete="off"
@@ -204,7 +205,7 @@ export function CommandPalette() {
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-1.5">
           {flat.length === 0 ? (
             <div
-              className="px-4 py-6 text-center text-sm text-text-muted"
+              className="px-4 py-6 text-center text-body text-text-muted"
               data-testid="command-palette-empty"
             >
               No matching commands
@@ -214,7 +215,7 @@ export function CommandPalette() {
               const GroupIcon = GROUP_ICON[group.id];
               return (
                 <div key={group.id} data-testid="command-palette-group" data-group={group.id}>
-                  <div className="px-4 pb-0.5 pt-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  <div className={cn("px-4 pb-0.5 pt-2", sectionHeaderClass, "text-text-muted")}>
                     {group.label}
                   </div>
                   {group.items.map((item) => {
@@ -241,13 +242,13 @@ export function CommandPalette() {
                             {item.title}
                           </span>
                           {item.subtitle ? (
-                            <span className="block truncate text-xs text-text-muted">
+                            <span className="block truncate text-detail text-text-muted">
                               {item.subtitle}
                             </span>
                           ) : null}
                         </span>
                         {item.shortcutLabel ? (
-                          <kbd className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 py-0.5 font-mono text-detail text-text-secondary">
+                          <kbd className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 py-0.5 font-mono text-micro text-text-secondary">
                             {item.shortcutLabel}
                           </kbd>
                         ) : null}

@@ -44,8 +44,8 @@ export function PastePreviewDialog({
       <section className="relative z-10 flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-card">
         <header className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
           <div>
-            <h2 className="text-sm font-semibold text-text-primary">Pasted text</h2>
-            <p className="text-xs text-text-muted">{paste.marker}</p>
+            <h2 className="text-label font-semibold text-text-primary">Pasted text</h2>
+            <p className="text-caption text-text-muted">{paste.marker}</p>
           </div>
           <ControlButton
             ref={closeButtonRef}
@@ -58,7 +58,7 @@ export function PastePreviewDialog({
           </ControlButton>
         </header>
         <pre
-          className="overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-text-secondary"
+          className="overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-code leading-relaxed text-text-secondary"
           tabIndex={0}
           data-testid="paste-preview-content"
         >

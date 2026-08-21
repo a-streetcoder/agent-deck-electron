@@ -42,7 +42,7 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
         "rounded-xl border border-role-user/25",
         "bg-role-user/8",
         "px-4 py-3 flex flex-col gap-2",
-        "text-label leading-relaxed",
+        "text-body",
         className,
       )}
     >
@@ -73,7 +73,7 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
         </ul>
       ) : null}
 
-      <MarkdownDocument source={text} className="text-label" />
+      <MarkdownDocument source={text} className="text-body" />
     </div>
   );
 });

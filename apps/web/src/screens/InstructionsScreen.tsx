@@ -324,7 +324,7 @@ export function InstructionsScreen() {
                   data-testid={`instructions-scope-${s}`}
                   aria-pressed={scope === s}
                   className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
+                    "rounded-capsule px-2.5 py-0.5 text-detail capitalize transition-colors",
                     scope === s
                       ? "bg-selection text-text-primary"
                       : "text-text-muted hover:text-text-primary",
@@ -338,7 +338,7 @@ export function InstructionsScreen() {
             {fileKind !== "context" && fileExists && !needsProject ? (
               <ControlButton
                 data-testid="instructions-remove-override"
-                className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-danger"
+                className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-danger"
                 title={
                   fileKind === "system"
                     ? "Delete this SYSTEM.md so pi falls back to its default base prompt"
@@ -352,7 +352,7 @@ export function InstructionsScreen() {
             <ControlButton
               data-testid="instructions-preview-toggle"
               aria-pressed={preview !== null}
-              className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
               title="Preview the assembled system prompt pi builds from these files"
               onClick={() => void togglePreview()}
             >
@@ -360,7 +360,7 @@ export function InstructionsScreen() {
             </ControlButton>
             <ControlButton
               data-testid="instructions-save"
-              className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+              className="rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
               style={{
                 background:
                   "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -378,9 +378,9 @@ export function InstructionsScreen() {
               className="flex min-h-0 flex-1 items-center justify-center px-6 text-center"
               data-testid="instructions-no-project"
             >
-              <div className="max-w-sm text-sm text-text-muted">
+              <div className="max-w-sm text-body text-text-muted">
                 Select a project in the sidebar to edit its{" "}
-                <code className="rounded bg-surface px-1 font-mono text-xs">{fallbackName}</code>,
+                <code className="rounded bg-surface px-1 font-mono text-code">{fallbackName}</code>,
                 or switch to <b>Global</b> to edit the instructions that apply to every session.
               </div>
             </div>
@@ -390,7 +390,10 @@ export function InstructionsScreen() {
                 {filePath}
               </p>
               {fileKind === "system" ? (
-                <p className="pb-3 text-xs text-text-muted" data-testid="instructions-system-note">
+                <p
+                  className="pb-3 text-caption text-text-muted"
+                  data-testid="instructions-system-note"
+                >
                   {fileExists
                     ? "This file REPLACES pi's built-in base prompt for this scope."
                     : scope === "project"
@@ -399,7 +402,10 @@ export function InstructionsScreen() {
                 </p>
               ) : null}
               {fileKind === "append" ? (
-                <p className="pb-3 text-xs text-text-muted" data-testid="instructions-append-note">
+                <p
+                  className="pb-3 text-caption text-text-muted"
+                  data-testid="instructions-append-note"
+                >
                   {scope === "project"
                     ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
                     : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
@@ -412,7 +418,7 @@ export function InstructionsScreen() {
                 >
                   {preview.map((section, index) => (
                     <div key={`${section.kind}-${index}`}>
-                      <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
                         {section.title}
                         {section.contentTruncated ? " (truncated)" : ""}
                       </div>
@@ -433,7 +439,7 @@ export function InstructionsScreen() {
               ) : null}
               {contextShadowed ? (
                 <p
-                  className="pb-3 text-xs text-text-muted"
+                  className="pb-3 text-detail text-text-muted"
                   data-testid="instructions-context-shadowed"
                 >
                   Shadowed in this folder (AGENTS.md wins): {contextShadowed}
@@ -442,9 +448,9 @@ export function InstructionsScreen() {
               {showAncestors && ancestors.length > 0 ? (
                 <div
                   data-testid="instructions-ancestors"
-                  className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+                  className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
                 >
-                  <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
                     Inherited context
                   </div>
                   <p className="pb-1 text-micro text-text-muted">
@@ -468,7 +474,7 @@ export function InstructionsScreen() {
               {loaded ? (
                 <ControlTextArea
                   data-testid="instructions-editor"
-                  className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                  className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-code text-text-primary outline-none focus:border-accent"
                   placeholder={
                     fileKind === "system"
                       ? "The replacement base prompt. Leave the override removed to keep pi's default."
@@ -484,7 +490,7 @@ export function InstructionsScreen() {
                 />
               ) : (
                 <div
-                  className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-border-subtle text-sm text-text-muted"
+                  className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-border-subtle text-body text-text-muted"
                   data-testid="instructions-loading"
                 >
                   Loading…

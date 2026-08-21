@@ -298,16 +298,16 @@ function AgentMemoryPreference() {
       data-testid="agent-memory-preference"
     >
       {state === "loading" ? (
-        <p className="text-sm text-text-muted" role="status">
+        <p className="text-body text-text-muted" role="status">
           Loading memory automation preference…
         </p>
       ) : state === "error" ? (
         <div>
-          <p className="text-sm text-danger" role="alert">
+          <p className="text-body text-danger" role="alert">
             {message}
           </p>
           <ControlButton
-            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary"
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-detail text-text-primary"
             onClick={() => void load()}
           >
             <RefreshCw size={13} aria-hidden="true" /> Retry memory automation
@@ -317,16 +317,16 @@ function AgentMemoryPreference() {
         <>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+              <div className="flex items-center gap-2 text-label font-medium text-text-primary">
                 Memory automation
                 <span
-                  className="rounded-capsule border border-border-subtle px-1.5 text-micro uppercase tracking-wider text-text-muted"
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted"
                   data-testid="agent-memory-state"
                 >
                   {capabilityAvailable ? (enabled ? "On" : "Paused") : "Unavailable"}
                 </span>
               </div>
-              <p id="agent-memory-description" className="mt-1 text-xs text-text-muted">
+              <p id="agent-memory-description" className="mt-1 text-caption text-text-muted">
                 {capabilityAvailable
                   ? "Across all projects, pausing stops automatic recall and agent memory tools. Stored memories remain available."
                   : "Memory automation is unavailable because it is disabled by this server’s configuration."}
@@ -356,7 +356,10 @@ function AgentMemoryPreference() {
             </ControlButton>
           </div>
           <div className="mt-3 grid gap-3 border-t border-border-subtle pt-3 sm:grid-cols-2">
-            <label className="text-xs text-text-muted" htmlFor="agent-memory-budget">
+            <label
+              className="text-caption font-medium text-text-muted"
+              htmlFor="agent-memory-budget"
+            >
               Memory context limit (characters)
               <ControlInput
                 id="agent-memory-budget"
@@ -376,14 +379,14 @@ function AgentMemoryPreference() {
                 }
                 onChange={(event) => setBudget(event.target.value)}
                 onBlur={(event) => void saveBudget(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-border-strong bg-surface px-2 py-1 text-sm text-text-primary"
+                className="mt-1 w-full rounded-lg border border-border-strong bg-surface px-2 py-1 text-label text-text-primary"
               />
               <span id="agent-memory-budget-help" className="mt-1 block text-micro">
                 Whole-number grapheme limit from 1,000 to 20,000.
               </span>
             </label>
             <div>
-              <div className="flex items-center justify-between gap-2 text-xs text-text-muted">
+              <div className="flex items-center justify-between gap-2 text-detail text-text-muted">
                 <span id="agent-memory-subagents-description">
                   Control automatic child policy, index, and task recall. Child memory tools
                   separately follow the master Memory automation switch.
@@ -430,7 +433,7 @@ function AgentMemoryPreference() {
           {message ? (
             <p
               className={cn(
-                "mt-2 text-xs",
+                "mt-2 text-detail",
                 message === "Saving…" || message === "Saved" ? "text-text-muted" : "text-danger",
               )}
               role={message === "Saving…" || message === "Saved" ? "status" : "alert"}
@@ -619,16 +622,20 @@ function SemanticMemoryPreference({
       data-testid="semantic-memory-preference"
     >
       {state === "loading" ? (
-        <p className="text-sm text-text-muted" role="status" data-testid="semantic-memory-loading">
+        <p
+          className="text-body text-text-muted"
+          role="status"
+          data-testid="semantic-memory-loading"
+        >
           Loading semantic memory preference…
         </p>
       ) : state === "error" ? (
         <div data-testid="semantic-memory-load-error">
-          <p className="text-sm text-danger" role="alert">
+          <p className="text-body text-danger" role="alert">
             {message}
           </p>
           <ControlButton
-            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary"
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-detail text-text-primary"
             onClick={() => void load()}
           >
             <RefreshCw size={13} aria-hidden="true" /> Try again
@@ -638,21 +645,21 @@ function SemanticMemoryPreference({
         <>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+              <div className="flex items-center gap-2 text-label font-medium text-text-primary">
                 Semantic ranking
                 <span
-                  className="rounded-capsule border border-border-subtle px-1.5 text-micro uppercase tracking-wider text-text-muted"
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted"
                   data-testid="semantic-memory-mode"
                 >
                   {enabled ? "Requested" : "Not requested"}
                 </span>
               </div>
-              <p id="semantic-memory-description" className="mt-1 text-xs text-text-muted">
+              <p id="semantic-memory-description" className="mt-1 text-caption text-text-muted">
                 Request semantic ranking for memory search and agent recall when it is available.
               </p>
               {recall ? (
                 <p
-                  className="mt-1 text-xs text-text-muted"
+                  className="mt-1 text-detail text-text-muted"
                   role="status"
                   data-testid="semantic-memory-readiness"
                 >
@@ -687,7 +694,7 @@ function SemanticMemoryPreference({
           </div>
           {enabled && recall && canCheck ? (
             <ControlButton
-              className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary disabled:opacity-50"
+              className="mt-2 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-detail text-text-primary disabled:opacity-50"
               disabled={recall.readiness === "checking"}
               onClick={() => void check()}
               data-testid="semantic-memory-check"
@@ -697,14 +704,17 @@ function SemanticMemoryPreference({
             </ControlButton>
           ) : null}
           {enabled && runtimeFailure ? (
-            <p className="mt-2 text-xs text-text-muted" data-testid="semantic-memory-runtime-retry">
+            <p
+              className="mt-2 text-caption text-text-muted"
+              data-testid="semantic-memory-runtime-retry"
+            >
               The next memory search or agent recall will retry semantic ranking automatically.
             </p>
           ) : null}
           {message ? (
             <p
               className={cn(
-                "mt-2 text-xs",
+                "mt-2 text-detail",
                 message === "Saving…" || message === "Saved" ? "text-text-muted" : "text-danger",
               )}
               role={message === "Saving…" || message === "Saved" ? "status" : "alert"}
@@ -1052,7 +1062,7 @@ export function MemoryScreen() {
         <SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
           <div className="mx-auto max-w-3xl">
-            <p className="pb-2 text-xs text-text-muted">
+            <p className="pb-2 text-caption text-text-muted">
               Durable project knowledge agents recall across sessions.
             </p>
             <AgentMemoryPreference />
@@ -1062,7 +1072,7 @@ export function MemoryScreen() {
               setRecall={setSemanticRecall}
             />
             <div
-              className="py-10 text-center text-sm text-text-muted"
+              className="py-10 text-center text-body text-text-muted"
               data-testid="memory-no-project"
             >
               Memory is project-scoped. Open a project to see and manage its memories.
@@ -1132,7 +1142,7 @@ export function MemoryScreen() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl">
-          <p className="pb-2 text-xs text-text-muted">
+          <p className="pb-2 text-caption text-text-muted">
             Durable project knowledge agents recall across sessions. Active and pinned memories are
             injected; stale and archived are kept but not injected.
           </p>
@@ -1144,7 +1154,7 @@ export function MemoryScreen() {
           />
           {navigationAlert ? (
             <div
-              className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-sm text-danger"
+              className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-label text-danger"
               role="alert"
               data-testid="memory-navigation-alert"
             >
@@ -1153,7 +1163,7 @@ export function MemoryScreen() {
           ) : null}
           <ControlInput
             data-testid="memory-search"
-            className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+            className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
             placeholder="Search memories (recall ranking)…"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
@@ -1167,7 +1177,7 @@ export function MemoryScreen() {
               <div className="flex gap-2">
                 <ControlSelect
                   data-testid="memory-type"
-                  className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                  className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                   value={draft.type}
                   onChange={(e) => setDraft({ ...draft, type: e.target.value as MemoryType })}
                 >
@@ -1179,7 +1189,7 @@ export function MemoryScreen() {
                 </ControlSelect>
                 <ControlInput
                   data-testid="memory-title"
-                  className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                  className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                   placeholder="title"
                   value={draft.title}
                   onChange={(e) => setDraft({ ...draft, title: e.target.value })}
@@ -1187,14 +1197,14 @@ export function MemoryScreen() {
               </div>
               <ControlInput
                 data-testid="memory-summary"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 placeholder="summary (a retrieval key)"
                 value={draft.summary}
                 onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
               />
               <ControlInput
                 data-testid="memory-tags"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 placeholder="comma-separated tags"
                 value={draft.tags}
                 onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
@@ -1202,7 +1212,7 @@ export function MemoryScreen() {
               {draft.id !== undefined ? (
                 <dl
                   data-testid="memory-meta"
-                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-muted"
+                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-detail text-text-muted"
                 >
                   {[
                     // Native's detail rows, in its order (AgentMemoryViews.swift:461-471).
@@ -1226,7 +1236,7 @@ export function MemoryScreen() {
               ) : null}
               <ControlTextArea
                 data-testid="memory-body"
-                className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="the durable content"
                 spellCheck={false}
                 value={draft.body}
@@ -1234,14 +1244,14 @@ export function MemoryScreen() {
               />
               <div className="flex items-center justify-end gap-2">
                 <ControlButton
-                  className="rounded-capsule px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => setDraft(null)}
                 >
                   Cancel
                 </ControlButton>
                 <ControlButton
                   data-testid="memory-save"
-                  className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+                  className="rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
                   style={{
                     background:
                       "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -1258,7 +1268,7 @@ export function MemoryScreen() {
 
           {staleSweepNotice ? (
             <p
-              className="pb-2 text-xs text-warning"
+              className="pb-2 text-detail text-warning"
               role="status"
               data-testid="memory-stale-sweep-notice"
             >
@@ -1274,7 +1284,7 @@ export function MemoryScreen() {
               : groupMemoriesByStatus(memories)
             ).map((group) => (
               <section key={group.status} data-testid={`memory-section-${group.status}`}>
-                <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                   {group.label}
                   <span className="rounded-capsule border border-border-subtle px-1 tabular-nums normal-case">
                     {group.memories.length}
@@ -1304,10 +1314,10 @@ export function MemoryScreen() {
                         >
                           {memory.status}
                         </span>
-                        <span className="truncate text-sm font-medium text-text-primary">
+                        <span className="truncate text-label font-medium text-text-primary">
                           {memory.title}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+                        <span className="min-w-0 flex-1 truncate text-caption text-text-muted">
                           {memory.summary}
                         </span>
                         {memory.sourceAgentName ? (
@@ -1377,14 +1387,17 @@ export function MemoryScreen() {
             {searchResults !== null ? (
               searchResults.length === 0 ? (
                 <div
-                  className="py-8 text-center text-sm text-text-muted"
+                  className="py-8 text-center text-body text-text-muted"
                   data-testid="memory-search-empty"
                 >
                   No memories recalled for this query.
                 </div>
               ) : null
             ) : memories.length === 0 && !draft ? (
-              <div className="py-8 text-center text-sm text-text-muted" data-testid="memory-empty">
+              <div
+                className="py-8 text-center text-body text-text-muted"
+                data-testid="memory-empty"
+              >
                 No memories yet. Agents add them as they work, or create one manually.
               </div>
             ) : null}

@@ -67,7 +67,6 @@ const config: Config = {
         pixel: ["var(--font-pixel)"],
       },
       fontSize: {
-        overline: ["var(--text-overline)", { lineHeight: "var(--leading-overline)" }],
         micro: ["var(--text-micro)", { lineHeight: "var(--leading-micro)" }],
         detail: ["var(--text-detail)", { lineHeight: "var(--leading-detail)" }],
         caption: ["var(--text-caption)", { lineHeight: "var(--leading-caption)" }],
@@ -75,6 +74,14 @@ const config: Config = {
         body: ["var(--text-body)", { lineHeight: "var(--leading-body)" }],
         title: ["var(--text-title)", { lineHeight: "var(--leading-title)" }],
         heading: ["var(--text-heading)", { lineHeight: "var(--leading-heading)" }],
+        code: ["var(--text-code)", { lineHeight: "var(--leading-code)" }],
+        "code-sm": ["var(--text-code-sm)", { lineHeight: "var(--leading-code-sm)" }],
+      },
+      letterSpacing: {
+        overline: "var(--tracking-overline)",
+        ui: "var(--tracking-ui)",
+        title: "var(--tracking-title)",
+        heading: "var(--tracking-heading)",
       },
       borderRadius: {
         xs: "var(--radius-xs)",

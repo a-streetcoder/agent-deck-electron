@@ -74,8 +74,8 @@ const ROLE_CLASSES: Record<MessageBubbleRole, string> = {
   tool: cn("bg-role-tool/8 border-role-tool/20"),
   status: cn("bg-hover border-border-subtle text-text-secondary"),
   error: cn("bg-danger/10 border-danger/35 text-text-primary"),
-  stderr: cn("bg-surface border-border-subtle font-mono text-xs text-text-muted"),
-  raw: cn("bg-surface border-border-subtle font-mono text-xs text-text-muted"),
+  stderr: cn("bg-surface border-border-subtle font-mono text-code text-text-muted"),
+  raw: cn("bg-surface border-border-subtle font-mono text-code text-text-muted"),
 };
 
 /**
@@ -127,7 +127,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
         ROLE_CLASSES[role],
         // Soften the body color in muted roles. We add this AFTER the
         // role class so it can override the role's text color.
-        "text-label leading-relaxed",
+        "text-body",
         className,
       )}
     >
@@ -183,7 +183,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
         // For multi-line markdown bodies we delegate to MarkdownDocument
         // so fenced code + lists + headings all parse. Single-line
         // strings render fine through it too.
-        <MarkdownDocument source={text} className="text-label" />
+        <MarkdownDocument source={text} className="text-body" />
       ) : null}
     </div>
   );

@@ -247,7 +247,7 @@ export function OpenInPicker({
               role="menuitem"
               data-testid={`open-in-option-${editor}`}
               className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs",
+                "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-detail",
                 editor === preferred
                   ? "bg-selection text-text-primary"
                   : "text-text-secondary hover:bg-hover",

@@ -39,7 +39,7 @@ export function ComposerPendingElementContexts({
             key={context.id}
             data-testid="pending-element-card"
             data-selector={context.selector ?? ""}
-            className="group flex max-w-full items-center gap-1.5 rounded-lg border border-border-strong bg-surface py-1 pl-2 pr-1 text-xs text-text-secondary"
+            className="group flex max-w-full items-center gap-1.5 rounded-lg border border-border-strong bg-surface py-1 pl-2 pr-1 text-detail text-text-secondary"
             title={[label, context.selector, context.pageUrl, context.note.trim()]
               .filter((part): part is string => Boolean(part && part.length > 0))
               .join("\n")}

@@ -77,13 +77,13 @@ function ToolCellView({
   const session = useAppStore((state) => state.session);
   const argsText =
     cell.args === undefined ? null : (
-      <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs text-text-muted">
+      <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-code text-text-muted">
         {typeof cell.args === "string" ? cell.args : JSON.stringify(cell.args, null, 2)}
       </pre>
     );
   const resultText =
     cell.result === undefined ? null : (
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs text-text-secondary">
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-code text-text-secondary">
         {typeof cell.result === "string" ? cell.result : JSON.stringify(cell.result, null, 2)}
       </pre>
     );
@@ -150,7 +150,7 @@ function MemoryRecallCellView({ cell }: { cell: MemoryRecallCell }) {
       aria-labelledby={titleId}
       data-testid="memory-recall-cell"
     >
-      <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+      <div className="flex items-center gap-2 text-label font-semibold text-text-primary">
         <Brain size={16} className="shrink-0 text-accent" aria-hidden />
         <h3 id={titleId}>Memory recalled</h3>
       </div>
@@ -173,7 +173,7 @@ function MemoryRecallCellView({ cell }: { cell: MemoryRecallCell }) {
             <span className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
               {memory.type}
             </span>
-            <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+            <span className="min-w-0 truncate text-label font-medium text-text-primary">
               {memory.title}
             </span>
           </ControlButton>
@@ -247,12 +247,12 @@ function ProviderRetryCellView({ cell }: { cell: ProviderRetryCell }) {
       <div className="flex items-start gap-2">
         <Icon size={16} className={`mt-0.5 shrink-0 ${accent}`} aria-hidden />
         <div className="min-w-0 space-y-1">
-          <div id={headlineId} className={`text-sm font-semibold ${accent}`}>
+          <div id={headlineId} className={`text-label font-semibold ${accent}`}>
             {headline}
           </div>
           <div id={detailId} className="space-y-1">
             <div
-              className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded text-detail text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               tabIndex={0}
               data-testid="provider-retry-message"
             >
@@ -287,7 +287,7 @@ const SUBAGENT_STATUS: Record<SubagentCell["status"], ToolGroupStatus> = {
 function ReadOnlyChildCell({ cell }: { cell: TranscriptCell }) {
   if (cell.kind === "question" || cell.kind === "ask_user" || cell.kind === "supervisor_question") {
     return (
-      <div className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
+      <div className="rounded-lg border border-border px-3 py-2 text-body text-text-secondary">
         Interactive child request (read-only)
       </div>
     );
@@ -338,15 +338,17 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
             {cell.agentName ? (
               <div
                 data-testid="subagent-agent-name"
-                className="flex items-center gap-1 text-xs text-text-muted"
+                className="flex items-center gap-1 text-detail text-text-muted"
               >
                 <Send size={11} className="shrink-0" />
                 <span className="truncate">{cell.agentName}</span>
               </div>
             ) : null}
-            <div className="text-xs font-medium uppercase tracking-wide text-text-muted">Task</div>
+            <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
+              Task
+            </div>
             <div
-              className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-xs text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-detail text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               data-testid="subagent-task"
               tabIndex={0}
             >
@@ -357,7 +359,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
                 {cell.progress.map((message, index) => (
                   <li
                     key={index}
-                    className="flex gap-1.5 text-xs text-text-muted"
+                    className="flex gap-1.5 text-detail text-text-muted"
                     data-testid="subagent-progress-item"
                   >
                     <span aria-hidden>→</span>
@@ -368,7 +370,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
             ) : null}
             {cell.text ? (
               <div
-                className="max-h-64 overflow-auto whitespace-pre-wrap rounded text-xs text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                className="max-h-64 overflow-auto whitespace-pre-wrap rounded text-detail text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 data-testid="subagent-output"
                 tabIndex={0}
               >
@@ -377,7 +379,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
             ) : null}
             {cell.error ? (
               <div
-                className="whitespace-pre-wrap text-xs text-danger"
+                className="whitespace-pre-wrap text-detail text-danger"
                 role="alert"
                 data-testid="subagent-error"
               >
@@ -393,7 +395,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
             {parentSessionId ? (
               <ControlButton
                 type="button"
-                className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-detail font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 onClick={() => setTranscriptOpen(true)}
                 data-testid="subagent-open-transcript"
               >
@@ -405,7 +407,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               <div className="flex flex-wrap items-center gap-2">
                 <ControlButton
                   type="button"
-                  className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait disabled:opacity-60"
+                  className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-detail font-medium text-text-secondary hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait disabled:opacity-60"
                   onClick={() => void reveal()}
                   disabled={revealState.status === "pending"}
                   aria-describedby={`subagent-reveal-status-${cell.id}`}
@@ -418,8 +420,8 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
                   id={`subagent-reveal-status-${cell.id}`}
                   className={
                     revealState.status === "error"
-                      ? "text-xs text-danger"
-                      : "text-xs text-text-muted"
+                      ? "text-detail text-danger"
+                      : "text-detail text-text-muted"
                   }
                   role={revealState.status === "error" ? "alert" : "status"}
                   aria-live="polite"
@@ -469,21 +471,21 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
       data-answered={cell.answered ? "true" : "false"}
       data-closed={cell.closed ? "true" : "false"}
     >
-      <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
+      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
         Subagent needs input
       </div>
       <div className="mt-1 font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
         {cell.title}
       </div>
       {cell.message ? (
-        <div className="mt-1 whitespace-pre-wrap text-sm text-text-secondary">{cell.message}</div>
+        <div className="mt-1 whitespace-pre-wrap text-body text-text-secondary">{cell.message}</div>
       ) : null}
       {cell.answered ? (
-        <div className="mt-2 text-sm text-text-muted" data-testid="supervisor-answer">
+        <div className="mt-2 text-body text-text-muted" data-testid="supervisor-answer">
           Answered: {cell.answer}
         </div>
       ) : cell.closed ? (
-        <div className="mt-2 text-sm text-text-muted" data-testid="supervisor-closed">
+        <div className="mt-2 text-body text-text-muted" data-testid="supervisor-closed">
           Closed: {cell.closedReason}
         </div>
       ) : (
@@ -494,7 +496,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
                 <ControlButton
                   key={option}
                   data-testid={`supervisor-option-${option}`}
-                  className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
+                  className="rounded-capsule border border-border-strong px-3 py-1.5 text-label text-text-primary hover:border-accent"
                   onClick={() => answer(option)}
                 >
                   {option}
@@ -505,14 +507,14 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
           <ControlTextArea
             data-testid="supervisor-input"
             aria-label={cell.title}
-            className="min-h-[4rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+            className="min-h-[4rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
             placeholder="Type a response…"
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
           <ControlButton
             data-testid="supervisor-submit"
-            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-label font-medium disabled:opacity-50"
             style={{ color: "var(--color-accent-foreground)" }}
             disabled={!inputValue.trim()}
             onClick={() => answer(inputValue)}
@@ -539,9 +541,11 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
       <div className="font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
         {cell.title}
       </div>
-      {cell.message ? <div className="mt-1 text-sm text-text-secondary">{cell.message}</div> : null}
+      {cell.message ? (
+        <div className="mt-1 text-body text-text-secondary">{cell.message}</div>
+      ) : null}
       {cell.answered ? (
-        <div className="mt-2 text-sm text-text-muted">Answered.</div>
+        <div className="mt-2 text-body text-text-muted">Answered.</div>
       ) : (
         <QuestionAnswerControls question={cell} testidPrefix="question" />
       )}
@@ -639,7 +643,7 @@ function UserHistoryActions({ entryId }: { entryId: string }) {
             <h2 id={`rerun-title-${entryId}`} className="font-semibold text-text-primary">
               Re-run from this message?
             </h2>
-            <p className="mt-2 text-sm text-text-secondary">
+            <p className="mt-2 text-body text-text-secondary">
               Later conversation messages will be abandoned. Workspace files are not changed. This
               message and its original attachments will be sent once.
             </p>
@@ -647,7 +651,7 @@ function UserHistoryActions({ entryId }: { entryId: string }) {
               <ControlButton
                 ref={cancelRef}
                 type="button"
-                className="rounded-md px-3 py-1.5 text-sm text-text-secondary hover:bg-hover"
+                className="rounded-md px-3 py-1.5 text-label text-text-secondary hover:bg-hover"
                 disabled={sessionPending}
                 onClick={() => setConfirming(false)}
               >
@@ -655,7 +659,7 @@ function UserHistoryActions({ entryId }: { entryId: string }) {
               </ControlButton>
               <ControlButton
                 type="button"
-                className="rounded-md bg-danger px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                className="rounded-md bg-danger px-3 py-1.5 text-label font-semibold text-white disabled:opacity-50"
                 disabled={sessionPending}
                 onClick={() => void run("rerun")}
                 data-testid="rerun-confirm-button"
@@ -807,7 +811,7 @@ function UserCellView({
               return failed.has(ref.id) || !item.src ? (
                 <div
                   key={ref.id}
-                  className="flex h-24 w-24 items-center justify-center rounded-lg border border-border-strong bg-surface text-center text-xs text-text-muted"
+                  className="flex h-24 w-24 items-center justify-center rounded-lg border border-border-strong bg-surface text-center text-detail text-text-muted"
                   role="img"
                   aria-label={`${item.name} unavailable`}
                 >

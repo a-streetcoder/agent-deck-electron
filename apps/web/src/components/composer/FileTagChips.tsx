@@ -35,7 +35,7 @@ export function FileTagChips({
           data-testid="file-tag-chip"
           data-path={mention.path}
           title={mention.path}
-          className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+          className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
         >
           <FileText size={12} className="shrink-0 text-text-muted" />
           <span className="max-w-[18ch] truncate font-mono">{basename(mention.path)}</span>

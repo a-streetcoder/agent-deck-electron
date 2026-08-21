@@ -33,7 +33,7 @@ function PlanRow({ item }: { item: SessionPlanItem }) {
   const muted = isComplete(item.status);
   return (
     <li
-      className="flex items-start gap-2 text-sm"
+      className="flex items-start gap-2 text-label"
       data-testid="plan-item"
       data-status={item.status}
     >
@@ -63,9 +63,11 @@ export function SessionPlanPanel() {
       data-testid="session-plan"
     >
       <div className="flex items-center justify-between">
-        <div className="text-xs font-medium uppercase tracking-wide text-text-muted">Plan</div>
+        <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
+          Plan
+        </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs tabular-nums text-text-muted" data-testid="plan-progress">
+          <span className="text-caption tabular-nums text-text-muted" data-testid="plan-progress">
             {done}/{plan.length}
           </span>
           <ProgressRing done={done} total={plan.length} />

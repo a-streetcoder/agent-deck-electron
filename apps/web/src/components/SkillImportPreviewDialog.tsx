@@ -140,7 +140,7 @@ export function SkillImportPreviewDialog({
               )}
               Import skills
             </h2>
-            <p className="truncate font-mono text-xs text-text-muted" title={sourceLabel}>
+            <p className="truncate font-mono text-code text-text-muted" title={sourceLabel}>
               {sourceLabel}
             </p>
           </div>
@@ -158,7 +158,7 @@ export function SkillImportPreviewDialog({
         <div className="flex items-center gap-2 border-b border-border px-4 py-2">
           <ControlInput
             data-testid="skill-import-preview-search"
-            className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
+            className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-detail text-text-primary outline-none focus:border-accent"
             placeholder="Search skills"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -166,7 +166,7 @@ export function SkillImportPreviewDialog({
           />
           <ControlButton
             data-testid="skill-import-preview-toggle-all"
-            className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+            className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
             disabled={visible.length === 0 || importing}
             onClick={toggleVisible}
           >
@@ -174,14 +174,17 @@ export function SkillImportPreviewDialog({
           </ControlButton>
         </div>
 
-        <p className="px-4 pt-2 text-xs text-text-muted" data-testid="skill-import-preview-count">
+        <p
+          className="px-4 pt-2 text-caption text-text-muted"
+          data-testid="skill-import-preview-count"
+        >
           Showing {visible.length} of {skills.length} skill{skills.length === 1 ? "" : "s"} •{" "}
           {selected.size} selected
         </p>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {visible.length === 0 ? (
-            <p className="px-2 py-6 text-center text-xs text-text-muted">
+            <p className="px-2 py-6 text-center text-caption text-text-muted">
               No importable skills match your search.
             </p>
           ) : (
@@ -206,7 +209,7 @@ export function SkillImportPreviewDialog({
                     />
                     <span className="min-w-0">
                       <span className="flex items-baseline gap-2">
-                        <span className="text-sm font-medium text-text-primary">
+                        <span className="text-label font-medium text-text-primary">
                           {skill.displayName}
                         </span>
                         {skill.extraFileCount > 0 ? (
@@ -216,7 +219,7 @@ export function SkillImportPreviewDialog({
                         ) : null}
                       </span>
                       {skill.description ? (
-                        <span className="mt-0.5 line-clamp-2 block text-xs text-text-secondary">
+                        <span className="mt-0.5 line-clamp-2 block text-caption text-text-secondary">
                           {skill.description}
                         </span>
                       ) : null}
@@ -234,7 +237,7 @@ export function SkillImportPreviewDialog({
 
         <footer className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <p
-            className="min-w-0 flex-1 truncate text-xs text-danger"
+            className="min-w-0 flex-1 truncate text-detail text-danger"
             data-testid="skill-import-preview-error"
             role="status"
             aria-live="polite"
@@ -246,7 +249,7 @@ export function SkillImportPreviewDialog({
             <ControlButton
               ref={cancelRef}
               data-testid="skill-import-preview-cancel"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+              className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={importing}
               onClick={cancelSafely}
             >
@@ -254,7 +257,7 @@ export function SkillImportPreviewDialog({
             </ControlButton>
             <ControlButton
               data-testid="skill-import-preview-import"
-              className="rounded-capsule border border-accent bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-40"
+              className="rounded-capsule border border-accent bg-accent/10 px-3 py-1.5 text-detail font-medium text-accent hover:bg-accent/20 disabled:opacity-40"
               disabled={selected.size === 0 || importing}
               onClick={() => void doImport()}
             >

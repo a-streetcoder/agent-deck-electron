@@ -826,7 +826,7 @@ export function Composer() {
         pendingInput.steering.length > 0 ||
         pendingInput.followUp.length > 0 ? (
           <div
-            className="mx-3 mt-3 space-y-2 rounded-xl border border-border-subtle bg-surface px-3 py-2 text-xs"
+            className="mx-3 mt-3 space-y-2 rounded-xl border border-border-subtle bg-surface px-3 py-2 text-detail"
             data-testid="pending-input"
             aria-live="polite"
           >
@@ -895,7 +895,7 @@ export function Composer() {
                 key={file.id}
                 data-testid={`file-attachment-${file.id}`}
                 title={file.path}
-                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
               >
                 <FilePlus2 size={14} aria-hidden="true" />
                 <span className="max-w-[20ch] truncate">{file.name}</span>
@@ -921,7 +921,7 @@ export function Composer() {
                 key={folder.id}
                 data-testid={`folder-attachment-${folder.id}`}
                 title={folder.path}
-                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
               >
                 <FolderPlus size={14} aria-hidden="true" />
                 <span className="max-w-[20ch] truncate">{folder.name}</span>
@@ -946,7 +946,7 @@ export function Composer() {
               <span
                 key={image.id}
                 data-testid={`attachment-${image.id}`}
-                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
               >
                 <ControlButton
                   type="button"
@@ -983,7 +983,7 @@ export function Composer() {
         <TextareaAutosize
           ref={textareaRef}
           data-testid="composer-input"
-          className="block w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-sm text-text-primary outline-none placeholder:text-text-muted"
+          className="block w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-body text-text-primary outline-none placeholder:text-text-muted"
           placeholder={
             running
               ? streamingBehavior === "steer"
@@ -1111,7 +1111,7 @@ export function Composer() {
           <label className={chipClass()} title="Agent">
             <ControlSelect
               data-testid="agent-picker"
-              className="max-w-[18ch] cursor-pointer truncate bg-transparent text-xs font-medium outline-none"
+              className="max-w-[18ch] cursor-pointer truncate bg-transparent text-detail font-medium outline-none"
               value={currentAgentName ?? ""}
               disabled={running}
               onChange={(event) => void switchToAgent(event.target.value || null)}
@@ -1216,7 +1216,7 @@ export function Composer() {
               <span className="sr-only">Running prompt mode</span>
               <ControlSelect
                 data-testid="streaming-behavior"
-                className="cursor-pointer bg-transparent text-xs font-medium outline-none"
+                className="cursor-pointer bg-transparent text-detail font-medium outline-none"
                 value={streamingBehavior}
                 disabled={submitting}
                 onChange={(event) => {
@@ -1307,7 +1307,7 @@ export function Composer() {
       </div>
       {submitStatus ? (
         <p
-          className={`px-3 pt-2 text-xs ${submitStatus.kind === "rejection" || submitStatus.kind === "image" ? "text-danger" : "text-text-muted"}`}
+          className={`px-3 pt-2 text-detail ${submitStatus.kind === "rejection" || submitStatus.kind === "image" ? "text-danger" : "text-text-muted"}`}
           data-testid="composer-submit-status"
           role="status"
         >

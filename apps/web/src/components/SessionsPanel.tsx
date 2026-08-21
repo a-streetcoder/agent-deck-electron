@@ -323,7 +323,7 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-card">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1">
           <span
-            className="text-xs font-semibold text-text-primary"
+            className="text-detail font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
             Sessions
@@ -376,7 +376,7 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
             />
           ))}
           {listedSessions.length === 0 ? (
-            <div className="px-2.5 py-2 text-xs text-text-muted">No sessions yet.</div>
+            <div className="px-2.5 py-2 text-detail text-text-muted">No sessions yet.</div>
           ) : null}
         </div>
       </div>
@@ -456,7 +456,7 @@ export function SessionsExpandedOverlay({
       <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-elevated">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
           <span
-            className="text-xs font-semibold text-text-primary"
+            className="text-detail font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
             All sessions
@@ -484,7 +484,7 @@ export function SessionsExpandedOverlay({
         </div>
         <ControlInput
           data-testid="sessions-search"
-          className="mb-1.5 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-text-primary outline-none focus:border-accent"
+          className="mb-1.5 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-detail text-text-primary outline-none focus:border-accent"
           placeholder="Search sessions by title or content…"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -492,7 +492,7 @@ export function SessionsExpandedOverlay({
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto" data-testid="sessions-scroll">
           {filtered.length === 0 ? (
             <div
-              className="py-6 text-center text-xs text-text-muted"
+              className="py-6 text-center text-detail text-text-muted"
               data-testid="sessions-search-empty"
             >
               {query ? "No sessions match your search." : "No sessions yet."}
@@ -500,7 +500,7 @@ export function SessionsExpandedOverlay({
           ) : null}
           {[...groups.entries()].map(([group, groupSessions]) => (
             <div key={group}>
-              <div className="px-2.5 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="px-2.5 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 {group}
               </div>
               <div className="space-y-0.5">

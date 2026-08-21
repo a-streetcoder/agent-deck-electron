@@ -490,7 +490,7 @@ export function PromptsScreen() {
               <ControlInput
                 autoFocus
                 data-testid="prompt-external-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="absolute path to an existing prompt file (.md, .markdown, .mdown, .txt)"
                 value={externalPath}
                 onChange={(event) => setExternalPath(event.target.value)}
@@ -501,7 +501,7 @@ export function PromptsScreen() {
               />
               <ControlButton
                 data-testid="prompt-external-confirm"
-                className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                 disabled={!externalPath.trim()}
                 onClick={() => void addExternalRef()}
               >
@@ -509,7 +509,7 @@ export function PromptsScreen() {
               </ControlButton>
             </div>
           ) : null}
-          <p className="pb-3 text-xs text-text-muted">
+          <p className="pb-3 text-caption text-text-muted">
             Reusable prompts pi exposes as <code className="font-mono">/&lt;name&gt;</code> slash
             commands. Project prompts override global ones of the same name.
           </p>
@@ -536,7 +536,7 @@ export function PromptsScreen() {
               <ControlInput
                 ref={promptNameInputRef}
                 data-testid="prompt-name"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent disabled:opacity-50"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-50"
                 placeholder="name (e.g. review)"
                 value={draft.name}
                 disabled={draft.original !== undefined}
@@ -544,21 +544,21 @@ export function PromptsScreen() {
               />
               <ControlInput
                 data-testid="prompt-description"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 placeholder="description"
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               />
               <ControlInput
                 data-testid="prompt-argument-hint-input"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="argument hint (e.g. <pr-number>) — shown next to /name"
                 value={draft.argumentHint}
                 onChange={(e) => setDraft({ ...draft, argumentHint: e.target.value })}
               />
               <ControlTextArea
                 data-testid="prompt-body"
-                className="h-48 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                className="h-48 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="The prompt template. Markdown."
                 spellCheck={false}
                 value={draft.body}
@@ -569,7 +569,7 @@ export function PromptsScreen() {
               {draft.filePath ? (
                 <div
                   data-testid="prompt-file-path"
-                  className="truncate text-xs text-text-muted"
+                  className="truncate text-detail text-text-muted"
                   title={draft.filePath}
                 >
                   {draft.filePath}
@@ -584,7 +584,7 @@ export function PromptsScreen() {
                   className="rounded-lg border border-border-subtle bg-surface p-2.5"
                   data-testid="prompt-availability"
                 >
-                  <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                  <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                     Available in projects
                   </div>
                   <p className="pb-1.5 text-detail text-text-muted">
@@ -610,7 +610,7 @@ export function PromptsScreen() {
                               void updateProject(project.id, { assignedPrompts: [...next] });
                             }}
                           />
-                          <span className="text-sm text-text-primary">{project.name}</span>
+                          <span className="text-label text-text-primary">{project.name}</span>
                           <span className="truncate font-mono text-detail text-text-muted">
                             {project.path}
                           </span>
@@ -622,14 +622,14 @@ export function PromptsScreen() {
               ) : null}
               <div className="flex items-center justify-end gap-2">
                 <ControlButton
-                  className="rounded-capsule px-3 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => setDraft(null)}
                 >
                   Cancel
                 </ControlButton>
                 <ControlButton
                   data-testid="prompt-save"
-                  className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule disabled:opacity-40"
+                  className="rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule disabled:opacity-40"
                   style={{
                     background:
                       "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -647,7 +647,7 @@ export function PromptsScreen() {
           {packageWarnings.length > 0 ? (
             <div
               data-testid="prompt-package-warnings"
-              className="mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+              className="mb-2 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
               role="status"
             >
               {packageWarnings.map((warning) => (
@@ -691,11 +691,11 @@ export function PromptsScreen() {
               >
                 {renaming?.name === prompt.name && renaming.scope === prompt.scope ? (
                   <>
-                    <span className="font-mono text-sm text-text-muted">/</span>
+                    <span className="font-mono text-code text-text-muted">/</span>
                     <ControlInput
                       autoFocus
                       data-testid={`prompt-rename-input-${prompt.name}`}
-                      className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 font-mono text-sm text-text-primary outline-none focus:border-accent"
+                      className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 font-mono text-code text-text-primary outline-none focus:border-accent"
                       value={renaming.value}
                       onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
                       onKeyDown={(e) => {
@@ -728,7 +728,7 @@ export function PromptsScreen() {
                     >
                       <span
                         data-testid="prompt-invocation"
-                        className="font-mono text-sm font-medium text-text-primary"
+                        className="font-mono text-code font-medium text-text-primary"
                         style={{ fontStretch: "expanded" }}
                       >
                         {prompt.invocation}
@@ -754,7 +754,7 @@ export function PromptsScreen() {
                         {prompt.scope}
                       </span>
                       {prompt.description ? (
-                        <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+                        <span className="min-w-0 flex-1 truncate text-caption text-text-muted">
                           {prompt.description}
                         </span>
                       ) : null}
@@ -880,7 +880,7 @@ export function PromptsScreen() {
             hasSearchQuery &&
             visiblePrompts.length === 0 ? (
               <div
-                className="py-8 text-center text-sm text-text-muted"
+                className="py-8 text-center text-body text-text-muted"
                 data-testid="prompt-search-empty"
                 role="status"
               >
@@ -888,7 +888,7 @@ export function PromptsScreen() {
               </div>
             ) : null}
             {promptsLoaded && prompts.length === 0 && !draft ? (
-              <div className="py-8 text-center text-sm text-text-muted">
+              <div className="py-8 text-center text-body text-text-muted">
                 No prompt templates yet. Create one to use it as a slash command.
               </div>
             ) : null}

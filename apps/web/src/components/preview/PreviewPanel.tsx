@@ -365,7 +365,7 @@ export function ScriptsRunner(props: {
       {/* Subheader row (matches the diff / files panels). */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
         <span
-          className="text-xs font-semibold uppercase tracking-wide text-text-muted"
+          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
           style={{ fontStretch: "expanded" }}
         >
           Preview
@@ -387,7 +387,7 @@ export function ScriptsRunner(props: {
       {/* Run control: pick a declared script, start / stop it. */}
       <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
         <ControlSelect
-          className="min-w-0 flex-1 truncate rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-xs text-text-primary disabled:opacity-50"
+          className="min-w-0 flex-1 truncate rounded-md border border-border-subtle bg-surface px-2 py-1 font-mono text-code text-text-primary disabled:opacity-50"
           data-testid="preview-script-select"
           value={selected ?? ""}
           aria-label="Detected server command"
@@ -407,7 +407,7 @@ export function ScriptsRunner(props: {
         {running ? (
           <ControlButton
             type="button"
-            className="flex items-center gap-1 rounded-md bg-danger px-2.5 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+            className="flex items-center gap-1 rounded-md bg-danger px-2.5 py-1 text-detail font-semibold text-white transition-opacity hover:opacity-90"
             data-testid="preview-stop"
             onClick={onStop}
           >
@@ -417,7 +417,7 @@ export function ScriptsRunner(props: {
         ) : (
           <ControlButton
             type="button"
-            className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
             data-testid="preview-run"
             disabled={!hasScripts || selected === null}
             onClick={onRun}
@@ -439,7 +439,7 @@ export function ScriptsRunner(props: {
                 <div className="text-detail text-text-muted">
                   Detected from {commandEvidence(proposal)}
                 </div>
-                <code className="mt-1 block break-all text-xs text-text-secondary">
+                <code className="mt-1 block break-all text-detail text-text-secondary">
                   {proposal.command}
                 </code>
               </div>
@@ -449,7 +449,7 @@ export function ScriptsRunner(props: {
 
       {scriptsLoading ? (
         <div
-          className="border-b border-border-subtle px-3 py-2 text-xs text-text-muted"
+          className="border-b border-border-subtle px-3 py-2 text-detail text-text-muted"
           role="status"
           aria-live="polite"
           data-testid="preview-list-loading"
@@ -460,7 +460,7 @@ export function ScriptsRunner(props: {
 
       {scriptsFailed ? (
         <div
-          className="flex items-center justify-between gap-3 border-b border-border-subtle px-3 py-2 text-xs"
+          className="flex items-center justify-between gap-3 border-b border-border-subtle px-3 py-2 text-detail"
           style={{ color: "var(--color-role-error)" }}
           role="alert"
           data-testid="preview-list-error"
@@ -478,7 +478,7 @@ export function ScriptsRunner(props: {
 
       {startError ? (
         <div
-          className="border-b border-border-subtle px-3 py-2 text-xs"
+          className="border-b border-border-subtle px-3 py-2 text-detail"
           style={{ color: "var(--color-role-error)" }}
           role="alert"
           aria-live="assertive"
@@ -498,7 +498,9 @@ export function ScriptsRunner(props: {
         >
           <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-success" />
           <span className="min-w-0 flex-1">
-            <span className="block text-xs font-semibold text-text-primary">Dev server ready</span>
+            <span className="block text-detail font-semibold text-text-primary">
+              Dev server ready
+            </span>
             <span className="block truncate font-mono text-detail text-text-muted">
               {server.url}
             </span>
@@ -521,7 +523,7 @@ export function ScriptsRunner(props: {
           className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
           data-testid="preview-empty"
         >
-          <p className="text-sm text-text-secondary">
+          <p className="text-body text-text-secondary">
             {scriptsLoading
               ? "Detecting server commands…"
               : scriptsFailed
@@ -532,7 +534,7 @@ export function ScriptsRunner(props: {
                     ? "No server command detected"
                     : "Waiting to detect server commands"}
           </p>
-          <p className="text-xs text-text-muted">
+          <p className="text-caption text-text-muted">
             {scriptsLoading
               ? "Nothing will start while detection is in progress."
               : scriptsFailed
@@ -906,7 +908,7 @@ export function PreviewBrowser(props: {
       <div className="relative min-h-0 flex-1 bg-white">
         {safeSrc === null ? (
           <div
-            className="flex h-full w-full items-center justify-center bg-surface p-6 text-center text-sm text-text-muted"
+            className="flex h-full w-full items-center justify-center bg-surface p-6 text-center text-body text-text-muted"
             data-testid="preview-blocked"
           >
             Only a loopback (localhost) dev server can be embedded here.
@@ -945,7 +947,7 @@ export function PreviewBrowser(props: {
             aria-live="polite"
           >
             <RotateCw className="h-5 w-5 animate-spin text-text-muted" />
-            <span className="text-xs text-text-muted">
+            <span className="text-caption text-text-muted">
               {showHint ? "The dev server may still be starting…" : "Loading…"}
             </span>
           </div>
@@ -998,7 +1000,7 @@ function ElementCaptureForm(props: {
       data-testid="preview-element-form"
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-text-secondary">Add element context</span>
+        <span className="text-caption font-semibold text-text-secondary">Add element context</span>
         <span className="truncate pl-2 font-mono text-micro text-text-muted" title={pageUrl}>
           {pageUrl}
         </span>
@@ -1019,7 +1021,7 @@ function ElementCaptureForm(props: {
         }}
       />
       <ControlTextArea
-        className="min-h-[3rem] resize-none rounded-md border border-border-subtle bg-surface-elevated px-2 py-1 text-xs text-text-primary focus:border-accent focus:outline-none"
+        className="min-h-[3rem] resize-none rounded-md border border-border-subtle bg-surface-elevated px-2 py-1 text-detail text-text-primary focus:border-accent focus:outline-none"
         data-testid="preview-element-note"
         value={note}
         placeholder="Describe the element or the change you want…"
@@ -1039,7 +1041,7 @@ function ElementCaptureForm(props: {
       <div className="flex items-center justify-end gap-2">
         <ControlButton
           type="button"
-          className="rounded-md px-2.5 py-1 text-xs text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
+          className="rounded-md px-2.5 py-1 text-detail text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
           data-testid="preview-element-cancel"
           onClick={onClose}
         >
@@ -1047,7 +1049,7 @@ function ElementCaptureForm(props: {
         </ControlButton>
         <ControlButton
           type="submit"
-          className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="rounded-md bg-accent px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
           data-testid="preview-element-add"
           disabled={!canAdd}
         >

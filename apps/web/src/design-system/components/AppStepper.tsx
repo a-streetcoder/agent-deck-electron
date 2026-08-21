@@ -147,11 +147,15 @@ export const AppStepper = forwardRef<HTMLInputElement, AppStepperProps>(function
       {label || description ? (
         <div className="flex min-w-0 flex-col gap-0.5">
           {label ? (
-            <label id={labelId} htmlFor={inputId} className="text-sm text-text-primary">
+            <label
+              id={labelId}
+              htmlFor={inputId}
+              className="text-caption font-medium text-text-primary"
+            >
               {label}
             </label>
           ) : null}
-          {description ? <span className="text-xs text-text-muted">{description}</span> : null}
+          {description ? <span className="text-caption text-text-muted">{description}</span> : null}
         </div>
       ) : null}
       <div
@@ -195,7 +199,7 @@ export const AppStepper = forwardRef<HTMLInputElement, AppStepperProps>(function
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           className={cn(
-            "w-16 min-w-0 bg-transparent text-center font-mono text-sm",
+            "w-16 min-w-0 bg-transparent text-center font-mono text-code",
             "text-text-primary tabular-nums outline-none",
             "placeholder:text-text-muted",
             // Suppress the browser-rendered number spinners since we

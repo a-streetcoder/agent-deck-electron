@@ -40,9 +40,9 @@ const baseClasses = [
 ].join(" ");
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-xs rounded-md",
-  md: "h-8 px-3 text-sm rounded-md",
-  lg: "h-10 px-4 text-sm rounded-lg",
+  sm: "h-7 px-2.5 text-detail rounded-md",
+  md: "h-8 px-3 text-label rounded-md",
+  lg: "h-10 px-4 text-label rounded-lg",
 };
 
 /**

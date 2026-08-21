@@ -82,7 +82,7 @@ function AgentRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span
-            className="truncate text-sm font-semibold text-text-primary"
+            className="truncate text-label font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
             {agent.name}
@@ -122,12 +122,12 @@ function AgentRow({
           {agent.shadowed ? <span className="text-micro text-text-muted">shadowed</span> : null}
         </div>
         {agent.description ? (
-          <div className="line-clamp-2 text-xs text-text-secondary">{agent.description}</div>
+          <div className="line-clamp-2 text-caption text-text-secondary">{agent.description}</div>
         ) : null}
       </div>
       <ControlButton
         data-testid={`agent-row-edit-${agent.name}`}
-        className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+        className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
         onClick={(event) => {
           event.stopPropagation();
           onEdit();
@@ -143,7 +143,7 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
   if (!items?.length) return null;
   return (
     <div>
-      <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+      <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
         {label}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -313,7 +313,7 @@ export function AgentDetail({
                 <ControlInput
                   autoFocus
                   data-testid="agent-rename-input"
-                  className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-lg font-bold text-text-primary outline-none focus:border-accent"
+                  className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-title font-semibold tracking-title text-text-primary outline-none focus:border-accent"
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => {
@@ -340,7 +340,7 @@ export function AgentDetail({
               </>
             ) : (
               <h2
-                className="truncate text-xl font-bold text-text-primary"
+                className="truncate text-title font-semibold tracking-title text-text-primary"
                 style={{ fontStretch: "expanded" }}
               >
                 {agent.name}
@@ -348,13 +348,13 @@ export function AgentDetail({
             )}
             <ScopeChip scope={agent.scope} />
             {agent.replacesBuiltin ? (
-              <span className="text-xs" style={{ color: "var(--color-warning)" }}>
+              <span className="text-detail" style={{ color: "var(--color-warning)" }}>
                 replaces builtin
               </span>
             ) : null}
           </div>
           {agent.description ? (
-            <p className="mt-0.5 text-sm text-text-secondary">{agent.description}</p>
+            <p className="mt-0.5 text-body text-text-secondary">{agent.description}</p>
           ) : null}
         </div>
         <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-[900px]:w-full">
@@ -365,7 +365,7 @@ export function AgentDetail({
                   data-testid={`assigned-agent-${agent.name}`}
                   aria-pressed={isAssigned}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
+                    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
                     isAssigned
                       ? "border-accent text-accent"
                       : "border-border-strong text-text-muted hover:text-text-primary",
@@ -376,14 +376,14 @@ export function AgentDetail({
                   {isAssigned ? "assigned to project" : "assign to project"}
                 </ControlButton>
               ) : (
-                <span className="text-xs text-text-muted" data-testid="builtin-project-access">
+                <span className="text-caption text-text-muted" data-testid="builtin-project-access">
                   available to every project
                 </span>
               )}
               <ControlButton
                 data-testid={`default-agent-${agent.name}`}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs",
+                  "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
                   isDefault
                     ? "border-accent text-accent"
                     : "border-border-strong text-text-muted hover:text-text-primary",
@@ -409,7 +409,7 @@ export function AgentDetail({
             {canCreateReplacement ? (
               <ControlButton
                 data-testid="agent-create-replacement"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                 title="Create an editable global custom agent from this builtin"
                 onClick={onCreateReplacement}
               >
@@ -419,7 +419,7 @@ export function AgentDetail({
             ) : null}
             <ControlButton
               data-testid="agent-disable"
-              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
               onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
             >
               {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
@@ -427,7 +427,7 @@ export function AgentDetail({
             </ControlButton>
             <ControlButton
               data-testid="agent-edit"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
               style={{
                 background:
                   "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -443,7 +443,7 @@ export function AgentDetail({
             {agent.scope !== "builtin" ? (
               <ControlButton
                 data-testid="agent-rename"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                 onClick={() => setRenameValue(agent.name)}
               >
                 <Tag size={12} />
@@ -469,7 +469,7 @@ export function AgentDetail({
             ) : agent.overridden ? (
               <ControlButton
                 data-testid="agent-reset"
-                className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-muted hover:text-danger"
+                className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-muted hover:text-danger"
                 title="Clear all overrides and restore the bundled defaults"
                 onClick={() => {
                   if (
@@ -487,7 +487,7 @@ export function AgentDetail({
       </div>
 
       {avatarError ? (
-        <div className="mt-3 text-sm" role="alert" style={{ color: "var(--color-role-error)" }}>
+        <div className="mt-3 text-body" role="alert" style={{ color: "var(--color-role-error)" }}>
           {avatarError}
         </div>
       ) : null}
@@ -499,18 +499,18 @@ export function AgentDetail({
             data-testid="agent-warning-panel"
             aria-labelledby="agent-warning-heading"
           >
-            <div className="flex items-center gap-2 text-sm font-semibold text-warning">
+            <div className="flex items-center gap-2 text-label font-semibold text-warning">
               <AlertTriangle size={15} aria-hidden="true" />
               <h3 id="agent-warning-heading">Configuration warnings</h3>
             </div>
-            <p className="mt-1 text-xs text-text-muted">
+            <p className="mt-1 text-caption text-text-muted">
               Evaluated against{" "}
               {currentProject
                 ? `the current project “${currentProject.name}”`
                 : "the global catalog (no project selected)"}{" "}
               and current runtime settings.
             </p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-text-secondary">
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-body text-text-secondary">
               {agent.warnings!.map((warning) => (
                 <li key={warning.id} data-warning-id={warning.id}>
                   {warning.message}
@@ -524,7 +524,7 @@ export function AgentDetail({
             className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-replacement-description"
           >
-            <p className="text-sm text-text-secondary">
+            <p className="text-body text-text-secondary">
               Use Replacement to create a global custom agent seeded from this bundled agent. The
               builtin stays unchanged.
             </p>
@@ -532,16 +532,16 @@ export function AgentDetail({
         ) : null}
         {agent.whenToUse ? (
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
               When to use
             </div>
-            <p className="text-sm text-text-secondary">{agent.whenToUse}</p>
+            <p className="text-body text-text-secondary">{agent.whenToUse}</p>
           </div>
         ) : null}
 
         <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
           <div className="flex items-center justify-between pb-2">
-            <div className="text-micro font-semibold uppercase tracking-wider text-text-muted">
+            <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
               System prompt
             </div>
             {/* Native "Prompt Mode" row (AgentManagementViews.swift:1335) surfaces
@@ -603,10 +603,10 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-output"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Output Advisory
               </div>
-              <div className="text-sm text-text-secondary">{agent.output}</div>
+              <div className="text-body text-text-secondary">{agent.output}</div>
             </div>
           ) : null}
           {agent.defaultReads?.length ? (
@@ -622,10 +622,10 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-default-outcome"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Default Outcome
               </div>
-              <div className="text-sm text-text-secondary">
+              <div className="text-body text-text-secondary">
                 {SUBAGENT_EXPECTED_OUTCOME_LABELS[agent.defaultExpectedOutcome]}
               </div>
             </div>
@@ -634,10 +634,10 @@ export function AgentDetail({
             className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-default-progress"
           >
-            <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
               Default Progress
             </div>
-            <div className="text-sm text-text-secondary">
+            <div className="text-body text-text-secondary">
               {agent.defaultProgress ? "Yes" : "No"}
             </div>
           </div>
@@ -646,36 +646,36 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-max-subagent-depth"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Max Subagent Depth Metadata
               </div>
-              <div className="text-sm text-text-secondary">{agent.maxSubagentDepth}</div>
+              <div className="text-body text-text-secondary">{agent.maxSubagentDepth}</div>
             </div>
           ) : null}
           <div
             className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-interactive"
           >
-            <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
               Interactive Metadata
             </div>
-            <div className="text-sm text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
+            <div className="text-body text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
           </div>
           {agent.scope !== "builtin" ? (
             <div
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-extensions"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Extensions
               </div>
               {agent.extensions === undefined ? (
-                <div className="text-sm text-text-secondary">Default catalog policy</div>
+                <div className="text-body text-text-secondary">Default catalog policy</div>
               ) : agent.extensions.length === 0 ? (
-                <div className="text-sm text-text-secondary">None (explicit)</div>
+                <div className="text-body text-text-secondary">None (explicit)</div>
               ) : (
                 <div className="space-y-1">
-                  <div className="text-sm text-text-secondary">
+                  <div className="text-body text-text-secondary">
                     {agent.extensions.length} selected
                   </div>
                   <div className="flex flex-wrap gap-1.5">
@@ -695,7 +695,7 @@ export function AgentDetail({
           ) : null}
         </div>
 
-        <div className="grid grid-cols-2 gap-4 text-xs text-text-muted">
+        <div className="grid grid-cols-2 gap-4 text-detail text-text-muted">
           <div>
             model: <span className="font-mono">{agent.model ?? "pi default"}</span>
             {agent.thinking ? <span className="font-mono">:{agent.thinking}</span> : null}
@@ -811,7 +811,7 @@ export function AgentsScreen() {
             <div className="flex items-center gap-2">
               <ControlInput
                 data-testid="agent-search"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 placeholder="Search agents"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -836,7 +836,7 @@ export function AgentsScreen() {
                   key={f}
                   data-testid={`agent-filter-${f}`}
                   className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-xs",
+                    "rounded-capsule px-2.5 py-0.5 text-detail",
                     filter === f
                       ? "bg-selection text-text-primary"
                       : "text-text-muted hover:bg-hover",
@@ -860,7 +860,7 @@ export function AgentsScreen() {
                 <div key={scope}>
                   <div className="flex items-baseline gap-2 px-1 pb-1 pt-2">
                     <span
-                      className="text-micro font-semibold uppercase tracking-wider"
+                      className="text-micro font-semibold uppercase tracking-overline"
                       style={{ color: agentSourceColor({ scope }) }}
                     >
                       {title}
@@ -885,7 +885,7 @@ export function AgentsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="mt-8 text-center text-sm text-text-muted">
+              <div className="mt-8 text-center text-body text-text-muted">
                 No agents match this filter.
               </div>
             ) : null}
@@ -918,7 +918,7 @@ export function AgentsScreen() {
             ]}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+          <div className="flex flex-1 items-center justify-center text-body text-text-muted">
             Select an agent.
           </div>
         )}

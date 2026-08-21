@@ -252,7 +252,7 @@ export function ProjectPicker() {
               <ControlInput
                 autoFocus
                 data-testid="add-project-path"
-                className="w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="/path/to/project"
                 value={draftPath}
                 onChange={(event) => setDraftPath(event.target.value)}
@@ -263,7 +263,7 @@ export function ProjectPicker() {
               />
               <ControlButton
                 data-testid="add-project-confirm"
-                className="w-full rounded-capsule bg-primary px-2 py-1.5 text-xs font-medium"
+                className="w-full rounded-capsule bg-primary px-2 py-1.5 text-detail font-medium"
                 style={{ color: "var(--color-accent-foreground)" }}
                 onClick={() => void submitPath()}
               >

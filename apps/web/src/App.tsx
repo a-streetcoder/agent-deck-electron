@@ -198,14 +198,12 @@ export function App() {
           </>
         ) : null}
         <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-col overflow-hidden bg-surface",
-          )}
+          className={cn("flex min-w-0 flex-1 flex-col overflow-hidden bg-surface")}
           data-testid="workspace-shell"
         >
           {error ? (
             <div
-              className="max-w-full break-words bg-danger-subtle px-6 py-2 text-sm text-danger [overflow-wrap:anywhere]"
+              className="max-w-full break-words bg-danger-subtle px-6 py-2 text-body text-danger [overflow-wrap:anywhere]"
               data-testid="error-banner"
               role="alert"
               aria-live="assertive"

@@ -104,13 +104,13 @@ export function ChildTranscriptDialog({
             {snapshot ? (
               <>
                 <p
-                  className="break-words text-xs text-text-muted"
+                  className="break-words text-detail text-text-muted"
                   data-testid="child-transcript-task"
                 >
                   {snapshot.task}
                 </p>
                 <p
-                  className="mt-1 text-xs font-medium text-text-secondary"
+                  className="mt-1 text-caption font-medium text-text-secondary"
                   role="status"
                   aria-live="polite"
                   data-testid="child-transcript-source-status"
@@ -135,18 +135,18 @@ export function ChildTranscriptDialog({
           data-testid="child-transcript-content"
         >
           {!snapshot && !error ? (
-            <p role="status" aria-live="polite" className="text-sm text-text-muted">
+            <p role="status" aria-live="polite" className="text-body text-text-muted">
               Loading child transcript…
             </p>
           ) : null}
           {error ? (
             <div className="space-y-2">
-              <p role="alert" className="text-sm text-danger">
+              <p role="alert" className="text-body text-danger">
                 {error}
               </p>
               <ControlButton
                 type="button"
-                className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
+                className="flex items-center gap-1.5 rounded-capsule border border-border px-2.5 py-1 text-detail font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
                 onClick={() => {
                   setError(null);
                   setRetrySequence((value) => value + 1);
@@ -160,13 +160,13 @@ export function ChildTranscriptDialog({
           {snapshot?.notice ? (
             <p
               role="status"
-              className="rounded-lg border border-border px-3 py-2 text-sm text-text-muted"
+              className="rounded-lg border border-border px-3 py-2 text-label text-text-muted"
             >
               {snapshot.notice}
             </p>
           ) : null}
           {snapshot && snapshot.cells.length === 0 ? (
-            <p role="status" className="text-sm text-text-muted">
+            <p role="status" className="text-body text-text-muted">
               No child messages yet.
             </p>
           ) : null}

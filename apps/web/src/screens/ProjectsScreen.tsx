@@ -165,7 +165,7 @@ function DiscoveryPanel() {
         <div className="flex items-center gap-2">
           <Search size={15} className="text-text-secondary" />
           <h3
-            className="text-sm font-semibold text-text-primary"
+            className="text-label font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
             Discover
@@ -173,7 +173,7 @@ function DiscoveryPanel() {
         </div>
         <ControlButton
           data-testid="discovery-rescan"
-          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
           disabled={scanning}
           onClick={() => void scan()}
         >
@@ -181,7 +181,7 @@ function DiscoveryPanel() {
           Rescan
         </ControlButton>
       </div>
-      <p className="pb-2 text-xs text-text-muted">
+      <p className="pb-2 text-caption text-text-muted">
         Scan folders for git repos and known project types, then add them with one click.
       </p>
 
@@ -189,7 +189,7 @@ function DiscoveryPanel() {
         {isElectron() ? (
           <ControlButton
             data-testid="discovery-root-browse"
-            className="rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary"
+            className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary"
             onClick={() => void browseRoots()}
           >
             Choose folder…
@@ -198,7 +198,7 @@ function DiscoveryPanel() {
           <>
             <ControlInput
               data-testid="discovery-root-input"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
               placeholder="/path/to/dev/folder"
               value={rootDraft}
               onChange={(e) => setRootDraft(e.target.value)}
@@ -208,7 +208,7 @@ function DiscoveryPanel() {
             />
             <ControlButton
               data-testid="discovery-root-add"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+              className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
               disabled={!rootDraft.trim()}
               onClick={() => void addRoot()}
             >
@@ -253,7 +253,7 @@ function DiscoveryPanel() {
               className="shrink-0 text-text-secondary"
             />
             <span
-              className="text-sm font-medium text-text-primary"
+              className="text-label font-medium text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
               {candidate.name}
@@ -266,7 +266,7 @@ function DiscoveryPanel() {
             </span>
             <ControlButton
               data-testid={`discovery-add-${candidate.name}`}
-              className="rounded-capsule px-2.5 py-0.5 text-xs font-medium shadow-capsule"
+              className="rounded-capsule px-2.5 py-0.5 text-detail font-medium shadow-capsule"
               style={{
                 background:
                   "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -279,12 +279,12 @@ function DiscoveryPanel() {
           </div>
         ))}
         {roots.length > 0 && unregistered.length === 0 ? (
-          <div className="py-2 text-center text-xs text-text-muted">
+          <div className="py-2 text-center text-detail text-text-muted">
             No new projects found under the configured roots.
           </div>
         ) : null}
         {roots.length === 0 ? (
-          <div className="py-2 text-center text-xs text-text-muted">
+          <div className="py-2 text-center text-detail text-text-muted">
             Add a root folder above to discover projects.
           </div>
         ) : null}
@@ -332,7 +332,7 @@ export function ProjectsScreen() {
         <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
           <div className="flex items-center justify-between pb-1">
             <h2
-              className="text-base font-semibold text-text-primary"
+              className="text-title font-semibold tracking-title text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
               Library
@@ -345,7 +345,7 @@ export function ProjectsScreen() {
                     key={f}
                     data-testid={`project-filter-${f}`}
                     className={cn(
-                      "rounded-capsule px-2.5 py-0.5 text-xs capitalize",
+                      "rounded-capsule px-2.5 py-0.5 text-detail capitalize",
                       filter === f
                         ? "bg-selection text-text-primary"
                         : "text-text-muted hover:text-text-primary",
@@ -371,7 +371,7 @@ export function ProjectsScreen() {
               </ControlButton>
             </div>
           </div>
-          <p className="pb-3 text-xs text-text-muted">
+          <p className="pb-3 text-caption text-text-muted">
             Registered project folders. Disabled projects are hidden from the sidebar and can't host
             new sessions; hiding removes the entry without touching files.
           </p>
@@ -381,7 +381,7 @@ export function ProjectsScreen() {
               <ControlInput
                 autoFocus
                 data-testid="projects-add-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="/path/to/project"
                 value={draftPath}
                 onChange={(event) => setDraftPath(event.target.value)}
@@ -397,7 +397,7 @@ export function ProjectsScreen() {
               />
               <ControlButton
                 data-testid="projects-add-confirm"
-                className="rounded-capsule px-3 py-1.5 text-xs font-medium shadow-capsule disabled:opacity-40"
+                className="rounded-capsule px-3 py-1.5 text-detail font-medium shadow-capsule disabled:opacity-40"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -438,7 +438,7 @@ export function ProjectsScreen() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span
-                        className="truncate text-sm font-semibold text-text-primary"
+                        className="truncate text-label font-semibold text-text-primary"
                         style={{ fontStretch: "expanded" }}
                       >
                         {project.name}
@@ -514,7 +514,7 @@ export function ProjectsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="py-6 text-center text-sm text-text-muted">
+              <div className="py-6 text-center text-body text-text-muted">
                 No projects {filter !== "all" ? `(${filter})` : ""} — add one with +.
               </div>
             ) : null}

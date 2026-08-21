@@ -11,7 +11,7 @@ const SCOPE_COLOR: Record<ResourceScope, string> = {
 export function ScopeChip({ scope }: { scope: ResourceScope }) {
   return (
     <span
-      className="rounded-capsule px-2 py-0.5 text-xs font-medium"
+      className="rounded-capsule px-2 py-0.5 text-detail font-medium"
       style={{
         color: SCOPE_COLOR[scope],
         border: `1px solid ${SCOPE_COLOR[scope]}`,

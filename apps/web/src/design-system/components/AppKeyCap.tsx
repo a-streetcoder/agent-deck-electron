@@ -28,9 +28,9 @@ function Cap({ children }: CapProps) {
       className={cn(
         "inline-flex min-h-[22px] min-w-[22px] items-center justify-center",
         "rounded-md border border-border-subtle bg-surface-subtle",
-        "font-mono font-semibold text-text-primary",
+        "font-mono font-semibold text-micro text-text-primary",
         "shadow-keycap",
-        length === "single" ? "px-0 text-xs" : "px-1.5 text-micro",
+        length === "single" ? "px-0" : "px-1.5",
       )}
     >
       {children}
@@ -62,7 +62,7 @@ export function AppKeyCap({ children, keys, className }: AppKeyCapProps) {
       {list.map((key, index) => (
         <Fragment key={index}>
           {index > 0 ? (
-            <span aria-hidden className="text-xs text-text-muted">
+            <span aria-hidden className="text-micro text-text-muted">
               +
             </span>
           ) : null}

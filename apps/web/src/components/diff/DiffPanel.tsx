@@ -119,7 +119,7 @@ function InlineCommentEditor(props: {
       <ControlTextArea
         ref={ref}
         data-testid="diff-comment-input"
-        className="block max-h-40 min-h-[3.5rem] w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-xs text-text-primary outline-none placeholder:text-text-muted focus:border-accent"
+        className="block max-h-40 min-h-[3.5rem] w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-detail text-text-primary outline-none placeholder:text-text-muted focus:border-accent"
         placeholder="Leave a comment on this line…"
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -285,7 +285,7 @@ function NoticeBar({ children }: { children: string }) {
 function CenteredState({ children, testId }: { children: string; testId: string }) {
   return (
     <div
-      className="flex flex-1 items-center justify-center px-5 text-center text-xs text-text-muted"
+      className="flex flex-1 items-center justify-center px-5 text-center text-detail text-text-muted"
       data-testid={testId}
     >
       {children}
@@ -555,7 +555,7 @@ export function DiffPanel() {
   if (!repo) {
     return (
       <div
-        className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-text-muted"
+        className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-detail text-text-muted"
         data-testid="diff-panel-pending"
       >
         No changes to show.
@@ -629,12 +629,12 @@ export function DiffPanel() {
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className="text-xs font-semibold uppercase tracking-wide text-text-muted"
+            className="text-micro font-semibold uppercase tracking-overline text-text-muted"
             style={{ fontStretch: "expanded" }}
           >
             Changes
           </span>
-          <span className="text-xs tabular-nums text-text-muted" data-testid="diff-file-count">
+          <span className="text-caption tabular-nums text-text-muted" data-testid="diff-file-count">
             {files.length}
           </span>
           {hasNonZeroStat(summaryStat) && (

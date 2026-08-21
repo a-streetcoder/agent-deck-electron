@@ -10,6 +10,45 @@ The design system is the single visual and interaction boundary for the Electron
 4. **Domain adapters** — `themes/` translates tokens for CodeMirror, Shiki, and xterm.
 5. **Feature views** — compose the layers above and retain only domain state and unique layout.
 
+## Typography
+
+Tokens in `tokens.css` are the only type ramp. Tailwind maps them as `text-micro` through `text-heading`, plus `text-code` / `text-code-sm`. Default Tailwind sizes (`text-xs`, `text-sm`, `text-base`, `text-lg`, `text-xl`, `text-2xl`) are lint-banned in `apps/web/src`.
+
+| Token   | Size / leading | Role                                                 |
+| ------- | -------------: | ---------------------------------------------------- |
+| micro   |        10 / 13 | Floor. Badges, keycaps, section headers.             |
+| detail  |        11 / 14 | Meta, chips, timestamps, small controls.             |
+| caption |        12 / 16 | Helpers, empty-state body, field descriptions.       |
+| label   |        13 / 16 | Chrome: nav, list rows, control md/lg, field chrome. |
+| body    |        13 / 20 | Reading: chat, markdown, composer, dialogs.          |
+| title   |        15 / 20 | Page and in-page titles.                             |
+| heading |        20 / 26 | Hero / display (`SectionHero` only).                 |
+| code    |        11 / 16 | Mono chrome (paths, keys).                           |
+| code-sm |        10 / 14 | Tiny mono IDs and gutters.                           |
+
+Tracking tokens: `tracking-overline` (0.08em), `tracking-ui` (−0.006em), `tracking-title` (−0.015em), `tracking-heading` (−0.02em). Use existing `font-normal` / `font-medium` / `font-semibold`. Do not use `font-bold` in chrome.
+
+Apply roles as classes, not a Text/Heading primitive:
+
+- Section / group header: `sectionHeaderClass` from `styles.ts` (`text-micro font-semibold uppercase tracking-overline`)
+- Chrome label / list row / nav: `text-label`
+- Reading surfaces: `text-body` (no extra `leading-relaxed`)
+- Page title: `text-title font-semibold tracking-title`
+- Hero: `text-heading font-semibold tracking-heading`
+- Field labels: `text-caption font-medium`
+- Helper / empty body: `text-caption`
+- Empty title: `text-label font-semibold`
+- Meta / chips: `text-detail`
+- Badges / keycaps: `text-micro` (keycaps also `font-mono font-semibold`)
+- Markdown: baseline `text-body`; h1 `text-title font-semibold`; h2 `text-label font-semibold`; h3 `text-caption font-semibold`; h4–h6 `text-detail font-semibold`
+
+Approved type exceptions:
+
+- Sidebar pixel wordmark: `font-pixel text-lg leading-none` (only allowed default Tailwind size)
+- Markdown inline code: `text-[0.85em]` (document-relative)
+- `fontStretch: "expanded"` on `SectionHero` (identity, not a token)
+- CodeMirror / xterm keep their domain adapter font sizes
+
 ## Rules for new UI
 
 - Use semantic Tailwind names such as `bg-surface-elevated`, `text-text-muted`, `border-danger`, and `text-detail`.
@@ -35,4 +74,4 @@ The design system is the single visual and interaction boundary for the Electron
 
 ## Checks
 
-Run `pnpm check:design-system`. The check rejects undeclared CSS variables, app-owned raw colors, arbitrary visual token utilities, and raw native controls outside the design system. Keep exceptions exact and documented; do not allowlist directories broadly.
+Run `pnpm check:design-system`. The check rejects undeclared CSS variables, app-owned raw colors, arbitrary visual token utilities, raw native controls outside the design system, and default Tailwind type sizes (`text-xs` through `text-2xl`). Keep exceptions exact and documented; do not allowlist directories broadly. The only type-size exception is the Sidebar pixel wordmark (`text-lg`). Markdown inline `text-[0.85em]` is already an arbitrary-visual exception.

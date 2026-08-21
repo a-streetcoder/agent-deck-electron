@@ -287,7 +287,7 @@ export function TerminalDrawer() {
       />
       <div className="flex items-center justify-between border-b border-border-subtle bg-surface-elevated px-3 py-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          <span className="text-micro font-semibold uppercase tracking-overline text-text-muted">
             Terminal
           </span>
           <div
@@ -301,7 +301,7 @@ export function TerminalDrawer() {
                   autoFocus
                   defaultValue={tab.title}
                   data-testid="terminal-tab-rename-input"
-                  className="w-28 rounded border border-border-subtle bg-surface px-1.5 py-0.5 text-xs text-text-primary outline-none"
+                  className="w-28 rounded border border-border-subtle bg-surface px-1.5 py-0.5 text-detail text-text-primary outline-none"
                   onFocus={(event) => event.currentTarget.select()}
                   onBlur={(event) => commitRename(tab.id, event.currentTarget.value)}
                   onKeyDown={(event) => {
@@ -319,7 +319,7 @@ export function TerminalDrawer() {
                   type="button"
                   data-testid={`terminal-tab-${tab.id}`}
                   title="Double-click to rename"
-                  className={`max-w-40 truncate rounded px-1.5 py-0.5 text-xs transition-colors ${
+                  className={`max-w-40 truncate rounded px-1.5 py-0.5 text-detail transition-colors ${
                     tab.id === tabs.activeId
                       ? "bg-hover text-text-primary"
                       : "text-text-muted hover:bg-hover hover:text-text-primary"

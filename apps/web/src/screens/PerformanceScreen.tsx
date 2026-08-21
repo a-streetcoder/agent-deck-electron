@@ -89,7 +89,11 @@ export function PerformanceScreen() {
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-2xl rounded-2xl border border-border-subtle bg-surface-elevated p-4 shadow-card">
           {loadState === "loading" ? (
-            <p className="text-sm text-text-muted" role="status" data-testid="performance-loading">
+            <p
+              className="text-body text-text-muted"
+              role="status"
+              data-testid="performance-loading"
+            >
               Loading performance preferences…
             </p>
           ) : loadState === "error" ? (
@@ -97,11 +101,11 @@ export function PerformanceScreen() {
               className="rounded-xl border border-danger/40 bg-surface p-3"
               data-testid="performance-error"
             >
-              <p className="text-sm text-danger" role="alert">
+              <p className="text-body text-danger" role="alert">
                 {message}
               </p>
               <ControlButton
-                className="mt-3 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+                className="mt-3 flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-detail text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
                 onClick={() => void load()}
               >
                 <RefreshCw size={13} aria-hidden="true" /> Try again
@@ -111,8 +115,8 @@ export function PerformanceScreen() {
             <div className="space-y-4" data-testid="performance-ready">
               <div className="flex items-start justify-between gap-4 rounded-xl border border-border-subtle bg-surface p-3">
                 <div className="min-w-0" id="idle-parking-description">
-                  <div className="text-sm font-medium text-text-primary">Pause idle chats</div>
-                  <p className="mt-1 text-xs text-text-muted">
+                  <div className="text-label font-medium text-text-primary">Pause idle chats</div>
+                  <p className="mt-1 text-caption text-text-muted">
                     Release an idle chat’s Pi process to save resources. The chat resumes
                     automatically when you send the next command.
                   </p>
@@ -146,8 +150,11 @@ export function PerformanceScreen() {
                 className="block rounded-xl border border-border-subtle bg-surface p-3"
                 htmlFor="idle-parking-minutes"
               >
-                <span className="text-sm font-medium text-text-primary">Pause after</span>
-                <span id="idle-parking-minutes-help" className="mt-1 block text-xs text-text-muted">
+                <span className="text-label font-medium text-text-primary">Pause after</span>
+                <span
+                  id="idle-parking-minutes-help"
+                  className="mt-1 block text-caption text-text-muted"
+                >
                   Choose how long an idle chat stays ready before its Pi process is released (1–120
                   minutes).
                 </span>
@@ -178,9 +185,9 @@ export function PerformanceScreen() {
                         setMessage(null);
                       }
                     }}
-                    className="w-24 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50"
+                    className="w-24 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50"
                   />
-                  <span className="text-xs text-text-muted">minutes</span>
+                  <span className="text-caption text-text-muted">minutes</span>
                 </div>
               </label>
             </div>
@@ -189,7 +196,7 @@ export function PerformanceScreen() {
           {loadState === "ready" && message ? (
             <p
               className={cn(
-                "mt-3 text-xs",
+                "mt-3 text-detail",
                 message === "Saved" || message === "Saving…" ? "text-text-muted" : "text-danger",
               )}
               role={message === "Saved" || message === "Saving…" ? "status" : "alert"}

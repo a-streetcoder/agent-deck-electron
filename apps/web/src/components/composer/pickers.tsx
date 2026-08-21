@@ -22,7 +22,7 @@ export interface PiComposerState {
 
 export function chipClass(active = false): string {
   return cn(
-    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-xs font-medium transition-colors",
+    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail font-medium transition-colors",
     active
       ? "border-selection-stroke bg-selection text-text-primary"
       : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary",
@@ -104,7 +104,7 @@ export function ModelChip({
         >
           {[...byProvider.entries()].map(([provider, providerModels]) => (
             <div key={provider}>
-              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-wider text-text-muted">
+              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
                 <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
                 {provider}
               </div>
@@ -113,7 +113,7 @@ export function ModelChip({
                   key={`${model.provider}/${model.id}`}
                   data-testid={`model-option-${model.id}`}
                   className={cn(
-                    "block w-full truncate rounded-md px-2 py-1 text-left text-xs",
+                    "block w-full truncate rounded-md px-2 py-1 text-left text-detail",
                     "disabled:cursor-not-allowed disabled:opacity-40",
                     model.id === state?.modelId && model.provider === state?.provider
                       ? "bg-selection text-text-primary"
@@ -132,7 +132,7 @@ export function ModelChip({
             </div>
           ))}
           {models.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-text-muted">No models available.</div>
+            <div className="px-2 py-2 text-detail text-text-muted">No models available.</div>
           ) : null}
         </div>
       ) : null}
@@ -251,7 +251,7 @@ export function ThinkingChip({
               tabIndex={index === focusedIndex ? 0 : -1}
               data-testid={`thinking-option-${level}`}
               className={cn(
-                "block w-full rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                "block w-full rounded-md px-2 py-1 text-left text-detail outline-none focus-visible:ring-2 focus-visible:ring-accent",
                 level === state?.thinkingLevel
                   ? "bg-selection text-text-primary"
                   : "text-text-secondary hover:bg-hover",

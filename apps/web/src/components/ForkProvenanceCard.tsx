@@ -53,7 +53,7 @@ function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onCl
             <h2 id="fork-recap-title" className="font-medium text-text-primary">
               Inherited conversation recap
             </h2>
-            <p className="text-xs text-text-muted">Forked from “{provenance.sourceTitle}”</p>
+            <p className="text-caption text-text-muted">Forked from “{provenance.sourceTitle}”</p>
           </div>
           <ControlButton
             ref={closeRef}
@@ -67,16 +67,16 @@ function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onCl
         </header>
         <div className="min-h-32 flex-1 overflow-y-auto p-4" data-testid="fork-recap-content">
           {provenance.recapTruncated ? (
-            <p className="mb-3 rounded-lg border border-border px-3 py-2 text-sm text-text-muted">
+            <p className="mb-3 rounded-lg border border-border px-3 py-2 text-body text-text-muted">
               Earlier conversation was omitted to keep this recap bounded.
             </p>
           ) : null}
           {provenance.recap ? (
-            <pre className="whitespace-pre-wrap break-words font-sans text-sm text-text-secondary">
+            <pre className="whitespace-pre-wrap break-words font-sans text-body text-text-secondary">
               {provenance.recap}
             </pre>
           ) : (
-            <p className="text-sm text-text-muted">No earlier conversation was inherited.</p>
+            <p className="text-body text-text-muted">No earlier conversation was inherited.</p>
           )}
         </div>
       </div>
@@ -102,10 +102,10 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
       >
         <GitFork size={18} className="shrink-0 text-accent" aria-hidden />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-text-primary">
+          <p className="truncate text-label font-medium text-text-primary">
             Forked from “{provenance.sourceTitle}”
           </p>
-          <p className="text-xs text-text-muted">
+          <p className="text-caption text-text-muted">
             {source ? "Source chat is available." : "Source chat is no longer available."}
           </p>
         </div>
@@ -113,7 +113,7 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
           <ControlButton
             type="button"
             onClick={() => void switchToSession(source)}
-            className="rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
+            className="rounded-capsule border border-border px-2.5 py-1 text-detail font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
           >
             Open source
           </ControlButton>
@@ -121,7 +121,7 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
         <ControlButton
           type="button"
           onClick={() => setRecapOpen(true)}
-          className="flex items-center gap-1 rounded-capsule border border-border px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex items-center gap-1 rounded-capsule border border-border px-2.5 py-1 text-detail font-medium text-text-secondary hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
         >
           <Eye size={13} aria-hidden /> View recap
         </ControlButton>

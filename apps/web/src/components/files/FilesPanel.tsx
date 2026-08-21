@@ -146,7 +146,7 @@ export function FilesPanel() {
       {/* Subheader row (matches the diff panel's surface-subheader). */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
         <span
-          className="text-xs font-semibold uppercase tracking-wide text-text-muted"
+          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
           style={{ fontStretch: "expanded" }}
         >
           Files
@@ -227,7 +227,7 @@ export function FilesPanel() {
                       <div
                         key={file.id}
                         className={cn(
-                          "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs",
+                          "group flex h-7 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-detail",
                           isActive
                             ? "bg-selection text-text-primary"
                             : "text-text-muted hover:bg-hover hover:text-text-primary",

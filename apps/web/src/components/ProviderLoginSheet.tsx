@@ -21,7 +21,7 @@ type LoginEvent =
 type LoginStatus = "running" | "done" | "error";
 
 const inputClass =
-  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
+  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent";
 
 export function ProviderLoginSheet({
   provider,
@@ -161,7 +161,7 @@ export function ProviderLoginSheet({
       >
         <div
           id="provider-login-title"
-          className="text-sm font-semibold text-text-primary"
+          className="text-label font-semibold text-text-primary"
           style={{ fontStretch: "expanded" }}
         >
           {authType === "api_key" ? "Add an API key for" : "Sign in to"} {provider.name}
@@ -172,12 +172,12 @@ export function ProviderLoginSheet({
             <LoginStep key={index} event={event} />
           ))}
           {fatal ? (
-            <div className="text-sm" style={{ color: "var(--color-role-error)" }}>
+            <div className="text-label" style={{ color: "var(--color-role-error)" }}>
               {fatal}
             </div>
           ) : null}
           {status === "running" && !awaitingPrompt && !awaitingSelect ? (
-            <div className="flex items-center gap-2 text-xs text-text-muted">
+            <div className="flex items-center gap-2 text-detail text-text-muted">
               <Loader2 size={13} className="animate-spin" /> Waiting for the provider…
             </div>
           ) : null}
@@ -192,7 +192,7 @@ export function ProviderLoginSheet({
               void respond(promptValue);
             }}
           >
-            <label htmlFor={promptInputId} className="text-xs text-text-secondary">
+            <label htmlFor={promptInputId} className="text-caption font-medium text-text-secondary">
               {visiblePrompt.message}
             </label>
             <ControlInput
@@ -214,7 +214,7 @@ export function ProviderLoginSheet({
               <ControlButton
                 key={option.id}
                 data-testid={`login-select-${option.id}`}
-                className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
+                className="rounded-capsule border border-border-strong px-3 py-1.5 text-label text-text-primary hover:border-accent"
                 onClick={() => void respond(option.id)}
               >
                 {option.label}
@@ -230,7 +230,7 @@ export function ProviderLoginSheet({
           {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
             <ControlButton
               type="button"
-              className="text-xs text-text-muted hover:text-text-primary"
+              className="text-detail text-text-muted hover:text-text-primary"
               onClick={() => setShowManualEntry(true)}
             >
               Enter a code manually
@@ -241,7 +241,7 @@ export function ProviderLoginSheet({
           <div className="ml-auto flex items-center gap-2">
             <ControlButton
               type="button"
-              className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+              className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
               onClick={onClose}
             >
               {doneEvent || fatal ? "Close" : "Cancel"}
@@ -251,7 +251,7 @@ export function ProviderLoginSheet({
                 type="submit"
                 form={promptFormId}
                 data-testid="login-prompt-submit"
-                className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule"
+                className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule"
                 style={{
                   background:
                     "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -272,13 +272,13 @@ function LoginStep({ event }: { event: LoginEvent }) {
   switch (event.type) {
     case "auth_url":
       return (
-        <div className="rounded-xl border border-border-subtle bg-surface px-4 py-3 text-sm">
+        <div className="rounded-xl border border-border-subtle bg-surface px-4 py-3 text-label">
           <div className="font-medium text-text-primary">Continue in your browser</div>
-          <div className="mt-1 text-xs leading-relaxed text-text-muted">
+          <div className="mt-1 text-detail leading-relaxed text-text-muted">
             Sign in securely with the provider, then return to Agent Deck.
           </div>
           <ControlButton
-            className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-detail font-medium text-text-primary hover:border-accent"
             data-testid="login-auth-url"
             onClick={() => void openExternal(event.url)}
           >
@@ -291,7 +291,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
       );
     case "device_code":
       return (
-        <div className="rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm">
+        <div className="rounded-lg border border-border-subtle bg-surface px-3 py-2 text-label">
           <div className="text-text-muted">
             Go to{" "}
             <a
@@ -305,7 +305,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
             and enter:
           </div>
           <div
-            className="mt-1 font-mono text-lg tracking-widest text-text-primary"
+            className="mt-1 font-mono text-title tracking-widest text-text-primary"
             data-testid="login-device-code"
           >
             {event.userCode}
@@ -313,15 +313,15 @@ function LoginStep({ event }: { event: LoginEvent }) {
         </div>
       );
     case "progress":
-      return <div className="text-xs text-text-muted">{event.message}</div>;
+      return <div className="text-detail text-text-muted">{event.message}</div>;
     case "prompt":
       return null;
     case "select":
-      return <div className="text-sm text-text-primary">{event.message}</div>;
+      return <div className="text-label text-text-primary">{event.message}</div>;
     case "done":
       return event.ok ? (
         <div
-          className="flex items-center gap-2 text-sm"
+          className="flex items-center gap-2 text-label"
           style={{ color: "var(--color-success)" }}
           data-testid="login-done"
         >
@@ -329,7 +329,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
         </div>
       ) : (
         <div
-          className="flex items-center gap-2 text-sm"
+          className="flex items-center gap-2 text-label"
           style={{ color: "var(--color-role-error)" }}
           data-testid="login-done"
         >

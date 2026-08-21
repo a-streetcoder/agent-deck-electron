@@ -124,22 +124,28 @@
     Roboto, sans-serif;
   --font-mono:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
-  --text-overline: 9px;
   --text-micro: 10px;
   --text-detail: 11px;
   --text-caption: 12px;
   --text-label: 13px;
-  --text-body: 14px;
-  --text-title: 16px;
+  --text-body: 13px;
+  --text-title: 15px;
   --text-heading: 20px;
-  --leading-overline: 12px;
-  --leading-micro: 14px;
-  --leading-detail: 15px;
+  --text-code: 11px;
+  --text-code-sm: 10px;
+  --leading-micro: 13px;
+  --leading-detail: 14px;
   --leading-caption: 16px;
-  --leading-label: 18px;
+  --leading-label: 16px;
   --leading-body: 20px;
-  --leading-title: 22px;
+  --leading-title: 20px;
   --leading-heading: 26px;
+  --leading-code: 16px;
+  --leading-code-sm: 14px;
+  --tracking-overline: 0.08em;
+  --tracking-ui: -0.006em;
+  --tracking-title: -0.015em;
+  --tracking-heading: -0.02em;
 
   /* Spacing: reusable values and semantic layout aliases */
   --space-0-5: 2px;

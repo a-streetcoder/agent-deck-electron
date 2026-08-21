@@ -61,7 +61,7 @@ export function QuestionAnswerControls({
           <ControlButton
             type="button"
             data-testid={`${testidPrefix}-confirm-yes`}
-            className="rounded-capsule bg-primary px-4 py-1.5 text-sm font-medium"
+            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium"
             style={{ color: "var(--color-accent-foreground)" }}
             onClick={() => answer({ confirmed: true })}
           >
@@ -70,7 +70,7 @@ export function QuestionAnswerControls({
           <ControlButton
             type="button"
             data-testid={`${testidPrefix}-confirm-no`}
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary"
+            className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary"
             onClick={() => answer({ confirmed: false })}
           >
             No
@@ -83,7 +83,7 @@ export function QuestionAnswerControls({
               key={option}
               type="button"
               data-testid={`${testidPrefix}-option-${option}`}
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-sm text-text-primary hover:border-accent"
+              className="rounded-capsule border border-border-strong px-3 py-1.5 text-label text-text-primary hover:border-accent"
               onClick={() => answer({ value: option })}
             >
               {option}
@@ -95,7 +95,7 @@ export function QuestionAnswerControls({
           <ControlTextArea
             data-testid={`${testidPrefix}-editor`}
             aria-label={question.title}
-            className="min-h-[7rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-sm text-text-primary outline-none focus:border-accent"
+            className="min-h-[7rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
             placeholder={question.placeholder}
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
@@ -103,7 +103,7 @@ export function QuestionAnswerControls({
           <ControlButton
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium"
+            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-label font-medium"
             style={{ color: "var(--color-accent-foreground)" }}
             onClick={() => answer({ value: inputValue })}
           >
@@ -115,7 +115,7 @@ export function QuestionAnswerControls({
           <ControlInput
             data-testid={`${testidPrefix}-input`}
             aria-label={question.title}
-            className="flex-1 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+            className="flex-1 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
             placeholder={question.placeholder}
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
@@ -129,7 +129,7 @@ export function QuestionAnswerControls({
           <ControlButton
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            className="rounded-capsule bg-primary px-3 py-1.5 text-sm font-medium"
+            className="rounded-capsule bg-primary px-3 py-1.5 text-label font-medium"
             style={{ color: "var(--color-accent-foreground)" }}
             onClick={() => answer({ value: inputValue })}
           >
@@ -139,7 +139,7 @@ export function QuestionAnswerControls({
       )}
       <ControlButton
         type="button"
-        className="mt-2 text-xs text-text-muted hover:text-text-primary"
+        className="mt-2 text-detail text-text-muted hover:text-text-primary"
         data-testid={`${testidPrefix}-cancel`}
         onClick={() => answer({ cancelled: true })}
       >

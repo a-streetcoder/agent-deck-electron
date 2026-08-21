@@ -13,6 +13,8 @@ const approvedArbitraryVisualFiles = new Set([
   path.join(sourceRoot, "design-system/markdown/MarkdownDocument.tsx"),
   path.join(sourceRoot, "design-system/markdown/MarkdownInline.tsx"),
 ]);
+const sidebarWordmarkFile = path.join(sourceRoot, "components/Sidebar.tsx");
+const defaultTypeSize = /\btext-(xs|sm|base|lg|xl|2xl)\b/g;
 
 function filesUnder(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -52,6 +54,18 @@ for (const file of sourceFiles) {
     );
     for (const nativeControl of nativeControls) {
       report(file, `raw <${nativeControl}> must use a design-system control`);
+    }
+  }
+
+  for (const match of source.matchAll(defaultTypeSize)) {
+    const index = match.index ?? 0;
+    const lineStart = source.lastIndexOf("\n", index - 1) + 1;
+    const lineEnd = source.indexOf("\n", index);
+    const line = source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+    const allowedSidebarWordmark =
+      file === sidebarWordmarkFile && match[0] === "text-lg" && line.includes("font-pixel");
+    if (!allowedSidebarWordmark) {
+      report(file, `default Tailwind type size ${match[0]} must use a semantic token`);
     }
   }
 

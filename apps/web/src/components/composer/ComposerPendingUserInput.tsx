@@ -1,4 +1,6 @@
 import type { QuestionCell } from "@agent-deck/domain";
+import { sectionHeaderClass } from "@/design-system/styles";
+import { cn } from "@/lib/cn";
 import { QuestionAnswerControls } from "../QuestionAnswerControls.tsx";
 
 /**
@@ -22,14 +24,12 @@ export function ComposerPendingUserInput({ question }: { question: QuestionCell 
       data-testid="composer-question"
       data-method={question.method}
     >
-      <div className="text-detail font-semibold uppercase tracking-widest text-text-muted">
-        Pi needs input
-      </div>
+      <div className={cn(sectionHeaderClass, "text-text-muted")}>Pi needs input</div>
       <div className="mt-1 font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
         {question.title}
       </div>
       {question.message ? (
-        <div className="mt-1 text-sm text-text-secondary">{question.message}</div>
+        <div className="mt-1 text-body text-text-secondary">{question.message}</div>
       ) : null}
 
       <QuestionAnswerControls question={question} testidPrefix="composer-question" />

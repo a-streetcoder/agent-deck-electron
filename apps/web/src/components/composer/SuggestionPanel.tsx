@@ -51,7 +51,7 @@ export function SuggestionPanel({
           data-testid={`${testid}-item-${item.id}`}
           role="option"
           aria-selected={index === selectedIndex}
-          className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm ${
+          className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-label ${
             index === selectedIndex
               ? "bg-selection text-text-primary"
               : "text-text-secondary hover:bg-hover"
@@ -64,7 +64,7 @@ export function SuggestionPanel({
         >
           <span className="shrink-0 font-mono">{item.label}</span>
           {item.detail ? (
-            <span className="min-w-0 truncate text-xs text-text-muted">{item.detail}</span>
+            <span className="min-w-0 truncate text-caption text-text-muted">{item.detail}</span>
           ) : null}
         </ControlButton>
       ))}
@@ -105,7 +105,7 @@ export function SlashSuggestionPanel({
       {loading ? (
         <div
           role="presentation"
-          className="px-2 py-1 text-xs text-text-muted"
+          className="px-2 py-1 text-detail text-text-muted"
           data-testid="slash-panel-loading"
         >
           Loading…
@@ -113,7 +113,7 @@ export function SlashSuggestionPanel({
       ) : rows.length === 0 ? (
         <div
           role="presentation"
-          className="px-2 py-1 text-xs text-text-muted"
+          className="px-2 py-1 text-detail text-text-muted"
           data-testid="slash-panel-empty"
         >
           No matches
@@ -125,7 +125,7 @@ export function SlashSuggestionPanel({
               key={row.id}
               role="presentation"
               data-testid={`slash-panel-header-${row.label}`}
-              className="px-2 pb-0.5 pt-1 text-xs font-semibold uppercase tracking-wide text-text-muted"
+              className="px-2 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-overline text-text-muted"
             >
               {row.label}
             </div>
@@ -137,7 +137,7 @@ export function SlashSuggestionPanel({
               data-testid={`slash-panel-item-${row.id}`}
               role="option"
               aria-selected={index === highlightedIndex}
-              className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm ${
+              className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-label ${
                 index === highlightedIndex
                   ? "bg-selection text-text-primary"
                   : "text-text-secondary hover:bg-hover"
@@ -152,10 +152,10 @@ export function SlashSuggestionPanel({
                 {row.type === "category" ? row.label : row.item.displayName}
               </span>
               {row.type === "item" && row.item.scopeLabel ? (
-                <span className="shrink-0 text-xs text-text-muted">{row.item.scopeLabel}</span>
+                <span className="shrink-0 text-caption text-text-muted">{row.item.scopeLabel}</span>
               ) : null}
               {row.type === "item" && row.item.description ? (
-                <span className="min-w-0 truncate text-xs text-text-muted">
+                <span className="min-w-0 truncate text-caption text-text-muted">
                   {row.item.description}
                 </span>
               ) : null}

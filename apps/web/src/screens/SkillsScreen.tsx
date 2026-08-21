@@ -81,7 +81,7 @@ import { chooseDirectory, trashSkillRecovery } from "../lib/native.ts";
  */
 
 const inputClass =
-  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
+  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent";
 
 /**
  * Mirrors pi's skill-name validity (skills.js validateName): ≤64 chars,
@@ -188,7 +188,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
             <WandSparkles size={15} />
           </span>
           <div
-            className="flex-1 truncate text-sm font-semibold text-text-primary"
+            className="flex-1 truncate text-label font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
           >
             {draft.isNew ? "New Skill" : `Edit ${draft.name}`}
@@ -204,7 +204,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
           {draft.isNew ? (
             <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs text-text-muted">
+              <label className="text-caption font-medium text-text-muted">
                 Name
                 <ControlInput
                   data-testid="skill-editor-name"
@@ -213,7 +213,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
               </label>
-              <label className="text-xs text-text-muted">
+              <label className="text-caption font-medium text-text-muted">
                 Scope
                 <ControlSelect
                   data-testid="skill-editor-scope"
@@ -229,7 +229,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
               </label>
             </div>
           ) : null}
-          <label className="block text-xs text-text-muted">
+          <label className="block text-caption font-medium text-text-muted">
             Description
             <ControlInput
               data-testid="skill-editor-description"
@@ -238,31 +238,31 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
               onChange={(e) => setForm({ ...form, description: e.target.value })}
             />
           </label>
-          <label className="block text-xs text-text-muted">
+          <label className="block text-caption font-medium text-text-muted">
             SKILL.md body
             <ControlTextArea
               data-testid="skill-editor-body"
-              className={cn(inputClass, "min-h-[220px] font-mono text-caption")}
+              className={cn(inputClass, "min-h-[220px] font-mono text-code")}
               value={form.body}
               onChange={(e) => setForm({ ...form, body: e.target.value })}
             />
           </label>
           {error ? (
-            <div className="text-sm" style={{ color: "var(--color-role-error)" }}>
+            <div className="text-label" style={{ color: "var(--color-role-error)" }}>
               {error}
             </div>
           ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
           <ControlButton
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+            className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
             onClick={onClose}
           >
             Cancel
           </ControlButton>
           <ControlButton
             data-testid="skill-editor-save"
-            className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+            className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
             style={{
               background:
                 "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -356,15 +356,15 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
 
   return (
     <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-      <div className="pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+      <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
         Project assignment
       </div>
-      <p className="pb-2 text-xs text-text-muted">
+      <p className="pb-2 text-caption text-text-muted">
         Assigned skills are passed to new sessions as explicit --skill paths (no ambient discovery).
         Changes apply to the next session.
       </p>
       {skill.disabled ? (
-        <p className="pb-2 text-xs" style={{ color: "var(--color-warning)" }}>
+        <p className="pb-2 text-detail" style={{ color: "var(--color-warning)" }}>
           This skill is disabled — enable it to assign it to projects.
         </p>
       ) : null}
@@ -378,8 +378,8 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
           onChange={(event) => void toggleAllProjects(event.target.checked)}
         />
         <Grid3x3 size={14} className="text-text-muted" />
-        <span className="text-sm text-text-primary">All Projects</span>
-        <span className="text-xs text-text-muted">enable this skill for every project</span>
+        <span className="text-label text-text-primary">All Projects</span>
+        <span className="text-caption text-text-muted">enable this skill for every project</span>
       </label>
       <div className="my-1.5 border-t border-border-subtle" />
       <div
@@ -407,13 +407,13 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
                   void updateProject(project.id, { assignedSkills: [...next] });
                 }}
               />
-              <span className="text-sm text-text-primary">{project.name}</span>
-              <span className="truncate font-mono text-xs text-text-muted">{project.path}</span>
+              <span className="text-label text-text-primary">{project.name}</span>
+              <span className="truncate font-mono text-code text-text-muted">{project.path}</span>
             </label>
           );
         })}
         {projects.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-text-muted">No projects registered.</div>
+          <div className="px-2 py-1.5 text-detail text-text-muted">No projects registered.</div>
         ) : null}
       </div>
     </div>
@@ -1559,7 +1559,7 @@ export function SkillsScreen() {
           <div className="flex items-center gap-2 px-3 pb-2 pt-3">
             <ControlInput
               data-testid="skill-search"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
               placeholder="Search skills"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -1609,7 +1609,7 @@ export function SkillsScreen() {
               <ControlInput
                 autoFocus
                 data-testid="skill-import-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="/path/to/skill.md"
                 value={importPath}
                 onChange={(event) => setImportPath(event.target.value)}
@@ -1620,7 +1620,7 @@ export function SkillsScreen() {
               />
               <ControlButton
                 data-testid="skill-import-confirm"
-                className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                 disabled={!importPath.trim()}
                 onClick={() => void doImport()}
               >
@@ -1633,7 +1633,7 @@ export function SkillsScreen() {
               <ControlInput
                 autoFocus
                 data-testid="skill-import-git-url"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
                 placeholder="owner/repo, skills.sh/…, or a git URL"
                 value={gitUrl}
                 onChange={(event) => setGitUrl(event.target.value)}
@@ -1647,7 +1647,7 @@ export function SkillsScreen() {
               />
               <ControlButton
                 data-testid="skill-import-git-confirm"
-                className="rounded-capsule border border-border-strong px-2.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
                 disabled={!gitUrl.trim() || gitImporting}
                 onClick={() => void doGitInspect()}
               >
@@ -1669,8 +1669,8 @@ export function SkillsScreen() {
                 className="flex max-h-[85vh] w-[900px] max-w-full flex-col rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
               >
                 <div className="border-b border-border-subtle px-5 py-4">
-                  <div className="text-sm font-semibold text-text-primary">Compare skills</div>
-                  <div className="text-xs text-text-muted">
+                  <div className="text-label font-semibold text-text-primary">Compare skills</div>
+                  <div className="text-detail text-text-muted">
                     Review both copies of &quot;{compare.left.name}&quot; before choosing which one
                     to keep.
                   </div>
@@ -1696,7 +1696,7 @@ export function SkillsScreen() {
                 <div className="flex justify-end border-t border-border-subtle px-5 py-3">
                   <ControlButton
                     data-testid="skill-compare-done"
-                    className="rounded-capsule border border-border-strong px-3 py-1 text-sm text-text-secondary hover:text-text-primary"
+                    className="rounded-capsule border border-border-strong px-3 py-1 text-label text-text-secondary hover:text-text-primary"
                     onClick={() => setCompare(null)}
                   >
                     Done
@@ -1741,7 +1741,7 @@ export function SkillsScreen() {
           {packageWarnings.length > 0 ? (
             <div
               data-testid="skill-package-warnings"
-              className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+              className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
               role="status"
             >
               {packageWarnings.map((warning) => (
@@ -1754,9 +1754,9 @@ export function SkillsScreen() {
           {pluginRefs.length > 0 ? (
             <div
               data-testid="skill-plugin-refs"
-              className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary"
+              className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
             >
-              <div className="text-micro font-semibold uppercase tracking-wide text-text-muted">
+              <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
                 Codex plugin references
               </div>
               {pluginRefs.map((ref) => {
@@ -1798,7 +1798,7 @@ export function SkillsScreen() {
             >
               {recoveries.length > 0 ? (
                 <div className="space-y-1" data-testid="skill-recoveries">
-                  <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  <div className="px-0.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
                     Safe recovery
                   </div>
                   {recoveries.map((recovery) => {
@@ -1853,7 +1853,7 @@ export function SkillsScreen() {
               ) : null}
               {repos.length > 0 ? (
                 <div className="space-y-1" data-testid="skill-repos">
-                  <div className="px-0.5 text-micro font-semibold uppercase tracking-wide text-text-muted">
+                  <div className="px-0.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
                     Imported repositories
                   </div>
                   {repos.map((repo) => (
@@ -2099,7 +2099,7 @@ export function SkillsScreen() {
           </div>
           {checkedSkills.length > 0 ? (
             <div
-              className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border-strong bg-surface-elevated px-2.5 py-1.5 text-xs"
+              className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border-strong bg-surface-elevated px-2.5 py-1.5 text-detail"
               data-testid="skills-bulk-bar"
             >
               <span className="flex-1 text-text-secondary">{checkedSkills.length} selected</span>
@@ -2182,7 +2182,7 @@ export function SkillsScreen() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span
-                        className="truncate text-sm font-semibold text-text-primary"
+                        className="truncate text-label font-semibold text-text-primary"
                         style={{ fontStretch: "expanded" }}
                       >
                         {skill.name}
@@ -2201,7 +2201,9 @@ export function SkillsScreen() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="truncate text-xs text-text-secondary">{skill.description}</div>
+                    <div className="truncate text-caption text-text-secondary">
+                      {skill.description}
+                    </div>
                     {isReadOnlyScope(skill.scope) ? (
                       <div
                         className="truncate font-mono text-micro text-text-muted"
@@ -2240,7 +2242,7 @@ export function SkillsScreen() {
                   </div>
                   {!isReadOnlyScope(skill.scope) ? (
                     <ControlButton
-                      className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+                      className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
                       onClick={(event) => {
                         event.stopPropagation();
                         selectSkill(skill.filePath);
@@ -2254,7 +2256,7 @@ export function SkillsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="mt-8 text-center text-sm text-text-muted">
+              <div className="mt-8 text-center text-body text-text-muted">
                 No skills found in ~/.pi/agent/skills or this project's .pi/skills.
               </div>
             ) : null}
@@ -2275,7 +2277,7 @@ export function SkillsScreen() {
                       <ControlInput
                         autoFocus
                         data-testid="skill-rename-input"
-                        className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-lg font-bold text-text-primary outline-none focus:border-accent"
+                        className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-title font-semibold tracking-title text-text-primary outline-none focus:border-accent"
                         value={renameValue}
                         onChange={(e) => setRenameValue(e.target.value)}
                         onKeyDown={(e) => {
@@ -2302,7 +2304,7 @@ export function SkillsScreen() {
                     </>
                   ) : (
                     <h2
-                      className="truncate text-xl font-bold text-text-primary"
+                      className="truncate text-title font-semibold tracking-title text-text-primary"
                       style={{ fontStretch: "expanded" }}
                     >
                       {selected.name}
@@ -2319,7 +2321,7 @@ export function SkillsScreen() {
                     </span>
                   ) : null}
                 </div>
-                <p className="mt-0.5 text-sm text-text-secondary">{selected.description}</p>
+                <p className="mt-0.5 text-body text-text-secondary">{selected.description}</p>
                 {/* How pi invokes this skill explicitly (agent-session _expandSkillCommand
                   matches `/skill:<name>`, where name is pi's resolved skill name —
                   frontmatter `name` or the directory basename — which is exactly
@@ -2330,7 +2332,7 @@ export function SkillsScreen() {
                 {isValidSkillCommandName(selected.name) ? (
                   <code
                     data-testid="skill-invocation"
-                    className="mt-1 inline-block font-mono text-xs text-text-muted"
+                    className="mt-1 inline-block font-mono text-code text-text-muted"
                   >
                     /skill:{selected.name}
                   </code>
@@ -2340,7 +2342,7 @@ export function SkillsScreen() {
                 {!isReadOnlyScope(selected.scope) ? (
                   <ControlButton
                     data-testid="skill-rename"
-                    className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                    className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                     onClick={() => setRenameValue(selected.name)}
                   >
                     <Tag size={12} />
@@ -2349,7 +2351,7 @@ export function SkillsScreen() {
                 ) : null}
                 <ControlButton
                   data-testid="skill-disable"
-                  className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+                  className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => void setSkillDisabled(selected.name, !selected.disabled)}
                 >
                   {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
@@ -2359,7 +2361,7 @@ export function SkillsScreen() {
                   <>
                     <ControlButton
                       data-testid="skill-edit"
-                      className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
+                      className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-detail font-medium shadow-capsule"
                       style={{
                         background:
                           "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
@@ -2399,7 +2401,7 @@ export function SkillsScreen() {
                     className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                   >
                     <div className="flex items-center justify-between pb-2">
-                      <span className="text-micro font-semibold uppercase tracking-wider text-text-muted">
+                      <span className="text-micro font-semibold uppercase tracking-overline text-text-muted">
                         AI summary
                       </span>
                       <ControlButton
@@ -2411,10 +2413,12 @@ export function SkillsScreen() {
                         {s?.busy ? "Summarizing…" : s?.text ? "Regenerate" : "Summarize"}
                       </ControlButton>
                     </div>
-                    {s?.text ? <div className="text-xs text-text-secondary">{s.text}</div> : null}
-                    {s?.error ? <div className="text-xs text-danger">{s.error}</div> : null}
+                    {s?.text ? (
+                      <div className="text-detail text-text-secondary">{s.text}</div>
+                    ) : null}
+                    {s?.error ? <div className="text-detail text-danger">{s.error}</div> : null}
                     {!s?.text && !s?.error && !s?.busy ? (
-                      <div className="text-xs text-text-muted">
+                      <div className="text-detail text-text-muted">
                         Ask the configured model what this skill does and when to reach for it.
                       </div>
                     ) : null}
@@ -2432,12 +2436,12 @@ export function SkillsScreen() {
                     data-testid="skill-duplicates"
                     className="rounded-xl border border-warning/55 bg-warning/10 px-4 py-3"
                   >
-                    <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
                       Duplicate copies
                     </div>
                     <div className="space-y-1.5">
                       {copies.map((copy, index) => (
-                        <div key={copy.filePath} className="flex items-center gap-2 text-xs">
+                        <div key={copy.filePath} className="flex items-center gap-2 text-detail">
                           <span
                             className="min-w-0 flex-1 truncate font-mono text-text-secondary"
                             title={copy.filePath}
@@ -2468,10 +2472,10 @@ export function SkillsScreen() {
                     data-testid="skill-detail-collection"
                     className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                   >
-                    <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
                       Synced collection
                     </div>
-                    <div className="space-y-1 text-xs text-text-secondary">
+                    <div className="space-y-1 text-detail text-text-secondary">
                       <div className="truncate" title={repo.remoteUrl}>
                         <span className="text-text-muted">Source</span> · {repoLabel(repo)}
                       </div>
@@ -2521,18 +2525,18 @@ export function SkillsScreen() {
                 );
               })()}
               <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-                <div className="pb-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
                   SKILL.md
                 </div>
                 <MarkdownDocument source={selected.body || "_(empty)_"} />
               </div>
-              <div className="truncate text-xs text-text-muted" title={selected.filePath}>
+              <div className="truncate text-detail text-text-muted" title={selected.filePath}>
                 {selected.filePath}
               </div>
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+          <div className="flex flex-1 items-center justify-center text-body text-text-muted">
             Select a skill.
           </div>
         )}

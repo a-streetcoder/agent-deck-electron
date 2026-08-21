@@ -151,12 +151,14 @@ export function KeybindingsEditor() {
         <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           <div>
             <h2
-              className="text-sm font-semibold text-text-primary"
+              className="text-label font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
               Keybindings
             </h2>
-            <p className="text-xs text-text-muted">Click a shortcut, then press the new keys.</p>
+            <p className="text-caption text-text-muted">
+              Click a shortcut, then press the new keys.
+            </p>
           </div>
           <ControlButton
             type="button"

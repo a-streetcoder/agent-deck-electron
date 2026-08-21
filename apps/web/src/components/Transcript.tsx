@@ -138,7 +138,7 @@ export function Transcript() {
       {session ? <ForkProvenanceCard session={session} /> : null}
       {session?.status === "failed" ? (
         <section
-          className="max-w-full rounded-md border border-danger bg-danger-subtle px-4 py-3 text-sm text-danger"
+          className="max-w-full rounded-md border border-danger bg-danger-subtle px-4 py-3 text-label text-danger"
           data-testid="session-failure-details"
           role="status"
           aria-live="polite"

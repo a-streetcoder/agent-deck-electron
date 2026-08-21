@@ -38,9 +38,9 @@ export interface AppTextFieldProps
 }
 
 const sizeClasses: Record<AppTextFieldSize, string> = {
-  sm: "h-7 text-xs",
-  md: "h-8 text-sm",
-  lg: "h-10 text-sm",
+  sm: "h-7 text-detail",
+  md: "h-8 text-label",
+  lg: "h-10 text-label",
 };
 
 /**

@@ -18,7 +18,7 @@ export function SlashSelectionChips({
           data-testid="slash-selection-chip"
           data-slash-id={item.id}
           title={item.description ?? item.displayName}
-          className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+          className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
         >
           <span className="max-w-[18ch] truncate">{item.displayName}</span>
           <ControlButton

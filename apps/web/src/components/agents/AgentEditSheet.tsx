@@ -36,7 +36,7 @@ const TABS: Array<{ id: EditTab; label: string }> = [
 ];
 
 const inputClass =
-  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent";
+  "w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent";
 
 // Pi's full ladder. `max` was missing, so an agent storing it rendered a select
 // with no matching option (Codex). Used only when the selected model's own
@@ -556,7 +556,7 @@ export function AgentEditSheet({
           <AgentAvatar agent={agent ?? { scope, name }} size={32} />
           <div className="min-w-0 flex-1">
             <div
-              className="truncate text-sm font-semibold text-text-primary"
+              className="truncate text-label font-semibold text-text-primary"
               style={{ fontStretch: "expanded" }}
             >
               {agent
@@ -566,11 +566,11 @@ export function AgentEditSheet({
                   : "New Agent"}
             </div>
             {isReplacement ? (
-              <div className="text-xs text-text-muted">
+              <div className="text-detail text-text-muted">
                 Seeded from builtin; saving creates a separate global file.
               </div>
             ) : isBuiltin ? (
-              <div className="text-xs" style={{ color: "var(--color-warning)" }}>
+              <div className="text-detail" style={{ color: "var(--color-warning)" }}>
                 builtin — saved as override, file untouched
               </div>
             ) : null}
@@ -591,7 +591,7 @@ export function AgentEditSheet({
               key={t.id}
               data-testid={`editor-tab-${t.id}`}
               className={cn(
-                "rounded-t-lg px-3 py-1.5 text-xs font-medium",
+                "rounded-t-lg px-3 py-1.5 text-detail font-medium",
                 tab === t.id
                   ? "border border-b-0 border-border-subtle bg-surface text-text-primary"
                   : "text-text-muted hover:text-text-primary",
@@ -613,7 +613,7 @@ export function AgentEditSheet({
             <>
               {!agent ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="text-xs text-text-muted">
+                  <label className="text-caption font-medium text-text-muted">
                     Name
                     <ControlInput
                       ref={nameInputRef}
@@ -623,7 +623,7 @@ export function AgentEditSheet({
                       onChange={(e) => setName(e.target.value)}
                     />
                   </label>
-                  <label className="text-xs text-text-muted">
+                  <label className="text-caption font-medium text-text-muted">
                     Scope
                     {isReplacement ? (
                       <ControlInput
@@ -647,7 +647,7 @@ export function AgentEditSheet({
                   </label>
                 </div>
               ) : null}
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Description
                 <ControlInput
                   data-testid="editor-description"
@@ -656,7 +656,7 @@ export function AgentEditSheet({
                   onChange={(e) => setDescription(e.target.value)}
                 />
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 When to use
                 <ControlInput
                   className={inputClass}
@@ -666,7 +666,7 @@ export function AgentEditSheet({
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-text-muted">
+                  <label className="text-caption font-medium text-text-muted">
                     Model
                     <ControlInput
                       data-testid="editor-model"
@@ -706,7 +706,7 @@ export function AgentEditSheet({
                   ) : null}
                 </div>
                 <div>
-                  <label className="text-xs text-text-muted">
+                  <label className="text-caption font-medium text-text-muted">
                     Thinking
                     <ControlSelect
                       data-testid="editor-thinking"
@@ -746,7 +746,7 @@ export function AgentEditSheet({
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-text-muted">
+                <label className="block text-caption font-medium text-text-muted">
                   Fallback models (comma-separated; tried in order if the primary is unavailable)
                   {/* No datalist here: browser completion replaces the WHOLE input
                       value, so picking a suggestion after an existing entry would
@@ -777,24 +777,27 @@ export function AgentEditSheet({
                   </span>
                 ) : null}
               </div>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Default reads (one project-relative path per line)
                 <ControlTextArea
                   data-testid="editor-default-reads"
-                  className={cn(inputClass, "min-h-[88px] font-mono text-caption")}
+                  className={cn(inputClass, "min-h-[88px] font-mono text-code")}
                   aria-describedby="editor-default-reads-help"
                   placeholder={"AGENTS.md\nsrc/main.ts"}
                   value={defaultReads}
                   onChange={(event) => setDefaultReads(event.target.value)}
                 />
-                <span id="editor-default-reads-help" className="mt-1 block text-xs text-text-muted">
+                <span
+                  id="editor-default-reads-help"
+                  className="mt-1 block text-caption text-text-muted"
+                >
                   Read-first hints for named delegation. Contents are not preloaded; unsafe manually
                   authored entries are ignored independently.
                 </span>
               </label>
               {!isBuiltin ? (
                 <>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Default outcome for managed delegation
                     <ControlSelect
                       data-testid="editor-default-outcome"
@@ -816,14 +819,14 @@ export function AgentEditSheet({
                     </ControlSelect>
                     <span
                       id="editor-default-outcome-help"
-                      className="mt-1 block text-xs text-text-muted"
+                      className="mt-1 block text-detail text-text-muted"
                     >
                       This adds outcome guidance only; it neither adds nor removes configured tools.
                       Edit files in worktree needs caller-selected worktree isolation, and
                       write/update project file needs a validated per-run output path.
                     </span>
                   </label>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Output advisory
                     <ControlInput
                       data-testid="editor-output"
@@ -834,12 +837,15 @@ export function AgentEditSheet({
                       value={output}
                       onChange={(event) => setOutput(event.target.value)}
                     />
-                    <span id="editor-output-help" className="mt-1 block text-xs text-text-muted">
+                    <span
+                      id="editor-output-help"
+                      className="mt-1 block text-caption text-text-muted"
+                    >
                       Advisory guidance for named children only. It does not grant tools, authorize
                       a path, create a worktree, or select an Agent Deck artifact file.
                     </span>
                   </label>
-                  <label className="flex items-start gap-2 text-xs text-text-muted">
+                  <label className="flex items-start gap-2 text-caption font-medium text-text-muted">
                     <ControlInput
                       type="checkbox"
                       data-testid="editor-default-progress"
@@ -856,7 +862,7 @@ export function AgentEditSheet({
                       </span>
                     </span>
                   </label>
-                  <label className="block text-xs text-text-muted">
+                  <label className="block text-caption font-medium text-text-muted">
                     Maximum subagent depth
                     <ControlInput
                       type="number"
@@ -871,14 +877,14 @@ export function AgentEditSheet({
                     />
                     <span
                       id="editor-max-subagent-depth-help"
-                      className="mt-1 block text-xs text-text-muted"
+                      className="mt-1 block text-detail text-text-muted"
                     >
                       Compatibility metadata. Native’s editor offers 0 to 10, while higher
                       hand-authored non-negative values remain preservable. Agent Deck still blocks
                       recursive child delegation regardless of this value.
                     </span>
                   </label>
-                  <label className="flex items-start gap-2 text-xs text-text-muted">
+                  <label className="flex items-start gap-2 text-caption font-medium text-text-muted">
                     <ControlInput
                       type="checkbox"
                       data-testid="editor-interactive"
@@ -902,7 +908,7 @@ export function AgentEditSheet({
 
           {tab === "prompt" ? (
             <>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Prompt mode
                 <ControlSelect
                   className={inputClass}
@@ -913,11 +919,11 @@ export function AgentEditSheet({
                   <option value="append">Append</option>
                 </ControlSelect>
               </label>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 System prompt (markdown)
                 <ControlTextArea
                   data-testid="editor-body"
-                  className={cn(inputClass, "min-h-[220px] font-mono text-caption")}
+                  className={cn(inputClass, "min-h-[220px] font-mono text-code")}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                 />
@@ -929,8 +935,8 @@ export function AgentEditSheet({
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs text-text-secondary">Reset</div>
-                  <div data-testid="editor-tools-mode" className="text-xs text-text-muted">
+                  <div className="text-detail text-text-secondary">Reset</div>
+                  <div data-testid="editor-tools-mode" className="text-detail text-text-muted">
                     {!toolsExplicit
                       ? "Currently using Pi default tool access."
                       : selectedTools.length > 0
@@ -941,7 +947,7 @@ export function AgentEditSheet({
                 <ControlButton
                   type="button"
                   data-testid="editor-tools-reset"
-                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary"
+                  className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-detail text-text-secondary hover:text-text-primary"
                   onClick={() => {
                     setTools("");
                     setToolsExplicit(false);
@@ -950,7 +956,7 @@ export function AgentEditSheet({
                   Reset Tool Access
                 </ControlButton>
               </div>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Add Tool
                 <ControlSelect
                   data-testid="editor-tools-picker"
@@ -974,12 +980,12 @@ export function AgentEditSheet({
                 </ControlSelect>
               </label>
               <div>
-                <div className="text-xs text-text-muted">Selected</div>
+                <div className="text-detail text-text-muted">Selected</div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {selectedTools.map((name, index) => (
                     <span
                       key={`${name}-${index}`}
-                      className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-xs text-text-secondary"
+                      className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1 text-detail text-text-secondary"
                     >
                       <span className="max-w-[24ch] truncate">{name}</span>
                       <ControlButton
@@ -1001,7 +1007,7 @@ export function AgentEditSheet({
                   ))}
                 </div>
               </div>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Tools (comma-separated; empty = no tools when explicitly edited)
                 <ControlInput
                   data-testid="editor-tools"
@@ -1015,7 +1021,7 @@ export function AgentEditSheet({
                   }}
                 />
               </label>
-              <p id="editor-tools-help" className="text-xs text-text-muted">
+              <p id="editor-tools-help" className="text-caption text-text-muted">
                 Prefix an external Pi MCP adapter tool with mcp:. These names may be stale and do
                 not connect or grant access to Agent Deck MCP servers.
               </p>
@@ -1024,7 +1030,7 @@ export function AgentEditSheet({
 
           {tab === "skills" ? (
             <div className="space-y-3" data-testid="editor-skills" aria-busy={skillCatalogLoading}>
-              <label className="block text-xs text-text-muted">
+              <label className="block text-caption font-medium text-text-muted">
                 Skills (comma-separated bare names)
                 <ControlInput
                   data-testid="editor-skills-input"
@@ -1034,17 +1040,17 @@ export function AgentEditSheet({
                   onChange={(e) => setSkills(e.target.value)}
                 />
               </label>
-              <p id="editor-skills-help" className="text-xs text-text-muted">
+              <p id="editor-skills-help" className="text-caption text-text-muted">
                 Names resolve against global skills and the currently selected project. A project
                 skill from another project is not visible here; duplicate visible names are
                 ambiguous and block named launch.
               </p>
               {skillCatalogLoading ? (
-                <div className="text-xs text-text-muted" role="status">
+                <div className="text-caption text-text-muted" role="status">
                   Loading skill catalog…
                 </div>
               ) : skillCatalogError ? (
-                <div className="text-xs text-danger" role="alert">
+                <div className="text-caption text-danger" role="alert">
                   Skill catalog unavailable: {skillCatalogError}
                 </div>
               ) : (
@@ -1066,7 +1072,7 @@ export function AgentEditSheet({
                         key={skillName}
                         className="rounded-lg border border-border-subtle bg-surface px-3 py-2"
                       >
-                        <div className="font-mono text-xs text-text-primary">{skillName}</div>
+                        <div className="font-mono text-code text-text-primary">{skillName}</div>
                         <div
                           className={cn(
                             "text-micro",
@@ -1081,7 +1087,7 @@ export function AgentEditSheet({
                     );
                   })}
                   {assignedSkillNames.length === 0 ? (
-                    <div className="text-xs text-text-muted">No explicit skills assigned.</div>
+                    <div className="text-detail text-text-muted">No explicit skills assigned.</div>
                   ) : null}
                 </div>
               )}
@@ -1094,7 +1100,7 @@ export function AgentEditSheet({
               data-testid="editor-extensions"
               aria-busy={extensionCatalogLoading}
             >
-              <label className="flex items-start gap-2 text-xs text-text-muted">
+              <label className="flex items-start gap-2 text-caption font-medium text-text-muted">
                 <ControlInput
                   type="checkbox"
                   data-testid="editor-extensions-default"
@@ -1111,17 +1117,17 @@ export function AgentEditSheet({
                 </span>
               </label>
               {!extensionCatalogLoading && extensionLoadingMode === "agentDeckManaged" ? (
-                <div className="rounded-lg border border-warning px-3 py-2 text-xs text-warning">
+                <div className="rounded-lg border border-warning px-3 py-2 text-detail text-warning">
                   Agent Deck managed loading mode currently blocks all user extensions, including
                   this agent’s selections.
                 </div>
               ) : null}
               {extensionCatalogLoading ? (
-                <div className="text-xs text-text-muted" role="status">
+                <div className="text-caption text-text-muted" role="status">
                   Loading extension catalog…
                 </div>
               ) : extensionCatalogError ? (
-                <div className="text-xs text-danger" role="alert">
+                <div className="text-caption text-danger" role="alert">
                   Extension catalog unavailable: {extensionCatalogError}
                 </div>
               ) : null}
@@ -1155,7 +1161,7 @@ export function AgentEditSheet({
                           onChange={() => toggleExtension(entry.path)}
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-xs text-text-primary">
+                          <span className="block truncate text-detail text-text-primary">
                             {entry.name}
                           </span>
                           <span className="block truncate font-mono text-micro text-text-muted">
@@ -1182,7 +1188,7 @@ export function AgentEditSheet({
                     );
                   })}
                   {extensionEntries.length === 0 ? (
-                    <div className="rounded-lg border border-border-subtle px-3 py-4 text-center text-xs text-text-muted">
+                    <div className="rounded-lg border border-border-subtle px-3 py-4 text-center text-detail text-text-muted">
                       No catalog extensions are available. Saving keeps an explicit empty allowlist.
                     </div>
                   ) : null}
@@ -1192,7 +1198,7 @@ export function AgentEditSheet({
           ) : null}
 
           {tab === "mcp" ? (
-            <label className="block text-xs text-text-muted">
+            <label className="block text-caption font-medium text-text-muted">
               MCP servers (comma-separated names from mcp.json this agent uses)
               <ControlInput
                 data-testid="editor-mcp"
@@ -1205,7 +1211,7 @@ export function AgentEditSheet({
           ) : null}
 
           {error ? (
-            <div className="text-sm" role="alert" style={{ color: "var(--color-role-error)" }}>
+            <div className="text-body" role="alert" style={{ color: "var(--color-role-error)" }}>
               {error}
             </div>
           ) : null}
@@ -1213,14 +1219,14 @@ export function AgentEditSheet({
 
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
           <ControlButton
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+            className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
             onClick={onClose}
           >
             Cancel
           </ControlButton>
           <ControlButton
             data-testid="editor-save"
-            className="rounded-capsule px-4 py-1.5 text-sm font-medium shadow-capsule disabled:opacity-40"
+            className="rounded-capsule px-4 py-1.5 text-label font-medium shadow-capsule disabled:opacity-40"
             style={{
               background:
                 "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",

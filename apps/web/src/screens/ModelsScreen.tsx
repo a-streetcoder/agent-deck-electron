@@ -256,7 +256,7 @@ export function ModelsScreen() {
         <div className="mx-auto max-w-3xl">
           {!sessionId && discoveryState === "loading" ? (
             <div
-              className="py-8 text-center text-sm text-text-muted"
+              className="py-8 text-center text-body text-text-muted"
               role="status"
               data-testid="models-loading"
             >
@@ -264,7 +264,7 @@ export function ModelsScreen() {
             </div>
           ) : !sessionId && discoveryState === "error" ? (
             <div
-              className="py-8 text-center text-sm text-text-muted"
+              className="py-8 text-center text-body text-text-muted"
               role="alert"
               data-testid="models-error"
             >
@@ -281,7 +281,7 @@ export function ModelsScreen() {
           ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
             (sessionId && models.length === 0) ? (
             <div
-              className="py-8 text-center text-sm text-text-muted"
+              className="py-8 text-center text-body text-text-muted"
               role="status"
               data-testid="models-empty"
             >
@@ -292,14 +292,14 @@ export function ModelsScreen() {
               <ControlInput
                 ref={searchInput}
                 data-testid="models-search"
-                className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
                 placeholder="Search models by name, id, or provider…"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
               {filtered.length === 0 ? (
                 <div
-                  className="py-8 text-center text-sm text-text-muted"
+                  className="py-8 text-center text-body text-text-muted"
                   data-testid="models-search-empty"
                 >
                   No models match your search.
@@ -308,7 +308,7 @@ export function ModelsScreen() {
               <div className="space-y-4">
                 {[...byProvider.entries()].map(([provider, providerModels]) => (
                   <div key={provider}>
-                    <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
                       <ProviderLogo
                         providerId={provider}
                         size={13}
@@ -356,7 +356,7 @@ export function ModelsScreen() {
                               <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
                                 <div className="flex items-center gap-2">
                                   <span
-                                    className="truncate text-sm font-medium text-text-primary"
+                                    className="truncate text-label font-medium text-text-primary"
                                     style={{ fontStretch: "expanded" }}
                                   >
                                     {model.name ?? model.id}

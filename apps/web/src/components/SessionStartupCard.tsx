@@ -23,23 +23,23 @@ export function SessionStartupCard() {
     <div className="mx-auto mt-12 w-full max-w-md" data-testid="session-startup">
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-5 shadow-card">
         <div
-          className="text-micro font-semibold uppercase tracking-wider text-text-muted"
+          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
           style={{ fontStretch: "expanded" }}
         >
           New session
         </div>
         <h2
-          className="mt-1 text-lg font-semibold text-text-primary"
+          className="mt-1 text-title font-semibold tracking-title text-text-primary"
           style={{ fontStretch: "expanded" }}
           data-testid="startup-agent"
         >
           {agentName}
         </h2>
-        <p className="mt-1 text-sm text-text-muted">
+        <p className="mt-1 text-body text-text-muted">
           Send a message below to launch. It will run with:
         </p>
 
-        <dl className="mt-4 space-y-3 text-sm">
+        <dl className="mt-4 space-y-3 text-label">
           <div className="flex items-start justify-between gap-3">
             <dt className="flex items-center gap-1.5 text-text-muted">
               <Folder size={13} aria-hidden /> Project
@@ -74,7 +74,7 @@ export function SessionStartupCard() {
                 skills.map((skill) => (
                   <span
                     key={skill}
-                    className="rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 text-xs text-text-secondary"
+                    className="rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 text-detail text-text-secondary"
                   >
                     {skill}
                   </span>

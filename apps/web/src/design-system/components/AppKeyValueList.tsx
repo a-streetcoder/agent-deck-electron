@@ -41,7 +41,7 @@ export const AppKeyValueList = forwardRef<HTMLDListElement, AppKeyValueListProps
         ref={ref}
         className={cn(
           "grid grid-cols-[minmax(0,140px)_1fr] gap-x-4 gap-y-2.5",
-          "text-sm",
+          "text-label",
           className,
         )}
         {...rest}
