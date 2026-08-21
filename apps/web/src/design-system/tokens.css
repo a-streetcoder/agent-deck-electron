@@ -157,6 +157,7 @@
   --space-card: var(--space-4);
   --space-row: var(--space-3);
   --space-control-gap: var(--space-1-5);
+  --space-sheet: var(--space-8);
 
   /* Sizing */
   --size-control-sm: 28px;
@@ -167,6 +168,7 @@
   --size-icon-lg: 20px;
   --size-hit-target: 32px;
   --size-titlebar: 40px;
+  --size-sheet: 48rem;
   --size-scroll-fade: 36px;
   --sidebar-width: 240px;
 

@@ -1,6 +1,7 @@
 import { AppSpinner } from "@/design-system/components/AppSpinner";
 import { Button } from "@/design-system/components/Button";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
+import { SheetContainer } from "@/design-system/components/SheetContainer";
 import { SheetFooter } from "@/design-system/components/SheetFooter";
 import { SheetHeader } from "@/design-system/components/SheetHeader";
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -468,7 +469,7 @@ function PrefModelPicker({
                       })}
                     </div>
                     <SheetFooter
-                      className="px-5 py-3"
+                      className="py-3"
                       leading={
                         <Button
                           type="button"
@@ -964,8 +965,8 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "setup" ? (
-          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-setup">
-            <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-8 pt-8">
+          <div className="flex h-full min-h-0 flex-col pt-titlebar" data-testid="onboarding-setup">
+            <SheetContainer className="flex min-h-0 flex-1 flex-col py-5">
               <div className="flex items-center justify-between pb-2 pt-4">
                 <div className="flex items-center gap-2">
                   <Stethoscope size={16} className="text-text-secondary" />
@@ -1036,7 +1037,7 @@ export function OnboardingOverlay() {
                     );
                   })}
               </div>
-            </div>
+            </SheetContainer>
             <SheetFooter
               leading={
                 <Button
@@ -1098,140 +1099,138 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "preferences" ? (
-          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-preferences">
-            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
-              <SheetHeader className="items-start">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <SlidersHorizontal size={16} className="text-text-secondary" />
-                    <h2
-                      className="text-base font-semibold text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
-                      Preferences
-                    </h2>
-                  </div>
-                  <p className="text-xs text-text-muted">
-                    Defaults for new sessions — you can change these anytime later.
-                  </p>
+          <div
+            className="flex h-full min-h-0 flex-col pt-titlebar [-webkit-app-region:drag]"
+            data-testid="onboarding-preferences"
+          >
+            <SheetHeader className="items-start">
+              <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal size={16} className="text-text-secondary" />
+                  <h2
+                    className="text-base font-semibold text-text-primary"
+                    style={{ fontStretch: "expanded" }}
+                  >
+                    Preferences
+                  </h2>
                 </div>
-              </SheetHeader>
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-3">
-                {prefs ? (
-                  <>
-                    <PrefToggle
-                      testid="pref-auto-title"
-                      label="Auto-name sessions"
-                      description="Generate a session title from your first message."
-                      checked={prefs.autoTitle}
-                      onChange={(v) => patchPref({ autoTitle: v })}
-                    />
-                    <PrefToggle
-                      testid="pref-subagents"
-                      label="Let sessions delegate to subagents"
-                      description="Sessions may hand focused work to a subagent and run several in parallel. Turn off to keep every session doing its own work."
-                      checked={prefs.subagentsEnabled}
-                      onChange={(v) => patchPref({ subagentsEnabled: v })}
-                    />
-                    <PrefToggle
-                      testid="pref-worktree"
-                      label="Isolate sessions in a worktree"
-                      description="Run each project session in its own git worktree. Session creation stops if isolation cannot be made."
-                      checked={prefs.worktreeIsolation}
-                      onChange={(v) => patchPref({ worktreeIsolation: v })}
-                    />
-                    <PrefToggle
-                      testid="pref-keep-worktree"
-                      label="Keep worktree and branch after a successful merge"
-                      description="Applies only with worktree isolation. On by default so you can keep iterating; turn off to remove the worktree and branch only after a successful merge. Deleting a session removes its worktree regardless."
-                      disabledDescription="Enable worktree isolation to change this preference."
-                      checked={prefs.keepWorktreeAfterMerge}
-                      disabled={!prefs.worktreeIsolation}
-                      onChange={(v) => patchPref({ keepWorktreeAfterMerge: v })}
-                    />
-                    <PrefToggle
-                      testid="pref-git-automation"
-                      label="Enable git actions"
-                      description="Show Commit / Push / Merge actions on the Git screen."
-                      checked={prefs.gitAutomation}
-                      onChange={(v) => patchPref({ gitAutomation: v })}
-                    />
-                    <div className="flex flex-col gap-1 pt-1">
-                      <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
-                        Default model
-                      </label>
-                      <PrefModelPicker
-                        models={models}
-                        runtimeDefaultModel={runtimeDefaultModel}
-                        value={prefs.defaultModel}
-                        disabled={modelState === "initial-loading" || modelState === "loading"}
-                        onChange={(next) => patchPref({ defaultModel: next })}
-                        triggerRef={modelSelect}
-                      />
-                      {modelState === "initial-loading" ? (
-                        <span className="text-detail text-text-muted" role="status">
-                          Discovering available models…
-                        </span>
-                      ) : modelState === "loading" ? (
-                        <span className="text-detail text-text-muted" role="status">
-                          Trying model discovery again…
-                        </span>
-                      ) : modelState === "success" && models.length === 0 ? (
-                        <span className="text-detail text-text-muted" role="status">
-                          No models are currently available from connected providers.
-                        </span>
-                      ) : modelState === "error" ? (
-                        <div
-                          className="flex items-center gap-2 text-detail text-text-muted"
-                          role="alert"
-                        >
-                          <span>Models could not be discovered.</span>
-                          <ControlButton
-                            data-testid="pref-model-retry"
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
-                            onClick={() => discoverModels(false, true)}
-                          >
-                            Retry
-                          </ControlButton>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label
-                        className="text-sm font-medium text-text-primary"
-                        htmlFor="pref-thinking"
-                      >
-                        Default thinking
-                      </label>
-                      <ControlSelect
-                        id="pref-thinking"
-                        data-testid="pref-thinking"
-                        className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
-                        value={prefs.defaultThinking ?? ""}
-                        onChange={(event) =>
-                          patchPref({ defaultThinking: event.target.value || null })
-                        }
-                      >
-                        <option value="">Default</option>
-                        {PI_THINKING_LEVELS.map((level) => (
-                          <option key={level} value={level}>
-                            {level}
-                          </option>
-                        ))}
-                      </ControlSelect>
-                      <p className="mt-1 text-xs text-text-muted">
-                        Applied when supported by the selected model; Pi may clamp unsupported
-                        levels.
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <div className="py-6 text-center text-sm text-text-muted">
-                    Loading preferences…
-                  </div>
-                )}
+                <p className="text-xs text-text-muted">
+                  Defaults for new sessions — you can change these anytime later.
+                </p>
               </div>
-            </div>
+            </SheetHeader>
+            <SheetContainer className="min-h-0 flex-1 space-y-3 overflow-y-auto py-5">
+              {prefs ? (
+                <>
+                  <PrefToggle
+                    testid="pref-auto-title"
+                    label="Auto-name sessions"
+                    description="Generate a session title from your first message."
+                    checked={prefs.autoTitle}
+                    onChange={(v) => patchPref({ autoTitle: v })}
+                  />
+                  <PrefToggle
+                    testid="pref-subagents"
+                    label="Let sessions delegate to subagents"
+                    description="Sessions may hand focused work to a subagent and run several in parallel. Turn off to keep every session doing its own work."
+                    checked={prefs.subagentsEnabled}
+                    onChange={(v) => patchPref({ subagentsEnabled: v })}
+                  />
+                  <PrefToggle
+                    testid="pref-worktree"
+                    label="Isolate sessions in a worktree"
+                    description="Run each project session in its own git worktree. Session creation stops if isolation cannot be made."
+                    checked={prefs.worktreeIsolation}
+                    onChange={(v) => patchPref({ worktreeIsolation: v })}
+                  />
+                  <PrefToggle
+                    testid="pref-keep-worktree"
+                    label="Keep worktree and branch after a successful merge"
+                    description="Applies only with worktree isolation. On by default so you can keep iterating; turn off to remove the worktree and branch only after a successful merge. Deleting a session removes its worktree regardless."
+                    disabledDescription="Enable worktree isolation to change this preference."
+                    checked={prefs.keepWorktreeAfterMerge}
+                    disabled={!prefs.worktreeIsolation}
+                    onChange={(v) => patchPref({ keepWorktreeAfterMerge: v })}
+                  />
+                  <PrefToggle
+                    testid="pref-git-automation"
+                    label="Enable git actions"
+                    description="Show Commit / Push / Merge actions on the Git screen."
+                    checked={prefs.gitAutomation}
+                    onChange={(v) => patchPref({ gitAutomation: v })}
+                  />
+                  <div className="flex flex-col gap-1 pt-1">
+                    <label className="text-sm font-medium text-text-primary" htmlFor="pref-model">
+                      Default model
+                    </label>
+                    <PrefModelPicker
+                      models={models}
+                      runtimeDefaultModel={runtimeDefaultModel}
+                      value={prefs.defaultModel}
+                      disabled={modelState === "initial-loading" || modelState === "loading"}
+                      onChange={(next) => patchPref({ defaultModel: next })}
+                      triggerRef={modelSelect}
+                    />
+                    {modelState === "initial-loading" ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        Discovering available models…
+                      </span>
+                    ) : modelState === "loading" ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        Trying model discovery again…
+                      </span>
+                    ) : modelState === "success" && models.length === 0 ? (
+                      <span className="text-detail text-text-muted" role="status">
+                        No models are currently available from connected providers.
+                      </span>
+                    ) : modelState === "error" ? (
+                      <div
+                        className="flex items-center gap-2 text-detail text-text-muted"
+                        role="alert"
+                      >
+                        <span>Models could not be discovered.</span>
+                        <ControlButton
+                          data-testid="pref-model-retry"
+                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                          onClick={() => discoverModels(false, true)}
+                        >
+                          Retry
+                        </ControlButton>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label
+                      className="text-sm font-medium text-text-primary"
+                      htmlFor="pref-thinking"
+                    >
+                      Default thinking
+                    </label>
+                    <ControlSelect
+                      id="pref-thinking"
+                      data-testid="pref-thinking"
+                      className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-accent"
+                      value={prefs.defaultThinking ?? ""}
+                      onChange={(event) =>
+                        patchPref({ defaultThinking: event.target.value || null })
+                      }
+                    >
+                      <option value="">Default</option>
+                      {PI_THINKING_LEVELS.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </ControlSelect>
+                    <p className="mt-1 text-xs text-text-muted">
+                      Applied when supported by the selected model; Pi may clamp unsupported levels.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="py-6 text-center text-sm text-text-muted">Loading preferences…</div>
+              )}
+            </SheetContainer>
             <SheetFooter
               leading={
                 <Button
@@ -1260,8 +1259,8 @@ export function OnboardingOverlay() {
         ) : null}
 
         {phase === "final" ? (
-          <div className="flex h-full min-h-0 flex-col" data-testid="onboarding-final">
-            <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-3 px-5 py-8">
+          <div className="flex h-full min-h-0 flex-col pt-titlebar" data-testid="onboarding-final">
+            <SheetContainer className="flex flex-1 flex-col justify-center gap-3 py-5">
               <h2
                 className="text-base font-semibold text-text-primary"
                 style={{ fontStretch: "expanded" }}
@@ -1290,7 +1289,7 @@ export function OnboardingOverlay() {
                 />
                 <FinalGate label="A project" ok={!projectMissing} />
               </div>
-            </div>
+            </SheetContainer>
             <SheetFooter
               leading={
                 <Button

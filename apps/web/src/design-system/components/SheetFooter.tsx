@@ -1,5 +1,6 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
+import { SheetContainer } from "./SheetContainer";
 
 export interface SheetFooterProps extends HTMLAttributes<HTMLDivElement> {
   /** Leading slot (typically Back). */
@@ -9,7 +10,7 @@ export interface SheetFooterProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * Sheet/dialog footer chrome: full-bleed top hairline and standard padding.
+ * Sheet/dialog footer chrome: full-bleed top hairline.
  * The divider belongs to this bar, not the last list item.
  */
 export const SheetFooter = forwardRef<HTMLDivElement, SheetFooterProps>(function SheetFooter(
@@ -19,18 +20,18 @@ export const SheetFooter = forwardRef<HTMLDivElement, SheetFooterProps>(function
   return (
     <div
       ref={ref}
-      className={cn(
-        "flex w-full shrink-0 items-center border-t border-border-subtle px-8 py-4",
-        leading ? "justify-between" : "justify-end",
-        className,
-      )}
+      className={cn("w-full shrink-0 border-t border-border-subtle py-4", className)}
       {...rest}
     >
-      {leading ? <div className="flex items-center">{leading}</div> : null}
-      {trailing ? (
-        <div className={cn("flex items-center", !leading && "ml-auto")}>{trailing}</div>
-      ) : null}
-      {children}
+      <SheetContainer
+        className={cn("flex items-center", leading ? "justify-between" : "justify-end")}
+      >
+        {leading ? <div className="flex items-center">{leading}</div> : null}
+        {trailing ? (
+          <div className={cn("flex items-center", !leading && "ml-auto")}>{trailing}</div>
+        ) : null}
+        {children}
+      </SheetContainer>
     </div>
   );
 });

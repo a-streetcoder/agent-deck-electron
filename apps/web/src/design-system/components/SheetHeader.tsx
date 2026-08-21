@@ -1,21 +1,19 @@
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "../../lib/cn";
+import { SheetContainer } from "./SheetContainer";
 
 /**
- * Sheet/dialog header chrome: full-bleed bottom hairline and standard padding.
+ * Sheet/dialog header chrome: full-bleed bottom hairline.
  * Body content must not add a trailing divider.
  */
 export const SheetHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  function SheetHeader({ className, ...rest }, ref) {
+  function SheetHeader({ className, children, ...rest }, ref) {
     return (
-      <div
-        ref={ref}
-        className={cn(
-          "flex shrink-0 items-center gap-2 border-b border-border-subtle px-5 py-3",
-          className,
-        )}
-        {...rest}
-      />
+      <div ref={ref} className="shrink-0 border-b border-border-subtle py-3" {...rest}>
+        <SheetContainer className={cn("flex items-center gap-2", className)}>
+          {children}
+        </SheetContainer>
+      </div>
     );
   },
 );

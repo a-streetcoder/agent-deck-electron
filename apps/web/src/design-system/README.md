@@ -15,7 +15,7 @@ The design system is the single visual and interaction boundary for the Electron
 - Use semantic Tailwind names such as `bg-surface-elevated`, `text-text-muted`, `border-danger`, and `text-detail`.
 - Prefer `Button`, `IconButton`, and `TextField` when their supported contract fits.
 - Specialized native controls must use `ControlButton`, `ControlInput`, `ControlTextArea`, or `ControlSelect`; do not render raw controls in feature files.
-- Sheet/dialog chrome uses `SheetHeader` (bottom hairline) and `SheetFooter` (top hairline); the body has no trailing divider.
+- Sheet/dialog chrome uses `SheetHeader` (bottom hairline) and `SheetFooter` (top hairline); the body has no trailing divider. Inner width and padding are `--size-sheet` / `--space-sheet`; page overlays clear traffic lights with `--size-titlebar` (`pt-titlebar`), not on the header primitive.
 - Flex/grid, responsive layout, percentages, viewport sizes, and runtime geometry may remain local.
 - Reusable colors, typography, radii, shadows, layers, and motion belong in `tokens.css` and must be mapped through Tailwind.
 - A repeated composition should become a component after it has at least two real consumers or when it owns shared accessibility behavior.

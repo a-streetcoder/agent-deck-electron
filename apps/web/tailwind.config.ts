@@ -96,6 +96,10 @@ const config: Config = {
         "control-md": "var(--size-control-md)",
         "control-lg": "var(--size-control-lg)",
         titlebar: "var(--size-titlebar)",
+        sheet: "var(--space-sheet)",
+      },
+      maxWidth: {
+        sheet: "var(--size-sheet)",
       },
       boxShadow: {
         card: "var(--shadow-card)",
