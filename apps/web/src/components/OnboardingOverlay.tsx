@@ -1,5 +1,7 @@
 import { AppSpinner } from "@/design-system/components/AppSpinner";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
+import { SheetFooter } from "@/design-system/components/SheetFooter";
+import { SheetHeader } from "@/design-system/components/SheetHeader";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -387,9 +389,9 @@ function PrefModelPicker({
                 data-testid="pref-model-dialog-backdrop"
                 onClick={close}
               />
-              <div className="relative z-10 flex max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-elevated p-5 shadow-elevated">
+              <div className="relative z-10 flex max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-elevated shadow-elevated">
                 {providerId === null ? (
-                  <div className="min-h-0 overflow-y-auto">
+                  <div className="min-h-0 overflow-y-auto px-5 py-3">
                     <ControlButton
                       type="button"
                       data-testid="pref-model-option-default"
@@ -439,16 +441,15 @@ function PrefModelPicker({
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center gap-2 px-2 py-2 text-micro font-semibold uppercase tracking-wider text-text-muted">
+                    <SheetHeader className="text-micro font-semibold uppercase tracking-wider text-text-muted">
                       <ProviderLogo
                         providerId={providerId}
                         size={16}
                         className="text-text-secondary"
                       />
                       <span className="truncate">{providerId}</span>
-                    </div>
-                    <div className="border-t border-border-subtle" />
-                    <div className="min-h-0 flex-1 overflow-y-auto pt-2">
+                    </SheetHeader>
+                    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
                       {providerModels.map((model) => {
                         const optionValue = modelCatalogValue(model);
                         const active = optionValue === value;
@@ -470,7 +471,7 @@ function PrefModelPicker({
                         );
                       })}
                     </div>
-                    <div className="mt-2 flex items-center border-t border-border-subtle pt-3">
+                    <SheetFooter>
                       <ControlButton
                         type="button"
                         data-testid="pref-model-providers-back"
@@ -479,7 +480,7 @@ function PrefModelPicker({
                       >
                         <ArrowLeft size={13} /> Back
                       </ControlButton>
-                    </div>
+                    </SheetFooter>
                   </>
                 )}
               </div>
@@ -1095,19 +1096,23 @@ export function OnboardingOverlay() {
             className="mx-auto flex min-h-0 w-full max-w-3xl flex-col py-8"
             data-testid="onboarding-preferences"
           >
-            <div className="flex items-center gap-2 px-5 pb-1 pt-4">
-              <SlidersHorizontal size={16} className="text-text-secondary" />
-              <h2
-                className="text-base font-semibold text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
-                Preferences
-              </h2>
-            </div>
-            <p className="px-5 pb-2 text-xs text-text-muted">
-              Defaults for new sessions — you can change these anytime later.
-            </p>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-3">
+            <SheetHeader className="items-start">
+              <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal size={16} className="text-text-secondary" />
+                  <h2
+                    className="text-base font-semibold text-text-primary"
+                    style={{ fontStretch: "expanded" }}
+                  >
+                    Preferences
+                  </h2>
+                </div>
+                <p className="text-xs text-text-muted">
+                  Defaults for new sessions — you can change these anytime later.
+                </p>
+              </div>
+            </SheetHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-3">
               {prefs ? (
                 <>
                   <PrefToggle
@@ -1219,7 +1224,7 @@ export function OnboardingOverlay() {
                 <div className="py-6 text-center text-sm text-text-muted">Loading preferences…</div>
               )}
             </div>
-            <div className="flex items-center justify-between border-t border-border-subtle px-5 py-3">
+            <SheetFooter>
               <ControlButton
                 data-testid="onboarding-preferences-back"
                 className={overlayBackButtonClass}
@@ -1235,7 +1240,7 @@ export function OnboardingOverlay() {
               >
                 Continue <ArrowRight size={13} aria-hidden />
               </ControlButton>
-            </div>
+            </SheetFooter>
           </div>
         ) : null}
 
