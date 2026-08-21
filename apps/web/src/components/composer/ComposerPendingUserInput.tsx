@@ -25,9 +25,7 @@ export function ComposerPendingUserInput({ question }: { question: QuestionCell 
       data-method={question.method}
     >
       <div className={cn(sectionHeaderClass, "text-text-muted")}>Pi needs input</div>
-      <div className="mt-1 font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
-        {question.title}
-      </div>
+      <div className="mt-1 font-medium text-text-primary">{question.title}</div>
       {question.message ? (
         <div className="mt-1 text-body text-text-secondary">{question.message}</div>
       ) : null}

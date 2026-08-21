@@ -364,12 +364,7 @@ export function ScriptsRunner(props: {
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Subheader row (matches the diff / files panels). */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
-        <span
-          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
-          style={{ fontStretch: "expanded" }}
-        >
-          Preview
-        </span>
+        <span className="text-detail font-semibold text-text-primary">Preview</span>
         <div className="flex shrink-0 items-center gap-1">
           <ControlButton
             type="button"
@@ -512,7 +507,7 @@ export function ScriptsRunner(props: {
       {/* Output log, or the empty state. */}
       {log.length > 0 ? (
         <div
-          className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words bg-surface px-3 py-2 font-mono text-detail leading-relaxed text-text-secondary"
+          className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words bg-surface px-3 py-2 font-mono text-detail text-text-secondary"
           data-testid="preview-log"
         >
           {log}

@@ -125,12 +125,7 @@ export function CheckpointsPanel() {
       {/* Subheader row (matches the diff / files panels). The close X moved to the
           tab; the refresh control stays. */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
-        <span
-          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
-          style={{ fontStretch: "expanded" }}
-        >
-          Checkpoints
-        </span>
+        <span className="text-detail font-semibold text-text-primary">Checkpoints</span>
         <div className="flex shrink-0 items-center gap-1">
           <ControlButton
             type="button"

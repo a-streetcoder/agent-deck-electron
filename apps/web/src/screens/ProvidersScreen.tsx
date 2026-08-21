@@ -7,6 +7,8 @@ import { AppScrollView } from "../design-system/components/AppScrollView.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
+import { cn } from "@/lib/cn";
 
 interface ProviderEntry {
   id: string;
@@ -210,9 +212,7 @@ function ProviderGroup({
   if (providers.length === 0) return null;
   return (
     <section className="mb-5">
-      <h3 className="mb-1 px-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
-        {title}
-      </h3>
+      <h3 className={cn(sectionHeaderClass, "mb-1 px-2 text-text-muted")}>{title}</h3>
       <div className="space-y-1" data-testid="provider-list">
         {providers.map((provider) => (
           <div key={provider.id} className="flex items-center rounded-xl hover:bg-surface-subtle">

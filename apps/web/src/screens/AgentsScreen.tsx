@@ -32,6 +32,7 @@ import { deleteAgent, renameAgent, setAgentDisabled, updateProject } from "../st
 import { AgentAvatar, agentSourceColor } from "../components/agents/AgentAvatar.tsx";
 import { AgentEditSheet } from "../components/agents/AgentEditSheet.tsx";
 import { ScopeChip } from "../components/ScopeChip.tsx";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Native AgentsScreen: a fixed master-detail split (list 42% / detail 58%,
@@ -81,12 +82,7 @@ function AgentRow({
       <AgentAvatar agent={agent} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span
-            className="truncate text-label font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            {agent.name}
-          </span>
+          <span className="truncate text-label font-semibold text-text-primary">{agent.name}</span>
           <ScopeChip scope={agent.scope} />
           {(agent.warnings?.length ?? 0) > 0 ? (
             <span
@@ -143,9 +139,7 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
   if (!items?.length) return null;
   return (
     <div>
-      <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-        {label}
-      </div>
+      <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>{label}</div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((item) => (
           <span
@@ -339,10 +333,7 @@ export function AgentDetail({
                 </ControlButton>
               </>
             ) : (
-              <h2
-                className="truncate text-title font-semibold tracking-title text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
+              <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
                 {agent.name}
               </h2>
             )}
@@ -532,18 +523,14 @@ export function AgentDetail({
         ) : null}
         {agent.whenToUse ? (
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-              When to use
-            </div>
+            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>When to use</div>
             <p className="text-body text-text-secondary">{agent.whenToUse}</p>
           </div>
         ) : null}
 
         <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
           <div className="flex items-center justify-between pb-2">
-            <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-              System prompt
-            </div>
+            <div className={cn(sectionHeaderClass, "text-text-muted")}>System prompt</div>
             {/* Native "Prompt Mode" row (AgentManagementViews.swift:1335) surfaces
                 the mode only when it's set. "replace" is pi's default (an absent
                 mode launches as replace), so — like native, which hides the row
@@ -603,9 +590,7 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-output"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-                Output Advisory
-              </div>
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Output Advisory</div>
               <div className="text-body text-text-secondary">{agent.output}</div>
             </div>
           ) : null}
@@ -622,9 +607,7 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-default-outcome"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-                Default Outcome
-              </div>
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Default Outcome</div>
               <div className="text-body text-text-secondary">
                 {SUBAGENT_EXPECTED_OUTCOME_LABELS[agent.defaultExpectedOutcome]}
               </div>
@@ -634,9 +617,7 @@ export function AgentDetail({
             className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-default-progress"
           >
-            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-              Default Progress
-            </div>
+            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Default Progress</div>
             <div className="text-body text-text-secondary">
               {agent.defaultProgress ? "Yes" : "No"}
             </div>
@@ -646,7 +627,7 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-max-subagent-depth"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
                 Max Subagent Depth Metadata
               </div>
               <div className="text-body text-text-secondary">{agent.maxSubagentDepth}</div>
@@ -656,7 +637,7 @@ export function AgentDetail({
             className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
             data-testid="agent-interactive"
           >
-            <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
               Interactive Metadata
             </div>
             <div className="text-body text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
@@ -666,9 +647,7 @@ export function AgentDetail({
               className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
               data-testid="agent-extensions"
             >
-              <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-                Extensions
-              </div>
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Extensions</div>
               {agent.extensions === undefined ? (
                 <div className="text-body text-text-secondary">Default catalog policy</div>
               ) : agent.extensions.length === 0 ? (
@@ -860,7 +839,7 @@ export function AgentsScreen() {
                 <div key={scope}>
                   <div className="flex items-baseline gap-2 px-1 pb-1 pt-2">
                     <span
-                      className="text-micro font-semibold uppercase tracking-overline"
+                      className={sectionHeaderClass}
                       style={{ color: agentSourceColor({ scope }) }}
                     >
                       {title}

@@ -174,7 +174,7 @@ export function ProjectPicker() {
         ) : (
           <LayoutGrid size={14} className="text-text-secondary" />
         )}
-        <span className="max-w-[20ch] truncate" style={{ fontStretch: "expanded" }}>
+        <span className="max-w-[20ch] truncate">
           {current ? current.name : "All Projects"}
         </span>
         <ChevronDown size={12} className="opacity-60" />
@@ -209,7 +209,7 @@ export function ProjectPicker() {
               }}
             />
             <span className="min-w-0 flex-1">
-              <span className="block truncate" style={{ fontStretch: "expanded" }}>
+              <span className="block truncate">
                 All Projects
               </span>
               <span className="block truncate text-detail text-text-muted">
@@ -239,7 +239,7 @@ export function ProjectPicker() {
                 size={15}
                 className={currentProjectId === project.id ? "text-accent" : undefined}
               />
-              <span className="truncate" style={{ fontStretch: "expanded" }}>
+              <span className="truncate">
                 {project.name}
               </span>
             </ControlButton>
@@ -278,7 +278,7 @@ export function ProjectPicker() {
               onClick={() => void startAddProject()}
             >
               <Plus size={15} />
-              <span style={{ fontStretch: "expanded" }}>Add project</span>
+              <span>Add project</span>
             </ControlButton>
           )}
         </div>

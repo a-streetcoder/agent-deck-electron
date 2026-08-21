@@ -7,6 +7,7 @@ import type { InjectedCommandRecord } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Extensions screen (native Runtime → Extensions): user-added pi extension
@@ -123,9 +124,7 @@ function CommandCatalog({ resourcesVersion }: { resourcesVersion: number }) {
     const entries = commands.filter((command) => command.source === source);
     return (
       <div data-testid={`command-group-${source}`}>
-        <div className="pb-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
-          {label}
-        </div>
+        <div className={cn(sectionHeaderClass, "pb-1.5 text-text-muted")}>{label}</div>
         {entries.length === 0 ? (
           <div className="rounded-xl border border-border-subtle px-3.5 py-4 text-body text-text-muted">
             {source === "library" ? "No imported commands." : "No bundled commands available."}
@@ -504,7 +503,7 @@ export function ExtensionsScreen() {
 
           {bridges.length > 0 ? (
             <div className="mb-4" data-testid="app-bridges">
-              <div className="pb-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
+              <div className={cn(sectionHeaderClass, "pb-1.5 text-text-muted")}>
                 Agent Deck bridges
               </div>
               <p className="pb-2 text-detail text-text-muted">
@@ -522,10 +521,7 @@ export function ExtensionsScreen() {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <span
-                        className="text-label font-medium text-text-primary"
-                        style={{ fontStretch: "expanded" }}
-                      >
+                      <span className="text-label font-medium text-text-primary">
                         {b.displayName}
                       </span>
                       <span
@@ -669,10 +665,7 @@ export function ExtensionsScreen() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span
-                        className="truncate text-label font-medium text-text-primary"
-                        style={{ fontStretch: "expanded" }}
-                      >
+                      <span className="truncate text-label font-medium text-text-primary">
                         {ext.name}
                       </span>
                       {/* Where it came from (native scope/source label). */}

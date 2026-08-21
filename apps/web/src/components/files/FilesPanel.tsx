@@ -145,12 +145,7 @@ export function FilesPanel() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-testid="files-panel">
       {/* Subheader row (matches the diff panel's surface-subheader). */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
-        <span
-          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
-          style={{ fontStretch: "expanded" }}
-        >
-          Files
-        </span>
+        <span className="text-detail font-semibold text-text-primary">Files</span>
         <div className="flex shrink-0 items-center gap-1">
           <ControlButton
             type="button"

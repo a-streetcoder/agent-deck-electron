@@ -53,7 +53,9 @@ function RowInner({ title, subtitle, leading, trailing }: InnerProps) {
         </span>
       ) : null}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-label font-semibold text-text-primary">{title}</span>
+        <span className="truncate text-label font-medium tracking-ui text-text-primary">
+          {title}
+        </span>
         {subtitle ? <span className="truncate text-detail text-text-muted">{subtitle}</span> : null}
       </span>
       {trailing ? (

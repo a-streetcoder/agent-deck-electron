@@ -134,7 +134,7 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
       <div className="flex items-baseline justify-between gap-3">
         <span
           className={cn(
-            "flex items-center gap-1.5 text-detail font-semibold uppercase tracking-wide",
+            "flex items-center gap-1.5 text-detail font-semibold",
             ROLE_HEADER_TINT[role],
           )}
         >

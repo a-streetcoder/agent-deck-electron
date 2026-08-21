@@ -1,6 +1,8 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect } from "react";
 import type { SlashRow } from "@agent-deck/domain";
+import { sectionHeaderClass } from "@/design-system/styles";
+import { cn } from "@/lib/cn";
 
 /**
  * A shared keyboard-drivable suggestion list for the composer's `/` and `@`
@@ -125,7 +127,7 @@ export function SlashSuggestionPanel({
               key={row.id}
               role="presentation"
               data-testid={`slash-panel-header-${row.label}`}
-              className="px-2 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-overline text-text-muted"
+              className={cn(sectionHeaderClass, "px-2 pb-0.5 pt-1 text-text-muted")}
             >
               {row.label}
             </div>

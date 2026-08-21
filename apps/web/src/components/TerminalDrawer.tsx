@@ -287,9 +287,7 @@ export function TerminalDrawer() {
       />
       <div className="flex items-center justify-between border-b border-border-subtle bg-surface-elevated px-3 py-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-            Terminal
-          </span>
+          <span className="text-detail font-semibold text-text-primary">Terminal</span>
           <div
             className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
             data-testid="terminal-tabs"

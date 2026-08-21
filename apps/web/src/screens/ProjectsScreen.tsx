@@ -164,12 +164,7 @@ function DiscoveryPanel() {
       <div className="flex items-center justify-between pb-1">
         <div className="flex items-center gap-2">
           <Search size={15} className="text-text-secondary" />
-          <h3
-            className="text-label font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
-            Discover
-          </h3>
+          <h3 className="text-label font-semibold text-text-primary">Discover</h3>
         </div>
         <ControlButton
           data-testid="discovery-rescan"
@@ -252,12 +247,7 @@ function DiscoveryPanel() {
               size={15}
               className="shrink-0 text-text-secondary"
             />
-            <span
-              className="text-label font-medium text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              {candidate.name}
-            </span>
+            <span className="text-label font-medium text-text-primary">{candidate.name}</span>
             <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
               {candidate.type}
             </span>
@@ -331,12 +321,7 @@ export function ProjectsScreen() {
         <DiscoveryPanel />
         <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
           <div className="flex items-center justify-between pb-1">
-            <h2
-              className="text-title font-semibold tracking-title text-text-primary"
-              style={{ fontStretch: "expanded" }}
-            >
-              Library
-            </h2>
+            <h2 className="text-title font-semibold tracking-title text-text-primary">Library</h2>
             <div className="flex items-center gap-2">
               {/* Segmented filter (native All / Enabled / Disabled). */}
               <div className="flex rounded-capsule border border-border-subtle p-0.5">
@@ -437,10 +422,7 @@ export function ProjectsScreen() {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span
-                        className="truncate text-label font-semibold text-text-primary"
-                        style={{ fontStretch: "expanded" }}
-                      >
+                      <span className="truncate text-label font-semibold text-text-primary">
                         {project.name}
                       </span>
                       {project.type && project.type !== "unknown" && project.type !== "git" ? (

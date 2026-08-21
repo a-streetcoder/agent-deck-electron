@@ -430,15 +430,13 @@ function PrefModelPicker({
                           size={18}
                           className="text-text-secondary"
                         />
-                        <span className="text-micro font-semibold uppercase tracking-overline">
-                          {provider}
-                        </span>
+                        <span className="text-micro font-medium">{provider}</span>
                       </ControlButton>
                     ))}
                   </div>
                 ) : (
                   <>
-                    <SheetHeader className="text-micro font-semibold uppercase tracking-overline text-text-muted">
+                    <SheetHeader className="text-micro font-medium text-text-muted">
                       <ProviderLogo
                         providerId={providerId}
                         size={16}
@@ -857,7 +855,6 @@ export function OnboardingOverlay() {
                   <h2
                     data-testid="onboarding-title"
                     className="text-heading font-semibold tracking-heading"
-                    style={{ fontStretch: "expanded" }}
                   >
                     {tourPage.title}
                   </h2>
@@ -950,10 +947,7 @@ export function OnboardingOverlay() {
                               <span className="truncate text-detail font-medium text-text-primary">
                                 {summaryCheckLabel(check.id)}
                               </span>
-                              <span
-                                className="text-micro font-semibold uppercase tracking-overline"
-                                style={{ color }}
-                              >
+                              <span className="text-micro font-medium" style={{ color }}>
                                 {statusLabel}
                               </span>
                             </div>
@@ -1000,10 +994,7 @@ export function OnboardingOverlay() {
               <div className="flex items-center justify-between pb-2 pt-4">
                 <div className="flex items-center gap-2">
                   <Stethoscope size={16} className="text-text-secondary" />
-                  <h2
-                    className="text-title font-semibold tracking-title text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
+                  <h2 className="text-title font-semibold tracking-title text-text-primary">
                     Finish setup
                   </h2>
                 </div>
@@ -1045,14 +1036,11 @@ export function OnboardingOverlay() {
                             <span className="text-label font-medium text-text-primary">
                               {check.label}
                             </span>
-                            <span
-                              className="text-micro font-semibold uppercase tracking-overline"
-                              style={{ color }}
-                            >
+                            <span className="text-micro font-medium" style={{ color }}>
                               {label}
                             </span>
                           </div>
-                          <div className="mt-0.5 break-words text-detail leading-relaxed text-text-muted">
+                          <div className="mt-0.5 break-words text-detail text-text-muted">
                             {friendlyCheckDetail(check)}
                           </div>
                           {isProvider && check.status !== "ok" ? (
@@ -1140,10 +1128,7 @@ export function OnboardingOverlay() {
               <div className="flex min-w-0 flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal size={16} className="text-text-secondary" />
-                  <h2
-                    className="text-title font-semibold tracking-title text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
+                  <h2 className="text-title font-semibold tracking-title text-text-primary">
                     Preferences
                   </h2>
                 </div>
@@ -1307,10 +1292,7 @@ export function OnboardingOverlay() {
         {phase === "final" ? (
           <div className="flex h-full min-h-0 flex-col pt-titlebar" data-testid="onboarding-final">
             <SheetContainer className="flex flex-1 flex-col justify-center gap-3 py-5">
-              <h2
-                className="text-title font-semibold tracking-title text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
+              <h2 className="text-title font-semibold tracking-title text-text-primary">
                 {routed.view === "chat" && !modelsPending ? "You're all set" : "Almost there"}
               </h2>
               <p className="text-body text-text-secondary">

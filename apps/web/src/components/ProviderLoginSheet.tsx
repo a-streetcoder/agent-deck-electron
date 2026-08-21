@@ -159,11 +159,7 @@ export function ProviderLoginSheet({
         aria-modal="true"
         aria-labelledby="provider-login-title"
       >
-        <div
-          id="provider-login-title"
-          className="text-label font-semibold text-text-primary"
-          style={{ fontStretch: "expanded" }}
-        >
+        <div id="provider-login-title" className="text-label font-semibold text-text-primary">
           {authType === "api_key" ? "Add an API key for" : "Sign in to"} {provider.name}
         </div>
 
@@ -274,7 +270,7 @@ function LoginStep({ event }: { event: LoginEvent }) {
       return (
         <div className="rounded-xl border border-border-subtle bg-surface px-4 py-3 text-label">
           <div className="font-medium text-text-primary">Continue in your browser</div>
-          <div className="mt-1 text-detail leading-relaxed text-text-muted">
+          <div className="mt-1 text-detail text-text-muted">
             Sign in securely with the provider, then return to Agent Deck.
           </div>
           <ControlButton

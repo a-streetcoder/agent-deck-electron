@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { useAppStore } from "../state/store.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Instructions editor — pi's context files AND the base-prompt override (INS-01).
@@ -418,7 +419,7 @@ export function InstructionsScreen() {
                 >
                   {preview.map((section, index) => (
                     <div key={`${section.kind}-${index}`}>
-                      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
+                      <div className={cn(sectionHeaderClass, "text-text-muted")}>
                         {section.title}
                         {section.contentTruncated ? " (truncated)" : ""}
                       </div>
@@ -450,10 +451,8 @@ export function InstructionsScreen() {
                   data-testid="instructions-ancestors"
                   className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
                 >
-                  <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-                    Inherited context
-                  </div>
-                  <p className="pb-1 text-micro text-text-muted">
+                  <div className={cn(sectionHeaderClass, "text-text-muted")}>Inherited context</div>
+                  <p className="pb-1 text-caption text-text-muted">
                     pi also loads these ancestor files, outermost first, before the project's own
                     context.
                     {ancestorsTruncated

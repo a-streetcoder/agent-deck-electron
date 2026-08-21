@@ -1252,10 +1252,7 @@ export function McpScreen() {
                       </div>
                       <div className="min-w-0 basis-40 flex-1">
                         <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden">
-                          <span
-                            className="truncate text-label font-medium text-text-primary"
-                            style={{ fontStretch: "expanded" }}
-                          >
+                          <span className="truncate text-label font-medium text-text-primary">
                             {server.id}
                           </span>
                           <span

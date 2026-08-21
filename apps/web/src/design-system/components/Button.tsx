@@ -33,7 +33,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const baseClasses = [
   "inline-flex items-center justify-center gap-1.5",
   "select-none whitespace-nowrap",
-  "font-medium leading-none",
+  "font-medium leading-none tracking-ui",
   "border transition-colors duration-150 ease-spring",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface",
   "disabled:opacity-55 disabled:pointer-events-none",

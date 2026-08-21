@@ -21,6 +21,7 @@ import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { buildIssueContext, type IssueContextRelationships } from "./issueContext.ts";
 import { newChat } from "../state/wsBridge.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Issues screen (native Workspace → Issues): the current project's GitHub
@@ -609,10 +610,7 @@ export function IssuesScreen() {
                   ) : null}
                   <span className="font-mono text-code-sm text-text-muted">#{detail.number}</span>
                 </div>
-                <h2
-                  className="text-title font-semibold tracking-title text-text-primary"
-                  style={{ fontStretch: "expanded" }}
-                >
+                <h2 className="text-title font-semibold tracking-title text-text-primary">
                   {detail.title}
                 </h2>
                 <div className="flex flex-wrap items-center gap-2 pt-1.5 text-detail text-text-muted">
@@ -711,7 +709,7 @@ export function IssuesScreen() {
                       data-testid="issue-relationships"
                       className="mt-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                     >
-                      <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                      <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>
                         Relationships
                       </div>
                       <div className="space-y-1.5">
@@ -738,7 +736,12 @@ export function IssuesScreen() {
                 })()}
 
                 <div className="mt-5" data-testid="issue-comments">
-                  <div className="flex items-center gap-1.5 pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                  <div
+                    className={cn(
+                      sectionHeaderClass,
+                      "flex items-center gap-1.5 pb-2 text-text-muted",
+                    )}
+                  >
                     <MessageSquare size={12} /> Comments
                     <span className="rounded-capsule border border-border-subtle px-1 tabular-nums">
                       {detail.comments.length}
@@ -1137,10 +1140,7 @@ export function IssuesScreen() {
                   <span className="font-mono text-code text-text-muted">
                     {issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}
                   </span>
-                  <span
-                    className="min-w-0 flex-1 truncate text-label font-medium text-text-primary"
-                    style={{ fontStretch: "expanded" }}
-                  >
+                  <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
                     {issue.title}
                   </span>
                   {/* Native list-row meta leads with the author (GitHubIssuesViews

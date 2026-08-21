@@ -104,7 +104,7 @@ export function ModelChip({
         >
           {[...byProvider.entries()].map(([provider, providerModels]) => (
             <div key={provider}>
-              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
+              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-medium text-text-muted">
                 <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
                 {provider}
               </div>

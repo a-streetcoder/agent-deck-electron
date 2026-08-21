@@ -35,7 +35,7 @@ export interface AppSegmentedPickerProps<TValue extends string = string> {
 
 const sizeClasses: Record<AppSegmentedPickerSize, string> = {
   sm: "h-7 text-detail",
-  md: "h-8 text-label",
+  md: "h-8 text-label tracking-ui",
 };
 
 const segmentSizeClasses: Record<AppSegmentedPickerSize, string> = {

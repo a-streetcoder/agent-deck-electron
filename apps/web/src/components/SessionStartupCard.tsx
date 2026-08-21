@@ -22,15 +22,9 @@ export function SessionStartupCard() {
   return (
     <div className="mx-auto mt-12 w-full max-w-md" data-testid="session-startup">
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-5 shadow-card">
-        <div
-          className="text-micro font-semibold uppercase tracking-overline text-text-muted"
-          style={{ fontStretch: "expanded" }}
-        >
-          New session
-        </div>
+        <div className="text-micro font-medium text-text-muted">New session</div>
         <h2
           className="mt-1 text-title font-semibold tracking-title text-text-primary"
-          style={{ fontStretch: "expanded" }}
           data-testid="startup-agent"
         >
           {agentName}
@@ -45,12 +39,7 @@ export function SessionStartupCard() {
               <Folder size={13} aria-hidden /> Project
             </dt>
             <dd className="min-w-0 text-right">
-              <div
-                className="truncate font-medium text-text-primary"
-                style={{ fontStretch: "expanded" }}
-              >
-                {projectName}
-              </div>
+              <div className="truncate font-medium text-text-primary">{projectName}</div>
               {session?.cwd ? (
                 <div
                   className="truncate font-mono text-detail text-text-muted"

@@ -628,12 +628,7 @@ export function DiffPanel() {
           count + secondary controls stay; the close X moved to the tab. */}
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span
-            className="text-micro font-semibold uppercase tracking-overline text-text-muted"
-            style={{ fontStretch: "expanded" }}
-          >
-            Changes
-          </span>
+          <span className="text-detail font-semibold text-text-primary">Changes</span>
           <span className="text-caption tabular-nums text-text-muted" data-testid="diff-file-count">
             {files.length}
           </span>

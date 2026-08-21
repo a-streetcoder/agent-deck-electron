@@ -69,7 +69,9 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
             "border-b border-border-subtle",
           )}
         >
-          <div className="min-w-0 text-label font-semibold text-text-primary">{title}</div>
+          <div className="min-w-0 text-label font-semibold tracking-ui text-text-primary">
+            {title}
+          </div>
           {headerTrailing ? (
             <div className="flex shrink-0 items-center gap-1">{headerTrailing}</div>
           ) : null}

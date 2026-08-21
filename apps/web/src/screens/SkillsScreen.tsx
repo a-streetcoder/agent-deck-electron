@@ -71,6 +71,7 @@ import { useAppStore } from "../state/store.ts";
 import { deleteSkill, renameSkill, setSkillDisabled, updateProject } from "../state/wsBridge.ts";
 import { ScopeChip } from "../components/ScopeChip.tsx";
 import { chooseDirectory, trashSkillRecovery } from "../lib/native.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Native SkillsScreen: master-detail split; rows with the wand glyph
@@ -187,10 +188,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-source-project-subtle text-source-project">
             <WandSparkles size={15} />
           </span>
-          <div
-            className="flex-1 truncate text-label font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
+          <div className="flex-1 truncate text-label font-semibold text-text-primary">
             {draft.isNew ? "New Skill" : `Edit ${draft.name}`}
           </div>
           <ControlButton
@@ -356,9 +354,7 @@ function AssignmentCard({ skill }: { skill: SkillInfo }) {
 
   return (
     <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-      <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
-        Project assignment
-      </div>
+      <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Project assignment</div>
       <p className="pb-2 text-caption text-text-muted">
         Assigned skills are passed to new sessions as explicit --skill paths (no ambient discovery).
         Changes apply to the next session.
@@ -1756,7 +1752,7 @@ export function SkillsScreen() {
               data-testid="skill-plugin-refs"
               className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
             >
-              <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
+              <div className={cn(sectionHeaderClass, "text-text-muted")}>
                 Codex plugin references
               </div>
               {pluginRefs.map((ref) => {
@@ -1798,7 +1794,7 @@ export function SkillsScreen() {
             >
               {recoveries.length > 0 ? (
                 <div className="space-y-1" data-testid="skill-recoveries">
-                  <div className="px-0.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                  <div className={cn(sectionHeaderClass, "px-0.5 text-text-muted")}>
                     Safe recovery
                   </div>
                   {recoveries.map((recovery) => {
@@ -1813,7 +1809,7 @@ export function SkillsScreen() {
                         <div className="font-mono text-detail text-text-primary">
                           {recovery.skillName}
                         </div>
-                        <p className="text-micro text-text-muted">
+                        <p className="text-caption text-text-muted">
                           {busy === "trash"
                             ? "This completed-update backup is being moved to OS Trash automatically."
                             : "A displaced or interrupted tree was retained safely. Restore is available only while the active skill is absent, or move this retained tree to OS Trash."}
@@ -1853,7 +1849,7 @@ export function SkillsScreen() {
               ) : null}
               {repos.length > 0 ? (
                 <div className="space-y-1" data-testid="skill-repos">
-                  <div className="px-0.5 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                  <div className={cn(sectionHeaderClass, "px-0.5 text-text-muted")}>
                     Imported repositories
                   </div>
                   {repos.map((repo) => (
@@ -2181,10 +2177,7 @@ export function SkillsScreen() {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span
-                        className="truncate text-label font-semibold text-text-primary"
-                        style={{ fontStretch: "expanded" }}
-                      >
+                      <span className="truncate text-label font-semibold text-text-primary">
                         {skill.name}
                       </span>
                       <ScopeChip scope={skill.scope} />
@@ -2303,10 +2296,7 @@ export function SkillsScreen() {
                       </ControlButton>
                     </>
                   ) : (
-                    <h2
-                      className="truncate text-title font-semibold tracking-title text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
+                    <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
                       {selected.name}
                     </h2>
                   )}
@@ -2401,9 +2391,7 @@ export function SkillsScreen() {
                     className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                   >
                     <div className="flex items-center justify-between pb-2">
-                      <span className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-                        AI summary
-                      </span>
+                      <span className={cn(sectionHeaderClass, "text-text-muted")}>AI summary</span>
                       <ControlButton
                         data-testid="skill-summarize"
                         className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
@@ -2436,7 +2424,7 @@ export function SkillsScreen() {
                     data-testid="skill-duplicates"
                     className="rounded-xl border border-warning/55 bg-warning/10 px-4 py-3"
                   >
-                    <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                    <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>
                       Duplicate copies
                     </div>
                     <div className="space-y-1.5">
@@ -2472,7 +2460,7 @@ export function SkillsScreen() {
                     data-testid="skill-detail-collection"
                     className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
                   >
-                    <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                    <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>
                       Synced collection
                     </div>
                     <div className="space-y-1 text-detail text-text-secondary">
@@ -2525,9 +2513,7 @@ export function SkillsScreen() {
                 );
               })()}
               <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-                <div className="pb-2 text-micro font-semibold uppercase tracking-overline text-text-muted">
-                  SKILL.md
-                </div>
+                <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>SKILL.md</div>
                 <MarkdownDocument source={selected.body || "_(empty)_"} />
               </div>
               <div className="truncate text-detail text-text-muted" title={selected.filePath}>

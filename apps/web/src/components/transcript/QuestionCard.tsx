@@ -47,9 +47,7 @@ export const QuestionCard = forwardRef<HTMLDivElement, QuestionCardProps>(functi
       )}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-detail font-semibold uppercase tracking-wide text-role-user">
-          {askedBy}
-        </span>
+        <span className="text-detail font-semibold text-role-user">{askedBy}</span>
         <span className="flex items-center gap-2 text-detail text-text-muted">
           {timestamp ? <span>{timestamp}</span> : null}
           {trailing}

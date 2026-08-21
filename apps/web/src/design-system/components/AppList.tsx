@@ -246,7 +246,7 @@ export function AppList<T>({
                         handleSelect(id, event);
                       }}
                       className={cn(
-                        "cursor-pointer select-none rounded-md px-2 py-1.5 text-label",
+                        "cursor-pointer select-none rounded-md px-2 py-1.5 text-label tracking-ui",
                         // SwiftUI-parity: hover / selection fill swaps instantly
                         // (no transition), matching the native List highlight.
                         "transition-none",

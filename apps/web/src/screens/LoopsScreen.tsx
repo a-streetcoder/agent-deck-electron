@@ -1056,10 +1056,7 @@ export function LoopsScreen() {
               data-testid="loop-run-panel"
             >
               <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                <div
-                  className="min-w-0 max-w-full break-all text-label font-medium text-text-primary"
-                  style={{ fontStretch: "expanded" }}
-                >
+                <div className="min-w-0 max-w-full break-all text-label font-medium text-text-primary">
                   {activeRun.loopName}
                 </div>
                 <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -1598,10 +1595,7 @@ export function LoopsScreen() {
                     onClick={() => openEditor(loop)}
                     data-testid={`loop-open-${loop.name}`}
                   >
-                    <div
-                      className="truncate text-label font-medium text-text-primary"
-                      style={{ fontStretch: "expanded" }}
-                    >
+                    <div className="truncate text-label font-medium text-text-primary">
                       {loop.name}
                     </div>
                     <div className="truncate text-detail text-text-muted">
@@ -1820,7 +1814,6 @@ export function LoopsScreen() {
               <h3
                 id="loop-editor-title"
                 className="break-all text-label font-semibold text-text-primary"
-                style={{ fontStretch: "expanded" }}
               >
                 {draft.original ? `Edit ${draft.original}` : "New Loop"}
               </h3>
@@ -1869,7 +1862,7 @@ export function LoopsScreen() {
                 Launch context / arguments
                 <ControlTextArea
                   data-testid="loop-launch-context"
-                  className={`${inputClass} min-h-[76px]`}
+                  className={`${inputClass} min-h-[76px] text-body`}
                   value={draft.launchContext}
                   onChange={(event) => setDraft({ ...draft, launchContext: event.target.value })}
                 />
@@ -2641,7 +2634,7 @@ export function LoopsScreen() {
                 Launch context / arguments
                 <ControlTextArea
                   data-testid="loop-launch-context-override"
-                  className={`${inputClass} min-h-[90px]`}
+                  className={`${inputClass} min-h-[90px] text-body`}
                   value={launchDraft.launchContext}
                   disabled={runPending || Boolean(launchDraft.retryOf)}
                   onChange={(event) => {

@@ -13,6 +13,7 @@ import { responseErrorMessage } from "@/lib/responseError";
 import { chooseFiles, openResourceFile, revealResourceFile } from "../lib/native.ts";
 import { useAppStore } from "../state/store.ts";
 import { updateProject } from "../state/wsBridge.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Prompts screen (native piResources → Prompts): CRUD for prompt-template .md
@@ -584,7 +585,7 @@ export function PromptsScreen() {
                   className="rounded-lg border border-border-subtle bg-surface p-2.5"
                   data-testid="prompt-availability"
                 >
-                  <div className="pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                  <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
                     Available in projects
                   </div>
                   <p className="pb-1.5 text-detail text-text-muted">
@@ -729,7 +730,6 @@ export function PromptsScreen() {
                       <span
                         data-testid="prompt-invocation"
                         className="font-mono text-code font-medium text-text-primary"
-                        style={{ fontStretch: "expanded" }}
                       >
                         {prompt.invocation}
                       </span>

@@ -11,6 +11,7 @@ import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * Memory screen (native Memory sidebar): browse and manage a project's stored
@@ -320,7 +321,7 @@ function AgentMemoryPreference() {
               <div className="flex items-center gap-2 text-label font-medium text-text-primary">
                 Memory automation
                 <span
-                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted"
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-medium text-text-muted"
                   data-testid="agent-memory-state"
                 >
                   {capabilityAvailable ? (enabled ? "On" : "Paused") : "Unavailable"}
@@ -381,12 +382,12 @@ function AgentMemoryPreference() {
                 onBlur={(event) => void saveBudget(event.target.value)}
                 className="mt-1 w-full rounded-lg border border-border-strong bg-surface px-2 py-1 text-label text-text-primary"
               />
-              <span id="agent-memory-budget-help" className="mt-1 block text-micro">
+              <span id="agent-memory-budget-help" className="mt-1 block text-caption">
                 Whole-number grapheme limit from 1,000 to 20,000.
               </span>
             </label>
             <div>
-              <div className="flex items-center justify-between gap-2 text-detail text-text-muted">
+              <div className="flex items-center justify-between gap-2 text-caption text-text-muted">
                 <span id="agent-memory-subagents-description">
                   Control automatic child policy, index, and task recall. Child memory tools
                   separately follow the master Memory automation switch.
@@ -648,7 +649,7 @@ function SemanticMemoryPreference({
               <div className="flex items-center gap-2 text-label font-medium text-text-primary">
                 Semantic ranking
                 <span
-                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-semibold uppercase tracking-overline text-text-muted"
+                  className="rounded-capsule border border-border-subtle px-1.5 text-micro font-medium text-text-muted"
                   data-testid="semantic-memory-mode"
                 >
                   {enabled ? "Requested" : "Not requested"}
@@ -1284,7 +1285,12 @@ export function MemoryScreen() {
               : groupMemoriesByStatus(memories)
             ).map((group) => (
               <section key={group.status} data-testid={`memory-section-${group.status}`}>
-                <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                <div
+                  className={cn(
+                    sectionHeaderClass,
+                    "flex items-center gap-1.5 px-1 pb-1 text-text-muted",
+                  )}
+                >
                   {group.label}
                   <span className="rounded-capsule border border-border-subtle px-1 tabular-nums normal-case">
                     {group.memories.length}

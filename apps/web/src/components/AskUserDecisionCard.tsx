@@ -6,6 +6,8 @@ import {
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import { sendAskUserAnswer, sendAskUserCancel } from "@/state/wsBridge";
+import { sectionHeaderClass } from "@/design-system/styles";
+import { cn } from "@/lib/cn";
 
 /** One independent, accessible decision form for a parent ask_user call. */
 export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
@@ -74,9 +76,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
       data-status={cell.status}
       aria-labelledby={`${groupId}-title`}
     >
-      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-        Agent needs your input
-      </div>
+      <div className={cn(sectionHeaderClass, "text-text-muted")}>Agent needs your input</div>
       <h3 id={`${groupId}-title`} className="mt-1 font-medium text-text-primary">
         {cell.question}
       </h3>
@@ -132,7 +132,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
               </label>
               <ControlTextArea
                 id={`${groupId}-freeform`}
-                className="mt-1 min-h-20 w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                className="mt-1 min-h-20 w-full resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-body text-text-primary outline-none focus:border-accent"
                 value={freeform}
                 onChange={(event) => {
                   setFreeform(event.currentTarget.value);

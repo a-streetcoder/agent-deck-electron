@@ -34,6 +34,7 @@ body {
   font-family: var(--font-sans, ui-sans-serif), system-ui, sans-serif;
   font-size: var(--text-label);
   line-height: var(--leading-label);
+  letter-spacing: var(--tracking-ui);
 }
 
 /* CrunchyMurmur-style integrated Windows/Linux title bar. Electron owns the

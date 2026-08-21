@@ -195,7 +195,7 @@ export function CommandPalette() {
             }}
             onKeyDown={onKeyDown}
             placeholder="Search commands, sessions, and projects…"
-            className="w-full bg-transparent text-label text-text-primary placeholder:text-text-muted focus:outline-none"
+            className="w-full bg-transparent text-label tracking-ui text-text-primary placeholder:text-text-muted focus:outline-none"
             data-testid="command-palette-input"
             spellCheck={false}
             autoComplete="off"
@@ -238,7 +238,7 @@ export function CommandPalette() {
                       >
                         <GroupIcon className="h-4 w-4 shrink-0 text-text-muted" />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-label text-text-primary">
+                          <span className="block truncate text-label tracking-ui text-text-primary">
                             {item.title}
                           </span>
                           {item.subtitle ? (

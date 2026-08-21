@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { useAppStore } from "../state/store.ts";
 import { sendSetModel } from "../state/wsBridge.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /** A model returned by either Pi's live-session catalog or read-only discovery. */
 interface CatalogModel {
@@ -308,7 +309,12 @@ export function ModelsScreen() {
               <div className="space-y-4">
                 {[...byProvider.entries()].map(([provider, providerModels]) => (
                   <div key={provider}>
-                    <div className="flex items-center gap-1.5 px-1 pb-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+                    <div
+                      className={cn(
+                        sectionHeaderClass,
+                        "flex items-center gap-1.5 px-1 pb-1 text-text-muted",
+                      )}
+                    >
                       <ProviderLogo
                         providerId={provider}
                         size={13}
@@ -355,10 +361,7 @@ export function ModelsScreen() {
                             >
                               <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
                                 <div className="flex items-center gap-2">
-                                  <span
-                                    className="truncate text-label font-medium text-text-primary"
-                                    style={{ fontStretch: "expanded" }}
-                                  >
+                                  <span className="truncate text-label font-medium text-text-primary">
                                     {model.name ?? model.id}
                                   </span>
                                   {model.reasoning ? (

@@ -70,7 +70,10 @@ const config: Config = {
         micro: ["var(--text-micro)", { lineHeight: "var(--leading-micro)" }],
         detail: ["var(--text-detail)", { lineHeight: "var(--leading-detail)" }],
         caption: ["var(--text-caption)", { lineHeight: "var(--leading-caption)" }],
-        label: ["var(--text-label)", { lineHeight: "var(--leading-label)" }],
+        label: [
+          "var(--text-label)",
+          { lineHeight: "var(--leading-label)", letterSpacing: "var(--tracking-ui)" },
+        ],
         body: ["var(--text-body)", { lineHeight: "var(--leading-body)" }],
         title: ["var(--text-title)", { lineHeight: "var(--leading-title)" }],
         heading: ["var(--text-heading)", { lineHeight: "var(--leading-heading)" }],

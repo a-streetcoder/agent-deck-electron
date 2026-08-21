@@ -31,7 +31,7 @@ const BLOCK_STYLES = [
   // Layout / typography baseline
   "text-body text-text-primary",
   // Headings — compact document scale on the semantic ramp
-  "[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-title [&_h1]:font-semibold",
+  "[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-title [&_h1]:font-semibold [&_h1]:tracking-title",
   "[&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-label [&_h2]:font-semibold",
   "[&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-caption [&_h3]:font-semibold",
   "[&_h4]:mt-3 [&_h4]:mb-1 [&_h4]:text-detail [&_h4]:font-semibold",

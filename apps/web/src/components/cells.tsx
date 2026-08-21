@@ -56,6 +56,8 @@ import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
 import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
+import { cn } from "@/lib/cn";
 
 const TOOL_STATUS: Record<ToolCell["status"], ToolGroupStatus> = {
   running: "running",
@@ -344,9 +346,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
                 <span className="truncate">{cell.agentName}</span>
               </div>
             ) : null}
-            <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-              Task
-            </div>
+            <div className={cn(sectionHeaderClass, "text-text-muted")}>Task</div>
             <div
               className="max-h-32 overflow-auto whitespace-pre-wrap rounded text-detail text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               data-testid="subagent-task"
@@ -471,12 +471,8 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
       data-answered={cell.answered ? "true" : "false"}
       data-closed={cell.closed ? "true" : "false"}
     >
-      <div className="text-micro font-semibold uppercase tracking-overline text-text-muted">
-        Subagent needs input
-      </div>
-      <div className="mt-1 font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
-        {cell.title}
-      </div>
+      <div className={cn(sectionHeaderClass, "text-text-muted")}>Subagent needs input</div>
+      <div className="mt-1 font-medium text-text-primary">{cell.title}</div>
       {cell.message ? (
         <div className="mt-1 whitespace-pre-wrap text-body text-text-secondary">{cell.message}</div>
       ) : null}
@@ -507,7 +503,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
           <ControlTextArea
             data-testid="supervisor-input"
             aria-label={cell.title}
-            className="min-h-[4rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+            className="min-h-[4rem] resize-y rounded-md border border-border-strong bg-surface px-2 py-1.5 text-body text-text-primary outline-none focus:border-accent"
             placeholder="Type a response…"
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
@@ -538,9 +534,7 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
       data-testid="question-cell"
       data-answered={cell.answered ? "true" : "false"}
     >
-      <div className="font-medium text-text-primary" style={{ fontStretch: "expanded" }}>
-        {cell.title}
-      </div>
+      <div className="font-medium text-text-primary">{cell.title}</div>
       {cell.message ? (
         <div className="mt-1 text-body text-text-secondary">{cell.message}</div>
       ) : null}

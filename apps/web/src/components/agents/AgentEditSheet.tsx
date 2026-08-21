@@ -557,7 +557,6 @@ export function AgentEditSheet({
           <div className="min-w-0 flex-1">
             <div
               className="truncate text-label font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
             >
               {agent
                 ? `Edit ${agent.name}`
@@ -596,7 +595,6 @@ export function AgentEditSheet({
                   ? "border border-b-0 border-border-subtle bg-surface text-text-primary"
                   : "text-text-muted hover:text-text-primary",
               )}
-              style={{ fontStretch: "expanded" }}
               onClick={() => {
                 setTab(t.id);
                 if (t.id === "extensions") setExtensionCatalogRequested(true);

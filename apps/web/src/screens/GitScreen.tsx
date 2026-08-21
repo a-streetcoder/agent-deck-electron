@@ -1024,7 +1024,7 @@ function WorktreePreferenceSwitch({
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="text-detail font-medium text-text-primary">{label}</div>
-        <p id={helpId} className="mt-0.5 text-detail leading-relaxed text-text-muted">
+        <p id={helpId} className="mt-0.5 text-detail text-text-muted">
           {help}
         </p>
       </div>

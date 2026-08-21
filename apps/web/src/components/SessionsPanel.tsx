@@ -27,6 +27,7 @@ import {
   setSessionPinned,
   switchToSession,
 } from "../state/wsBridge.ts";
+import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
  * The Coding-Agent sessions panel, ported from the native sidebar
@@ -163,11 +164,7 @@ export function SessionRow({
       }}
     >
       <div className="flex min-w-0 flex-1 flex-col">
-        <span
-          className="truncate text-label font-medium"
-          style={{ fontStretch: "expanded" }}
-          data-testid="chat-title"
-        >
+        <span className="truncate text-label font-medium" data-testid="chat-title">
           {displayTitle}
         </span>
         {session.status === "failed" ? (
@@ -322,10 +319,7 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
     <div className="px-2 pb-2">
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-card">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1">
-          <span
-            className="text-detail font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
+          <span className="text-detail font-semibold text-text-primary">
             Sessions
             {pendingAttentionCount > 0 ? (
               <span
@@ -455,10 +449,7 @@ export function SessionsExpandedOverlay({
     >
       <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-elevated">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
-          <span
-            className="text-detail font-semibold text-text-primary"
-            style={{ fontStretch: "expanded" }}
-          >
+          <span className="text-detail font-semibold text-text-primary">
             All sessions
             {pendingAttentionCount > 0 ? (
               <span
@@ -500,7 +491,7 @@ export function SessionsExpandedOverlay({
           ) : null}
           {[...groups.entries()].map(([group, groupSessions]) => (
             <div key={group}>
-              <div className="px-2.5 pb-0.5 pt-1 text-micro font-semibold uppercase tracking-overline text-text-muted">
+              <div className={cn(sectionHeaderClass, "px-2.5 pb-0.5 pt-1 text-text-muted")}>
                 {group}
               </div>
               <div className="space-y-0.5">

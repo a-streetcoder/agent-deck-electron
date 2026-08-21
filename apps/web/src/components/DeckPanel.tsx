@@ -117,7 +117,7 @@ function RunRow({
       >
         <div className="flex items-center justify-between gap-2">
           <span
-            className="rounded-capsule px-2 py-0.5 text-micro font-semibold uppercase tracking-overline"
+            className="rounded-capsule px-2 py-0.5 text-micro font-medium"
             style={{
               color: STATUS_COLOR[run.status],
               border: `1px solid ${STATUS_COLOR[run.status]}`,
@@ -193,12 +193,7 @@ export function DeckPanel() {
       data-testid="deck-panel"
     >
       <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5">
-        <span
-          className="text-micro font-semibold uppercase tracking-overline text-text-primary"
-          style={{ fontStretch: "expanded" }}
-        >
-          Deck
-        </span>
+        <span className="text-detail font-semibold text-text-primary">Deck</span>
         <span className="text-caption tabular-nums text-text-muted" data-testid="deck-count">
           {active > 0 ? `${active} active · ` : ""}
           {runs.length}

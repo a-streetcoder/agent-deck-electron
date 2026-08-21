@@ -152,7 +152,6 @@ export function KeybindingsEditor() {
           <div>
             <h2
               className="text-label font-semibold text-text-primary"
-              style={{ fontStretch: "expanded" }}
             >
               Keybindings
             </h2>

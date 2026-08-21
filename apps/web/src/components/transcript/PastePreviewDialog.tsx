@@ -58,7 +58,7 @@ export function PastePreviewDialog({
           </ControlButton>
         </header>
         <pre
-          className="overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-code leading-relaxed text-text-secondary"
+          className="overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-code text-text-secondary"
           tabIndex={0}
           data-testid="paste-preview-content"
         >

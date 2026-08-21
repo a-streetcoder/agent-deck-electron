@@ -73,7 +73,7 @@ export function Sidebar({ width }: { width?: number }) {
 
   const rowClass = (active: boolean): string =>
     cn(
-      "flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-label font-medium transition-colors",
+      "flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-label font-medium tracking-ui transition-colors",
       active ? "bg-selection text-text-primary" : "text-text-secondary hover:bg-hover",
     );
 
@@ -145,7 +145,7 @@ export function Sidebar({ width }: { width?: number }) {
                       size={15}
                       style={{ color: active ? "var(--color-brand-accent)" : undefined }}
                     />
-                    <span style={{ fontStretch: "expanded" }}>{item.label}</span>
+                    <span>{item.label}</span>
                   </ControlButton>
                 );
               })}
@@ -167,7 +167,7 @@ export function Sidebar({ width }: { width?: number }) {
                       size={15}
                       style={{ color: active ? "var(--color-brand-accent)" : undefined }}
                     />
-                    <span style={{ fontStretch: "expanded" }}>{item.label}</span>
+                    <span>{item.label}</span>
                   </ControlButton>
                 );
               })}
