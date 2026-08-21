@@ -74,7 +74,7 @@ const config: Config = {
           "var(--text-label)",
           { lineHeight: "var(--leading-label)", letterSpacing: "var(--tracking-ui)" },
         ],
-        body: ["var(--text-body)", { lineHeight: "var(--leading-body)" }],
+        body: ["var(--text-body)", { lineHeight: "var(--leading-body)", letterSpacing: "0" }],
         title: ["var(--text-title)", { lineHeight: "var(--leading-title)" }],
         heading: ["var(--text-heading)", { lineHeight: "var(--leading-heading)" }],
         code: ["var(--text-code)", { lineHeight: "var(--leading-code)" }],

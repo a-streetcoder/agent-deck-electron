@@ -6,8 +6,6 @@ import {
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import { sendAskUserAnswer, sendAskUserCancel } from "@/state/wsBridge";
-import { sectionHeaderClass } from "@/design-system/styles";
-import { cn } from "@/lib/cn";
 
 /** One independent, accessible decision form for a parent ask_user call. */
 export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
@@ -76,7 +74,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
       data-status={cell.status}
       aria-labelledby={`${groupId}-title`}
     >
-      <div className={cn(sectionHeaderClass, "text-text-muted")}>Agent needs your input</div>
+      <div className="text-detail font-semibold text-text-muted">Agent needs your input</div>
       <h3 id={`${groupId}-title`} className="mt-1 font-medium text-text-primary">
         {cell.question}
       </h3>

@@ -471,7 +471,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
       data-answered={cell.answered ? "true" : "false"}
       data-closed={cell.closed ? "true" : "false"}
     >
-      <div className={cn(sectionHeaderClass, "text-text-muted")}>Subagent needs input</div>
+      <div className="text-detail font-semibold text-text-muted">Subagent needs input</div>
       <div className="mt-1 font-medium text-text-primary">{cell.title}</div>
       {cell.message ? (
         <div className="mt-1 whitespace-pre-wrap text-body text-text-secondary">{cell.message}</div>

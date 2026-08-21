@@ -541,7 +541,7 @@ export function DoctorScreen() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2">
                       <div className="text-label font-medium text-text-primary">{check.label}</div>
-                      <span className="text-micro font-medium uppercase text-text-secondary">
+                      <span className="text-micro font-medium text-text-secondary">
                         {label}
                       </span>
                     </div>

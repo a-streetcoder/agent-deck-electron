@@ -9,8 +9,8 @@ export interface AppLabelTagProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 /**
- * Status pill. Mirrors the macOS `AppLabelTag` (caption semibold expanded
- * width, 8pt h-pad / 4pt v-pad, 8pt corner radius, stroke at 55% of color,
+ * Status pill. Mirrors the macOS `AppLabelTag` (sentence-case micro medium,
+ * 8pt h-pad / 4pt v-pad, 8pt corner radius, stroke at 55% of color,
  * text in the same hue).
  */
 const variantClasses: Record<AppLabelTagVariant, string> = {

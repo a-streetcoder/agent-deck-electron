@@ -79,9 +79,7 @@ const ROLE_CLASSES: Record<MessageBubbleRole, string> = {
 };
 
 /**
- * Per-role header glyph color. The header label runs at footnote
- * (12-13px) semibold with .expanded width to match the macOS card
- * header.
+ * Per-role header glyph color. The header label is detail semibold.
  */
 const ROLE_HEADER_TINT: Record<MessageBubbleRole, string> = {
   user: "text-role-user",

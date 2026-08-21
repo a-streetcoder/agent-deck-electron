@@ -1,8 +1,6 @@
 import type { PlanItemStatus, SessionPlanItem } from "@agent-deck/domain";
 import { ProgressRing } from "./ProgressRing.tsx";
 import { useAppStore } from "../state/store.ts";
-import { sectionHeaderClass } from "@/design-system/styles";
-import { cn } from "@/lib/cn";
 
 /**
  * The session's activity plan (native activity-sidebar "Plan" card), driven by a
@@ -65,7 +63,7 @@ export function SessionPlanPanel() {
       data-testid="session-plan"
     >
       <div className="flex items-center justify-between">
-        <div className={cn(sectionHeaderClass, "text-text-muted")}>Plan</div>
+        <div className="text-detail font-semibold text-text-primary">Plan</div>
         <div className="flex items-center gap-2">
           <span className="text-caption tabular-nums text-text-muted" data-testid="plan-progress">
             {done}/{plan.length}
