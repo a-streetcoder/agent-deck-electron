@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { finalCtaFor, inheritModelLabel } from "./OnboardingOverlay.tsx";
+import { afterPreferencesContinue, finalCtaFor, inheritModelLabel } from "./OnboardingOverlay.tsx";
 
 /**
  * ONB-01 — the final step's smart-routing gates (native OnboardingViews:
@@ -42,6 +42,52 @@ describe("finalCtaFor (ONB-01 readiness gates)", () => {
     const cta = finalCtaFor(ready);
     expect(cta.view).toBe("chat");
     expect(cta.label).toBe("Start Coding");
+  });
+});
+
+describe("afterPreferencesContinue", () => {
+  const settled = {
+    checksLoading: false,
+    modelsPending: false,
+    piMissing: false,
+    providerMissing: false,
+    modelsMissing: false,
+    projectMissing: false,
+  };
+
+  it("waits while doctor or models are still pending", () => {
+    expect(afterPreferencesContinue({ ...settled, checksLoading: true })).toBe("wait");
+    expect(afterPreferencesContinue({ ...settled, modelsPending: true })).toBe("wait");
+    expect(
+      afterPreferencesContinue({
+        ...settled,
+        checksLoading: true,
+        piMissing: true,
+        projectMissing: true,
+      }),
+    ).toBe("wait");
+  });
+
+  it("recaps when Pi is broken", () => {
+    expect(afterPreferencesContinue({ ...settled, piMissing: true })).toBe("recap");
+  });
+
+  it("recaps when the provider is missing", () => {
+    expect(afterPreferencesContinue({ ...settled, providerMissing: true })).toBe("recap");
+  });
+
+  it("recaps when models are missing", () => {
+    expect(afterPreferencesContinue({ ...settled, modelsMissing: true })).toBe("recap");
+  });
+
+  it("skips recap to projects when only a project is missing", () => {
+    expect(afterPreferencesContinue({ ...settled, projectMissing: true })).toEqual({
+      dismissTo: "projects",
+    });
+  });
+
+  it("skips recap to chat when everything is green", () => {
+    expect(afterPreferencesContinue(settled)).toEqual({ dismissTo: "chat" });
   });
 });
 

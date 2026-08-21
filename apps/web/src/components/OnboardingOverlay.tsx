@@ -31,7 +31,7 @@ import { useAppStore, type AppView } from "../state/store.ts";
 /**
  * First-run onboarding (native WelcomeOnboardingSheet): a phased flow, not just a
  * marketing slideshow. Native runs tour → Setup Check → Preferences → Final; this
- * builds tour → Setup Check → Preferences → Final. The Setup
+ * builds tour → prefs → [recap if broken]. The Setup
  * Check is a real dependency doctor (the same /runtime/doctor the Doctor screen
  * uses) that flags what's missing with fixes, followed by Preferences and a Final
  * step that smart-routes wherever setup still needs attention.
@@ -514,6 +514,21 @@ export function finalCtaFor(flags: {
   return { label: "Start Coding", view: "chat" };
 }
 
+/** After Preferences Continue: wait for doctor+models, recap if broken, else dismiss. */
+export function afterPreferencesContinue(flags: {
+  checksLoading: boolean;
+  modelsPending: boolean;
+  piMissing: boolean;
+  providerMissing: boolean;
+  modelsMissing: boolean;
+  projectMissing: boolean;
+}): "wait" | "recap" | { dismissTo: "projects" | "chat" } {
+  if (flags.checksLoading || flags.modelsPending) return "wait";
+  if (flags.piMissing || flags.providerMissing || flags.modelsMissing) return "recap";
+  if (flags.projectMissing) return { dismissTo: "projects" };
+  return { dismissTo: "chat" };
+}
+
 export function OnboardingOverlay() {
   const projects = useAppStore((state) => state.projects);
   const projectsLoaded = useAppStore((state) => state.projectsLoaded);
@@ -525,6 +540,7 @@ export function OnboardingOverlay() {
   const [page, setPage] = useState(0);
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [checksLoading, setChecksLoading] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [runtimeDefaultModel, setRuntimeDefaultModel] = useState<string | null>(null);
@@ -586,13 +602,6 @@ export function OnboardingOverlay() {
     }, 6_000);
     return () => window.clearTimeout(timer);
   }, [page, phase]);
-
-  // A close during this session always wins (even when forced via ?onboarding,
-  // where the URL param would otherwise keep re-showing it).
-  if (dismissed) return null;
-  // Wait for the initial fetch so a returning user never flashes the overlay.
-  // `forced` replays it regardless of projects/dismissal — used for testing.
-  if (!forced && (!projectsLoaded || projects.length > 0)) return null;
 
   const dismiss = (): void => {
     try {
@@ -769,6 +778,41 @@ export function OnboardingOverlay() {
   // unknown — the CTA waits instead of flashing an actionable "Start Coding"
   // that discovery may immediately contradict (Codex).
   const modelsPending = !providerMissing && modelState !== "success" && modelState !== "error";
+
+  useEffect(() => {
+    if (!leaving) return;
+    const decision = afterPreferencesContinue({
+      checksLoading,
+      modelsPending,
+      piMissing,
+      providerMissing,
+      modelsMissing,
+      projectMissing,
+    });
+    if (decision === "wait") return;
+    if (decision === "recap") {
+      setLeaving(false);
+      setPhase("final");
+      return;
+    }
+    finishTo(decision.dismissTo);
+  }, [
+    leaving,
+    checksLoading,
+    modelsPending,
+    piMissing,
+    providerMissing,
+    modelsMissing,
+    projectMissing,
+  ]);
+
+  // A close during this session always wins (even when forced via ?onboarding,
+  // where the URL param would otherwise keep re-showing it).
+  if (dismissed) return null;
+  // Wait for the initial fetch so a returning user never flashes the overlay.
+  // `forced` replays it regardless of projects/dismissal — used for testing.
+  if (!forced && (!projectsLoaded || projects.length > 0)) return null;
+
   const routed = finalCtaFor({ piMissing, providerMissing, modelsMissing, projectMissing });
   const finalCta: { label: string; view: AppView; Icon: typeof Rocket } = {
     label: routed.label,
@@ -1226,7 +1270,10 @@ export function OnboardingOverlay() {
                   size="md"
                   data-testid="onboarding-preferences-back"
                   leadingIcon={<ArrowLeft size={13} />}
-                  onClick={() => goto("tour")}
+                  onClick={() => {
+                    setLeaving(false);
+                    goto("tour");
+                  }}
                 >
                   Back
                 </Button>
@@ -1236,8 +1283,13 @@ export function OnboardingOverlay() {
                   variant="primary"
                   size="md"
                   data-testid="onboarding-preferences-continue"
+                  disabled={leaving}
                   trailingIcon={<ArrowRight size={13} aria-hidden />}
-                  onClick={() => goto("final")}
+                  onClick={() => {
+                    setLeaving(true);
+                    runChecks();
+                    if (modelState !== "success") discoverModels(true);
+                  }}
                 >
                   Continue
                 </Button>

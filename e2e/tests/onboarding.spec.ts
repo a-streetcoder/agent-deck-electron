@@ -321,3 +321,116 @@ test("the welcome auto-hides once a project exists", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("onboarding")).toBeHidden();
 });
+
+const READY_DOCTOR = {
+  report: {
+    checks: [
+      { id: "pi-binary", label: "Pi", status: "ok", detail: "ready" },
+      { id: "pi-version", label: "Pi version", status: "ok", detail: "0.82.0" },
+      { id: "node", label: "Node", status: "ok", detail: "ready" },
+      { id: "bash", label: "Shell", status: "ok", detail: "ready" },
+      { id: "auth", label: "Models", status: "ok", detail: "1 connected" },
+      { id: "github", label: "GitHub", status: "warn", detail: "optional" },
+    ],
+  },
+};
+
+async function clearHarnessProjects(): Promise<void> {
+  const response = await fetch(`${harness.baseUrl}/projects`);
+  const body = (await response.json()) as { projects: Array<{ id: string }> };
+  for (const project of body.projects) {
+    const deleted = await fetch(`${harness.baseUrl}/projects/${project.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.ok).toBe(true);
+  }
+}
+
+test("skips the recap and lands on projects when setup is ready", async ({ page }) => {
+  await clearHarnessProjects();
+  await page.route("**/runtime/doctor", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(READY_DOCTOR),
+    });
+  });
+
+  await page.goto(harness.baseUrl);
+  const getStarted = page.getByTestId("onboarding-get-started");
+  await expect(getStarted).toHaveText(/Get Started/);
+  await getStarted.click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+  await expect(page.getByTestId("pref-model")).toBeEnabled();
+
+  await page.getByTestId("onboarding-preferences-continue").click();
+  await expect(page.getByTestId("onboarding")).toBeHidden();
+  await expect(page.getByTestId("projects-screen")).toBeVisible();
+});
+
+test("waits on preferences until model discovery settles, then skips recap", async ({ page }) => {
+  await clearHarnessProjects();
+  await page.route("**/runtime/doctor", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(READY_DOCTOR),
+    });
+  });
+
+  let releaseDiscovery!: () => void;
+  const discoveryGate = new Promise<void>((resolve) => {
+    releaseDiscovery = resolve;
+  });
+  await page.route("**/runtime/models/discover", async (route) => {
+    await discoveryGate;
+    try {
+      await route.continue();
+    } catch {
+      // Continue re-kicks discovery and aborts the in-flight request.
+    }
+  });
+
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("onboarding-get-started").click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+  await page.getByTestId("onboarding-preferences-continue").click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+  await expect(page.getByTestId("onboarding-final")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-preferences-continue")).toBeDisabled();
+
+  releaseDiscovery();
+  await expect(page.getByTestId("onboarding")).toBeHidden();
+  await expect(page.getByTestId("projects-screen")).toBeVisible();
+});
+
+test("shows the recap when doctor is still broken after preferences", async ({ page }) => {
+  await clearHarnessProjects();
+  let piOk = true;
+  await page.route("**/runtime/doctor", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        report: {
+          checks: READY_DOCTOR.report.checks.map((check) =>
+            check.id === "pi-binary" && !piOk
+              ? { ...check, status: "error", detail: "missing" }
+              : check,
+          ),
+        },
+      }),
+    });
+  });
+
+  await page.goto(harness.baseUrl);
+  const getStarted = page.getByTestId("onboarding-get-started");
+  await expect(getStarted).toHaveText(/Get Started/);
+  await getStarted.click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+  await expect(page.getByTestId("pref-model")).toBeEnabled();
+
+  piOk = false;
+  await page.getByTestId("onboarding-preferences-continue").click();
+  await expect(page.getByTestId("onboarding-final")).toBeVisible();
+  await expect(page.getByTestId("onboarding-finish")).toHaveAttribute("data-target", "doctor");
+  await page.getByTestId("onboarding-final-back").click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+});
