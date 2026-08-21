@@ -1,5 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, FileCode2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { conflictingExtensionNames } from "@agent-deck/domain";
@@ -473,29 +473,24 @@ export function ExtensionsScreen() {
         imageSrc="/screen-art/screen-art-extensions.jpg"
         title="Extensions"
         actions={
-          <div className="flex items-center gap-2">
-            <ControlButton
+          <>
+            <SectionHeroButton
               data-testid="extension-refresh"
-              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-xs font-medium text-text-secondary hover:text-text-primary disabled:opacity-40"
+              variant="ghost"
               disabled={refreshing}
               onClick={() => void refreshFromDisk()}
             >
               <RefreshCw size={13} className={refreshing ? "animate-spin" : undefined} />
               {refreshing ? "Refreshing…" : "Refresh"}
-            </ControlButton>
-            <ControlButton
+            </SectionHeroButton>
+            <SectionHeroButton
               data-testid="extension-add"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
+              variant="primary"
               onClick={() => setAdding((v) => !v)}
             >
               <Plus size={13} /> Add extension
-            </ControlButton>
-          </div>
+            </SectionHeroButton>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

@@ -8,7 +8,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } f
 import { Archive, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
 
@@ -1103,11 +1103,11 @@ export function MemoryScreen() {
         imageSrc="/screen-art/screen-art-memory.jpg"
         title="Memory"
         actions={
-          <div className="flex items-center gap-2">
+          <>
             {visibleStaleIds.length > 0 ? (
-              <ControlButton
+              <SectionHeroButton
                 data-testid="memory-delete-stale"
-                className="rounded-capsule border border-border-subtle px-3 py-1 text-xs font-medium text-text-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                variant="ghost"
                 title="Delete every stale memory shown"
                 disabled={sweepingStale}
                 onClick={() => {
@@ -1122,21 +1122,12 @@ export function MemoryScreen() {
                 }}
               >
                 {sweepingStale ? "Deleting…" : `Delete stale (${visibleStaleIds.length})`}
-              </ControlButton>
+              </SectionHeroButton>
             ) : null}
-            <ControlButton
-              data-testid="memory-new"
-              className="rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              onClick={startNew}
-            >
+            <SectionHeroButton data-testid="memory-new" variant="primary" onClick={startNew}>
               New memory
-            </ControlButton>
-          </div>
+            </SectionHeroButton>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

@@ -4,7 +4,7 @@ import {
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import { AppTextField } from "@/design-system/components/AppTextField";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Globe, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { PromptInfo } from "@agent-deck/domain";
@@ -468,28 +468,19 @@ export function PromptsScreen() {
         imageSrc="/screen-art/screen-art-prompts.jpg"
         title="Prompt templates"
         actions={
-          <div className="flex items-center gap-2">
-            <ControlButton
+          <>
+            <SectionHeroButton
               data-testid="prompt-add-external"
-              className="rounded-capsule border border-border-strong px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
+              variant="ghost"
               title="Reference an existing markdown or text file in place — it stays where you keep it (never copied)"
               onClick={() => void importExternalPrompt()}
             >
               Reference file…
-            </ControlButton>
-            <ControlButton
-              data-testid="prompt-new"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
-              onClick={startNew}
-            >
+            </SectionHeroButton>
+            <SectionHeroButton data-testid="prompt-new" variant="primary" onClick={startNew}>
               <Plus size={13} /> New prompt
-            </ControlButton>
-          </div>
+            </SectionHeroButton>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

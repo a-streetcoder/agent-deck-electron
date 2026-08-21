@@ -11,9 +11,13 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "pill" | "destru
 /** sm/md/lg map onto AppKit control sizes mini / small / regular. */
 export type ButtonSize = "sm" | "md" | "lg";
 
+/** `on-media` is for controls composited onto photographs / illustrations. */
+export type ButtonTone = "default" | "on-media";
+
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
+  tone?: ButtonTone;
   leadingIcon?: ReactNode;
   trailingIcon?: ReactNode;
   isLoading?: boolean;
@@ -82,10 +86,34 @@ const variantClasses: Record<ButtonVariant, string> = {
   ),
 };
 
+/**
+ * On-media overrides. Primary and destructive keep their fills; secondary,
+ * ghost, and pill become frosted pills that read on dark photography.
+ * Ring offset is dropped so the surface-colored halo does not flash on photos.
+ */
+const onMediaToneClasses: Record<ButtonVariant, string> = {
+  primary: "focus-visible:ring-offset-0",
+  secondary: cn(
+    "focus-visible:ring-offset-0 shadow-none",
+    "bg-media-overlay text-on-media border-on-media/25 hover:bg-media-overlay-strong",
+  ),
+  ghost: cn(
+    "focus-visible:ring-offset-0",
+    "bg-media-overlay text-on-media border-on-media/25 hover:bg-media-overlay-strong",
+  ),
+  pill: cn(
+    "focus-visible:ring-offset-0",
+    "bg-media-overlay text-on-media border-on-media/25 hover:bg-media-overlay-strong",
+    "data-[active=true]:bg-on-media/20 data-[active=true]:text-on-media",
+  ),
+  destructive: "focus-visible:ring-offset-0 text-on-media",
+};
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = "secondary",
     size = "md",
+    tone = "default",
     leadingIcon,
     trailingIcon,
     isLoading = false,
@@ -107,11 +135,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       aria-busy={isLoading || undefined}
       data-variant={variant}
       data-size={size}
+      data-tone={tone}
       data-active={isActive ? "true" : undefined}
       className={cn(
         baseClasses,
         sizeClasses[size],
         variantClasses[variant],
+        tone === "on-media" && onMediaToneClasses[variant],
         fullWidth && "w-full",
         className,
       )}

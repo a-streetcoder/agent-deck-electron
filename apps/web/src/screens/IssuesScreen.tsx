@@ -16,7 +16,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { buildIssueContext, type IssueContextRelationships } from "./issueContext.ts";
@@ -834,21 +834,18 @@ export function IssuesScreen() {
         title={`${project.name} · Issues`}
         actions={
           <div
-            className="flex origin-left items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+            className="flex items-center gap-0.5 rounded-capsule bg-media-overlay p-0.5"
             role="group"
             aria-label="Filter issues by state"
           >
             {(["open", "closed", "all"] as const).map((s) => (
-              <ControlButton
+              <SectionHeroButton
                 key={s}
+                variant="pill"
+                isActive={stateFilter === s}
                 data-testid={`issues-state-${s}`}
                 aria-pressed={stateFilter === s}
-                className={cn(
-                  "rounded-capsule px-2.5 py-0.5 text-xs capitalize transition-colors",
-                  stateFilter === s
-                    ? "bg-selection text-text-primary"
-                    : "text-text-muted hover:text-text-primary",
-                )}
+                className="capitalize"
                 onClick={() => {
                   if (s === stateFilter) return;
                   // Clear synchronously with the query change rather than
@@ -860,7 +857,7 @@ export function IssuesScreen() {
                 }}
               >
                 {s}
-              </ControlButton>
+              </SectionHeroButton>
             ))}
           </div>
         }

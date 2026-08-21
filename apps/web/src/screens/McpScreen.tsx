@@ -1,5 +1,5 @@
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import {
   ControlButton,
   ControlInput,
@@ -870,8 +870,8 @@ export function McpScreen() {
         imageSrc="/screen-art/screen-art-mcp.jpg"
         title="MCP servers"
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-border-subtle px-2.5 py-1 text-xs text-text-secondary">
+          <>
+            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-on-media/30 bg-media-overlay px-2.5 py-1 text-xs text-on-media">
               <ControlInput
                 ref={policySwitchRef}
                 type="checkbox"
@@ -895,9 +895,9 @@ export function McpScreen() {
                       : "Paused"}
               </span>
             </label>
-            <ControlButton
+            <SectionHeroButton
               data-testid="mcp-reload"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium text-text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40"
+              variant="ghost"
               disabled={reloading}
               title="Reload mcp.json and apply added, changed, or removed servers"
               aria-label="Reload MCP configuration"
@@ -905,23 +905,18 @@ export function McpScreen() {
             >
               <RefreshCw size={13} className={reloading ? "animate-spin" : undefined} />
               {reloading ? "Reloading…" : "Reload config"}
-            </ControlButton>
-            <ControlButton
+            </SectionHeroButton>
+            <SectionHeroButton
               ref={addToggleRef}
               data-testid="mcp-add"
-              className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              style={{
-                background:
-                  "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-                color: "var(--color-accent-foreground)",
-              }}
+              variant="primary"
               aria-label={adding ? "Close add MCP server form" : "Add MCP server"}
               disabled={saving}
               onClick={startAdd}
             >
               <Plus size={13} /> Add server
-            </ControlButton>
-          </div>
+            </SectionHeroButton>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

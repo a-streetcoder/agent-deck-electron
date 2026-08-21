@@ -3,7 +3,7 @@ import {
   ControlInput,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
@@ -84,14 +84,9 @@ export function EnvironmentScreen() {
         imageSrc="/screen-art/screen-art-environment.jpg"
         title="Environment"
         actions={
-          <ControlButton
+          <SectionHeroButton
             data-testid="env-add"
-            className="flex h-7 w-7 items-center justify-center rounded-full shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
+            variant="primary"
             title="Add variable"
             onClick={() => {
               setAdding((v) => !v);
@@ -99,7 +94,7 @@ export function EnvironmentScreen() {
             }}
           >
             <Plus size={14} />
-          </ControlButton>
+          </SectionHeroButton>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -484,16 +479,16 @@ export function DoctorScreen() {
         title="Doctor"
         subtitle="Environment health for the pi runtime this app drives."
         actions={
-          <ControlButton
+          <SectionHeroButton
             ref={refreshButton}
             type="button"
             data-testid="doctor-refresh"
-            className="rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:opacity-40"
+            variant="ghost"
             disabled={loading}
             onClick={() => refresh()}
           >
             {loading ? "Checking…" : "Re-check"}
-          </ControlButton>
+          </SectionHeroButton>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

@@ -4,7 +4,7 @@ import {
   ControlTextArea,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Play, Plus, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import {
@@ -1039,18 +1039,13 @@ export function LoopsScreen() {
           </>
         }
         actions={
-          <ControlButton
+          <SectionHeroButton
             data-testid="new-loop"
-            className="flex items-center gap-1.5 rounded-capsule px-3 py-1 text-xs font-medium shadow-capsule"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--color-brand-accent-bright), var(--color-brand-accent))",
-              color: "var(--color-accent-foreground)",
-            }}
+            variant="primary"
             onClick={() => openEditor(null)}
           >
             <Plus size={13} /> New loop
-          </ControlButton>
+          </SectionHeroButton>
         }
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">

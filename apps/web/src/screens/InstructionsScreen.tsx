@@ -1,5 +1,5 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
@@ -285,7 +285,7 @@ export function InstructionsScreen() {
         }
         actions={
           <div
-            className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
+            className="flex items-center gap-0.5 rounded-capsule bg-media-overlay p-0.5"
             role="group"
             aria-label="Instruction file"
           >
@@ -296,20 +296,16 @@ export function InstructionsScreen() {
                 ["append", "Append"],
               ] as const
             ).map(([kind, label]) => (
-              <ControlButton
+              <SectionHeroButton
                 key={kind}
+                variant="pill"
+                isActive={fileKind === kind}
                 data-testid={`instructions-file-${kind}`}
                 aria-pressed={fileKind === kind}
-                className={cn(
-                  "rounded-capsule px-2.5 py-0.5 text-xs transition-colors",
-                  fileKind === kind
-                    ? "bg-selection text-text-primary"
-                    : "text-text-muted hover:text-text-primary",
-                )}
                 onClick={() => setFileKind(kind)}
               >
                 {label}
-              </ControlButton>
+              </SectionHeroButton>
             ))}
           </div>
         }

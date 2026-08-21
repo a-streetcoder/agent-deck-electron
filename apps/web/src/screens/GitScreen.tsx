@@ -1,5 +1,9 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import {
+  SectionHero,
+  SectionHeroButton,
+  SectionHeroMeta,
+} from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Sparkles, Tag } from "lucide-react";
@@ -618,28 +622,23 @@ export function GitScreen() {
   const gitHeroActions =
     (statusReady && status?.repo && status.branch) ||
     (gitActions === true && statusReady && status?.repo && !releaseOpen) ? (
-      <div className="flex items-center gap-2">
+      <>
         {statusReady && status?.repo && status.branch ? (
-          <span
-            data-testid="git-branch"
-            className="rounded-capsule border border-border-strong px-2 py-0.5 font-mono text-detail text-text-secondary"
-          >
-            {status.branch}
-          </span>
+          <SectionHeroMeta data-testid="git-branch">{status.branch}</SectionHeroMeta>
         ) : null}
         {gitActions === true && statusReady && status?.repo && !releaseOpen ? (
-          <ControlButton
+          <SectionHeroButton
             ref={releaseTriggerRef}
             data-testid="git-release"
-            className="flex items-center gap-1 rounded-capsule border border-border-strong px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+            variant="ghost"
             disabled={preflighting}
             onClick={() => void openRelease()}
             title="Tag a version and generate release notes"
           >
             <Tag size={12} /> {preflighting ? "Preparing…" : "Release"}
-          </ControlButton>
+          </SectionHeroButton>
         ) : null}
-      </div>
+      </>
     ) : undefined;
 
   return (

@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
+import { cn } from "../../lib/cn";
+import { Button, type ButtonProps } from "./Button";
 
 export type SectionHeroProps = {
   imageSrc: string;
@@ -26,12 +28,36 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
           </h2>
           {subtitle ? <div className="mt-0.5 text-caption text-on-media/80">{subtitle}</div> : null}
         </div>
-        {actions ? (
-          <div className="shrink-0 rounded-lg bg-surface-elevated/95 p-1 shadow-card">
-            {actions}
-          </div>
-        ) : null}
+        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
     </div>
+  );
+}
+
+/** Small on-media capsule for CTAs and secondary actions composited on the hero art. */
+export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
+  function SectionHeroButton({ className, size = "sm", tone = "on-media", ...props }, ref) {
+    return (
+      <Button
+        ref={ref}
+        size={size}
+        tone={tone}
+        className={cn("rounded-capsule", className)}
+        {...props}
+      />
+    );
+  },
+);
+
+/** Non-button chip for hero metadata such as the current git branch. */
+export function SectionHeroMeta({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span
+      className={cn(
+        "rounded-capsule border border-on-media/30 bg-media-overlay px-2 py-0.5 font-mono text-detail text-on-media",
+        className,
+      )}
+      {...props}
+    />
   );
 }
