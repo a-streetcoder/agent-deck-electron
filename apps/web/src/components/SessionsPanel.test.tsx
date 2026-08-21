@@ -2,7 +2,8 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionRow } from "./SessionsPanel.tsx";
+import { useAppStore } from "../state/store.ts";
+import { SessionRow, SessionsCollapsedCard } from "./SessionsPanel.tsx";
 
 afterEach(cleanup);
 
@@ -141,5 +142,40 @@ describe("SessionRow durable failure state", () => {
     expect(
       failure.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+describe("SessionsCollapsedCard", () => {
+  it("lists newest sessions across all projects and exposes selected-chat status", () => {
+    useAppStore.setState({
+      panelExpanded: false,
+      connection: "open",
+      currentProjectId: null,
+      session: null,
+      projects: [
+        { id: "p1", name: "Alpha", path: "/alpha", createdAt: "2026-01-01T00:00:00.000Z" },
+        { id: "p2", name: "Beta", path: "/beta", createdAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      sessions: [
+        {
+          id: "a",
+          projectId: "p1",
+          cwd: "/alpha",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+        {
+          id: "b",
+          projectId: "p2",
+          cwd: "/beta",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-03T00:00:00.000Z",
+        },
+      ],
+    });
+    render(<SessionsCollapsedCard onExpand={vi.fn()} />);
+    expect(screen.getByTestId("chat-a")).toBeTruthy();
+    expect(screen.getByTestId("chat-b")).toBeTruthy();
+    expect(screen.getByTestId("status-indicator").getAttribute("data-status")).toBe("idle");
   });
 });

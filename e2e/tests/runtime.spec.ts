@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -48,10 +48,8 @@ test.afterAll(async () => {
 
 test("environment inspector masks values and flags overrides", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
-  await expect(page.getByTestId("session-cwd")).toHaveText(project);
-
   await page.getByTestId("nav-environment").click();
+  await expect(page.getByTestId("app-view-title")).toHaveText("Environment");
 
   const apiKeyRow = page.locator('[data-env-key="OPENAI_API_KEY"]');
   await expect(apiKeyRow).toBeVisible();
@@ -61,9 +59,9 @@ test("environment inspector masks values and flags overrides", async ({ page }) 
   // Each row names its source .env file (native 5.2).
   await expect(apiKeyRow.getByTestId("env-source")).toContainText(".env");
 
-  // SHARED_KEY exists globally (overridden) and in the project.
+  // Without a globally selected project, only the global SHARED_KEY is shown.
   const sharedRows = page.locator('[data-env-key="SHARED_KEY"]');
-  await expect(sharedRows).toHaveCount(2);
+  await expect(sharedRows).toHaveCount(1);
 });
 
 test("doctor reports a healthy pi binary with a version", async ({ page }) => {
@@ -120,50 +118,25 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   await expect(page.locator('[data-check-id="pi-binary"]')).toBeVisible();
 });
 
-test("Doctor inspects the selected project's effective environment without leaking it", async ({
-  page,
-}) => {
+test("Doctor inspects the global environment when no project is selected", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
   const doctorRequest = page.waitForRequest((request) =>
     new URL(request.url()).pathname.endsWith("/runtime/doctor"),
   );
   await page.getByTestId("nav-doctor").click();
   const request = await doctorRequest;
-  expect(new URL(request.url()).searchParams.get("projectId")).toBeTruthy();
+  expect(new URL(request.url()).searchParams.has("projectId")).toBe(false);
 
   const globalSettingsCheck = page.locator('[data-check-id="settings"]');
-  const projectSettingsCheck = page.locator('[data-check-id="settings-project"]');
   await expect(globalSettingsCheck).toContainText(
     path.join(harness.piHome, ".pi", "agent", "settings.json"),
   );
-  await expect(projectSettingsCheck).toContainText(path.join(project, ".pi", "settings.json"));
-  await expect(projectSettingsCheck).toContainText(/selected project's settings candidate/i);
-  await expect(projectSettingsCheck).toContainText(
-    /new trusted Pi sessions load a valid candidate.*matching values then override global settings/i,
-  );
+  await expect(page.locator('[data-check-id="settings-project"]')).toHaveCount(0);
 
   const exaCheck = page.locator('[data-check-id="web-access-exa"]');
-  await expect(exaCheck).toContainText("EXA_API_KEY is configured");
-  await expect(exaCheck).toContainText(/tools are unavailable/i);
+  await expect(exaCheck).toContainText(/optional.*EXA_API_KEY/i);
   await expect(page.getByTestId("doctor-screen")).not.toContainText(
     "exa-project-super-secret-7890",
-  );
-  await expect(exaCheck.getByTestId("doctor-fix-copy")).toHaveCount(0);
-
-  // Switching project while Doctor remains mounted triggers a fresh request
-  // and re-reads the effective global environment.
-  const globalRequest = page.waitForRequest((next) =>
-    new URL(next.url()).pathname.endsWith("/runtime/doctor"),
-  );
-  await page.getByTestId("project-picker").click();
-  await page.getByTestId("project-all-projects").click();
-  const nextRequest = await globalRequest;
-  expect(new URL(nextRequest.url()).searchParams.has("projectId")).toBe(false);
-  await expect(exaCheck).toContainText(/optional.*EXA_API_KEY/i);
-  await expect(projectSettingsCheck).toHaveCount(0);
-  await expect(globalSettingsCheck).toContainText(
-    path.join(harness.piHome, ".pi", "agent", "settings.json"),
   );
 });
 

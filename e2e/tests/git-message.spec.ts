@@ -2,13 +2,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
- * Git "Generate" (native PiAgentShipService): drafting a commit message from the
- * working-tree changes via a pi helper (the harness mock provider returns a
- * fixed message), then filling the message box.
+ * Git "Generate" is project-scoped. Without a globally selected project the
+ * Git screen stays empty until it has its own picker.
  */
 
 let harness: E2eHarness;
@@ -21,7 +20,6 @@ test.beforeAll(async () => {
   writeFileSync(path.join(project, "greet.js"), "export function hello() {}\n");
   execFileSync("git", ["add", "-A"], { cwd: project });
   execFileSync("git", ["commit", "-m", "init"], { cwd: project });
-  // An uncommitted change to describe.
   writeFileSync(path.join(project, "greet.js"), "export function hello() {\n  return 'hi';\n}\n");
 
   harness = await startHarness({ chunkDelayMs: 20, reply: () => "Refine greet.js greeting" });
@@ -37,16 +35,10 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("Generate drafts a commit message into the box", async ({ page }) => {
+test("Git generate stays unavailable without a selected project", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
-  await expect(page.getByTestId("session-cwd")).toHaveText(project);
   await page.getByTestId("nav-git").click();
-
-  await expect(page.locator('[data-git-path="greet.js"]')).toBeVisible();
-  await page.getByTestId("git-generate-message").click();
-  // The pi helper's message (the mock reply) lands in the commit box.
-  await expect(page.getByTestId("git-commit-message")).toHaveValue(/Refine greet\.js/, {
-    timeout: 30_000,
-  });
+  await expect(page.getByTestId("app-view-title")).toHaveText("Git");
+  await expect(page.getByTestId("git-no-project")).toBeVisible();
+  await expect(page.getByTestId("git-generate-message")).toHaveCount(0);
 });

@@ -627,9 +627,8 @@ test("treats OS Trash as successful when backend acknowledgement transport fails
 
 test("adding a project via the native folder picker registers it", async () => {
   const window = await app.firstWindow();
-  // Project selection lives in the toolbar picker popover (native), so open it.
-  await window.getByTestId("project-picker").click({ timeout: 30_000 });
-  await expect(window.getByTestId("add-project")).toBeVisible({ timeout: 30_000 });
+  await window.getByTestId("nav-projects").click({ timeout: 30_000 });
+  await expect(window.getByTestId("projects-add")).toBeVisible({ timeout: 30_000 });
 
   // Stub the OS folder chooser to return our throwaway project directory, so
   // the real preload → ipcMain → dialog → addProject chain runs headlessly.
@@ -637,11 +636,11 @@ test("adding a project via the native folder picker registers it", async () => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [dir] });
   }, projectDir);
 
-  await window.getByTestId("add-project").click();
+  await window.getByTestId("projects-add").click();
 
-  // The picked folder shows up as a registered project; reopen the picker to see it.
-  await window.getByTestId("project-picker").click();
-  await expect(window.getByTestId(`project-${projectName}`)).toBeVisible({ timeout: 15_000 });
+  await expect(window.locator(`[data-project-name="${projectName}"]`)).toBeVisible({
+    timeout: 15_000,
+  });
 
   const runId = await window.evaluate(async (selectedPath) => {
     const projectsResponse = await fetch("/projects");
@@ -922,9 +921,10 @@ test("the native Git menu routes commands without bypassing disabled actions", a
     gitMenu?.submenu?.items.find((i) => i.label === "Commit all")?.click();
   });
   await expect(window.getByTestId("git-screen")).toBeVisible();
-  // This fixture deliberately leaves gitAutomation disabled. Menu routing must
-  // reach GitScreen but cannot bypass that existing preference gate.
-  await expect(window.getByTestId("git-actions-off")).toBeVisible();
+  // There is no globally selected project, so Git stays on its empty state.
+  // Menu routing must still reach GitScreen without inventing a project.
+  await expect(window.getByTestId("git-no-project")).toBeVisible();
+  await expect(window.getByTestId("git-actions-off")).toHaveCount(0);
   await expect(window.getByTestId("git-commit-message")).toHaveCount(0);
 });
 

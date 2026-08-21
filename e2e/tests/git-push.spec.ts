@@ -6,13 +6,11 @@ import { expect, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
- * Git push (native pushCurrentBranch): a local bare repo is the hermetic origin
- * — `git push` to a filesystem remote needs no network. The work repo's branch
- * has NO upstream, so Commit & Push exercises the `-u origin <branch>` fallback.
+ * Git push is project-scoped. Without a globally selected project the Git
+ * screen stays empty. The no-remote HTTP path still proves the API.
  */
 
 let harness: E2eHarness;
-const bare = mkdtempSync(path.join(tmpdir(), "git-bare-"));
 const work = mkdtempSync(path.join(tmpdir(), "git-work-"));
 const noRemote = mkdtempSync(path.join(tmpdir(), "git-noremote-"));
 
@@ -21,20 +19,13 @@ function gitIn(cwd: string, args: string[]): string {
 }
 
 test.beforeAll(async () => {
-  execFileSync("git", ["init", "--bare", bare], { encoding: "utf8" });
-
-  // A work repo pointed at the bare origin, but its branch is never pushed — so
-  // `git push` will fail on a missing upstream and fall back to -u.
   execFileSync("git", ["init", "-b", "main", work], { encoding: "utf8" });
   gitIn(work, ["config", "user.email", "test@agent-deck.local"]);
   gitIn(work, ["config", "user.name", "Agent Deck Test"]);
-  gitIn(work, ["remote", "add", "origin", bare]);
   writeFileSync(path.join(work, "README.md"), "# work\n");
   gitIn(work, ["add", "-A"]);
   gitIn(work, ["commit", "-m", "initial"]);
-  writeFileSync(path.join(work, "feature.ts"), "export const x = 1;\n");
 
-  // A repo with no remote at all — push must fail cleanly.
   execFileSync("git", ["init", "-b", "main", noRemote], { encoding: "utf8" });
   gitIn(noRemote, ["config", "user.email", "t@t.local"]);
   gitIn(noRemote, ["config", "user.name", "T"]);
@@ -57,22 +48,13 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("Commit & Push publishes to the remote via the -u upstream fallback", async ({ page }) => {
+test("Git push stays empty without a globally selected project", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(work));
-  await expect(page.getByTestId("session-cwd")).toHaveText(work);
   await page.getByTestId("nav-git").click();
-
-  await expect(page.locator('[data-git-path="feature.ts"]')).toBeVisible();
-  await page.getByTestId("git-commit-message").fill("Add feature via push");
-  await page.getByTestId("git-commit-push").click();
-
-  // The tree goes clean locally…
-  await expect(page.getByTestId("git-clean")).toBeVisible();
-  // …and the commit reached the bare origin's main branch.
-  await expect
-    .poll(() => gitIn(bare, ["log", "--oneline", "main"]))
-    .toContain("Add feature via push");
+  await expect(page.getByTestId("app-view-title")).toHaveText("Git");
+  await expect(page.getByTestId("git-no-project")).toBeVisible();
+  await expect(page.getByTestId("git-commit-push")).toHaveCount(0);
 });
 
 test("push with no remote fails cleanly (502)", async () => {

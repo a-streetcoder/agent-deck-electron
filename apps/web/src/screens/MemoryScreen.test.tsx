@@ -97,7 +97,11 @@ describe("MemoryScreen transcript navigation", () => {
       jsonResponse({ memory: memory("memory-a", "Renamed live title") }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
     useAppStore.getState().requestMemoryNavigation({
       projectId: "project-a",
       memoryId: "memory-a",
@@ -124,7 +128,11 @@ describe("MemoryScreen transcript navigation", () => {
   it("shows an accessible snapshot-specific alert for a deleted exact ID", async () => {
     const fetchMock = memoryNavigationFetch(async () => jsonResponse({}, false, 404));
     vi.stubGlobal("fetch", fetchMock);
-    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
     useAppStore.getState().requestMemoryNavigation({
       projectId: "project-a",
       memoryId: "deleted-memory",
@@ -139,7 +147,7 @@ describe("MemoryScreen transcript navigation", () => {
     expect(screen.queryByTestId("memory-editor")).toBeNull();
   });
 
-  it("does not fetch or open another item when the historical project is unavailable", async () => {
+  it("does not fetch or open another item when no global project is selected", async () => {
     const fetchMock = memoryNavigationFetch(async () => {
       throw new Error("exact memory fetch must not run");
     });
@@ -153,9 +161,7 @@ describe("MemoryScreen transcript navigation", () => {
 
     render(<MemoryScreen />);
 
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Memory “Historical title” no longer exists",
-    );
+    expect(await screen.findByTestId("memory-no-project")).toBeTruthy();
     expect(screen.queryByTestId("memory-editor")).toBeNull();
     expect(
       fetchMock.mock.calls.some(([input]) =>
@@ -199,7 +205,11 @@ describe("MemoryScreen transcript navigation", () => {
   ])("shows an honest alert for $name without fallback", async ({ name, response }) => {
     const fetchMock = memoryNavigationFetch(async () => response());
     vi.stubGlobal("fetch", fetchMock);
-    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
     useAppStore.getState().requestMemoryNavigation({
       projectId: "project-a",
       memoryId: "exact-memory",
@@ -234,7 +244,11 @@ describe("MemoryScreen transcript navigation", () => {
       throw new Error(`unexpected direct request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    useAppStore.setState({ projects: [project("project-a")], projectsLoaded: true });
+    useAppStore.setState({
+      currentProjectId: "project-a",
+      projects: [project("project-a")],
+      projectsLoaded: true,
+    });
     useAppStore.getState().requestMemoryNavigation({
       projectId: "project-a",
       memoryId: "memory-a",

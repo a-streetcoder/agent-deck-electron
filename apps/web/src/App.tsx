@@ -1,13 +1,4 @@
-import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useState } from "react";
-import {
-  FolderTree,
-  GitCompareArrows,
-  Globe,
-  History,
-  MonitorPlay,
-  SquareTerminal,
-} from "lucide-react";
 import {
   coerceTranscriptVisibility,
   DEFAULT_TRANSCRIPT_VISIBILITY,
@@ -15,19 +6,17 @@ import {
 } from "@agent-deck/contracts";
 import { Composer } from "./components/Composer.tsx";
 import { AppTitleBar } from "./components/AppTitleBar.tsx";
+import { ChatToolbar } from "./components/ChatToolbar.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { KeybindingsEditor } from "./components/KeybindingsEditor.tsx";
 import { DeckPanel } from "./components/DeckPanel.tsx";
 import { OnboardingOverlay } from "./components/OnboardingOverlay.tsx";
-import { ProjectPicker } from "./components/ProjectPicker.tsx";
 import { TabbedPane } from "./components/workspace/TabbedPane.tsx";
 import { ResizeHandle, useResizable } from "./components/common/Resizable.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { TerminalDrawer } from "./components/TerminalDrawer.tsx";
 import { Toaster } from "./components/Toaster.tsx";
 import { Transcript } from "./components/Transcript.tsx";
-import { TranscriptDisplayMenu } from "./components/TranscriptDisplayMenu.tsx";
-import { FinalSystemPromptButton } from "./components/FinalSystemPromptDialog.tsx";
 import { PiAgentProcessingIndicatorBar } from "@/components/transcript/PiAgentProcessingIndicatorBar";
 import { AgentsScreen } from "./screens/AgentsScreen.tsx";
 import { ExtensionsScreen } from "./screens/ExtensionsScreen.tsx";
@@ -45,9 +34,7 @@ import { ProvidersScreen } from "./screens/ProvidersScreen.tsx";
 import { DoctorScreen, EnvironmentScreen } from "./screens/RuntimeScreens.tsx";
 import { SkillsScreen } from "./screens/SkillsScreen.tsx";
 import { cn } from "@/lib/cn";
-import { hasIntegratedDesktopChrome, isElectron, isMacDesktop } from "@/lib/native";
-import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
-import { selectedSessionStatus } from "@/lib/sessionStatus";
+import { hasIntegratedDesktopChrome } from "@/lib/native";
 import { refreshCheckpoints } from "./state/wsBridge.ts";
 import { useAppStore } from "./state/store.ts";
 import { useKeyboardShortcuts } from "./state/useKeyboardShortcuts.ts";
@@ -65,29 +52,11 @@ import { useNotificationRouting } from "./state/useNotificationRouting.ts";
 const DETAIL_MOVE = "transform 340ms cubic-bezier(0.3, 1.04, 0.4, 1)";
 const DETAIL_FADE = "opacity 200ms ease-out";
 
-const VIEW_TITLES: Record<string, string> = {
-  agents: "Agents",
-  skills: "Skills",
-  projects: "Projects",
-  instructions: "Instructions",
-  issues: "Issues",
-  git: "Git",
-  loops: "Loops",
-  prompts: "Prompts",
-  models: "Models",
-  performance: "Performance",
-  extensions: "Extensions",
-  environment: "Environment",
-  providers: "Providers",
-  memory: "Memory",
-  mcp: "MCP",
-  doctor: "Doctor",
-};
-
 function ChatColumn() {
   const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   return (
     <div className="flex h-full min-w-0 flex-col">
+      <ChatToolbar />
       <div className="flex min-h-0 flex-1">
         <div className="flex h-full min-w-0 flex-1 flex-col">
           <Transcript />
@@ -122,26 +91,12 @@ export function App() {
     max: 460,
     edge: "right",
   });
-  const terminalOpen = useAppStore((state) => state.terminalOpen);
-  const setTerminalOpen = useAppStore((state) => state.setTerminalOpen);
-  const toggleWorkspaceTab = useAppStore((state) => state.toggleWorkspaceTab);
-  const openTabs = useAppStore((state) =>
-    state.session ? state.workspaceTabs[state.session.id]?.tabs : undefined,
-  );
-  const checkpointCount = useAppStore((state) => state.checkpoints.length);
-  const diffRepo = useAppStore((state) => state.diffRepo);
-  const diffFileCount = useAppStore((state) => state.diffFiles.length);
-  const connection = useAppStore((state) => state.connection);
-  const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   const session = useAppStore((state) => state.session);
-  const projects = useAppStore((state) => state.projects);
+  const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   const error = useAppStore((state) => state.error);
   const attentionAnnouncement = useAppStore((state) => state.attentionAnnouncement);
   const view = useAppStore((state) => state.view);
   const isChat = view === "chat";
-  const chatTitle = session
-    ? sessionDisplayTitle(session.title, projectDisplayName(projects, session.projectId))
-    : "Pi Agent";
   const setKeybindings = useAppStore((state) => state.setKeybindings);
   const setTranscriptVisibility = useAppStore((state) => state.setTranscriptVisibility);
   const setTranscriptVisibilityLoaded = useAppStore((state) => state.setTranscriptVisibilityLoaded);
@@ -212,30 +167,7 @@ export function App() {
   useEffect(() => {
     if (session && agentStatus !== "running") void refreshCheckpoints(session.id);
   }, [session, agentStatus]);
-  // The frameless macOS window needs a drag region across the top bar so the
-  // window can be moved by its header (the sidebar strip is already draggable).
-  const macDesktop = isMacDesktop();
   const integratedDesktopChrome = hasIntegratedDesktopChrome();
-
-  // Live transport/activity outrank durable terminal metadata. `agent_end`
-  // changes only transcript activity and must not erase a persisted failure.
-  const parkedStatus =
-    connection === "open" &&
-    agentStatus !== "running" &&
-    session?.status !== "failed" &&
-    Boolean(session?.parkedAt);
-  const statusLabel = parkedStatus
-    ? "Parked · resumes on next command"
-    : selectedSessionStatus(connection, agentStatus, session?.status);
-  const statusToken = parkedStatus ? "parked" : statusLabel;
-  const statusColor =
-    connection !== "open"
-      ? "var(--color-warning)"
-      : agentStatus === "running"
-        ? "var(--color-brand-accent)"
-        : session?.status === "failed"
-          ? "var(--color-danger)"
-          : "var(--color-success)";
 
   return (
     <div className="flex h-full flex-col">
@@ -277,186 +209,6 @@ export function App() {
           )}
           data-testid="workspace-shell"
         >
-          <header
-            className={cn(
-              "flex items-center justify-between border-b border-border-subtle bg-surface-elevated px-6 py-2.5",
-              macDesktop && "[-webkit-app-region:drag]",
-            )}
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <ProjectPicker />
-              <div className="h-4 w-px bg-border-subtle" />
-              <h1
-                className="min-w-0 truncate text-sm font-semibold text-text-primary"
-                style={{ fontStretch: "expanded" }}
-                data-testid="app-view-title"
-              >
-                {isChat ? chatTitle : VIEW_TITLES[view]}
-              </h1>
-              {session && isChat ? (
-                <span
-                  className="max-w-[40ch] truncate font-mono text-xs text-text-muted"
-                  data-testid="session-cwd"
-                >
-                  {session.cwd}
-                </span>
-              ) : null}
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              {session && isChat ? <FinalSystemPromptButton /> : null}
-              {isChat ? <TranscriptDisplayMenu /> : null}
-              {/* Files toggle (Slice 13b): a lazy project-tree browser +
-                  read-only preview. Ungated by git — shown for any chat
-                  session (it browses the session cwd). */}
-              {session && isChat ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-hover",
-                    openTabs?.includes("files") ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle files"
-                  aria-label="Toggle files"
-                  aria-pressed={openTabs?.includes("files") ?? false}
-                  data-testid="files-toggle"
-                  onClick={() => toggleWorkspaceTab(session.id, "files")}
-                >
-                  <FolderTree className="h-4 w-4" />
-                </ControlButton>
-              ) : null}
-              {/* Preview toggle (Slice 15b): runs project dev scripts and embeds
-                  the discovered dev-server URL. Ungated by git — shown for any
-                  chat session (it browses the session's package.json scripts). */}
-              {session && isChat ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-hover",
-                    openTabs?.includes("preview") ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle preview"
-                  aria-label="Toggle preview"
-                  aria-pressed={openTabs?.includes("preview") ?? false}
-                  data-testid="preview-toggle"
-                  onClick={() => toggleWorkspaceTab(session.id, "preview")}
-                >
-                  <MonitorPlay className="h-4 w-4" />
-                </ControlButton>
-              ) : null}
-              {/* Changed-files toggle (Slice 10): only for git-repo sessions
-                  (repo:false keeps the whole surface hidden); the badge tracks
-                  the server-refreshed changed-file count live. */}
-              {session && isChat && diffRepo ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "relative rounded-md p-1.5 transition-colors hover:bg-hover",
-                    openTabs?.includes("diff") ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle changed files"
-                  aria-label="Toggle changed files"
-                  aria-pressed={openTabs?.includes("diff") ?? false}
-                  data-testid="diff-toggle"
-                  onClick={() => toggleWorkspaceTab(session.id, "diff")}
-                >
-                  <GitCompareArrows className="h-4 w-4" />
-                  {diffFileCount > 0 ? (
-                    <span
-                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
-                      data-testid="diff-badge"
-                    >
-                      {diffFileCount}
-                    </span>
-                  ) : null}
-                </ControlButton>
-              ) : null}
-              {/* Checkpoints toggle (Slice 18b): a per-turn rewind timeline.
-                  Ungated (every session captures per turn); the badge tracks the
-                  available-checkpoint count so a session with none shows nothing
-                  extra, one with captures shows a subtle indicator. */}
-              {session && isChat ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "relative rounded-md p-1.5 transition-colors hover:bg-hover",
-                    openTabs?.includes("checkpoints") ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle checkpoints"
-                  aria-label="Toggle checkpoints"
-                  aria-pressed={openTabs?.includes("checkpoints") ?? false}
-                  data-testid="checkpoints-toggle"
-                  onClick={() => toggleWorkspaceTab(session.id, "checkpoints")}
-                >
-                  <History className="h-4 w-4" />
-                  {checkpointCount > 0 ? (
-                    <span
-                      className="absolute -right-0.5 -top-0.5 rounded-capsule bg-accent px-1 text-overline font-semibold leading-[14px] text-on-accent"
-                      data-testid="checkpoints-badge"
-                    >
-                      {checkpointCount}
-                    </span>
-                  ) : null}
-                </ControlButton>
-              ) : null}
-              {/* Browser toggle (Slice L2): a real general-purpose Chromium guest
-                  (<webview>) as a workspace tab. Desktop-only — the <webview> tag
-                  only instantiates in the Electron shell, so the header button is
-                  never rendered in the web build (the "+" menu still lists it, but
-                  disabled with an "Available in the desktop app." reason). */}
-              {session && isChat && isElectron() ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-hover",
-                    openTabs?.includes("browser") ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle browser"
-                  aria-label="Toggle browser"
-                  aria-pressed={openTabs?.includes("browser") ?? false}
-                  data-testid="browser-toggle"
-                  onClick={() => toggleWorkspaceTab(session.id, "browser")}
-                >
-                  <Globe className="h-4 w-4" />
-                </ControlButton>
-              ) : null}
-              {session && isChat ? (
-                <ControlButton
-                  type="button"
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors hover:bg-hover",
-                    terminalOpen ? "text-accent" : "text-text-muted",
-                    macDesktop && "[-webkit-app-region:no-drag]",
-                  )}
-                  title="Toggle terminal (⌘`)"
-                  aria-label="Toggle terminal"
-                  aria-pressed={terminalOpen}
-                  data-testid="terminal-toggle"
-                  onClick={() => setTerminalOpen(!terminalOpen)}
-                >
-                  <SquareTerminal className="h-4 w-4" />
-                </ControlButton>
-              ) : null}
-              <div
-                className="flex items-center gap-2"
-                data-testid="status-indicator"
-                data-status={statusToken}
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ background: statusColor }}
-                />
-                <span className="text-sm text-text-secondary">{statusLabel}</span>
-              </div>
-            </div>
-          </header>
           {error ? (
             <div
               className="max-w-full break-words bg-danger-subtle px-6 py-2 text-sm text-danger [overflow-wrap:anywhere]"

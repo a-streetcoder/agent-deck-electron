@@ -6,8 +6,8 @@ import type { SessionMeta } from "@agent-deck/domain";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
- * Slice-6 gate: switching project creates/uses a session whose pi subprocess
- * runs in that project's directory, and transcripts are isolated per project.
+ * Projects are registered folders. There is no globally selected project;
+ * chats can still be opened in a project folder and listed across all projects.
  */
 
 let harness: E2eHarness;
@@ -22,21 +22,33 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("adding and switching projects scopes sessions to the project cwd", async ({ page }) => {
+test("adding projects registers folders; chats stay project-scoped without a global picker", async ({
+  page,
+}) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
-  // Add project A via the toolbar project picker popover.
-  await page.getByTestId("project-picker").click();
-  await page.getByTestId("add-project").click();
-  await page.getByTestId("add-project-path").fill(projectA);
-  await page.getByTestId("add-project-confirm").click();
+  await page.getByTestId("nav-projects").click();
+  await expect(page.getByTestId("app-view-title")).toHaveText("Projects");
 
-  // The header cwd flips to project A's path once its session is live.
+  await page.getByTestId("projects-add").click();
+  await page.getByTestId("projects-add-path").fill(projectA);
+  await page.getByTestId("projects-add-confirm").click();
+  await expect(page.locator(`[data-project-name="${path.basename(projectA)}"]`)).toBeVisible();
+
+  await page.getByTestId("projects-add").click();
+  await page.getByTestId("projects-add-path").fill(projectB);
+  await page.getByTestId("projects-add-confirm").click();
+  await expect(page.locator(`[data-project-name="${path.basename(projectB)}"]`)).toBeVisible();
+  await expect(page.getByTestId("project-active-tag")).toHaveCount(0);
+
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "false");
+
+  await selectProject(page, path.basename(projectA));
   await expect(page.getByTestId("session-cwd")).toHaveText(projectA);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
-  // The server-side session really is scoped to the project.
   const sessions = (await (await fetch(`${harness.baseUrl}/sessions`)).json()) as {
     sessions: SessionMeta[];
   };
@@ -44,7 +56,6 @@ test("adding and switching projects scopes sessions to the project cwd", async (
   expect(projectSession).toBeDefined();
   expect(projectSession!.projectId).toBeDefined();
 
-  // Chat in project A.
   await page.getByTestId("composer-input").fill("message for alpha");
   await page.getByTestId("send-button").click();
   await expect(page.getByTestId("user-cell")).toContainText("message for alpha");
@@ -52,16 +63,11 @@ test("adding and switching projects scopes sessions to the project cwd", async (
     timeout: 30_000,
   });
 
-  // Add and switch to project B: fresh, empty transcript in B's cwd.
-  await page.getByTestId("project-picker").click();
-  await page.getByTestId("add-project").click();
-  await page.getByTestId("add-project-path").fill(projectB);
-  await page.getByTestId("add-project-confirm").click();
+  await selectProject(page, path.basename(projectB));
   await expect(page.getByTestId("session-cwd")).toHaveText(projectB);
   await expect(page.getByTestId("user-cell")).toHaveCount(0);
 
-  // Switching back to A restores its transcript from the server snapshot.
-  await selectProject(page, path.basename(projectA));
+  await page.getByTestId("chat-list").getByTestId(`chat-${projectSession!.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(projectA);
   await expect(page.getByTestId("user-cell")).toContainText("message for alpha");
   await expect(page.getByTestId("assistant-text")).toContainText("message for alpha");
@@ -85,26 +91,13 @@ test("the Projects screen toggles enabled state and hides entries", async ({ pag
   const row = page.locator(`[data-project-name="${name}"]`);
   await expect(row).toBeVisible();
 
-  // Disable: the project vanishes from the toolbar picker (and the enabled
-  // filter hides the Projects-screen row too).
   await page.getByTestId(`project-enabled-${name}`).click();
-  await page.getByTestId("project-picker").click();
-  await expect(page.getByTestId("project-all-projects")).toBeVisible(); // picker is open
-  await expect(page.getByTestId(`project-${name}`)).toHaveCount(0);
-  await page.keyboard.press("Escape");
   await expect(row).toHaveCount(0);
   await page.getByTestId("project-filter-disabled").click();
   await expect(row).toBeVisible();
 
-  // Re-enable from the disabled view (B isn't shown under the enabled
-  // filter while disabled), then hide it. B is not the active project on a
-  // fresh load (bootstrap selects All Projects), so hide is allowed.
   await page.getByTestId(`project-enabled-${name}`).click();
   await page.getByTestId("project-filter-all").click();
   await page.getByTestId(`project-hide-${name}`).click();
   await expect(row).toHaveCount(0);
-  await page.getByTestId("project-picker").click();
-  await expect(page.getByTestId("project-all-projects")).toBeVisible(); // picker is open
-  await expect(page.getByTestId(`project-${name}`)).toHaveCount(0);
-  await page.keyboard.press("Escape");
 });

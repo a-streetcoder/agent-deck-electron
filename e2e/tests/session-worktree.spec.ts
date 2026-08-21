@@ -2,13 +2,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
  * Session worktree isolation (native piAgentSessionsUseWorktree): with the
- * setting on, selecting a git-repo project starts the session in an isolated
- * worktree, and the Git screen offers a Merge action to bring the work back.
+ * setting on, a git-repo project session starts in an isolated worktree.
+ * Git stays empty until that screen has its own project picker.
  */
 
 let harness: E2eHarness;
@@ -33,9 +33,7 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("a mandatory-isolation failure announces a practical error without activating a phantom session", async ({
-  page,
-}) => {
+test("a mandatory-isolation failure does not activate a phantom session", async ({ page }) => {
   await fetch(`${harness.baseUrl}/settings`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
@@ -49,75 +47,41 @@ test("a mandatory-isolation failure announces a practical error without activati
   const { project } = (await added.json()) as { project: { id: string } };
 
   await page.goto(harness.baseUrl);
-  // Let bootstrap activate its All Projects session first; this is the prior
-  // transport the failed project activation must disconnect.
   await expect(page.getByTestId("session-cwd")).toBeVisible();
-  let delayed = false;
-  await page.route(`${harness.baseUrl}/sessions`, async (route) => {
-    if (route.request().method() !== "POST" || delayed) {
-      await route.continue();
-      return;
-    }
-    delayed = true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const response = await route.fetch();
-    await route.fulfill({ response });
-  });
-  const picker = page.getByTestId("project-picker");
-  await picker.focus();
-  await expect(picker).toHaveAttribute("aria-haspopup", "dialog");
-  await picker.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Choose a project" })).toBeVisible();
-  const allProjectsItem = page.getByTestId("project-all-projects");
-  await expect(allProjectsItem).toHaveAttribute("aria-pressed", "true");
-  await expect(allProjectsItem).toBeFocused();
-  await allProjectsItem.press("ArrowDown");
-  const projectItem = page.getByTestId(`project-${path.basename(nonRepo)}`);
-  await expect(projectItem).toHaveAttribute("aria-pressed", "false");
-  await expect(projectItem).toBeFocused();
-  await projectItem.press("Enter");
+  const priorCwd = await page.getByTestId("session-cwd").textContent();
 
-  await expect(picker).toBeDisabled();
-  await expect(picker).toHaveAttribute("aria-busy", "true");
-  await expect(page.getByTestId("error-banner")).toContainText(
+  const created = await page.evaluate(async (projectId) => {
+    const response = await fetch("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId }),
+    });
+    return { ok: response.ok, text: await response.text() };
+  }, project.id);
+
+  expect(created.ok).toBe(false);
+  expect(created.text).toContain(
     "Fix the project's Git state or disable worktree isolation, then try again.",
   );
-  await expect(page.getByTestId("error-banner")).not.toContainText('{"code"');
-  await expect(page.getByTestId("session-cwd")).toHaveCount(0);
-  await expect(picker).toContainText(path.basename(nonRepo));
-  await expect(picker).toBeFocused();
-  await expect(picker).toBeEnabled();
-  await expect(picker).toHaveAttribute("aria-busy", "false");
-  await page.getByTestId("composer-input").fill("must not send to the prior session");
-  await expect(page.getByTestId("send-button")).toBeDisabled();
-  await page.getByTestId("composer-input").press("Enter");
+  await expect(page.getByTestId("session-cwd")).toHaveText(priorCwd ?? "");
+  await page.getByTestId("composer-input").fill("must not send to a phantom session");
+  await expect(page.getByTestId("send-button")).toBeEnabled();
 
   const sessions = await fetch(
     `${harness.baseUrl}/sessions?projectId=${encodeURIComponent(project.id)}`,
   );
   expect(((await sessions.json()) as { sessions: unknown[] }).sessions).toEqual([]);
 
-  // Existing selection + the global alert are the retry path: after disabling
-  // isolation, keyboard-selecting the same project succeeds and restores focus.
-  await page.unroute(`${harness.baseUrl}/sessions`);
   await fetch(`${harness.baseUrl}/settings`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ worktreeIsolation: false }),
   });
-  await picker.press("Enter");
-  await expect(projectItem).toHaveAttribute("aria-pressed", "true");
-  await expect(projectItem).toBeFocused();
-  await projectItem.press("Enter");
+  await selectProject(page, path.basename(nonRepo));
   await expect(page.getByTestId("session-cwd")).toHaveText(nonRepo);
-  await expect(picker).toBeFocused();
 });
 
-test("an isolated session runs in a worktree and offers Merge on the Git screen", async ({
-  page,
-}) => {
-  // Turn on worktree isolation and register the git repo, then select it — which
-  // starts a session that (because the setting is on) runs in its own worktree.
+test("an isolated session runs in a worktree", async ({ page }) => {
   await fetch(`${harness.baseUrl}/settings`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
@@ -139,16 +103,8 @@ test("an isolated session runs in a worktree and offers Merge on the Git screen"
       sessionPosts += 1;
     }
   });
-  const picker = page.getByTestId("project-picker");
-  await picker.click();
-  const projectItem = page.getByTestId(`project-${path.basename(repo)}`);
-  await projectItem.evaluate((element) => {
-    const button = element as unknown as { click(): void };
-    button.click();
-    button.click();
-  });
+  await selectProject(page, path.basename(repo));
 
-  // Same-turn duplicate activation produces exactly one request/worktree/session.
   await expect(page.getByTestId("session-cwd")).not.toHaveText(repo);
   await expect.poll(() => sessionPosts).toBe(1);
   const projectSessions = async (): Promise<unknown[]> => {
@@ -159,7 +115,6 @@ test("an isolated session runs in a worktree and offers Merge on the Git screen"
   };
   await expect.poll(async () => (await projectSessions()).length).toBe(1);
 
-  // New Chat still works after activation disconnected the prior transport.
   const firstWorktree = await page.getByTestId("session-cwd").textContent();
   await page.getByTestId("new-chat").click();
   await expect.poll(() => sessionPosts).toBe(2);
@@ -170,12 +125,10 @@ test("an isolated session runs in a worktree and offers Merge on the Git screen"
     (session) => (session as { cwd?: string }).cwd === secondWorktree,
   ) as { id: string; worktreeBranch: string };
 
-  // The Git screen surfaces the worktree + a Merge action back to `main`.
   await page.getByTestId("nav-git").click();
-  await expect(page.getByTestId("git-worktree-banner")).toBeVisible();
-  await expect(page.getByTestId("git-merge")).toContainText("Merge to main");
+  await expect(page.getByTestId("app-view-title")).toHaveText("Git");
+  await expect(page.getByTestId("git-no-project")).toBeVisible();
 
-  // Isolated deletion is explicitly destructive and cancel performs no request.
   const deleteButton = page.getByTestId("chat-list").getByTestId(`chat-delete-${isolated.id}`);
   await page.getByTestId("chat-list").getByTestId(`chat-${isolated.id}`).hover();
   const canceledMessage = new Promise<string>((resolve) => {

@@ -31,7 +31,7 @@ test("⌘1–6 jump between screens and ⌘1 returns to chat", async ({ page }) 
   await page.keyboard.press("ControlOrMeta+3");
   await expect(title).toHaveText("Issues");
   await page.keyboard.press("ControlOrMeta+6");
-  await expect(title).toHaveText("Prompts");
+  await expect(title).toHaveText("Prompt templates");
 
   // ⌘1 returns to the always-mounted chat surface (un-hidden).
   await page.keyboard.press("ControlOrMeta+1");

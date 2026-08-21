@@ -53,8 +53,4 @@ test("configure a root, discover projects, and add one", async ({ page }) => {
   await expect(row).toBeVisible();
   await expect(row.getByTestId("project-type-badge")).toHaveText("rust");
   await expect(page.locator('[data-candidate-name="rusty"]')).toHaveCount(0);
-
-  // The registered project is now selectable in the toolbar project picker.
-  await page.getByTestId("project-picker").click();
-  await expect(page.getByTestId("project-rusty")).toBeVisible();
 });

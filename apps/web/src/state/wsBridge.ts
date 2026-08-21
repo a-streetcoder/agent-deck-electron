@@ -934,7 +934,8 @@ async function activateSession(projectId: string | null, agentName: string | nul
   disconnect();
   try {
     store.setError(null);
-    store.setCurrentProject(projectId);
+    // There is no globally selected project; sessions may still carry a projectId.
+    store.setCurrentProject(null);
     store.setCurrentAgent(agentName);
     store.resetTranscript();
     store.setSession(null);
@@ -955,7 +956,7 @@ async function switchToSessionAtActivation(target: SessionMeta, token: number): 
   disconnect();
   try {
     store.setError(null);
-    store.setCurrentProject(target.projectId ?? null);
+    store.setCurrentProject(null);
     store.setCurrentAgent(target.agentName ?? null);
     store.resetTranscript();
     store.setSession(null);
@@ -1002,11 +1003,12 @@ export async function focusSessionFromNotification(sessionId: string): Promise<v
   }
 }
 
-/** Start a brand-new chat for the current project + agent. */
+/** Start a brand-new chat. Inherits the selected session's folder/agent when present. */
 export async function newChat(): Promise<SessionMeta | null> {
   const token = ++activationToken;
   const store = useAppStore.getState();
-  const { currentProjectId, currentAgentName } = store;
+  const projectId = store.session?.projectId ?? store.currentProjectId;
+  const agentName = store.session?.agentName ?? store.currentAgentName;
   disconnect();
   try {
     store.setError(null);
@@ -1016,8 +1018,8 @@ export async function newChat(): Promise<SessionMeta | null> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        ...(currentProjectId ? { projectId: currentProjectId } : {}),
-        ...(currentAgentName ? { agentName: currentAgentName } : {}),
+        ...(projectId ? { projectId } : {}),
+        ...(agentName ? { agentName } : {}),
       }),
     });
     if (token !== activationToken) return null;
@@ -1375,13 +1377,12 @@ export async function switchToAgent(agentName: string | null): Promise<void> {
 export async function addProject(path: string): Promise<void> {
   const store = useAppStore.getState();
   try {
-    const { project } = await fetchJson<{ project: ProjectMeta }>("/projects", {
+    await fetchJson<{ project: ProjectMeta }>("/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path }),
     });
     await refreshProjects();
-    await switchToProject(project.id);
   } catch (error) {
     store.setError(String(error));
   }

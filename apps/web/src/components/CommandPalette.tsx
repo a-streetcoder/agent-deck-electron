@@ -47,7 +47,6 @@ export function CommandPalette() {
   const projects = useAppStore((state) => state.projects);
   const currentSessionId = useAppStore((state) => state.session?.id ?? null);
   const keybindings = useAppStore((state) => state.keybindings);
-  const setCurrentProject = useAppStore((state) => state.setCurrentProject);
   const setView = useAppStore((state) => state.setView);
 
   const [query, setQuery] = useState("");
@@ -110,12 +109,12 @@ export function CommandPalette() {
       group: "projects",
       shortcutLabel: null,
       run: () => {
-        setCurrentProject(project.id);
+        setView("projects");
       },
     }));
 
     return [...commandItems, ...sessionItems, ...projectItems];
-  }, [sessions, projects, currentSessionId, keybindings, setCurrentProject, setView]);
+  }, [sessions, projects, currentSessionId, keybindings, setView]);
 
   const groups = useMemo(() => buildPaletteGroups({ items, query }), [items, query]);
   const flat = useMemo(() => flattenPaletteGroups(groups), [groups]);

@@ -18,6 +18,7 @@ import { cn } from "@/lib/cn";
 import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrdering";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
 import { useAppStore } from "../state/store.ts";
+import { SessionStatusIndicator } from "./SessionStatusIndicator.tsx";
 import {
   deleteSession,
   forkSession,
@@ -288,7 +289,6 @@ export function SessionRow({
 function useSessionsData() {
   const sessions = useAppStore((state) => state.sessions);
   const projects = useAppStore((state) => state.projects);
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
   const currentSession = useAppStore((state) => state.session);
   const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   const setView = useAppStore((state) => state.setView);
@@ -303,7 +303,6 @@ function useSessionsData() {
   ).length;
   return {
     byNewest,
-    currentProjectId,
     currentSession,
     agentStatus,
     setView,
@@ -314,23 +313,15 @@ function useSessionsData() {
 
 /** Collapsed card — lives at the bottom of the NAV layer. */
 export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
-  const {
-    byNewest,
-    currentProjectId,
-    currentSession,
-    agentStatus,
-    setView,
-    projectName,
-    pendingAttentionCount,
-  } = useSessionsData();
-  const currentProjectSessions = sortSessionsWithPins(
-    byNewest.filter((s) => (s.projectId ?? null) === currentProjectId),
-  );
+  const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
+    useSessionsData();
+  const panelExpanded = useAppStore((state) => state.panelExpanded);
+  const listedSessions = sortSessionsWithPins(byNewest);
 
   return (
     <div className="px-2 pb-2">
       <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-card">
-        <div className="flex items-center justify-between px-1.5 pb-1">
+        <div className="flex items-center justify-between gap-1 px-1.5 pb-1">
           <span
             className="text-xs font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
@@ -347,7 +338,8 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
               </span>
             ) : null}
           </span>
-          <span className="flex items-center gap-1">
+          <span className="flex min-w-0 items-center gap-1">
+            <SessionStatusIndicator attachTestId={!panelExpanded} />
             <ControlButton
               data-testid="new-chat"
               className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
@@ -370,7 +362,7 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
           </span>
         </div>
         <div className="space-y-0.5" data-testid="chat-list">
-          {currentProjectSessions.slice(0, 5).map((session) => (
+          {listedSessions.slice(0, 5).map((session) => (
             <SessionRow
               key={session.id}
               session={session}
@@ -383,7 +375,7 @@ export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
               }}
             />
           ))}
-          {currentProjectSessions.length === 0 ? (
+          {listedSessions.length === 0 ? (
             <div className="px-2.5 py-2 text-xs text-text-muted">No sessions yet.</div>
           ) : null}
         </div>
@@ -405,6 +397,7 @@ export function SessionsExpandedOverlay({
 }) {
   const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
     useSessionsData();
+  const panelExpanded = useAppStore((state) => state.panelExpanded);
   const [search, setSearch] = useState("");
 
   // Search sessions by title OR content (native Sessions search 18.1 "by title
@@ -461,7 +454,7 @@ export function SessionsExpandedOverlay({
       }}
     >
       <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-elevated">
-        <div className="flex items-center justify-between px-1.5 pb-1.5">
+        <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
           <span
             className="text-xs font-semibold text-text-primary"
             style={{ fontStretch: "expanded" }}
@@ -478,13 +471,16 @@ export function SessionsExpandedOverlay({
               </span>
             ) : null}
           </span>
-          <ControlButton
-            data-testid="sessions-collapse"
-            className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
-            onClick={onCollapse}
-          >
-            <ChevronDown size={14} />
-          </ControlButton>
+          <span className="flex min-w-0 items-center gap-1">
+            <SessionStatusIndicator attachTestId={panelExpanded} />
+            <ControlButton
+              data-testid="sessions-collapse"
+              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
+              onClick={onCollapse}
+            >
+              <ChevronDown size={14} />
+            </ControlButton>
+          </span>
         </div>
         <ControlInput
           data-testid="sessions-search"

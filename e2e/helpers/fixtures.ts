@@ -24,11 +24,27 @@ export { expect } from "@playwright/test";
 export type { Page } from "@playwright/test";
 
 /**
- * Select a project via the toolbar project picker (native ProjectPickerPopover).
- * The picker is a header popover, so a project row is only clickable once the
- * picker is opened — this opens it then clicks the row.
+ * Start a chat in the named project without selecting a global project.
+ * Creates a session via HTTP, then activates it from the collapsed sessions list.
  */
 export async function selectProject(page: Page, name: string): Promise<void> {
-  await page.getByTestId("project-picker").click();
-  await page.getByTestId(`project-${name}`).click();
+  const sessionId = await page.evaluate(async (projectName) => {
+    const projectsResponse = await fetch("/projects");
+    if (!projectsResponse.ok) throw new Error(await projectsResponse.text());
+    const { projects } = (await projectsResponse.json()) as {
+      projects: Array<{ id: string; name: string }>;
+    };
+    const project = projects.find((item) => item.name === projectName);
+    if (!project) throw new Error(`Unknown project: ${projectName}`);
+    const createResponse = await fetch("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id }),
+    });
+    if (!createResponse.ok) throw new Error(await createResponse.text());
+    const { session } = (await createResponse.json()) as { session: { id: string } };
+    return session.id;
+  }, name);
+  const row = page.getByTestId("chat-list").getByTestId(`chat-${sessionId}`);
+  await row.click();
 }

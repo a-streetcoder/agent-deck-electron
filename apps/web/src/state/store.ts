@@ -696,7 +696,6 @@ export const useAppStore = create<AppState>((set) => ({
     ),
   requestMemoryNavigation: (request) =>
     set({
-      currentProjectId: request.projectId,
       view: "memory",
       panelExpanded: false,
       selectedAgentFilePath: null,

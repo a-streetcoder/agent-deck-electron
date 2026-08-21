@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 describe("memory transcript navigation request", () => {
-  it("atomically switches project and view and keeps only the latest exact request", () => {
+  it("navigates to Memory without selecting a global project and keeps only the latest exact request", () => {
     const store = useAppStore.getState();
     store.requestMemoryNavigation({
       projectId: "project-a",
@@ -33,7 +33,7 @@ describe("memory transcript navigation request", () => {
     expect(state).toMatchObject({
       view: "memory",
       panelExpanded: false,
-      currentProjectId: "project-b",
+      currentProjectId: null,
       selectedAgentFilePath: null,
       selectedPromptFilePath: null,
       memoryNavigationRequest: {
