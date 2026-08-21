@@ -1,3 +1,4 @@
+import { AppSpinner } from "@/design-system/components/AppSpinner";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -349,6 +350,7 @@ function PrefModelPicker({
         data-value={value ?? ""}
         type="button"
         disabled={disabled}
+        aria-busy={disabled || undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-left text-sm text-text-primary outline-none focus:border-accent disabled:opacity-40"
@@ -362,7 +364,11 @@ function PrefModelPicker({
           />
           <span className="min-w-0 truncate">{triggerLabel}</span>
         </span>
-        <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
+        {disabled ? (
+          <AppSpinner size="sm" label="Loading models" className="shrink-0" />
+        ) : (
+          <ChevronDown size={16} className="shrink-0 text-text-muted" aria-hidden />
+        )}
       </ControlButton>
       {open
         ? createPortal(
@@ -1149,7 +1155,7 @@ export function OnboardingOverlay() {
                       models={models}
                       runtimeDefaultModel={runtimeDefaultModel}
                       value={prefs.defaultModel}
-                      disabled={modelState === "initial-loading"}
+                      disabled={modelState === "initial-loading" || modelState === "loading"}
                       onChange={(next) => patchPref({ defaultModel: next })}
                       triggerRef={modelSelect}
                     />
