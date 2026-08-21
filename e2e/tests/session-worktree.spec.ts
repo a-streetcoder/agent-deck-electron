@@ -47,7 +47,7 @@ test("a mandatory-isolation failure does not activate a phantom session", async 
   const { project } = (await added.json()) as { project: { id: string } };
 
   await page.goto(harness.baseUrl);
-  await expect(page.getByTestId("session-cwd")).toBeVisible();
+  await expect(page.getByTestId("session-cwd")).toHaveCount(1);
   const priorCwd = await page.getByTestId("session-cwd").textContent();
 
   const created = await page.evaluate(async (projectId) => {
@@ -96,7 +96,7 @@ test("an isolated session runs in a worktree", async ({ page }) => {
   const { project } = (await added.json()) as { project: { id: string } };
 
   await page.goto(harness.baseUrl);
-  await expect(page.getByTestId("session-cwd")).toBeVisible();
+  await expect(page.getByTestId("session-cwd")).toHaveCount(1);
   let sessionPosts = 0;
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url() === `${harness.baseUrl}/sessions`) {

@@ -9,19 +9,16 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { isElectron, isMacDesktop } from "@/lib/native";
-import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
 import { useAppStore } from "../state/store.ts";
 import { TranscriptDisplayMenu } from "./TranscriptDisplayMenu.tsx";
 import { FinalSystemPromptButton } from "./FinalSystemPromptDialog.tsx";
 
 /**
- * Compact chat-only toolbar: session title, cwd, and the workspace tool toggles
- * that used to live in the workspace header.
+ * Chat-only tool strip. Session name and folder already live on the Sessions
+ * card / new-session summary — this bar is just workspace toggles.
  */
 export function ChatToolbar() {
-  const view = useAppStore((state) => state.view);
   const session = useAppStore((state) => state.session);
-  const projects = useAppStore((state) => state.projects);
   const terminalOpen = useAppStore((state) => state.terminalOpen);
   const setTerminalOpen = useAppStore((state) => state.setTerminalOpen);
   const toggleWorkspaceTab = useAppStore((state) => state.toggleWorkspaceTab);
@@ -31,38 +28,22 @@ export function ChatToolbar() {
   const checkpointCount = useAppStore((state) => state.checkpoints.length);
   const diffRepo = useAppStore((state) => state.diffRepo);
   const diffFileCount = useAppStore((state) => state.diffFiles.length);
-  const isChat = view === "chat";
-  const chatTitle = session
-    ? sessionDisplayTitle(session.title, projectDisplayName(projects, session.projectId))
-    : "Pi Agent";
   const macDesktop = isMacDesktop();
   const noDrag = macDesktop ? "[-webkit-app-region:no-drag]" : undefined;
 
   return (
     <div
       className={cn(
-        "flex items-center justify-between border-b border-border-subtle bg-surface-elevated px-4 py-1.5",
+        "flex items-center justify-end border-b border-border-subtle bg-surface-elevated px-4 py-1.5",
         macDesktop && "[-webkit-app-region:drag]",
       )}
       data-testid="chat-toolbar"
     >
-      <div className="flex min-w-0 items-center gap-3">
-        <h1
-          className="min-w-0 truncate text-sm font-semibold text-text-primary"
-          style={{ fontStretch: "expanded" }}
-          data-testid={isChat ? "app-view-title" : undefined}
-        >
-          {chatTitle}
-        </h1>
-        {session ? (
-          <span
-            className="max-w-[40ch] truncate font-mono text-xs text-text-muted"
-            data-testid="session-cwd"
-          >
-            {session.cwd}
-          </span>
-        ) : null}
-      </div>
+      {session ? (
+        <span className="sr-only" data-testid="session-cwd">
+          {session.cwd}
+        </span>
+      ) : null}
       <div className={cn("flex shrink-0 items-center gap-1.5", noDrag)}>
         {session ? <FinalSystemPromptButton /> : null}
         <TranscriptDisplayMenu />

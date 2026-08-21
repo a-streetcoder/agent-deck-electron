@@ -57,5 +57,5 @@ test("⌘N starts a new session on the chat surface", async ({ page }) => {
 
   await page.keyboard.press("ControlOrMeta+n");
   await expect(page.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "false");
-  await expect(page.getByTestId("session-cwd")).toBeVisible();
+  await expect(page.getByTestId("chat-toolbar")).toBeVisible();
 });
