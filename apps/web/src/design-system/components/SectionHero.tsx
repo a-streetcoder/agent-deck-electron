@@ -25,7 +25,7 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
     >
       <img alt="" src={imageSrc} className="absolute inset-0 size-full object-cover" />
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 px-page-x pb-3 pt-5">
+      <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 px-page-x pb-4 pt-6">
         <div className="min-w-0">
           <h2
             className="text-heading font-semibold tracking-heading text-on-media"
@@ -34,7 +34,9 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
           >
             {title}
           </h2>
-          {subtitle ? <div className="mt-0.5 text-caption text-on-media/80">{subtitle}</div> : null}
+          {subtitle ? (
+            <div className="mt-0.5 line-clamp-2 text-caption text-on-media/80">{subtitle}</div>
+          ) : null}
         </div>
         {actions ? (
           <div
