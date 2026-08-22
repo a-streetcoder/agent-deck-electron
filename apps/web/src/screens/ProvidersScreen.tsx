@@ -1,11 +1,14 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { ControlButton } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppSpinner } from "@/design-system/components/AppSpinner";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, KeyRound, LogOut, Search, UserRound } from "lucide-react";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
-import { AppScrollView } from "../design-system/components/AppScrollView.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
-import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
@@ -89,47 +92,57 @@ export function ProvidersScreen({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="providers-screen">
-      <SectionHero
-        imageSrc="/onboarding/pop-hero.jpg"
-        title="Providers"
-        subtitle="Use an existing subscription or an API key. Credentials are handled by Pi and stored in your private Agent Deck configuration."
-      />
-      <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
-        <div className="mx-auto flex h-full max-w-3xl flex-col">
-          <label className="mb-4 flex items-center gap-2 rounded-lg border border-border-strong bg-surface px-3 py-2">
-            <Search size={14} className="text-text-muted" />
-            <ControlInput
-              className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none"
+    <PageShell
+      width="column"
+      testId="providers-screen"
+      hero={
+        <SectionHero
+          imageSrc="/onboarding/pop-hero.jpg"
+          title="Providers"
+          subtitle="Use an existing subscription or an API key. Credentials are handled by Pi and stored in your private Agent Deck configuration."
+        />
+      }
+      toolbar={
+        <PageToolbar
+          leading={
+            <AppTextField
+              size="sm"
+              showClear
+              leadingIcon={<Search size={14} aria-hidden />}
               placeholder="Search providers"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={setSearch}
+              aria-label="Search providers"
             />
-          </label>
-
-          <AppScrollView className="flex-1" testId="provider-scroll-area">
-            {!loaded ? <SkeletonRows count={5} /> : null}
-            <ProviderGroup
-              title="Subscriptions"
-              providers={subscriptions}
-              onSelect={selectProvider}
-              onSignOut={(provider) => void signOutProvider(provider)}
-              disconnectingId={disconnectingId}
-            />
-            <ProviderGroup
-              title="API key"
-              providers={apiKeyOnly}
-              onSelect={selectProvider}
-              onSignOut={(provider) => void signOutProvider(provider)}
-              disconnectingId={disconnectingId}
-            />
-            {loaded && visible.length === 0 ? (
-              <div className="py-8 text-center text-body text-text-muted">
-                No matching providers.
-              </div>
-            ) : null}
-          </AppScrollView>
-        </div>
+          }
+        />
+      }
+    >
+      <div data-testid="provider-scroll-area">
+        {!loaded ? (
+          <AppEmptyState
+            heading="Loading providers…"
+            icon={<AppSpinner size="md" />}
+          />
+        ) : null}
+        <ProviderGroup
+          title="Subscriptions"
+          providers={subscriptions}
+          onSelect={selectProvider}
+          onSignOut={(provider) => void signOutProvider(provider)}
+          disconnectingId={disconnectingId}
+        />
+        <ProviderGroup
+          title="API key"
+          providers={apiKeyOnly}
+          onSelect={selectProvider}
+          onSignOut={(provider) => void signOutProvider(provider)}
+          disconnectingId={disconnectingId}
+        />
+        {loaded && visible.length === 0 ? (
+          <AppEmptyState heading="No matching providers." />
+        ) : null}
+      </div>
 
         {methodProvider ? (
           <div
@@ -191,8 +204,7 @@ export function ProvidersScreen({
             }}
           />
         ) : null}
-      </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -215,11 +227,14 @@ function ProviderGroup({
       <h3 className={cn(sectionHeaderClass, "mb-1 px-2 text-text-muted")}>{title}</h3>
       <div className="space-y-1" data-testid="provider-list">
         {providers.map((provider) => (
-          <div key={provider.id} className="flex items-center rounded-xl hover:bg-surface-subtle">
+          <div
+            key={provider.id}
+            className="flex items-center rounded-xl border border-border-subtle bg-surface-elevated px-3.5 py-2.5"
+          >
             <ControlButton
               data-provider-id={provider.id}
               data-configured={provider.configured ? "true" : "false"}
-              className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-2.5 pl-3 text-left"
+              className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
               disabled={disconnectingId !== null}
               onClick={() => onSelect(provider)}
             >

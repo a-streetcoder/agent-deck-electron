@@ -7,6 +7,14 @@ import { useAppStore } from "../state/store.ts";
 import { MemoryScreen } from "./MemoryScreen.tsx";
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   useAppStore.setState({
     currentProjectId: null,
     projects: [],

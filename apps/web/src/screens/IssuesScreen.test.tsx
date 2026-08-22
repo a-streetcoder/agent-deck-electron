@@ -46,6 +46,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   useAppStore.setState({ currentProjectId: project.id, projects: [project], error: null });
 });
 

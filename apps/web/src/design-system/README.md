@@ -10,6 +10,8 @@ The design system is the single visual and interaction boundary for the Electron
 4. **Domain adapters** — `themes/` translates tokens for CodeMirror, Shiki, and xterm.
 5. **Feature views** — compose the layers above and retain only domain state and unique layout.
 
+Page layout tokens (aliases unless noted): `--space-page-x` (`--space-6`), `--space-page-y` (`--space-5`), `--space-toolbar` (`--space-3`), `--size-page-column` (48rem), `--size-page-column-narrow` (36rem), `--size-master-pane` (22rem), `--size-master-pane-min` (18rem), `--size-page-toolbar` (40px), `--size-section-hero` (5.5rem), switch track/thumb sizes.
+
 ## Typography
 
 Tokens in `tokens.css` are the only type ramp. Tailwind maps them as `text-micro` through `text-heading`, plus `text-code` / `text-code-sm`. Default Tailwind size keys still generate (`theme.extend.fontSize` does not remove `text-xs` / `text-sm` / `text-lg`, because the Sidebar wordmark needs `text-lg`). Feature code must not use those defaults; `pnpm check:design-system` lint-bans `text-xs` through `text-2xl` in `apps/web/src`.
@@ -56,6 +58,7 @@ Approved type exceptions:
 - Prefer `Button`, `IconButton`, and `TextField` when their supported contract fits.
 - Specialized native controls must use `ControlButton`, `ControlInput`, `ControlTextArea`, or `ControlSelect`; do not render raw controls in feature files.
 - Sheet/dialog chrome uses `SheetHeader` (bottom hairline) and `SheetFooter` (top hairline); the body has no trailing divider. Inner width and padding are `--size-sheet` / `--space-sheet`; page overlays clear traffic lights with `--size-titlebar` (`pt-titlebar`), not on the header primitive.
+- Sidebar-launched views compose `PageShell` + optional `PageToolbar` / `MasterDetailSplit` / `DetailHeader`. Do not wrap the page canvas in an extra elevated card. `SectionHero` is 5.5rem (`--size-section-hero`). Settings rows use `AppSwitch`; inline status uses `AppInlineNotice`.
 - Flex/grid, responsive layout, percentages, viewport sizes, and runtime geometry may remain local.
 - Reusable colors, typography, radii, shadows, layers, and motion belong in `tokens.css` and must be mapped through Tailwind.
 - A repeated composition should become a component after it has at least two real consumers or when it owns shared accessibility behavior.

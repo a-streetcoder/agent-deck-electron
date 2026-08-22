@@ -10,6 +10,8 @@ export interface AppSegmentedOption<TValue extends string = string> {
   disabled?: boolean;
   /** Accessible name override when the visible label is non-text. */
   "aria-label"?: string;
+  /** Optional test id on the segment button. */
+  "data-testid"?: string;
 }
 
 export type AppSegmentedPickerSize = "sm" | "md";
@@ -172,7 +174,9 @@ export const AppSegmentedPicker = forwardRef(function AppSegmentedPicker<
             role="radio"
             aria-checked={isSelected}
             aria-label={opt["aria-label"]}
+            data-testid={opt["data-testid"]}
             data-selected={isSelected ? "true" : "false"}
+            data-active={isSelected}
             data-disabled={isDisabled ? "true" : "false"}
             disabled={isDisabled}
             // Roving tabindex: only the selected (or the first when nothing

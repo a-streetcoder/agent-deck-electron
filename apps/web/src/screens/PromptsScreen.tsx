@@ -3,7 +3,15 @@ import {
   ControlInput,
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppScrollView } from "@/design-system/components/AppScrollView";
 import { AppTextField } from "@/design-system/components/AppTextField";
+import { Button } from "@/design-system/components/Button";
+import { DetailHeader } from "@/design-system/components/DetailHeader";
+import { MasterDetailSplit } from "@/design-system/components/MasterDetailSplit";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Globe, Pencil, Plus, Search, Trash2, X } from "lucide-react";
@@ -209,6 +217,8 @@ export function PromptsScreen() {
   } | null>(null);
   const visiblePrompts = useMemo(() => filterPrompts(prompts, search), [prompts, search]);
   const hasSearchQuery = search.trim().length > 0;
+  const selectedPrompt =
+    prompts.find((prompt) => prompt.filePath === selectedPromptFilePath) ?? null;
 
   const load = useCallback(async (): Promise<void> => {
     const projectId = currentProjectId;
@@ -464,28 +474,52 @@ export function PromptsScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="prompts-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-prompts.jpg"
-        title="Prompt templates"
-        actions={
+    <PageShell
+      width="split"
+      testId="prompts-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-prompts.jpg"
+          title="Prompts"
+          actions={
+            <>
+              <SectionHeroButton
+                data-testid="prompt-add-external"
+                variant="ghost"
+                title="Reference an existing markdown or text file in place — it stays where you keep it (never copied)"
+                onClick={() => void importExternalPrompt()}
+              >
+                Reference file…
+              </SectionHeroButton>
+              <SectionHeroButton data-testid="prompt-new" variant="primary" onClick={startNew}>
+                <Plus size={13} /> New prompt
+              </SectionHeroButton>
+            </>
+          }
+        />
+      }
+    >
+      <MasterDetailSplit
+        master={
           <>
-            <SectionHeroButton
-              data-testid="prompt-add-external"
-              variant="ghost"
-              title="Reference an existing markdown or text file in place — it stays where you keep it (never copied)"
-              onClick={() => void importExternalPrompt()}
-            >
-              Reference file…
-            </SectionHeroButton>
-            <SectionHeroButton data-testid="prompt-new" variant="primary" onClick={startNew}>
-              <Plus size={13} /> New prompt
-            </SectionHeroButton>
-          </>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
+            <PageToolbar
+              leading={
+                <AppTextField
+                  data-testid="prompt-search"
+                  size="sm"
+                  aria-label="Search prompt templates"
+                  placeholder="Search prompts"
+                  value={search}
+                  onChange={setSearch}
+                  leadingIcon={<Search aria-hidden />}
+                  showClear
+                  clearLabel="Clear prompt search"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              }
+            />
+            <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
           {externalPath !== null ? (
             <div className="mb-3 flex gap-2">
               <ControlInput
@@ -515,142 +549,15 @@ export function PromptsScreen() {
             commands. Project prompts override global ones of the same name.
           </p>
 
-          <AppTextField
-            data-testid="prompt-search"
-            className="mb-3"
-            aria-label="Search prompt templates"
-            placeholder="Search prompts"
-            value={search}
-            onChange={setSearch}
-            leadingIcon={<Search aria-hidden />}
-            showClear
-            clearLabel="Clear prompt search"
-            autoComplete="off"
-            spellCheck={false}
-          />
-
-          {draft ? (
-            <div
-              className="mb-4 space-y-2 rounded-2xl border border-border-strong bg-surface-elevated p-4"
-              data-testid="prompt-editor"
-            >
-              <ControlInput
-                ref={promptNameInputRef}
-                data-testid="prompt-name"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-50"
-                placeholder="name (e.g. review)"
-                value={draft.name}
-                disabled={draft.original !== undefined}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              />
-              <ControlInput
-                data-testid="prompt-description"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                placeholder="description"
-                value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-              />
-              <ControlInput
-                data-testid="prompt-argument-hint-input"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
-                placeholder="argument hint (e.g. <pr-number>) — shown next to /name"
-                value={draft.argumentHint}
-                onChange={(e) => setDraft({ ...draft, argumentHint: e.target.value })}
-              />
-              <ControlTextArea
-                data-testid="prompt-body"
-                className="h-48 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
-                placeholder="The prompt template. Markdown."
-                spellCheck={false}
-                value={draft.body}
-                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-              />
-              {/* On-disk path (native "File" metadata row, PromptsViews.swift:700);
-                mirrors the Skills editor's path line. Only for an existing prompt. */}
-              {draft.filePath ? (
-                <div
-                  data-testid="prompt-file-path"
-                  className="truncate text-detail text-text-muted"
-                  title={draft.filePath}
-                >
-                  {draft.filePath}
-                </div>
-              ) : null}
-              {/* Per-project availability (native assignedPromptTemplateNames). Like
-                the All-Projects default, this is a GLOBAL concept: assigning a
-                global prompt to a project injects it as --prompt-template there.
-                Shown only when editing an existing global prompt. */}
-              {draft.original !== undefined && draft.scope === "global" && projects.length > 0 ? (
-                <div
-                  className="rounded-lg border border-border-subtle bg-surface p-2.5"
-                  data-testid="prompt-availability"
-                >
-                  <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
-                    Available in projects
-                  </div>
-                  <p className="pb-1.5 text-detail text-text-muted">
-                    Inject this prompt as a <code className="font-mono">/{draft.name}</code> command
-                    in specific projects (in addition to any All Projects default).
-                  </p>
-                  <div className="space-y-0.5">
-                    {projects.map((project) => {
-                      const assigned = (project.assignedPrompts ?? []).includes(draft.name);
-                      return (
-                        <label
-                          key={project.id}
-                          className="flex items-center gap-2.5 rounded px-1.5 py-1 hover:bg-hover"
-                        >
-                          <ControlInput
-                            type="checkbox"
-                            data-testid={`prompt-assign-${draft.name}-${project.name}`}
-                            checked={assigned}
-                            onChange={(event) => {
-                              const next = new Set(project.assignedPrompts ?? []);
-                              if (event.target.checked) next.add(draft.name);
-                              else next.delete(draft.name);
-                              void updateProject(project.id, { assignedPrompts: [...next] });
-                            }}
-                          />
-                          <span className="text-label text-text-primary">{project.name}</span>
-                          <span className="truncate font-mono text-detail text-text-muted">
-                            {project.path}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-              <div className="flex items-center justify-end gap-2">
-                <ControlButton
-                  className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
-                  onClick={() => setDraft(null)}
-                >
-                  Cancel
-                </ControlButton>
-                <ControlButton
-                  data-testid="prompt-save"
-                  className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
-                  disabled={!draft.name.trim()}
-                  onClick={() => void save()}
-                >
-                  Save
-                </ControlButton>
-              </div>
-            </div>
-          ) : null}
-
           {packageWarnings.length > 0 ? (
-            <div
-              data-testid="prompt-package-warnings"
-              className="mb-2 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
-              role="status"
-            >
-              {packageWarnings.map((warning) => (
-                <div key={warning} className="truncate" title={warning}>
-                  {warning}
-                </div>
-              ))}
+            <div data-testid="prompt-package-warnings" className="mb-2">
+              <AppInlineNotice tone="neutral">
+                {packageWarnings.map((warning) => (
+                  <div key={warning} className="truncate" title={warning}>
+                    {warning}
+                  </div>
+                ))}
+              </AppInlineNotice>
             </div>
           ) : null}
           <div
@@ -874,22 +781,144 @@ export function PromptsScreen() {
             prompts.length > 0 &&
             hasSearchQuery &&
             visiblePrompts.length === 0 ? (
-              <div
-                className="py-8 text-center text-body text-text-muted"
+              <AppEmptyState
                 data-testid="prompt-search-empty"
-                role="status"
-              >
-                No prompt templates match your search.
-              </div>
+                heading="No matches"
+                body="No prompt templates match your search."
+              />
             ) : null}
             {promptsLoaded && prompts.length === 0 && !draft ? (
-              <div className="py-8 text-center text-body text-text-muted">
-                No prompt templates yet. Create one to use it as a slash command.
-              </div>
+              <AppEmptyState heading="No prompt templates yet. Create one to use it as a slash command." />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+            </AppScrollView>
+          </>
+        }
+        detail={
+          draft ? (
+            <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
+              <div className="space-y-2" data-testid="prompt-editor">
+                <ControlInput
+                  ref={promptNameInputRef}
+                  data-testid="prompt-name"
+                  className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent disabled:opacity-50"
+                  placeholder="name (e.g. review)"
+                  value={draft.name}
+                  disabled={draft.original !== undefined}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                />
+                <ControlInput
+                  data-testid="prompt-description"
+                  className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                  placeholder="description"
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                />
+                <ControlInput
+                  data-testid="prompt-argument-hint-input"
+                  className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
+                  placeholder="argument hint (e.g. <pr-number>) — shown next to /name"
+                  value={draft.argumentHint}
+                  onChange={(e) => setDraft({ ...draft, argumentHint: e.target.value })}
+                />
+                <ControlTextArea
+                  data-testid="prompt-body"
+                  className="h-48 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
+                  placeholder="The prompt template. Markdown."
+                  spellCheck={false}
+                  value={draft.body}
+                  onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                />
+                {draft.filePath ? (
+                  <div
+                    data-testid="prompt-file-path"
+                    className="truncate text-detail text-text-muted"
+                    title={draft.filePath}
+                  >
+                    {draft.filePath}
+                  </div>
+                ) : null}
+                {draft.original !== undefined && draft.scope === "global" && projects.length > 0 ? (
+                  <div
+                    className="rounded-lg border border-border-subtle bg-surface p-2.5"
+                    data-testid="prompt-availability"
+                  >
+                    <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
+                      Available in projects
+                    </div>
+                    <p className="pb-1.5 text-detail text-text-muted">
+                      Inject this prompt as a <code className="font-mono">/{draft.name}</code> command
+                      in specific projects (in addition to any All Projects default).
+                    </p>
+                    <div className="space-y-0.5">
+                      {projects.map((project) => {
+                        const assigned = (project.assignedPrompts ?? []).includes(draft.name);
+                        return (
+                          <label
+                            key={project.id}
+                            className="flex items-center gap-2.5 rounded px-1.5 py-1 hover:bg-hover"
+                          >
+                            <ControlInput
+                              type="checkbox"
+                              data-testid={`prompt-assign-${draft.name}-${project.name}`}
+                              checked={assigned}
+                              onChange={(event) => {
+                                const next = new Set(project.assignedPrompts ?? []);
+                                if (event.target.checked) next.add(draft.name);
+                                else next.delete(draft.name);
+                                void updateProject(project.id, { assignedPrompts: [...next] });
+                              }}
+                            />
+                            <span className="text-label text-text-primary">{project.name}</span>
+                            <span className="truncate font-mono text-detail text-text-muted">
+                              {project.path}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="flex items-center justify-end gap-2">
+                  <ControlButton
+                    className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                    onClick={() => setDraft(null)}
+                  >
+                    Cancel
+                  </ControlButton>
+                  <ControlButton
+                    data-testid="prompt-save"
+                    className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
+                    disabled={!draft.name.trim()}
+                    onClick={() => void save()}
+                  >
+                    Save
+                  </ControlButton>
+                </div>
+              </div>
+            </AppScrollView>
+          ) : selectedPrompt ? (
+            <>
+              <DetailHeader
+                title={selectedPrompt.invocation}
+                subtitle={selectedPrompt.description || selectedPrompt.filePath}
+                trailing={
+                  <Button size="sm" onClick={() => startEdit(selectedPrompt)}>
+                    Edit
+                  </Button>
+                }
+              />
+              <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
+                <pre className="whitespace-pre-wrap font-mono text-code text-text-primary">
+                  {selectedPrompt.body || "_(empty)_"}
+                </pre>
+              </AppScrollView>
+            </>
+          ) : (
+            <AppEmptyState layout="fill" heading="Select a prompt." role="presentation" />
+          )
+        }
+      />
+    </PageShell>
   );
 }

@@ -1,8 +1,13 @@
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { AppTextField } from "@/design-system/components/AppTextField";
 import {
   ControlButton,
-  ControlInput,
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -16,7 +21,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
 import { buildIssueContext, type IssueContextRelationships } from "./issueContext.ts";
@@ -543,40 +548,46 @@ export function IssuesScreen() {
 
   if (!project) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col" data-testid="issues-screen">
-        <SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-5 text-center">
-          <div className="max-w-sm text-body text-text-muted" data-testid="issues-no-project">
-            Issues are project-scoped. Select a project with a GitHub remote to see its issues.
-          </div>
-        </div>
-      </div>
+      <PageShell
+        width="column"
+        testId="issues-screen"
+        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+      >
+        <AppEmptyState
+          data-testid="issues-no-project"
+          heading="Issues are project-scoped. Select a project with a GitHub remote to see its issues."
+        />
+      </PageShell>
     );
   }
 
   if (detailNumber !== null) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6" data-testid="issues-screen">
-        <div className="mx-auto max-w-3xl">
-          <div data-testid="issue-detail">
-            <ControlButton
-              data-testid="issue-detail-back"
-              className="flex items-center gap-1 pb-3 text-detail text-text-muted hover:text-text-primary"
-              onClick={closeDetail}
-            >
-              <ArrowLeft size={13} /> Back to issues
-            </ControlButton>
-            {detailError ? (
-              <div
-                className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-body text-text-muted"
-                data-testid="issue-detail-error"
+      <PageShell
+        width="column"
+        testId="issues-screen"
+        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+        toolbar={
+          <PageToolbar
+            leading={
+              <ControlButton
+                data-testid="issue-detail-back"
+                className="flex items-center gap-1 text-detail text-text-muted hover:text-text-primary"
+                onClick={closeDetail}
               >
-                {detailError}
+                <ArrowLeft size={13} /> Back to issues
+              </ControlButton>
+            }
+          />
+        }
+      >
+          <div data-testid="issue-detail">
+            {detailError ? (
+              <div data-testid="issue-detail-error">
+                <AppInlineNotice tone="danger">{detailError}</AppInlineNotice>
               </div>
             ) : !detail ? (
-              <div className="py-8 text-center text-body text-text-muted">
-                Loading issue #{detailNumber}…
-              </div>
+              <AppEmptyState heading={`Loading issue #${detailNumber}…`} />
             ) : (
               <>
                 <div className="flex items-center gap-2 pb-1">
@@ -820,163 +831,135 @@ export function IssuesScreen() {
               </>
             )}
           </div>
-        </div>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="issues-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-issues.jpg"
-        title={`${project.name} · Issues`}
-        actions={
-          <div
-            className="flex items-center gap-0.5 rounded-capsule bg-media-overlay p-0.5"
-            role="group"
-            aria-label="Filter issues by state"
-          >
-            {(["open", "closed", "all"] as const).map((s) => (
-              <SectionHeroButton
-                key={s}
-                variant="pill"
-                isActive={stateFilter === s}
-                data-testid={`issues-state-${s}`}
-                aria-pressed={stateFilter === s}
-                className="capitalize"
-                onClick={() => {
+    <PageShell
+      width="column"
+      testId="issues-screen"
+      hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+      toolbar={
+        <PageToolbar
+          leading={
+            <>
+              <AppSegmentedPicker
+                size="sm"
+                aria-label="Filter issues by state"
+                value={stateFilter}
+                onChange={(s) => {
                   if (s === stateFilter) return;
-                  // Clear synchronously with the query change rather than
-                  // leaving the previous state's notice until the effect runs.
                   setIncompleteResults(false);
-                  // the close-reason facet is scoped to the closed board
                   setReasonFilter(null);
                   setStateFilter(s);
                 }}
+                options={(
+                  [
+                    { id: "open", label: "Open" },
+                    { id: "closed", label: "Closed" },
+                    { id: "all", label: "All" },
+                  ] as const
+                ).map((opt) => ({
+                  ...opt,
+                  "data-testid": `issues-state-${opt.id}`,
+                }))}
+              />
+              {!error ? (
+                <AppTextField
+                  data-testid="issues-search"
+                  size="sm"
+                  className="max-w-sm"
+                  placeholder="Search issues by title, #number, label, assignee, or author…"
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                />
+              ) : null}
+            </>
+          }
+          trailing={
+            <>
+              <span
+                data-testid="issues-connection"
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  "rounded-capsule border px-2 py-0.5 text-detail",
+                  connection && !connection.connected
+                    ? "border-warning/55 bg-warning/10 text-warning"
+                    : "border-border-subtle text-text-muted",
+                )}
+                title={
+                  connection?.connected
+                    ? "The gh CLI is signed in — issues use its authentication"
+                    : (connection?.error ?? "Checking GitHub connection…")
+                }
               >
-                {s}
-              </SectionHeroButton>
-            ))}
-          </div>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-5 sm:px-6">
-        <div className="mx-auto max-w-3xl">
-          <div className="flex flex-col items-start gap-2 pb-1 sm:flex-row sm:items-center sm:justify-end">
-            <span
-              data-testid="issues-connection"
-              role="status"
-              aria-live="polite"
-              className={cn(
-                "rounded-capsule border px-2 py-0.5 text-detail",
-                connection && !connection.connected
-                  ? "border-warning/55 bg-warning/10 text-warning"
-                  : "border-border-subtle text-text-muted",
-              )}
-              title={
-                connection?.connected
-                  ? "The gh CLI is signed in — issues use its authentication"
-                  : (connection?.error ?? "Checking GitHub connection…")
-              }
-            >
-              {connection === null
-                ? "GitHub …"
-                : connection.connected
-                  ? `GitHub · ${connection.login ?? "signed in"}`
-                  : (connection.error ?? "GitHub disconnected")}
-            </span>
-            <ControlButton
-              data-testid="issues-scope-all"
-              aria-pressed={allProjects}
-              className={cn(
-                "rounded-capsule border px-2.5 py-0.5 text-detail transition-colors",
-                allProjects
-                  ? "border-border-strong bg-selection text-text-primary"
-                  : "border-border-subtle text-text-muted hover:text-text-primary",
-              )}
-              title="Search across every registered project's repository (native aggregate board)"
-              onClick={() => {
-                setIncompleteResults(false);
-                // leaving the aggregate scope drops its PR mode too (Codex)
-                setAllProjects((v) => {
-                  if (v) setSearchKind("issues");
-                  return !v;
-                });
-              }}
-            >
-              All projects
-            </ControlButton>
-            {allProjects ? (
+                {connection === null
+                  ? "GitHub …"
+                  : connection.connected
+                    ? `GitHub · ${connection.login ?? "signed in"}`
+                    : (connection.error ?? "GitHub disconnected")}
+              </span>
               <ControlButton
-                data-testid="issues-kind-toggle"
-                aria-pressed={searchKind === "prs"}
+                data-testid="issues-scope-all"
+                aria-pressed={allProjects}
                 className={cn(
                   "rounded-capsule border px-2.5 py-0.5 text-detail transition-colors",
-                  searchKind === "prs"
+                  allProjects
                     ? "border-border-strong bg-selection text-text-primary"
                     : "border-border-subtle text-text-muted hover:text-text-primary",
                 )}
-                title="Search pull requests instead of issues (native broader PR search)"
+                title="Search across every registered project's repository (native aggregate board)"
                 onClick={() => {
                   setIncompleteResults(false);
-                  // issue-only facets have no meaning over PR rows (Codex)
-                  setTypeFilter(null);
-                  setReasonFilter(null);
-                  setSearchKind((k) => (k === "prs" ? "issues" : "prs"));
+                  setAllProjects((v) => {
+                    if (v) setSearchKind("issues");
+                    return !v;
+                  });
                 }}
               >
-                PRs
+                All projects
               </ControlButton>
-            ) : null}
-            <ControlButton
-              data-testid="issues-refresh"
-              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={loading}
-              onClick={() => currentProjectId && void load(currentProjectId)}
-            >
-              <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
-            </ControlButton>
-          </div>
-          <p className="pb-3 text-caption text-text-muted">
-            {stateFilter === "all"
-              ? "All GitHub issues for this project."
-              : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
-            Select one to start a session on it.
-          </p>
-
-          {/* Native free-text search (searchableHaystack): filters the loaded
-                board client-side by title / #number / labels / assignees. */}
-          {!error ? (
-            <ControlInput
-              data-testid="issues-search"
-              className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-              placeholder="Search issues by title, #number, label, assignee, or author…"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-          ) : null}
-
-          {incompleteResults && !loading && !error ? (
-            <div
-              className="mb-3 break-words rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2 text-detail text-text-secondary"
-              data-testid="issues-incomplete-results"
-              role="status"
-              aria-live="polite"
-            >
-              Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
-              type, and close-reason filters apply only to these results.
-            </div>
-          ) : null}
-
-          {/* Native label + assignee + author facet filters (client-side over
-                the loaded board). Only shown when the board offers a facet. */}
-          {!error &&
-          (availableLabels.length > 0 ||
-            availableAssignees.length > 0 ||
-            availableAuthors.length > 0 ||
-            availableTypes.length > 0 ||
-            availableReasons.length > 0) ? (
-            <div className="flex flex-wrap items-center gap-1.5 pb-3" data-testid="issues-facets">
+              {allProjects ? (
+                <ControlButton
+                  data-testid="issues-kind-toggle"
+                  aria-pressed={searchKind === "prs"}
+                  className={cn(
+                    "rounded-capsule border px-2.5 py-0.5 text-detail transition-colors",
+                    searchKind === "prs"
+                      ? "border-border-strong bg-selection text-text-primary"
+                      : "border-border-subtle text-text-muted hover:text-text-primary",
+                  )}
+                  title="Search pull requests instead of issues (native broader PR search)"
+                  onClick={() => {
+                    setIncompleteResults(false);
+                    setTypeFilter(null);
+                    setReasonFilter(null);
+                    setSearchKind((k) => (k === "prs" ? "issues" : "prs"));
+                  }}
+                >
+                  PRs
+                </ControlButton>
+              ) : null}
+              <ControlButton
+                data-testid="issues-refresh"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                disabled={loading}
+                onClick={() => currentProjectId && void load(currentProjectId)}
+              >
+                <RefreshCw size={11} className={loading ? "animate-spin" : undefined} /> Refresh
+              </ControlButton>
+            </>
+          }
+          below={
+            !error &&
+            (availableLabels.length > 0 ||
+              availableAssignees.length > 0 ||
+              availableAuthors.length > 0 ||
+              availableTypes.length > 0 ||
+              availableReasons.length > 0) ? (
+              <div className="flex flex-wrap items-center gap-1.5" data-testid="issues-facets">
               {availableTypes.length > 0 ? (
                 <div className="flex items-center gap-1" data-testid="issues-type-filter">
                   <CircleDot size={12} className="text-text-muted" aria-hidden />
@@ -1106,14 +1089,35 @@ export function IssuesScreen() {
                 </ControlButton>
               ) : null}
             </div>
+            ) : null
+          }
+        />
+      }
+    >
+          <p className="pb-3 text-caption text-text-muted">
+            {stateFilter === "all"
+              ? "All GitHub issues for this project."
+              : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
+            Select one to start a session on it.
+          </p>
+
+          {incompleteResults && !loading && !error ? (
+            <div
+              data-testid="issues-incomplete-results"
+              className="mb-3"
+              role="status"
+              aria-live="polite"
+            >
+              <AppInlineNotice tone="neutral">
+                Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
+                type, and close-reason filters apply only to these results.
+              </AppInlineNotice>
+            </div>
           ) : null}
 
           {error ? (
-            <div
-              className="rounded-2xl border border-border-subtle bg-surface px-4 py-6 text-center text-body text-text-muted"
-              data-testid="issues-error"
-            >
-              {error}
+            <div data-testid="issues-error">
+              <AppInlineNotice tone="danger">{error}</AppInlineNotice>
             </div>
           ) : (
             <div className="space-y-1.5" data-testid="issues-list">
@@ -1170,25 +1174,21 @@ export function IssuesScreen() {
                 </ControlButton>
               ))}
               {visibleIssues.length === 0 && !loading ? (
-                <div
-                  className="py-8 text-center text-body text-text-muted"
+                <AppEmptyState
                   data-testid="issues-empty"
-                >
-                  {/* Native emptyStateMessage priority: search query wins,
-                        then active facets, then the plain no-issues copy. */}
-                  {search
-                    ? `No issues match “${searchQuery.trim()}”.`
-                    : filtersActive
-                      ? "Try clearing the filters or changing the state."
-                      : stateFilter === "all"
-                        ? "No issues."
-                        : `No ${stateFilter} issues.`}
-                </div>
+                  heading={
+                    search
+                      ? `No issues match “${searchQuery.trim()}”.`
+                      : filtersActive
+                        ? "Try clearing the filters or changing the state."
+                        : stateFilter === "all"
+                          ? "No issues."
+                          : `No ${stateFilter} issues.`
+                  }
+                />
               ) : null}
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

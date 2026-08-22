@@ -1,4 +1,9 @@
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { Card } from "@/design-system/components/Card";
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, FileCode2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
@@ -467,33 +472,36 @@ export function ExtensionsScreen() {
   const conflicts = conflictingExtensionNames(extensions);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="extensions-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-extensions.jpg"
-        title="Extensions"
-        actions={
-          <>
-            <SectionHeroButton
-              data-testid="extension-refresh"
-              variant="ghost"
-              disabled={refreshing}
-              onClick={() => void refreshFromDisk()}
-            >
-              <RefreshCw size={13} className={refreshing ? "animate-spin" : undefined} />
-              {refreshing ? "Refreshing…" : "Refresh"}
-            </SectionHeroButton>
-            <SectionHeroButton
-              data-testid="extension-add"
-              variant="primary"
-              onClick={() => setAdding((v) => !v)}
-            >
-              <Plus size={13} /> Add extension
-            </SectionHeroButton>
-          </>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
+    <PageShell
+      width="column"
+      testId="extensions-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-extensions.jpg"
+          title="Extensions"
+          actions={
+            <>
+              <SectionHeroButton
+                data-testid="extension-refresh"
+                variant="ghost"
+                disabled={refreshing}
+                onClick={() => void refreshFromDisk()}
+              >
+                <RefreshCw size={13} className={refreshing ? "animate-spin" : undefined} />
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </SectionHeroButton>
+              <SectionHeroButton
+                data-testid="extension-add"
+                variant="primary"
+                onClick={() => setAdding((v) => !v)}
+              >
+                <Plus size={13} /> Add extension
+              </SectionHeroButton>
+            </>
+          }
+        />
+      }
+    >
           <p className="pb-3 text-caption text-text-muted">
             pi extension files loaded into every new session. Disabled ones stay listed but
             don&apos;t load.
@@ -552,13 +560,14 @@ export function ExtensionsScreen() {
 
           {adding ? (
             <div className="mb-3 flex gap-2">
-              <ControlInput
+              <AppTextField
                 autoFocus
                 data-testid="extension-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
+                size="sm"
+                className="min-w-0 flex-1 font-mono"
                 placeholder="/path/to/extension.ts"
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={setDraft}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void add();
                   if (e.key === "Escape") setAdding(false);
@@ -578,37 +587,28 @@ export function ExtensionsScreen() {
           {/* Loading mode (native PiAgentExtensionLoadingMode) + bulk enable/disable.
             Hidden until the setting loads so the wrong mode never flashes. */}
           {loadingMode !== null ? (
-            <div className="mb-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
+            <Card className="mb-3" padding="sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-detail font-medium text-text-primary">Loading mode</span>
-                <div
-                  className="flex rounded-capsule border border-border-subtle p-0.5"
-                  role="group"
-                  aria-busy={modeBusy}
-                >
-                  {(
-                    [
-                      ["useMyExtensions", "Use my extensions"],
-                      ["agentDeckManaged", "Agent Deck managed"],
-                    ] as const
-                  ).map(([mode, label]) => (
-                    <ControlButton
-                      key={mode}
-                      data-testid={`extension-mode-${mode}`}
-                      data-active={loadingMode === mode}
-                      disabled={modeBusy}
-                      className={cn(
-                        "rounded-capsule px-2.5 py-0.5 text-detail transition-colors disabled:opacity-40",
-                        loadingMode === mode
-                          ? "bg-selection text-text-primary"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                      onClick={() => void setMode(mode)}
-                    >
-                      {label}
-                    </ControlButton>
-                  ))}
-                </div>
+                <AppSegmentedPicker<LoadingMode>
+                  size="sm"
+                  aria-label="Extension loading mode"
+                  disabled={modeBusy}
+                  value={loadingMode}
+                  onChange={(mode) => void setMode(mode)}
+                  options={[
+                    {
+                      id: "useMyExtensions",
+                      label: "Use my extensions",
+                      "data-testid": "extension-mode-useMyExtensions",
+                    },
+                    {
+                      id: "agentDeckManaged",
+                      label: "Agent Deck managed",
+                      "data-testid": "extension-mode-agentDeckManaged",
+                    },
+                  ]}
+                />
               </div>
               <p className="mt-1 text-detail text-text-muted">
                 {loadingMode === "agentDeckManaged"
@@ -635,7 +635,7 @@ export function ExtensionsScreen() {
                   </ControlButton>
                 </div>
               ) : null}
-            </div>
+            </Card>
           ) : null}
 
           <div
@@ -744,13 +744,12 @@ export function ExtensionsScreen() {
               );
             })}
             {extensions.length === 0 && !adding ? (
-              <div className="py-8 text-center text-body text-text-muted">
-                No extensions added. Point at a pi extension file to load it into sessions.
-              </div>
+              <AppEmptyState
+                role="presentation"
+                heading="No extensions added. Point at a pi extension file to load it into sessions."
+              />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

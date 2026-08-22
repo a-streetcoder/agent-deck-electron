@@ -8,6 +8,14 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } f
 import { Archive, Pin, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { groupMemoriesByStatus, type MemoryStatus } from "@agent-deck/domain";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppScrollView } from "@/design-system/components/AppScrollView";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { MasterDetailSplit } from "@/design-system/components/MasterDetailSplit";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
@@ -333,28 +341,14 @@ function AgentMemoryPreference() {
                   : "Memory automation is unavailable because it is disabled by this server’s configuration."}
               </p>
             </div>
-            <ControlButton
-              role="switch"
+            <AppSwitch
               aria-label="Memory automation"
               aria-describedby="agent-memory-description"
-              aria-checked={capabilityAvailable && enabled}
               data-testid="agent-memory-toggle"
               disabled={saving || !capabilityAvailable}
-              onClick={() => void toggle()}
-              className={cn(
-                "relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
-                capabilityAvailable && enabled
-                  ? "border-accent bg-accent"
-                  : "border-border-strong bg-surface-muted",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
-                  capabilityAvailable && enabled ? "translate-x-5" : "translate-x-0.5",
-                )}
-              />
-            </ControlButton>
+              checked={capabilityAvailable && enabled}
+              onCheckedChange={() => void toggle()}
+            />
           </div>
           <div className="mt-3 grid gap-3 border-t border-border-subtle pt-3 sm:grid-cols-2">
             <label
@@ -392,30 +386,14 @@ function AgentMemoryPreference() {
                   Control automatic child policy, index, and task recall. Child memory tools
                   separately follow the master Memory automation switch.
                 </span>
-                <ControlButton
-                  role="switch"
+                <AppSwitch
                   aria-label="Delegated agent memory context"
                   aria-describedby="agent-memory-subagents-description"
-                  aria-checked={capabilityAvailable && enabled && subagentsEnabled}
                   data-testid="agent-memory-subagents-toggle"
                   disabled={saving || !capabilityAvailable || !enabled}
-                  onClick={() => void toggleSubagents()}
-                  className={cn(
-                    "relative h-6 w-11 shrink-0 rounded-full border",
-                    capabilityAvailable && enabled && subagentsEnabled
-                      ? "border-accent bg-accent"
-                      : "border-border-strong bg-surface-muted",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow",
-                      capabilityAvailable && enabled && subagentsEnabled
-                        ? "translate-x-5"
-                        : "translate-x-0.5",
-                    )}
-                  />
-                </ControlButton>
+                  checked={capabilityAvailable && enabled && subagentsEnabled}
+                  onCheckedChange={() => void toggleSubagents()}
+                />
               </div>
               <p
                 className="mt-1 text-micro text-text-muted"
@@ -672,26 +650,14 @@ function SemanticMemoryPreference({
                 </p>
               ) : null}
             </div>
-            <ControlButton
-              role="switch"
+            <AppSwitch
               aria-label="Semantic ranking"
               aria-describedby="semantic-memory-description"
-              aria-checked={enabled}
               data-testid="semantic-memory-toggle"
               disabled={saving}
-              onClick={() => void toggle()}
-              className={cn(
-                "relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
-                enabled ? "border-accent bg-accent" : "border-border-strong bg-surface-muted",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
-                  enabled ? "translate-x-5" : "translate-x-0.5",
-                )}
-              />
-            </ControlButton>
+              checked={enabled}
+              onCheckedChange={() => void toggle()}
+            />
           </div>
           {enabled && recall && canCheck ? (
             <ControlButton
@@ -1059,28 +1025,25 @@ export function MemoryScreen() {
 
   if (!currentProjectId) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col" data-testid="memory-screen">
-        <SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          <div className="mx-auto max-w-3xl">
-            <p className="pb-2 text-caption text-text-muted">
-              Durable project knowledge agents recall across sessions.
-            </p>
-            <AgentMemoryPreference />
-            <SemanticMemoryPreference
-              onChanged={semanticPreferenceChanged}
-              recall={semanticRecall}
-              setRecall={setSemanticRecall}
-            />
-            <div
-              className="py-10 text-center text-body text-text-muted"
-              data-testid="memory-no-project"
-            >
-              Memory is project-scoped. Open a project to see and manage its memories.
-            </div>
-          </div>
-        </div>
-      </div>
+      <PageShell
+        width="column"
+        testId="memory-screen"
+        hero={<SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />}
+      >
+        <p className="pb-2 text-caption text-text-muted">
+          Durable project knowledge agents recall across sessions.
+        </p>
+        <AgentMemoryPreference />
+        <SemanticMemoryPreference
+          onChanged={semanticPreferenceChanged}
+          recall={semanticRecall}
+          setRecall={setSemanticRecall}
+        />
+        <AppEmptyState
+          data-testid="memory-no-project"
+          heading="Memory is project-scoped. Open a project to see and manage its memories."
+        />
+      </PageShell>
     );
   }
 
@@ -1109,7 +1072,10 @@ export function MemoryScreen() {
     });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="memory-screen">
+    <PageShell
+      width="split"
+      testId="memory-screen"
+      hero={
       <SectionHero
         imageSrc="/screen-art/screen-art-memory.jpg"
         title="Memory"
@@ -1141,8 +1107,27 @@ export function MemoryScreen() {
           </>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
+      }
+    >
+      <MasterDetailSplit
+        master={
+          <>
+            <PageToolbar
+              leading={
+                <AppTextField
+                  data-testid="memory-search"
+                  size="sm"
+                  placeholder="Search memories (recall ranking)…"
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  showClear
+                  clearLabel="Clear memory search"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              }
+            />
+            <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
           <p className="pb-2 text-caption text-text-muted">
             Durable project knowledge agents recall across sessions. Active and pinned memories are
             injected; stale and archived are kept but not injected.
@@ -1154,122 +1139,15 @@ export function MemoryScreen() {
             setRecall={setSemanticRecall}
           />
           {navigationAlert ? (
-            <div
-              className="mb-3 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-label text-danger"
-              role="alert"
-              data-testid="memory-navigation-alert"
-            >
-              {navigationAlert}
-            </div>
-          ) : null}
-          <ControlInput
-            data-testid="memory-search"
-            className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-            placeholder="Search memories (recall ranking)…"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-          />
-
-          {draft ? (
-            <div
-              className="mb-4 space-y-2 rounded-2xl border border-border-strong bg-surface-elevated p-4"
-              data-testid="memory-editor"
-            >
-              <div className="flex gap-2">
-                <ControlSelect
-                  data-testid="memory-type"
-                  className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                  value={draft.type}
-                  onChange={(e) => setDraft({ ...draft, type: e.target.value as MemoryType })}
-                >
-                  {MEMORY_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </ControlSelect>
-                <ControlInput
-                  data-testid="memory-title"
-                  className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                  placeholder="title"
-                  value={draft.title}
-                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                />
-              </div>
-              <ControlInput
-                data-testid="memory-summary"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                placeholder="summary (a retrieval key)"
-                value={draft.summary}
-                onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
-              />
-              <ControlInput
-                data-testid="memory-tags"
-                className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                placeholder="comma-separated tags"
-                value={draft.tags}
-                onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
-              />
-              {draft.id !== undefined ? (
-                <dl
-                  data-testid="memory-meta"
-                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-detail text-text-muted"
-                >
-                  {[
-                    // Native's detail rows, in its order (AgentMemoryViews.swift:461-471).
-                    // Type mirrors the select above rather than a stored snapshot, so the
-                    // row can never contradict what a save would write.
-                    ["Type", draft.type],
-                    ["Scope", draft.scope ?? "project"],
-                    ["Created", formatMemoryTime(draft.createdAt)],
-                    ["Updated", formatMemoryTime(draft.updatedAt)],
-                    ...(draft.sourceAgentName ? [["Source", draft.sourceAgentName]] : []),
-                    ["File", draft.filePath ?? "—"],
-                  ].map(([label, value]) => (
-                    <Fragment key={label}>
-                      <dt className="font-medium text-text-secondary">{label}</dt>
-                      <dd className="truncate" title={value}>
-                        {value}
-                      </dd>
-                    </Fragment>
-                  ))}
-                </dl>
-              ) : null}
-              <ControlTextArea
-                data-testid="memory-body"
-                className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
-                placeholder="the durable content"
-                spellCheck={false}
-                value={draft.body}
-                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-              />
-              <div className="flex items-center justify-end gap-2">
-                <ControlButton
-                  className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
-                  onClick={() => setDraft(null)}
-                >
-                  Cancel
-                </ControlButton>
-                <ControlButton
-                  data-testid="memory-save"
-                  className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
-                  disabled={!draft.title.trim() || !draft.summary.trim() || !draft.body.trim()}
-                  onClick={() => void save()}
-                >
-                  Save
-                </ControlButton>
-              </div>
+            <div className="mb-3" data-testid="memory-navigation-alert">
+              <AppInlineNotice tone="danger">{navigationAlert}</AppInlineNotice>
             </div>
           ) : null}
 
           {staleSweepNotice ? (
-            <p
-              className="pb-2 text-detail text-warning"
-              role="status"
-              data-testid="memory-stale-sweep-notice"
-            >
-              {staleSweepNotice}
-            </p>
+            <div className="pb-2" data-testid="memory-stale-sweep-notice">
+              <AppInlineNotice tone="warning">{staleSweepNotice}</AppInlineNotice>
+            </div>
           ) : null}
 
           <div className="space-y-4" data-testid="memory-list">
@@ -1387,24 +1265,114 @@ export function MemoryScreen() {
             ))}
             {searchResults !== null ? (
               searchResults.length === 0 ? (
-                <div
-                  className="py-8 text-center text-body text-text-muted"
+                <AppEmptyState
                   data-testid="memory-search-empty"
-                >
-                  No memories recalled for this query.
-                </div>
+                  heading="No matches"
+                  body="No memories recalled for this query."
+                />
               ) : null
             ) : memories.length === 0 && !draft ? (
-              <div
-                className="py-8 text-center text-body text-text-muted"
+              <AppEmptyState
                 data-testid="memory-empty"
-              >
-                No memories yet. Agents add them as they work, or create one manually.
-              </div>
+                heading="No memories yet. Agents add them as they work, or create one manually."
+              />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+            </AppScrollView>
+          </>
+        }
+        detail={
+          draft ? (
+            <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
+              <div className="space-y-2" data-testid="memory-editor">
+                <div className="flex gap-2">
+                  <ControlSelect
+                    data-testid="memory-type"
+                    className="rounded-lg border border-border-strong bg-surface px-2 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                    value={draft.type}
+                    onChange={(e) => setDraft({ ...draft, type: e.target.value as MemoryType })}
+                  >
+                    {MEMORY_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </ControlSelect>
+                  <ControlInput
+                    data-testid="memory-title"
+                    className="flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                    placeholder="title"
+                    value={draft.title}
+                    onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                  />
+                </div>
+                <ControlInput
+                  data-testid="memory-summary"
+                  className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                  placeholder="summary (a retrieval key)"
+                  value={draft.summary}
+                  onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
+                />
+                <ControlInput
+                  data-testid="memory-tags"
+                  className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
+                  placeholder="comma-separated tags"
+                  value={draft.tags}
+                  onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
+                />
+                {draft.id !== undefined ? (
+                  <dl
+                    data-testid="memory-meta"
+                    className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-detail text-text-muted"
+                  >
+                    {[
+                      ["Type", draft.type],
+                      ["Scope", draft.scope ?? "project"],
+                      ["Created", formatMemoryTime(draft.createdAt)],
+                      ["Updated", formatMemoryTime(draft.updatedAt)],
+                      ...(draft.sourceAgentName ? [["Source", draft.sourceAgentName]] : []),
+                      ["File", draft.filePath ?? "—"],
+                    ].map(([label, value]) => (
+                      <Fragment key={label}>
+                        <dt className="font-medium text-text-secondary">{label}</dt>
+                        <dd className="truncate" title={value}>
+                          {value}
+                        </dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                ) : null}
+                <ControlTextArea
+                  data-testid="memory-body"
+                  className="h-40 w-full resize-none rounded-lg border border-border-strong bg-surface p-3 font-mono text-code text-text-primary outline-none focus:border-accent"
+                  placeholder="the durable content"
+                  spellCheck={false}
+                  value={draft.body}
+                  onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <ControlButton
+                    className="rounded-capsule px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                    onClick={() => setDraft(null)}
+                  >
+                    Cancel
+                  </ControlButton>
+                  <ControlButton
+                    data-testid="memory-save"
+                    className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
+                    disabled={!draft.title.trim() || !draft.summary.trim() || !draft.body.trim()}
+                    onClick={() => void save()}
+                  >
+                    Save
+                  </ControlButton>
+                </div>
+              </div>
+            </AppScrollView>
+          ) : (
+            <AppEmptyState layout="fill" heading="Select a memory." role="presentation" />
+          )
+        }
+      />
+    </PageShell>
   );
 }

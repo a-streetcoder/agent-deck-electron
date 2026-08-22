@@ -1,4 +1,8 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
+import { PageShell } from "@/design-system/components/PageShell";
 import {
   SectionHero,
   SectionHeroButton,
@@ -605,17 +609,16 @@ export function GitScreen() {
 
   if (!currentProjectId) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col" data-testid="git-screen">
-        <SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" />
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          <div
-            className="mx-auto max-w-3xl py-10 text-center text-body text-text-muted"
-            data-testid="git-no-project"
-          >
-            Git is project-scoped. Open a project to see its changes and commit.
-          </div>
-        </div>
-      </div>
+      <PageShell
+        width="column"
+        testId="git-screen"
+        hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" />}
+      >
+        <AppEmptyState
+          data-testid="git-no-project"
+          heading="Git is project-scoped. Open a project to see its changes and commit."
+        />
+      </PageShell>
     );
   }
 
@@ -642,10 +645,11 @@ export function GitScreen() {
     ) : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="git-screen">
-      <SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" actions={gitHeroActions} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
+    <PageShell
+      width="column"
+      testId="git-screen"
+      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" actions={gitHeroActions} />}
+    >
           {releaseOpen ? (
             <div
               data-testid="git-release-panel"
@@ -882,17 +886,9 @@ export function GitScreen() {
               Git status could not be loaded. Mutation actions are unavailable.
             </div>
           ) : !statusReady || !status ? (
-            <div
-              className="py-10 text-center text-body text-text-muted"
-              data-testid="git-status-loading"
-              role="status"
-            >
-              Loading Git status…
-            </div>
+            <AppEmptyState data-testid="git-status-loading" heading="Loading Git status…" />
           ) : !status.repo ? (
-            <div className="py-10 text-center text-body text-text-muted" data-testid="git-not-repo">
-              This project isn&apos;t a git repository.
-            </div>
+            <AppEmptyState data-testid="git-not-repo" heading="This project isn't a git repository." />
           ) : (
             <>
               <p className="pb-3 text-caption text-text-muted">
@@ -916,22 +912,19 @@ export function GitScreen() {
                   </div>
                 ))}
                 {status.clean ? (
-                  <div
-                    className="py-8 text-center text-body text-text-muted"
+                  <AppEmptyState
                     data-testid="git-clean"
-                  >
-                    Working tree clean — nothing to commit.
-                  </div>
+                    heading="Working tree clean — nothing to commit."
+                  />
                 ) : null}
               </div>
 
               {gitActions === false ? (
-                <div
-                  data-testid="git-actions-off"
-                  className="mt-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-detail text-text-muted"
-                >
-                  Git actions are turned off. Enable Commit / Push actions in the welcome
-                  flow&apos;s Preferences to commit from here.
+                <div className="mt-4" data-testid="git-actions-off">
+                  <AppInlineNotice tone="neutral">
+                    Git actions are turned off. Enable Commit / Push actions in the welcome flow's
+                    Preferences to commit from here.
+                  </AppInlineNotice>
                 </div>
               ) : gitActions === null ? null : (
                 <div className="mt-4 flex flex-col gap-2">
@@ -983,9 +976,7 @@ export function GitScreen() {
               )}
             </>
           )}
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -1013,21 +1004,14 @@ function WorktreePreferenceSwitch({
           {help}
         </p>
       </div>
-      <ControlButton
-        type="button"
-        role="switch"
-        aria-checked={checked}
+      <AppSwitch
         aria-describedby={helpId}
         aria-label={label}
         data-testid={testId}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${checked ? "bg-accent" : "bg-border-strong"}`}
-      >
-        <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${checked ? "left-[18px]" : "left-0.5"}`}
-        />
-      </ControlButton>
+        checked={checked}
+        onCheckedChange={onChange}
+      />
     </div>
   );
 }

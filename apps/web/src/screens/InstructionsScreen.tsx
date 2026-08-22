@@ -1,5 +1,11 @@
-import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppLabelTag } from "@/design-system/components/AppLabelTag";
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { Button } from "@/design-system/components/Button";
+import { ControlTextArea } from "@/design-system/components/NativeControls";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
+import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
@@ -263,128 +269,96 @@ export function InstructionsScreen() {
   // The effective file pi loads (AGENTS.md/CLAUDE.md for context; SYSTEM.md).
   const fallbackName =
     fileKind === "system" ? "SYSTEM.md" : fileKind === "append" ? "APPEND_SYSTEM.md" : "AGENTS.md";
-  const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? fallbackName) : fallbackName;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="instructions-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-instructions.jpg"
-        title={
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <span>
-              {scope === "global" ? "Global" : (project?.name ?? "Project")} · {fileName}
-            </span>
-            {statusChip ? (
-              <span
-                data-testid="instructions-status"
-                className="rounded-capsule border border-on-media/30 px-1.5 text-micro font-normal text-on-media/80"
-              >
-                {statusChip}
-              </span>
-            ) : null}
-          </span>
-        }
-        actions={
-          <div
-            className="flex items-center gap-0.5 rounded-capsule bg-media-overlay p-0.5"
-            role="group"
-            aria-label="Instruction file"
-          >
-            {(
-              [
-                ["context", "Context"],
-                ["system", "Base prompt"],
-                ["append", "Append"],
-              ] as const
-            ).map(([kind, label]) => (
-              <SectionHeroButton
-                key={kind}
-                variant="pill"
-                isActive={fileKind === kind}
-                data-testid={`instructions-file-${kind}`}
-                aria-pressed={fileKind === kind}
-                onClick={() => setFileKind(kind)}
-              >
-                {label}
-              </SectionHeroButton>
-            ))}
-          </div>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto flex h-full max-w-3xl flex-col">
-          <div className="flex flex-wrap items-center justify-end gap-2 pb-3">
-            <div
-              className="flex items-center gap-0.5 rounded-capsule border border-border-subtle p-0.5"
-              role="group"
-              aria-label="Instructions scope"
-            >
-              {(["project", "global"] as const).map((s) => (
-                <ControlButton
-                  key={s}
-                  data-testid={`instructions-scope-${s}`}
-                  aria-pressed={scope === s}
-                  className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-detail capitalize transition-colors",
-                    scope === s
-                      ? "bg-selection text-text-primary"
-                      : "text-text-muted hover:text-text-primary",
-                  )}
-                  onClick={() => setScope(s)}
+    <PageShell
+      width="split"
+      testId="instructions-screen"
+      hero={<SectionHero imageSrc="/screen-art/screen-art-instructions.jpg" title="Instructions" />}
+      toolbar={
+        <PageToolbar
+          leading={
+            <AppSegmentedPicker
+              aria-label="Instruction file"
+              size="sm"
+              value={fileKind}
+              onChange={setFileKind}
+              options={[
+                { id: "context", label: "Context", "data-testid": "instructions-file-context" },
+                { id: "system", label: "Base prompt", "data-testid": "instructions-file-system" },
+                { id: "append", label: "Append", "data-testid": "instructions-file-append" },
+              ]}
+            />
+          }
+          trailing={
+            <>
+              <AppSegmentedPicker
+                aria-label="Instructions scope"
+                size="sm"
+                value={scope}
+                onChange={setScope}
+                options={[
+                  { id: "project", label: "Project", "data-testid": "instructions-scope-project" },
+                  { id: "global", label: "Global", "data-testid": "instructions-scope-global" },
+                ]}
+              />
+              {fileKind !== "context" && fileExists && !needsProject ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid="instructions-remove-override"
+                  title={
+                    fileKind === "system"
+                      ? "Delete this SYSTEM.md so pi falls back to its default base prompt"
+                      : "Delete this APPEND_SYSTEM.md so pi falls back to the global append file, if any"
+                  }
+                  onClick={() => void removeOverride()}
                 >
-                  {s}
-                </ControlButton>
-              ))}
-            </div>
-            {fileKind !== "context" && fileExists && !needsProject ? (
-              <ControlButton
-                data-testid="instructions-remove-override"
-                className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-danger"
-                title={
-                  fileKind === "system"
-                    ? "Delete this SYSTEM.md so pi falls back to its default base prompt"
-                    : "Delete this APPEND_SYSTEM.md so pi falls back to the global append file, if any"
-                }
-                onClick={() => void removeOverride()}
+                  Remove override
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="instructions-preview-toggle"
+                aria-pressed={preview !== null}
+                title="Preview the assembled system prompt pi builds from these files"
+                onClick={() => void togglePreview()}
               >
-                Remove override
-              </ControlButton>
-            ) : null}
-            <ControlButton
-              data-testid="instructions-preview-toggle"
-              aria-pressed={preview !== null}
-              className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-              title="Preview the assembled system prompt pi builds from these files"
-              onClick={() => void togglePreview()}
-            >
-              Preview
-            </ControlButton>
-            <ControlButton
-              data-testid="instructions-save"
-              className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
-              disabled={!dirty || saving || !loaded || needsProject}
-              onClick={() => void save()}
-            >
-              {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-            </ControlButton>
-          </div>
-
+                Preview
+              </Button>
+              <Button
+                size="sm"
+                data-testid="instructions-save"
+                disabled={!dirty || saving || !loaded || needsProject}
+                onClick={() => void save()}
+              >
+                {saving ? "Saving…" : dirty ? "Save" : "Saved"}
+              </Button>
+            </>
+          }
+        />
+      }
+    >
+      <div className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col px-page-x py-page-y">
           {needsProject ? (
-            <div
-              className="flex min-h-0 flex-1 items-center justify-center px-6 text-center"
+            <AppEmptyState
+              layout="fill"
               data-testid="instructions-no-project"
-            >
-              <div className="max-w-sm text-body text-text-muted">
-                Select a project in the sidebar to edit its{" "}
-                <code className="rounded bg-surface px-1 font-mono text-code">{fallbackName}</code>,
-                or switch to <b>Global</b> to edit the instructions that apply to every session.
-              </div>
-            </div>
+              heading={`Select a project in the sidebar to edit its ${fallbackName}, or switch to Global to edit the instructions that apply to every session.`}
+            />
           ) : (
             <>
-              <p className="truncate pb-3 font-mono text-detail text-text-muted" title={filePath}>
-                {filePath}
-              </p>
+              <div className="flex items-center gap-2 pb-3">
+                <p className="min-w-0 truncate font-mono text-detail text-text-muted" title={filePath}>
+                  {filePath}
+                </p>
+                {statusChip ? (
+                  <AppLabelTag data-testid="instructions-status" variant="neutral">
+                    {statusChip}
+                  </AppLabelTag>
+                ) : null}
+              </div>
               {fileKind === "system" ? (
                 <p
                   className="pb-3 text-caption text-text-muted"
@@ -410,7 +384,7 @@ export function InstructionsScreen() {
               {preview ? (
                 <div
                   data-testid="instructions-preview"
-                  className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border px-2.5 py-1.5"
+                  className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border-subtle px-2.5 py-1.5"
                 >
                   {preview.map((section, index) => (
                     <div key={`${section.kind}-${index}`}>
@@ -444,7 +418,7 @@ export function InstructionsScreen() {
               {showAncestors && ancestors.length > 0 ? (
                 <div
                   data-testid="instructions-ancestors"
-                  className="mb-3 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
+                  className="mb-3 rounded-lg border border-border-subtle px-2.5 py-1.5 text-detail text-text-secondary"
                 >
                   <div className={cn(sectionHeaderClass, "text-text-muted")}>Inherited context</div>
                   <p className="pb-1 text-caption text-text-muted">
@@ -483,17 +457,11 @@ export function InstructionsScreen() {
                   onChange={(event) => setContent(event.target.value)}
                 />
               ) : (
-                <div
-                  className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-border-subtle text-body text-text-muted"
-                  data-testid="instructions-loading"
-                >
-                  Loading…
-                </div>
+                <AppEmptyState data-testid="instructions-loading" heading="Loading…" />
               )}
             </>
           )}
-        </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

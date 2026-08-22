@@ -1,7 +1,14 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { ControlButton } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppSpinner } from "@/design-system/components/AppSpinner";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { Button } from "@/design-system/components/Button";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Eye, EyeOff, Sparkles, Zap } from "lucide-react";
+import { Check, Eye, EyeOff, Search, Sparkles, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -243,68 +250,76 @@ export function ModelsScreen() {
     : discoveryState === "success" && models.length > 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="models-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-models.jpg"
-        title="Models"
-        subtitle={
-          sessionId
-            ? "Models available to the current session. Select one to make it active."
-            : "Browse and curate available models now. Start a session to activate a model."
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
+    <PageShell
+      width="column"
+      testId="models-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-models.jpg"
+          title="Models"
+          subtitle={
+            sessionId
+              ? "Models available to the current session. Select one to make it active."
+              : "Browse and curate available models now. Start a session to activate a model."
+          }
+        />
+      }
+      toolbar={
+        showCatalog ? (
+          <PageToolbar
+            leading={
+              <AppTextField
+                ref={searchInput}
+                data-testid="models-search"
+                size="sm"
+                showClear
+                leadingIcon={<Search size={14} aria-hidden />}
+                placeholder="Search models by name, id, or provider…"
+                value={search}
+                onChange={setSearch}
+                aria-label="Search models"
+              />
+            }
+          />
+        ) : null
+      }
+    >
           {!sessionId && discoveryState === "loading" ? (
-            <div
-              className="py-8 text-center text-body text-text-muted"
+            <AppEmptyState
+              heading="Discovering available models…"
+              icon={<AppSpinner size="md" />}
               role="status"
               data-testid="models-loading"
-            >
-              Discovering available models…
-            </div>
+            />
           ) : !sessionId && discoveryState === "error" ? (
-            <div
-              className="py-8 text-center text-body text-text-muted"
-              role="alert"
-              data-testid="models-error"
+            <div data-testid="models-error">
+            <AppInlineNotice
+              tone="danger"
+              action={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  data-testid="models-retry"
+                  onClick={() => loadSource(true)}
+                >
+                  Retry
+                </Button>
+              }
             >
-              <p>Models could not be discovered.</p>
-              <ControlButton
-                type="button"
-                data-testid="models-retry"
-                className="mt-3 rounded-capsule border border-border-strong px-3 py-1 text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
-                onClick={() => loadSource(true)}
-              >
-                Retry
-              </ControlButton>
+              Models could not be discovered.
+            </AppInlineNotice>
             </div>
           ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
             (sessionId && models.length === 0) ? (
-            <div
-              className="py-8 text-center text-body text-text-muted"
-              role="status"
+            <AppEmptyState
+              heading="No models available — check your provider configuration in Environment."
               data-testid="models-empty"
-            >
-              No models available — check your provider configuration in Environment.
-            </div>
+            />
           ) : showCatalog ? (
             <>
-              <ControlInput
-                ref={searchInput}
-                data-testid="models-search"
-                className="mb-3 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                placeholder="Search models by name, id, or provider…"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
               {filtered.length === 0 ? (
-                <div
-                  className="py-8 text-center text-body text-text-muted"
-                  data-testid="models-search-empty"
-                >
-                  No models match your search.
-                </div>
+                <AppEmptyState heading="No matches" data-testid="models-search-empty" />
               ) : null}
               <div className="space-y-4">
                 {[...byProvider.entries()].map(([provider, providerModels]) => (
@@ -450,8 +465,6 @@ export function ModelsScreen() {
               </div>
             </>
           ) : null}
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

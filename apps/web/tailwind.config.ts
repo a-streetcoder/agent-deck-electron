@@ -110,9 +110,23 @@ const config: Config = {
         titlebar: "var(--size-titlebar)",
         "section-hero": "var(--size-section-hero)",
         sheet: "var(--space-sheet)",
+        "page-x": "var(--space-page-x)",
+        "page-y": "var(--space-page-y)",
+        toolbar: "var(--space-toolbar)",
+        "page-toolbar": "var(--size-page-toolbar)",
+        "master-pane": "var(--size-master-pane)",
+        "master-pane-min": "var(--size-master-pane-min)",
+        "switch-track-w": "var(--size-switch-track-w)",
+        "switch-track-h": "var(--size-switch-track-h)",
+        "switch-thumb": "var(--size-switch-thumb)",
       },
       maxWidth: {
         sheet: "var(--size-sheet)",
+        page: "var(--size-page-column)",
+        "page-narrow": "var(--size-page-column-narrow)",
+      },
+      width: {
+        master: "var(--size-master-pane)",
       },
       boxShadow: {
         card: "var(--shadow-card)",

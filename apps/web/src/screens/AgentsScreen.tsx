@@ -1,4 +1,11 @@
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppScrollView } from "@/design-system/components/AppScrollView";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { IconButton } from "@/design-system/components/IconButton";
+import { MasterDetailSplit } from "@/design-system/components/MasterDetailSplit";
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -776,52 +783,61 @@ export function AgentsScreen() {
       : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="agents-screen">
-      <SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" />
-      <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
-        {/* List pane — native fixed 42% split. */}
-        <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle max-[900px]:h-[38%] max-[900px]:w-full max-[900px]:min-w-0 max-[900px]:border-b max-[900px]:border-r-0">
-          <div className="space-y-2 px-3 pb-2 pt-3">
-            <div className="flex items-center gap-2">
-              <ControlInput
-                data-testid="agent-search"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-                placeholder="Search agents"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-              <ControlButton
-                data-testid="new-agent"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
-                title="New agent"
-                onClick={() => setEditing("new")}
-              >
-                <Plus size={15} />
-              </ControlButton>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {AGENT_FILTERS.map((f) => (
-                <ControlButton
-                  key={f}
-                  data-testid={`agent-filter-${f}`}
-                  className={cn(
-                    "rounded-capsule px-2.5 py-0.5 text-detail",
-                    filter === f
-                      ? "bg-selection text-text-primary"
-                      : "text-text-muted hover:bg-hover",
-                  )}
-                  onClick={() => setFilter(f)}
-                >
-                  {f}
-                </ControlButton>
-              ))}
-            </div>
-          </div>
-          <div
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4"
-            role="listbox"
-            aria-label="Agents"
-          >
+    <PageShell
+      width="split"
+      testId="agents-screen"
+      hero={<SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" />}
+    >
+      <MasterDetailSplit
+        master={
+          <>
+            <PageToolbar
+              leading={
+                <AppTextField
+                  data-testid="agent-search"
+                  size="sm"
+                  placeholder="Search agents"
+                  value={search}
+                  onChange={setSearch}
+                  showClear
+                  clearLabel="Clear agent search"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              }
+              trailing={
+                <IconButton
+                  data-testid="new-agent"
+                  variant="primary"
+                  shape="circle"
+                  aria-label="New agent"
+                  title="New agent"
+                  icon={<Plus />}
+                  onClick={() => setEditing("new")}
+                />
+              }
+              below={
+                <div className="flex flex-wrap gap-1">
+                  {AGENT_FILTERS.map((f) => (
+                    <ControlButton
+                      key={f}
+                      data-testid={`agent-filter-${f}`}
+                      className={cn(
+                        "rounded-capsule px-2.5 py-0.5 text-detail",
+                        filter === f
+                          ? "bg-selection text-text-primary"
+                          : "text-text-muted hover:bg-hover",
+                      )}
+                      onClick={() => setFilter(f)}
+                    >
+                      {f}
+                    </ControlButton>
+                  ))}
+                </div>
+              }
+            />
+            <AppScrollView className="flex-1">
+          <div className="space-y-3 px-3 pb-4" role="listbox" aria-label="Agents">
             {SECTION_ORDER.map(({ scope, title, hint }) => {
               const sectionAgents = visible.filter((agent) => agent.scope === scope);
               if (sectionAgents.length === 0) return null;
@@ -854,15 +870,14 @@ export function AgentsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="mt-8 text-center text-body text-text-muted">
-                No agents match this filter.
-              </div>
+              <AppEmptyState heading="No matches" body="Clear search or filters." />
             ) : null}
           </div>
-        </div>
-
-        {/* Detail pane */}
-        {selected ? (
+            </AppScrollView>
+          </>
+        }
+        detail={
+        selected ? (
           <AgentDetail
             agent={selected}
             canCreateReplacement={
@@ -887,11 +902,10 @@ export function AgentsScreen() {
             ]}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center text-body text-text-muted">
-            Select an agent.
-          </div>
-        )}
-
+          <AppEmptyState layout="fill" heading="Select an agent." role="presentation" />
+        )
+        }
+      />
         {editing !== null ? (
           <AgentEditSheet
             agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
@@ -899,7 +913,6 @@ export function AgentsScreen() {
             onClose={() => setEditing(null)}
           />
         ) : null}
-      </div>
-    </div>
+    </PageShell>
   );
 }

@@ -15,6 +15,14 @@ function jsonResponse(body: unknown): Response {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   useAppStore.setState({
     error: null,
     toasts: [],

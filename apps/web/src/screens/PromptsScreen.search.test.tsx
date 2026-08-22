@@ -80,6 +80,14 @@ async function renderCatalog(): Promise<HTMLInputElement> {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   useAppStore.setState({
     resourcesVersion: 0,
     error: null,

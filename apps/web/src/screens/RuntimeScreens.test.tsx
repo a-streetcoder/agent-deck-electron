@@ -23,6 +23,14 @@ const doctorResponse = (warnings: Array<{ id: string; message: string }>): Respo
   );
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   useAppStore.setState({ currentProjectId: null });
 });
 

@@ -1,4 +1,13 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { Button } from "@/design-system/components/Button";
+import { Card } from "@/design-system/components/Card";
+import { IconButton } from "@/design-system/components/IconButton";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -31,38 +40,6 @@ type Filter = "all" | "enabled" | "disabled";
 
 function isEnabled(project: ProjectMeta): boolean {
   return project.enabled !== false;
-}
-
-function Switch({
-  checked,
-  onChange,
-  testid,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  testid: string;
-  disabled?: boolean;
-}) {
-  return (
-    <ControlButton
-      role="switch"
-      aria-checked={checked}
-      data-testid={testid}
-      disabled={disabled}
-      className="relative h-5 w-9 rounded-capsule transition-colors disabled:opacity-40"
-      style={{
-        background: checked ? "var(--color-brand-accent)" : "var(--color-surface-subtle)",
-        border: "1px solid var(--color-border-strong)",
-      }}
-      onClick={() => onChange(!checked)}
-    >
-      <span
-        className="absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-all"
-        style={{ left: checked ? "calc(100% - 18px)" : "2px" }}
-      />
-    </ControlButton>
-  );
 }
 
 function RecapButton({
@@ -160,7 +137,7 @@ function DiscoveryPanel() {
   const unregistered = discovered.filter((d) => !d.registered);
 
   return (
-    <div className="mb-4 rounded-2xl border border-border-subtle bg-surface-elevated p-4">
+    <Card className="mb-4 rounded-2xl" padding="md">
       <div className="flex items-center justify-between pb-1">
         <div className="flex items-center gap-2">
           <Search size={15} className="text-text-secondary" />
@@ -274,9 +251,15 @@ function DiscoveryPanel() {
           </div>
         ) : null}
       </div>
-    </div>
+    </Card>
   );
 }
+
+const PROJECT_FILTERS = [
+  { id: "all" as const, label: "All", "data-testid": "project-filter-all" },
+  { id: "enabled" as const, label: "Enabled", "data-testid": "project-filter-enabled" },
+  { id: "disabled" as const, label: "Disabled", "data-testid": "project-filter-disabled" },
+];
 
 export function ProjectsScreen() {
   const projects = useAppStore((state) => state.projects);
@@ -310,56 +293,59 @@ export function ProjectsScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="projects-screen">
-      <SectionHero imageSrc="/screen-art/screen-art-projects.jpg" title="Projects" />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+    <PageShell
+      width="bleed"
+      testId="projects-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-projects.jpg"
+          title="Projects"
+          actions={
+            <IconButton
+              data-testid="projects-add"
+              aria-label="Add project"
+              title="Add project"
+              icon={<Plus />}
+              variant="primary"
+              size="sm"
+              shape="circle"
+              onClick={() => void startAdd()}
+            />
+          }
+        />
+      }
+      toolbar={
+        <PageToolbar
+          leading={
+            <AppSegmentedPicker
+              size="sm"
+              aria-label="Filter projects"
+              options={PROJECT_FILTERS}
+              value={filter}
+              onChange={setFilter}
+            />
+          }
+          below={
+            <p className="text-caption text-text-muted">
+              Registered project folders. Disabled projects are hidden from the sidebar and can't
+              host new sessions; hiding removes the entry without touching files.
+            </p>
+          }
+        />
+      }
+    >
         <DiscoveryPanel />
-        <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
-          <div className="flex items-center justify-between pb-1">
-            <h2 className="text-title font-semibold tracking-title text-text-primary">Library</h2>
-            <div className="flex items-center gap-2">
-              {/* Segmented filter (native All / Enabled / Disabled). */}
-              <div className="flex rounded-capsule border border-border-subtle p-0.5">
-                {(["all", "enabled", "disabled"] as Filter[]).map((f) => (
-                  <ControlButton
-                    key={f}
-                    data-testid={`project-filter-${f}`}
-                    className={cn(
-                      "rounded-capsule px-2.5 py-0.5 text-detail capitalize",
-                      filter === f
-                        ? "bg-selection text-text-primary"
-                        : "text-text-muted hover:text-text-primary",
-                    )}
-                    onClick={() => setFilter(f)}
-                  >
-                    {f}
-                  </ControlButton>
-                ))}
-              </div>
-              <ControlButton
-                data-testid="projects-add"
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
-                title="Add project"
-                onClick={() => void startAdd()}
-              >
-                <Plus size={14} />
-              </ControlButton>
-            </div>
-          </div>
-          <p className="pb-3 text-caption text-text-muted">
-            Registered project folders. Disabled projects are hidden from the sidebar and can't host
-            new sessions; hiding removes the entry without touching files.
-          </p>
 
           {adding ? (
             <div className="mb-3 flex gap-2">
-              <ControlInput
+              <AppTextField
                 autoFocus
                 data-testid="projects-add-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
+                size="sm"
+                className="font-mono text-code"
                 placeholder="/path/to/project"
                 value={draftPath}
-                onChange={(event) => setDraftPath(event.target.value)}
+                onChange={setDraftPath}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && draftPath.trim()) {
                     void addProject(draftPath.trim()).then(() => {
@@ -370,9 +356,10 @@ export function ProjectsScreen() {
                   if (event.key === "Escape") setAdding(false);
                 }}
               />
-              <ControlButton
+              <Button
                 data-testid="projects-add-confirm"
-                className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
+                size="sm"
+                variant="primary"
                 disabled={!draftPath.trim()}
                 onClick={() =>
                   void addProject(draftPath.trim()).then(() => {
@@ -382,7 +369,7 @@ export function ProjectsScreen() {
                 }
               >
                 Add
-              </ControlButton>
+              </Button>
             </div>
           ) : null}
 
@@ -461,11 +448,12 @@ export function ProjectsScreen() {
                   />
                   {/* The active session's project can't be disabled or hidden. */}
                   <span title={active ? "Can't change the active project" : undefined}>
-                    <Switch
+                    <AppSwitch
                       checked={enabled}
                       disabled={active}
-                      testid={`project-enabled-${project.name}`}
-                      onChange={(next) => void updateProject(project.id, { enabled: next })}
+                      data-testid={`project-enabled-${project.name}`}
+                      aria-label={`Enable ${project.name}`}
+                      onCheckedChange={(next) => void updateProject(project.id, { enabled: next })}
                     />
                   </span>
                   <ControlButton
@@ -481,13 +469,12 @@ export function ProjectsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="py-6 text-center text-body text-text-muted">
-                No projects {filter !== "all" ? `(${filter})` : ""} — add one with +.
-              </div>
+              <AppEmptyState
+                heading={filter === "all" ? "No projects" : "No matches"}
+                body={filter === "all" ? "Add one with +." : `No ${filter} projects.`}
+              />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

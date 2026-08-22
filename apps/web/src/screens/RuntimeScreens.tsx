@@ -3,6 +3,10 @@ import {
   ControlInput,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { Button } from "@/design-system/components/Button";
+import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -79,26 +83,29 @@ export function EnvironmentScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="environment-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-environment.jpg"
-        title="Environment"
-        actions={
-          <SectionHeroButton
-            data-testid="env-add"
-            variant="primary"
-            title="Add variable"
-            onClick={() => {
-              setAdding((v) => !v);
-              setNewScope(currentProjectId ? "project" : "global");
-            }}
-          >
-            <Plus size={14} />
-          </SectionHeroButton>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-4">
+    <PageShell
+      width="column"
+      testId="environment-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-environment.jpg"
+          title="Environment"
+          actions={
+            <SectionHeroButton
+              data-testid="env-add"
+              variant="primary"
+              title="Add variable"
+              onClick={() => {
+                setAdding((v) => !v);
+                setNewScope(currentProjectId ? "project" : "global");
+              }}
+            >
+              <Plus size={14} />
+            </SectionHeroButton>
+          }
+        />
+      }
+    >
           <p className="pb-3 text-caption text-text-muted">
             Variables from ~/.pi/agent/.env and this project's .pi/.env. Values are masked; editing
             replaces the whole value.
@@ -226,14 +233,10 @@ export function EnvironmentScreen() {
               );
             })}
             {entries.length === 0 ? (
-              <div className="py-6 text-center text-body text-text-muted">
-                No environment variables found.
-              </div>
+              <AppEmptyState heading="No environment variables found." />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -470,29 +473,30 @@ export function DoctorScreen() {
   }, [cancelActiveRequest, refresh]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="doctor-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-doctor.jpg"
-        title="Doctor"
-        subtitle="Environment health for the pi runtime this app drives."
-        actions={
-          <SectionHeroButton
-            ref={refreshButton}
-            type="button"
-            data-testid="doctor-refresh"
-            variant="ghost"
-            disabled={loading}
-            onClick={() => refresh()}
-          >
-            {loading ? "Checking…" : "Re-check"}
-          </SectionHeroButton>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div
-          className="rounded-2xl border border-border-subtle bg-surface-elevated p-4"
-          aria-busy={loading}
-        >
+    <PageShell
+      width="column"
+      testId="doctor-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-doctor.jpg"
+          title="Doctor"
+          subtitle="Environment health for the pi runtime this app drives."
+          actions={
+            <SectionHeroButton
+              ref={refreshButton}
+              type="button"
+              data-testid="doctor-refresh"
+              variant="ghost"
+              disabled={loading}
+              onClick={() => refresh()}
+            >
+              {loading ? "Checking…" : "Re-check"}
+            </SectionHeroButton>
+          }
+        />
+      }
+    >
+        <div aria-busy={loading}>
           <div className="sr-only" role="status" aria-live="polite" data-testid="doctor-status">
             {loading
               ? "Checking diagnostics…"
@@ -501,19 +505,17 @@ export function DoctorScreen() {
                 : "Diagnostics up to date."}
           </div>
           {loadError ? (
-            <div
-              className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-danger/40 bg-surface px-3 py-2 text-label text-text-primary"
-              role="alert"
-              data-testid="doctor-error"
-            >
-              <span>{loadError}</span>
-              <ControlButton
-                type="button"
-                className="shrink-0 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-                onClick={() => refresh(true)}
+            <div className="mb-3" data-testid="doctor-error">
+              <AppInlineNotice
+                tone="danger"
+                action={
+                  <Button size="sm" variant="secondary" onClick={() => refresh(true)}>
+                    Retry
+                  </Button>
+                }
               >
-                Retry
-              </ControlButton>
+                {loadError}
+              </AppInlineNotice>
             </div>
           ) : null}
           <div className="space-y-2">
@@ -595,7 +597,6 @@ export function DoctorScreen() {
             </section>
           ) : null}
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

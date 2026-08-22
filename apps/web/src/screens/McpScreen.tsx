@@ -1,4 +1,9 @@
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
+import { Card } from "@/design-system/components/Card";
+import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import {
   ControlButton,
@@ -230,7 +235,7 @@ export function McpScreen() {
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
   const policySeq = useRef(0);
-  const policySwitchRef = useRef<HTMLInputElement>(null);
+  const policySwitchRef = useRef<HTMLButtonElement>(null);
   const loadedProject = useRef<string | null | undefined>(undefined);
   const assignmentSaving = useRef(false);
   const assignmentInputs = useRef(new Map<string, HTMLInputElement>());
@@ -865,89 +870,90 @@ export function McpScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="mcp-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-mcp.jpg"
-        title="MCP servers"
-        actions={
-          <>
-            <label className="flex w-[6.75rem] shrink-0 items-center justify-center gap-2 rounded-capsule border border-on-media/30 bg-media-overlay px-2.5 py-1 text-detail text-on-media">
-              <ControlInput
-                ref={policySwitchRef}
-                type="checkbox"
-                role="switch"
-                data-testid="mcp-policy-switch"
-                aria-label="MCP runtime availability"
-                aria-describedby="mcp-policy-help mcp-policy-status"
-                aria-busy={policySaving}
-                checked={mcpEnabled === true}
-                disabled={mcpEnabled === null || policySaving || loading || catalogLoadFailed}
-                onChange={() => void togglePolicy()}
-                className="h-4 w-4 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              />
-              <span className="inline-block min-w-[3.25rem] text-center">
-                {policySaving
-                  ? "Saving…"
-                  : mcpEnabled === null
-                    ? "Loading…"
-                    : mcpEnabled
-                      ? "On"
-                      : "Paused"}
-              </span>
-            </label>
-            <SectionHeroButton
-              data-testid="mcp-reload"
-              variant="ghost"
-              disabled={reloading}
-              title="Reload mcp.json and apply added, changed, or removed servers"
-              aria-label="Reload MCP configuration"
-              onClick={() => void reloadFromDisk()}
-            >
-              <RefreshCw size={13} className={reloading ? "animate-spin" : undefined} />
-              {reloading ? "Reloading…" : "Reload config"}
-            </SectionHeroButton>
-            <SectionHeroButton
-              ref={addToggleRef}
-              data-testid="mcp-add"
-              variant="primary"
-              aria-label={adding ? "Close add MCP server form" : "Add MCP server"}
-              disabled={saving}
-              onClick={startAdd}
-            >
-              <Plus size={13} /> Add server
-            </SectionHeroButton>
-          </>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
-          <p id="mcp-policy-help" className="break-words text-caption text-text-muted">
-            Pausing removes MCP from model runtimes while keeping servers, All
-            Projects/project/agent assignments, and sign-ins unchanged.
-          </p>
-          <div
-            id="mcp-policy-status"
-            data-testid="mcp-policy-status"
-            aria-live="polite"
-            className={cn(
-              "min-h-4 pb-1 text-detail",
-              policyError ? "text-text-primary" : "text-text-muted",
-            )}
-          >
-            {policyError ??
-              (policySaving
-                ? "Saving MCP availability…"
-                : mcpEnabled === null
-                  ? "Loading MCP availability…"
-                  : mcpEnabled
-                    ? "MCP is on."
-                    : "MCP is paused.")}
-          </div>
-          <p className="break-words pb-3 text-caption text-text-muted" data-testid="mcp-trust-copy">
-            {selectedProject
-              ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
-              : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
-          </p>
+    <PageShell
+      width="column"
+      testId="mcp-screen"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-mcp.jpg"
+          title="MCP"
+          actions={
+            <>
+              <SectionHeroButton
+                data-testid="mcp-reload"
+                variant="ghost"
+                disabled={reloading}
+                title="Reload mcp.json and apply added, changed, or removed servers"
+                aria-label="Reload MCP configuration"
+                onClick={() => void reloadFromDisk()}
+              >
+                <RefreshCw size={13} className={reloading ? "animate-spin" : undefined} />
+                {reloading ? "Reloading…" : "Reload config"}
+              </SectionHeroButton>
+              <SectionHeroButton
+                ref={addToggleRef}
+                data-testid="mcp-add"
+                variant="primary"
+                aria-label={adding ? "Close add MCP server form" : "Add MCP server"}
+                disabled={saving}
+                onClick={startAdd}
+              >
+                <Plus size={13} /> Add server
+              </SectionHeroButton>
+            </>
+          }
+        />
+      }
+    >
+      <Card className="mb-3" padding="md">
+        <AppSwitch
+          ref={policySwitchRef}
+          data-testid="mcp-policy-switch"
+          aria-label="MCP runtime availability"
+          aria-describedby="mcp-policy-help mcp-policy-status"
+          aria-busy={policySaving}
+          checked={mcpEnabled === true}
+          disabled={mcpEnabled === null || policySaving || loading || catalogLoadFailed}
+          onCheckedChange={() => void togglePolicy()}
+        >
+          <span className="inline-block min-w-[3.25rem]">
+            {policySaving
+              ? "Saving…"
+              : mcpEnabled === null
+                ? "Loading…"
+                : mcpEnabled
+                  ? "On"
+                  : "Paused"}
+          </span>
+        </AppSwitch>
+        <p id="mcp-policy-help" className="mt-2 break-words text-caption text-text-muted">
+          Pausing removes MCP from model runtimes while keeping servers, All
+          Projects/project/agent assignments, and sign-ins unchanged.
+        </p>
+        <div
+          id="mcp-policy-status"
+          data-testid="mcp-policy-status"
+          aria-live="polite"
+          className={cn(
+            "min-h-4 pb-1 text-detail",
+            policyError ? "text-text-primary" : "text-text-muted",
+          )}
+        >
+          {policyError ??
+            (policySaving
+              ? "Saving MCP availability…"
+              : mcpEnabled === null
+                ? "Loading MCP availability…"
+                : mcpEnabled
+                  ? "MCP is on."
+                  : "MCP is paused.")}
+        </div>
+        <p className="break-words text-caption text-text-muted" data-testid="mcp-trust-copy">
+          {selectedProject
+            ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
+            : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
+        </p>
+      </Card>
 
           {formOpen ? (
             <form
@@ -1130,17 +1136,13 @@ export function McpScreen() {
             aria-busy={loading || savingAssignments.size > 0}
           >
             {loading ? (
-              <div className="py-8 text-center text-body text-text-muted" data-testid="mcp-loading">
-                Loading MCP servers…
-              </div>
+              <AppEmptyState data-testid="mcp-loading" heading="Loading MCP servers…" />
             ) : null}
             {!loading && catalogLoadFailed ? (
-              <div
-                className="py-8 text-center text-body text-danger"
-                data-testid="mcp-load-error"
-                role="alert"
-              >
-                MCP servers could not be loaded. Reload the catalog to try again.
+              <div data-testid="mcp-load-error">
+                <AppInlineNotice tone="danger">
+                  MCP servers could not be loaded. Reload the catalog to try again.
+                </AppInlineNotice>
               </div>
             ) : null}
             {!loading &&
@@ -1662,15 +1664,16 @@ export function McpScreen() {
             missingAssignedServerIds.length === 0 &&
             missingDefaultAssignedServerIds.length === 0 &&
             !adding ? (
-              <div className="py-8 text-center text-body text-text-muted" data-testid="mcp-empty">
-                {currentProjectId
-                  ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
-                  : "No global MCP servers. Add one to assign it to All Projects or specific projects."}
-              </div>
+              <AppEmptyState
+                data-testid="mcp-empty"
+                heading={
+                  currentProjectId
+                    ? "No configured MCP servers. Add a global definition or review this project's .pi/mcp.json."
+                    : "No global MCP servers. Add one to assign it to All Projects or specific projects."
+                }
+              />
             ) : null}
           </div>
-        </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

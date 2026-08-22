@@ -65,6 +65,12 @@ interface SkillRepo {
   unavailable?: { code: "MANAGED_SKILL_REPOSITORY_UNAVAILABLE"; message: string };
   pendingMerges?: SkillMergeConflict[];
 }
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { AppTextField } from "@/design-system/components/AppTextField";
+import { IconButton } from "@/design-system/components/IconButton";
+import { MasterDetailSplit } from "@/design-system/components/MasterDetailSplit";
+import { PageShell } from "@/design-system/components/PageShell";
+import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
 import { useAppStore } from "../state/store.ts";
@@ -1542,54 +1548,77 @@ export function SkillsScreen() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="skills-screen">
-      <SectionHero imageSrc="/screen-art/screen-art-skills.jpg" title="Skills" />
-      <div className="flex min-h-0 flex-1">
-        {/* List pane */}
-        <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border-subtle">
-          <div className="flex items-center gap-2 px-3 pb-2 pt-3">
-            <ControlInput
-              data-testid="skill-search"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-label text-text-primary outline-none focus:border-accent"
-              placeholder="Search skills"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <ControlButton
-              data-testid="new-skill"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-on-accent shadow-capsule hover:bg-primary-hover"
-              title="New skill"
-              onClick={() =>
-                setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
+    <PageShell
+      width="split"
+      testId="skills-screen"
+      hero={<SectionHero imageSrc="/screen-art/screen-art-skills.jpg" title="Skills" />}
+    >
+      <MasterDetailSplit
+        master={
+          <>
+            <PageToolbar
+              leading={
+                <AppTextField
+                  data-testid="skill-search"
+                  size="sm"
+                  placeholder="Search skills"
+                  value={search}
+                  onChange={setSearch}
+                  showClear
+                  clearLabel="Clear skill search"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
               }
-            >
-              <Plus size={15} />
-            </ControlButton>
-            <ControlButton
-              data-testid="skill-import"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-              title="Import skills from a local folder or .md file"
-              onClick={() => void doLocalFolderImport()}
-            >
-              <FolderInput size={15} />
-            </ControlButton>
-            <ControlButton
-              data-testid="skill-scan-known"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-              title="Scan Claude and Codex skill folders"
-              onClick={() => void doKnownScan()}
-            >
-              <FolderSearch size={15} />
-            </ControlButton>
-            <ControlButton
-              data-testid="skill-import-git"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-strong text-text-secondary hover:text-text-primary"
-              title="Import skills from a git repository"
-              onClick={() => setGitUrl((v) => (v === null ? "" : null))}
-            >
-              <GitBranch size={15} />
-            </ControlButton>
-          </div>
+              trailing={
+                <>
+                  <IconButton
+                    data-testid="new-skill"
+                    variant="primary"
+                    shape="circle"
+                    aria-label="New skill"
+                    title="New skill"
+                    icon={<Plus />}
+                    onClick={() =>
+                      setEditing({
+                        name: "",
+                        scope: "global",
+                        description: "",
+                        body: "",
+                        isNew: true,
+                      })
+                    }
+                  />
+                  <IconButton
+                    data-testid="skill-import"
+                    variant="secondary"
+                    shape="circle"
+                    aria-label="Import skills from a local folder or .md file"
+                    title="Import skills from a local folder or .md file"
+                    icon={<FolderInput />}
+                    onClick={() => void doLocalFolderImport()}
+                  />
+                  <IconButton
+                    data-testid="skill-scan-known"
+                    variant="secondary"
+                    shape="circle"
+                    aria-label="Scan Claude and Codex skill folders"
+                    title="Scan Claude and Codex skill folders"
+                    icon={<FolderSearch />}
+                    onClick={() => void doKnownScan()}
+                  />
+                  <IconButton
+                    data-testid="skill-import-git"
+                    variant="secondary"
+                    shape="circle"
+                    aria-label="Import skills from a git repository"
+                    title="Import skills from a git repository"
+                    icon={<GitBranch />}
+                    onClick={() => setGitUrl((v) => (v === null ? "" : null))}
+                  />
+                </>
+              }
+            />
           {importPath !== null ? (
             <div className="mx-3 mb-2 flex gap-2">
               <ControlInput
@@ -1727,7 +1756,7 @@ export function SkillsScreen() {
           {packageWarnings.length > 0 ? (
             <div
               data-testid="skill-package-warnings"
-              className="mx-3 mb-2 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
+              className="mx-3 mb-2 rounded-lg border border-border-subtle px-2.5 py-1.5 text-detail text-text-secondary"
               role="status"
             >
               {packageWarnings.map((warning) => (
@@ -1740,7 +1769,7 @@ export function SkillsScreen() {
           {pluginRefs.length > 0 ? (
             <div
               data-testid="skill-plugin-refs"
-              className="mx-3 mb-2 space-y-1 rounded-lg border border-border px-2.5 py-1.5 text-detail text-text-secondary"
+              className="mx-3 mb-2 space-y-1 rounded-lg border border-border-subtle px-2.5 py-1.5 text-detail text-text-secondary"
             >
               <div className={cn(sectionHeaderClass, "text-text-muted")}>
                 Codex plugin references
@@ -2239,15 +2268,16 @@ export function SkillsScreen() {
               );
             })}
             {visible.length === 0 ? (
-              <div className="mt-8 text-center text-body text-text-muted">
-                No skills found in ~/.pi/agent/skills or this project's .pi/skills.
-              </div>
+              <AppEmptyState
+                heading="No matches"
+                body="No skills found in ~/.pi/agent/skills or this project's .pi/skills."
+              />
             ) : null}
           </div>
-        </div>
-
-        {/* Detail pane */}
-        {selected ? (
+          </>
+        }
+        detail={
+        selected ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="skill-detail">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-source-project-stroke bg-source-project-subtle text-source-project">
@@ -2507,13 +2537,11 @@ export function SkillsScreen() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-body text-text-muted">
-            Select a skill.
-          </div>
-        )}
-
+          <AppEmptyState layout="fill" heading="Select a skill." role="presentation" />
+        )
+        }
+      />
         {editing ? <SkillEditSheet draft={editing} onClose={() => setEditing(null)} /> : null}
-      </div>
-    </div>
+    </PageShell>
   );
 }

@@ -167,6 +167,9 @@
   --space-row: var(--space-3);
   --space-control-gap: var(--space-1-5);
   --space-sheet: var(--space-8);
+  --space-page-x: var(--space-6);
+  --space-page-y: var(--space-5);
+  --space-toolbar: var(--space-3);
 
   /* Sizing */
   --size-control-sm: 28px;
@@ -177,7 +180,15 @@
   --size-icon-lg: 20px;
   --size-hit-target: 32px;
   --size-titlebar: 40px;
-  --size-section-hero: 12rem;
+  --size-section-hero: 5.5rem;
+  --size-page-column: 48rem;
+  --size-page-column-narrow: 36rem;
+  --size-master-pane: 22rem;
+  --size-master-pane-min: 18rem;
+  --size-page-toolbar: 40px;
+  --size-switch-track-w: 36px;
+  --size-switch-track-h: 20px;
+  --size-switch-thumb: 14px;
   --size-sheet: 56rem;
   --size-scroll-fade: 36px;
   --sidebar-width: 240px;

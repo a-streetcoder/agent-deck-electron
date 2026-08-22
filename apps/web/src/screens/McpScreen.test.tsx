@@ -13,6 +13,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
   vi.stubGlobal("fetch", vi.fn());
   useAppStore.setState({
     resourcesVersion: 0,
@@ -39,12 +47,12 @@ describe("MCP master policy", () => {
     );
     render(<McpScreen />);
     const toggle = screen.getByRole("switch", { name: "MCP runtime availability" });
-    expect((toggle as HTMLInputElement).checked).toBe(false);
-    expect((toggle as HTMLInputElement).disabled).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("Loading…")).toBeTruthy();
     expect(screen.getByTestId("mcp-policy-status").textContent).toBe("Loading MCP availability…");
     resolveCatalog(jsonResponse({ mcpEnabled: true, servers: [] }));
-    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
   });
 
   it("exposes an accessible non-optimistic switch and renders paused rows without disabling management", async () => {
@@ -82,16 +90,16 @@ describe("MCP master policy", () => {
 
     render(<McpScreen />);
     const toggle = await screen.findByRole("switch", { name: "MCP runtime availability" });
-    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     toggle.focus();
     fireEvent.click(toggle);
     // Capability truth does not change optimistically while persistence is pending.
-    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(toggle.getAttribute("aria-busy")).toBe("true");
     expect(screen.getByText("Saving MCP availability…")).toBeTruthy();
     resolveToggle(jsonResponse({ mcpEnabled: false }));
 
-    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
     expect(screen.getByTestId("mcp-status-server").textContent).toBe("paused");
     expect((screen.getByTestId("mcp-refresh-server") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId("mcp-edit-server")).toBeTruthy();
@@ -134,7 +142,7 @@ describe("MCP master policy", () => {
     expect(toggle.getAttribute("aria-busy")).toBe("true");
     resolveWinner(jsonResponse({ mcpEnabled: false, servers: [] }));
     await waitFor(() => expect(toggle.getAttribute("aria-busy")).toBe("false"));
-    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(document.activeElement).toBe(toggle);
   });
 
@@ -150,7 +158,7 @@ describe("MCP master policy", () => {
     const toggle = await screen.findByRole("switch", { name: "MCP runtime availability" });
     fireEvent.click(toggle);
     await waitFor(() => expect(useAppStore.getState().error).toBe("Policy write failed"));
-    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     const status = screen.getByTestId("mcp-policy-status");
     expect(status.textContent).toContain("Policy write failed");
     expect(status.className).toContain("text-text-primary");

@@ -4,6 +4,8 @@ import {
   ControlTextArea,
   ControlSelect,
 } from "@/design-system/components/NativeControls";
+import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Play, Plus, ShieldCheck, Square, Trash2, X } from "lucide-react";
@@ -1028,28 +1030,33 @@ export function LoopsScreen() {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="loops-screen">
-      <SectionHero
-        imageSrc="/screen-art/screen-art-loops.jpg"
-        title="Loop Bank"
-        subtitle={
-          <>
-            Saved loops repeat an agent run until the validation command passes.
-            {currentProjectId ? " Run one in the current project." : " Open a project to run one."}
-          </>
-        }
-        actions={
-          <SectionHeroButton
-            data-testid="new-loop"
-            variant="primary"
-            onClick={() => openEditor(null)}
-          >
-            <Plus size={13} /> New loop
-          </SectionHeroButton>
-        }
-      />
-      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">
-        <div className="mx-auto min-w-0 max-w-3xl">
+    <PageShell
+      width="column"
+      testId="loops-screen"
+      className="min-w-0"
+      canvasClassName="min-w-0 overflow-x-hidden"
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-loops.jpg"
+          title="Loops"
+          subtitle={
+            <>
+              Saved loops repeat an agent run until the validation command passes.
+              {currentProjectId ? " Run one in the current project." : " Open a project to run one."}
+            </>
+          }
+          actions={
+            <SectionHeroButton
+              data-testid="new-loop"
+              variant="primary"
+              onClick={() => openEditor(null)}
+            >
+              <Plus size={13} /> New loop
+            </SectionHeroButton>
+          }
+        />
+      }
+    >
           {activeRun ? (
             <div
               className="mb-3 min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
@@ -1672,12 +1679,12 @@ export function LoopsScreen() {
               );
             })}
             {loaded && loops.length === 0 ? (
-              <div className="py-8 text-center text-body text-text-muted" data-testid="loop-empty">
-                No loops yet. Create one to iterate an agent toward a checked goal.
-              </div>
+              <AppEmptyState
+                data-testid="loop-empty"
+                heading="No loops yet. Create one to iterate an agent toward a checked goal."
+              />
             ) : null}
           </div>
-        </div>
 
         {reviewDialog ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-2 sm:p-6">
@@ -2847,7 +2854,6 @@ export function LoopsScreen() {
             </div>
           </div>
         ) : null}
-      </div>
-    </div>
+    </PageShell>
   );
 }
