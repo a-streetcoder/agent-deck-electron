@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { AppScrollView } from "./AppScrollView";
 
-export type PageShellWidth = "page" | "narrow" | "split";
+export type PageShellWidth = "page" | "split";
 
 export type PageShellProps = {
   hero?: ReactNode;
@@ -16,7 +16,6 @@ export type PageShellProps = {
 
 const canvasWidthClass: Record<Exclude<PageShellWidth, "split">, string> = {
   page: "w-full px-page-x py-page-y",
-  narrow: "mx-auto w-full max-w-page-narrow px-page-x py-page-y",
 };
 
 /**

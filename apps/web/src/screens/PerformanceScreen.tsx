@@ -91,7 +91,7 @@ export function PerformanceScreen() {
 
   return (
     <PageShell
-      width="narrow"
+      width="page"
       testId="performance-screen"
       hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Performance" />}
     >
