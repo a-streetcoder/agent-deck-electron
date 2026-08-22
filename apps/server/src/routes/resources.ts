@@ -376,9 +376,9 @@ export function registerResourceRoutes(ctx: ServerContext): void {
 
   fastify.get("/resources/skills", async (request) => {
     const { projectId } = request.query as { projectId?: string };
-    // SKL-08: surface package-resolution warnings (a configured package that silently
-    // contributes nothing is exactly what the user needs to hear about). The locations pass
-    // is metadata-only — no skill files are loaded twice.
+    // SKL-08: packageWarnings are declared-but-missing skill paths, bad settings JSON,
+    // and the ref cap — not unresolved theme/extension npm names (native parity). The
+    // locations pass is metadata-only — no skill files are loaded twice.
     const { warnings } = scanPackageSkillLocations(rootsFor(projectId));
     // SKL-09: plugin refs re-resolve every request — a ref gone stale (plugin removed,
     // version dropped the skill) warns here instead of silently vanishing from the catalog.

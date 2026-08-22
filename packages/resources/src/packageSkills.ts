@@ -9,9 +9,11 @@ import { piAgentHome, type ResourceRoots } from "./paths.ts";
  * Native's `PiScanner.scanPackageSkills`, ported. Read-only source: nothing here is written.
  *
  * Reference resolution mirrors native: an absolute path is used as-is, `./`-style refs resolve
- * against the PROJECT root, and a bare npm name is tried against the platform's global
- * `node_modules` roots (Windows adds `%APPDATA%\npm\node_modules`, which native's macOS list
- * lacks; the unix roots are kept for cross-platform parity and simply don't exist elsewhere).
+ * against the PROJECT root, and a bare npm name (after stripping an `npm:` prefix) is tried
+ * against the platform's global `node_modules` roots (Windows adds `%APPDATA%\npm\node_modules`,
+ * which native's macOS list lacks; the unix roots are kept for cross-platform parity and simply
+ * don't exist elsewhere). Unresolved packages are skipped silently (native parity); themes and
+ * extensions listed in `packages[]` are not skill errors.
  */
 export interface PackageSkillLocation {
   /** The catalog directory containing skill roots. */
@@ -22,7 +24,7 @@ export interface PackageSkillLocation {
 
 export interface PackageSkillScanResult {
   locations: PackageSkillLocation[];
-  /** Human-readable notes: unresolvable refs, declared-but-missing skill paths, bad JSON. */
+  /** Human-readable notes: invalid settings JSON, ref cap, declared-but-missing or escaped paths. */
   warnings: string[];
 }
 
@@ -44,14 +46,32 @@ function globalNodeModulesRoots(home: string): string[] {
  * project-controlled list of thousands of refs would block the event loop (review, Codex). */
 const MAX_PACKAGE_REFS = 50;
 
+/** Native `SlashCommandCatalog.normalizePackageReference` for lookup: strip `npm:`.
+ * Absolute and relative resolution still uses the original ref. */
+function normalizePackageReference(ref: string): string {
+  if (ref.startsWith("npm:")) return ref.slice(4);
+  return ref;
+}
+
+/** Native `packageSources`: a string, or `{ source: string }`. Other shapes are ignored. */
+function packageRefFromEntry(entry: unknown): string | undefined {
+  if (typeof entry === "string") return entry.trim() !== "" ? entry : undefined;
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const source = (entry as { source?: unknown }).source;
+    if (typeof source === "string" && source.trim() !== "") return source;
+  }
+  return undefined;
+}
+
 function readPackagesList(settingsFile: string, warnings: string[]): string[] {
   if (!existsSync(settingsFile)) return [];
   try {
     const parsed = JSON.parse(readFileSync(settingsFile, "utf8")) as { packages?: unknown };
     if (!Array.isArray(parsed.packages)) return [];
-    const refs = parsed.packages.filter(
-      (p): p is string => typeof p === "string" && p.trim() !== "",
-    );
+    const refs = parsed.packages.flatMap((entry) => {
+      const ref = packageRefFromEntry(entry);
+      return ref === undefined ? [] : [ref];
+    });
     if (refs.length > MAX_PACKAGE_REFS) {
       warnings.push(
         `${settingsFile} lists ${refs.length} packages; only the first ${MAX_PACKAGE_REFS} are scanned.`,
@@ -86,22 +106,17 @@ function isContained(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function resolvePackageRoot(
-  ref: string,
-  roots: ResourceRoots,
-  warnings: string[],
-): string | undefined {
+function resolvePackageRoot(ref: string, roots: ResourceRoots): string | undefined {
   if (path.isAbsolute(ref)) return existsSync(ref) ? ref : undefined;
   if (ref.startsWith("./") || ref.startsWith("../")) {
-    if (!roots.projectPath) {
-      warnings.push(`Package ${ref} is project-relative, but no project is selected.`);
-      return undefined;
-    }
+    if (!roots.projectPath) return undefined;
     const resolved = path.resolve(roots.projectPath, ref);
     return existsSync(resolved) ? resolved : undefined;
   }
+  const packageName = normalizePackageReference(ref);
+  if (packageName === "") return undefined;
   for (const nodeModules of globalNodeModulesRoots(roots.home)) {
-    const candidate = path.join(nodeModules, ref);
+    const candidate = path.join(nodeModules, packageName);
     if (existsSync(candidate)) return candidate;
   }
   return undefined;
@@ -150,8 +165,8 @@ function packageSkillDirs(pkgRoot: string, ref: string, warnings: string[]): str
   return dirs;
 }
 
-/** Every configured package ref resolved to its on-disk root (global ∪ project),
- * with unresolvable refs warned about — shared by the skill and prompt scans. */
+/** Every configured package ref resolved to its on-disk root (global ∪ project).
+ * Unresolved refs are skipped silently — shared by the skill and prompt scans. */
 function resolvedPackageRoots(
   roots: ResourceRoots,
   warnings: string[],
@@ -164,15 +179,8 @@ function resolvedPackageRoots(
   ];
   const resolved: { ref: string; pkgRoot: string }[] = [];
   for (const ref of refs) {
-    const pkgRoot = resolvePackageRoot(ref, roots, warnings);
-    if (!pkgRoot) {
-      if (!path.isAbsolute(ref) && !ref.startsWith("./") && !ref.startsWith("../")) {
-        warnings.push(`Package ${ref} was not found in any global node_modules root.`);
-      } else if (path.isAbsolute(ref)) {
-        warnings.push(`Package path ${ref} was not found.`);
-      }
-      continue;
-    }
+    const pkgRoot = resolvePackageRoot(ref, roots);
+    if (!pkgRoot) continue;
     resolved.push({ ref, pkgRoot });
   }
   return resolved;

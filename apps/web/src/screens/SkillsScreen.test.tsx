@@ -377,7 +377,9 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
                 disabled: false,
               },
             ],
-            packageWarnings: ["Package ghost-pack was not found in any global node_modules root."],
+            packageWarnings: [
+              "Package ghost-pack declares skills at skill-dir, but that path was not found.",
+            ],
           }),
         );
       }
@@ -395,8 +397,10 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(screen.getByTestId("skill-source-packaged-tip").textContent).toContain(
       "node_modules/pack",
     );
-    // a configured-but-broken package is surfaced, not silent
-    expect(screen.getByTestId("skill-package-warnings").textContent).toContain("ghost-pack");
+    // a declared-but-missing skill path is surfaced, not silent
+    expect(screen.getByTestId("skill-package-warnings").textContent).toContain(
+      "Package ghost-pack declares skills at skill-dir, but that path was not found.",
+    );
   });
 
   it("known-source scan merges labeled roots and imports grouped by folder (SKL-07/10)", async () => {

@@ -68,7 +68,7 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     expect(ghost.exists).toBe(false);
   });
 
-  it("lists package extensions with `package` provenance and surfaces resolution warnings (EXT-02)", async () => {
+  it("lists package extensions with `package` provenance (EXT-02)", async () => {
     const { extensions, packageExtensionWarnings } = (await (
       await fetch(`http://127.0.0.1:${server.port}/resources/extensions`)
     ).json()) as {
@@ -79,7 +79,7 @@ describe("settings-defined extension candidates (EXT-01)", () => {
     expect(packed.source).toBe("package");
     expect(packed.scope).toBe("package");
     expect(packed.packageRef).toContain("ext-pack");
-    // the unresolvable package ref is heard about, not silent
-    expect(packageExtensionWarnings.some((w) => w.includes("missing-pack"))).toBe(true);
+    // unresolved package refs are skipped silently (native parity)
+    expect(packageExtensionWarnings.some((w) => w.includes("missing-pack"))).toBe(false);
   });
 });

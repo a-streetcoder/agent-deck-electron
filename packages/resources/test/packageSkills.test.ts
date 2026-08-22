@@ -68,12 +68,58 @@ describe("scanPackageSkillLocations", () => {
 
     const out = scanPackageSkillLocations({ home, projectPath: project });
     expect(out.locations.map((l) => l.dir)).toEqual([path.resolve(pkg, "skills")]);
-    // the same ./ ref without a project warns instead of resolving against anything else
+    // the same ./ ref without a project is skipped silently (native parity)
     const homeSettings = path.join(home, ".pi", "agent", "settings.json");
     writeFileSync(homeSettings, JSON.stringify({ packages: ["./vendor/helper-pack"] }));
     const noProject = scanPackageSkillLocations({ home });
     expect(noProject.locations).toEqual([]);
-    expect(noProject.warnings.some((w) => w.includes("no project is selected"))).toBe(true);
+    expect(noProject.warnings).toEqual([]);
+  });
+
+  it("skips unresolved npm: theme/extension refs without warning", () => {
+    const { home, piAgent } = makeHome("npm-themes");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({
+        packages: ["npm:pi-theme-flexoki", "npm:@sherif-fanous/pi-atom-one"],
+      }),
+    );
+
+    const out = scanPackageSkillLocations({ home });
+    expect(out.locations).toEqual([]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("resolves npm: names against home node_modules after stripping the prefix", () => {
+    const { home, piAgent } = makeHome("npm-prefix");
+    const pkg = path.join(home, "node_modules", "my-skill-pack");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "my-skill-pack" }));
+    writeSkill(path.join(pkg, "skills"), "from-npm");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({ packages: ["npm:my-skill-pack"] }),
+    );
+
+    const out = scanPackageSkillLocations({ home });
+    expect(out.locations.map((l) => l.dir)).toEqual([path.resolve(pkg, "skills")]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("resolves { source } package entries to an absolute package with skills/", () => {
+    const { home, piAgent } = makeHome("obj-source");
+    const pkg = path.join(root, "pkg-object-source");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "pkg-object-source" }));
+    writeSkill(path.join(pkg, "skills"), "from-object");
+    writeFileSync(
+      path.join(piAgent, "settings.json"),
+      JSON.stringify({ packages: [{ source: pkg }] }),
+    );
+
+    const out = scanPackageSkillLocations({ home });
+    expect(out.locations.map((l) => l.dir)).toEqual([path.resolve(pkg, "skills")]);
+    expect(out.warnings).toEqual([]);
   });
 
   it("refuses a sibling-prefix escape (pkg vs pkg-evil)", () => {
