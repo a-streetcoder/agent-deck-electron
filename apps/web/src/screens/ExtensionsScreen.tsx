@@ -473,7 +473,7 @@ export function ExtensionsScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="extensions-screen"
       hero={
         <SectionHero

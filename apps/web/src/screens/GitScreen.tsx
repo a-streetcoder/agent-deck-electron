@@ -610,7 +610,7 @@ export function GitScreen() {
   if (!currentProjectId) {
     return (
       <PageShell
-        width="column"
+        width="page"
         testId="git-screen"
         hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" />}
       >
@@ -646,7 +646,7 @@ export function GitScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="git-screen"
       hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" actions={gitHeroActions} />}
     >

@@ -1031,7 +1031,7 @@ export function LoopsScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="loops-screen"
       className="min-w-0"
       canvasClassName="min-w-0 overflow-x-hidden"

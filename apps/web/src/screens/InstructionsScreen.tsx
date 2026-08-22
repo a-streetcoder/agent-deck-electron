@@ -340,7 +340,7 @@ export function InstructionsScreen() {
         />
       }
     >
-      <div className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col px-page-x py-page-y">
+      <div className="flex min-h-0 w-full flex-1 flex-col px-page-x py-page-y">
           {needsProject ? (
             <AppEmptyState
               layout="fill"

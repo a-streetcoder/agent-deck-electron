@@ -93,7 +93,7 @@ export function ProvidersScreen({
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="providers-screen"
       hero={
         <SectionHero

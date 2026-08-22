@@ -251,7 +251,7 @@ export function ModelsScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="models-screen"
       hero={
         <SectionHero

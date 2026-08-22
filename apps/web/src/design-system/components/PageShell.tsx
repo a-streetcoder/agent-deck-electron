@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { AppScrollView } from "./AppScrollView";
 
-export type PageShellWidth = "column" | "narrow" | "bleed" | "split";
+export type PageShellWidth = "page" | "narrow" | "split";
 
 export type PageShellProps = {
   hero?: ReactNode;
@@ -15,9 +15,8 @@ export type PageShellProps = {
 };
 
 const canvasWidthClass: Record<Exclude<PageShellWidth, "split">, string> = {
-  column: "mx-auto w-full max-w-page px-page-x py-page-y",
+  page: "w-full px-page-x py-page-y",
   narrow: "mx-auto w-full max-w-page-narrow px-page-x py-page-y",
-  bleed: "w-full px-page-x py-page-y",
 };
 
 /**
@@ -27,7 +26,7 @@ const canvasWidthClass: Record<Exclude<PageShellWidth, "split">, string> = {
 export function PageShell({
   hero,
   toolbar,
-  width = "column",
+  width = "page",
   children,
   className,
   canvasClassName,

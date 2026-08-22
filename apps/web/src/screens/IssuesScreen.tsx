@@ -549,7 +549,7 @@ export function IssuesScreen() {
   if (!project) {
     return (
       <PageShell
-        width="column"
+        width="page"
         testId="issues-screen"
         hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
       >
@@ -564,7 +564,7 @@ export function IssuesScreen() {
   if (detailNumber !== null) {
     return (
       <PageShell
-        width="column"
+        width="page"
         testId="issues-screen"
         hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
         toolbar={
@@ -837,7 +837,7 @@ export function IssuesScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="issues-screen"
       hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
       toolbar={

@@ -10,7 +10,7 @@ The design system is the single visual and interaction boundary for the Electron
 4. **Domain adapters** — `themes/` translates tokens for CodeMirror, Shiki, and xterm.
 5. **Feature views** — compose the layers above and retain only domain state and unique layout.
 
-Page layout tokens (aliases unless noted): `--space-page-x` (`--space-6`), `--space-page-y` (`--space-5`), `--space-toolbar` (`--space-3`), `--size-page-column` (48rem), `--size-page-column-narrow` (36rem), `--size-master-pane` (22rem), `--size-master-pane-min` (18rem), `--size-page-toolbar` (40px), `--size-section-hero` (8rem), switch track/thumb sizes.
+Page layout tokens (aliases unless noted): `--space-page-x` (`--space-6`), `--space-page-y` (`--space-5`), `--space-toolbar` (`--space-3`), `--size-page-column-narrow` (36rem), `--size-master-pane` (22rem), `--size-master-pane-min` (18rem), `--size-page-toolbar` (40px), `--size-section-hero` (8rem), switch track/thumb sizes. `PageShell` widths: `page` (default full-bleed canvas with page-x/page-y), `narrow` (settings forms only), `split` (inspector / sticky editor, no page scroller).
 
 ## Typography
 
@@ -58,7 +58,7 @@ Approved type exceptions:
 - Prefer `Button`, `IconButton`, and `TextField` when their supported contract fits.
 - Specialized native controls must use `ControlButton`, `ControlInput`, `ControlTextArea`, or `ControlSelect`; do not render raw controls in feature files.
 - Sheet/dialog chrome uses `SheetHeader` (bottom hairline) and `SheetFooter` (top hairline); the body has no trailing divider. Inner width and padding are `--size-sheet` / `--space-sheet`; page overlays clear traffic lights with `--size-titlebar` (`pt-titlebar`), not on the header primitive.
-- Sidebar-launched views compose `PageShell` + optional `PageToolbar` / `MasterDetailSplit` / `DetailHeader`. Do not wrap the page canvas in an extra elevated card. `SectionHero` is 8rem (`--size-section-hero`). Settings rows use `AppSwitch`; inline status uses `AppInlineNotice`.
+- Sidebar-launched views compose `PageShell` + optional `PageToolbar` / `MasterDetailSplit` / `DetailHeader`. Use `width="page"` unless the view is a short settings form (`narrow`) or a split/sticky editor (`split`). Do not wrap the page canvas in an extra elevated card or a second max-width column. `SectionHero` is 8rem (`--size-section-hero`). Settings rows use `AppSwitch`; inline status uses `AppInlineNotice`.
 - Flex/grid, responsive layout, percentages, viewport sizes, and runtime geometry may remain local.
 - Reusable colors, typography, radii, shadows, layers, and motion belong in `tokens.css` and must be mapped through Tailwind.
 - A repeated composition should become a component after it has at least two real consumers or when it owns shared accessibility behavior.

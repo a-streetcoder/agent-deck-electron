@@ -294,7 +294,7 @@ export function ProjectsScreen() {
 
   return (
     <PageShell
-      width="bleed"
+      width="page"
       testId="projects-screen"
       hero={
         <SectionHero

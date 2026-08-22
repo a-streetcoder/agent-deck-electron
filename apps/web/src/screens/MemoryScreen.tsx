@@ -1026,7 +1026,7 @@ export function MemoryScreen() {
   if (!currentProjectId) {
     return (
       <PageShell
-        width="column"
+        width="page"
         testId="memory-screen"
         hero={<SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />}
       >

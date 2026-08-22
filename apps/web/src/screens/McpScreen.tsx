@@ -871,7 +871,7 @@ export function McpScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="mcp-screen"
       hero={
         <SectionHero

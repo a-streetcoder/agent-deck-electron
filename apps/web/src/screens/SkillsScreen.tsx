@@ -2142,7 +2142,7 @@ export function SkillsScreen() {
             </div>
           ) : null}
           <div
-            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4"
+            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-page-x pb-page-y"
             role="listbox"
             aria-label="Skills"
           >
@@ -2278,7 +2278,7 @@ export function SkillsScreen() {
         }
         detail={
         selected ? (
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="skill-detail">
+          <div className="min-h-0 flex-1 overflow-y-auto px-page-x py-page-y" data-testid="skill-detail">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-source-project-stroke bg-source-project-subtle text-source-project">
                 <WandSparkles size={17} />

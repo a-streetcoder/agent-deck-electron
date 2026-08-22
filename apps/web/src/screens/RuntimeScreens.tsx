@@ -84,7 +84,7 @@ export function EnvironmentScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="environment-screen"
       hero={
         <SectionHero
@@ -474,7 +474,7 @@ export function DoctorScreen() {
 
   return (
     <PageShell
-      width="column"
+      width="page"
       testId="doctor-screen"
       hero={
         <SectionHero

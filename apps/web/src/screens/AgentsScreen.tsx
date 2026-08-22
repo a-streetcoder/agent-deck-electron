@@ -269,7 +269,7 @@ export function AgentDetail({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="agent-detail">
+    <div className="min-h-0 flex-1 overflow-y-auto px-page-x py-page-y" data-testid="agent-detail">
       <div className="flex flex-wrap items-start gap-4">
         <div className="flex shrink-0 flex-col items-center gap-1.5">
           <AgentAvatar agent={agent} size={56} />
@@ -837,7 +837,7 @@ export function AgentsScreen() {
               }
             />
             <AppScrollView className="flex-1">
-          <div className="space-y-3 px-3 pb-4" role="listbox" aria-label="Agents">
+          <div className="space-y-3 px-page-x pb-page-y" role="listbox" aria-label="Agents">
             {SECTION_ORDER.map(({ scope, title, hint }) => {
               const sectionAgents = visible.filter((agent) => agent.scope === scope);
               if (sectionAgents.length === 0) return null;
