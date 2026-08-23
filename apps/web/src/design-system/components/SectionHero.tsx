@@ -8,27 +8,46 @@ export type SectionHeroProps = {
   title: ReactNode;
   subtitle: ReactNode;
   actions?: ReactNode;
+  /** Use on catalog-heavy workspaces where vertical working area is the priority. */
+  compact?: boolean;
 };
 
 /**
  * Compact full-bleed illustration banner for Electron section screens.
  * Sits under the app titlebar; keep it out of cards and max-width columns.
  */
-export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroProps) {
+export function SectionHero({
+  imageSrc,
+  title,
+  subtitle,
+  actions,
+  compact = false,
+}: SectionHeroProps) {
   const macDesktop = isMacDesktop();
   return (
     <div
       className={cn(
-        "relative h-section-hero shrink-0 overflow-hidden",
+        "relative shrink-0 overflow-hidden",
+        compact ? "h-20 sm:h-24" : "h-section-hero",
         macDesktop && "[-webkit-app-region:drag]",
       )}
     >
       <img alt="" src={imageSrc} className="absolute inset-0 size-full object-cover" />
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 px-page-x pb-4 pt-6">
+      <div
+        className={cn(
+          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4",
+          compact ? "px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6 lg:px-8" : "px-page-x pb-4 pt-6",
+        )}
+      >
         <div className="min-w-0">
           <h2
-            className="truncate text-heading font-semibold tracking-heading text-on-media"
+            className={cn(
+              "truncate font-semibold text-on-media",
+              compact
+                ? "text-title tracking-title sm:text-heading sm:tracking-heading"
+                : "text-heading tracking-heading",
+            )}
             style={{ fontStretch: "expanded" }}
             data-testid="app-view-title"
           >

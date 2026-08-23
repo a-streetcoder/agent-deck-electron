@@ -1,15 +1,19 @@
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppScrollView } from "@/design-system/components/AppScrollView";
 import { AppTextField } from "@/design-system/components/AppTextField";
-import { IconButton } from "@/design-system/components/IconButton";
-import { MasterDetailSplit } from "@/design-system/components/MasterDetailSplit";
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+
+import {
+  ControlButton,
+  ControlInput,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   ImagePlus,
   Pencil,
@@ -42,9 +46,8 @@ import { ScopeChip } from "../components/ScopeChip.tsx";
 import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
- * Native AgentsScreen: a fixed master-detail split (list 42% / detail 58%,
- * AppTheme.Split.listFraction) — sectioned avatar rows on the left, an
- * AppPage-style detail on the right, editing in a tabbed sheet.
+ * Full-width agent catalog with an in-place full-page detail route. Editing
+ * remains in the existing tabbed sheet.
  */
 
 const SECTION_ORDER: Array<{ scope: AgentInfo["scope"]; title: string; hint?: string }> = [
@@ -75,6 +78,7 @@ function AgentRow({
       )}
       data-testid="agent-row"
       data-agent-name={agent.name}
+      data-agent-path={agent.filePath}
       role="option"
       aria-selected={selected}
       tabIndex={0}
@@ -269,420 +273,451 @@ export function AgentDetail({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-page-x py-page-y" data-testid="agent-detail">
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="flex shrink-0 flex-col items-center gap-1.5">
-          <AgentAvatar agent={agent} size={56} />
-          <ControlInput
-            ref={avatarInput}
-            className="sr-only"
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            aria-label={`${agent.avatarUrl ? "Replace" : "Import"} avatar for ${agent.name}`}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void avatarRequest(file);
-            }}
-          />
-          <div className="flex gap-1">
-            <ControlButton
-              data-testid="agent-avatar-import"
-              className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={avatarBusy}
-              onClick={() => avatarInput.current?.click()}
-            >
-              <ImagePlus size={11} aria-hidden="true" />
-              {agent.avatarUrl ? "Replace" : "Import"}
-            </ControlButton>
-            {agent.avatarUrl ? (
+    <div
+      className="min-h-0 flex-1 overflow-y-auto px-4 py-page-y sm:px-6 lg:px-8"
+      data-testid="agent-detail"
+    >
+      <div className="mx-auto w-full max-w-5xl">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex shrink-0 flex-col items-center gap-1.5">
+            <AgentAvatar agent={agent} size={56} />
+            <ControlInput
+              ref={avatarInput}
+              className="sr-only"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              aria-label={`${agent.avatarUrl ? "Replace" : "Import"} avatar for ${agent.name}`}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void avatarRequest(file);
+              }}
+            />
+            <div className="flex gap-1">
               <ControlButton
-                data-testid="agent-avatar-remove"
-                className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-muted hover:text-danger disabled:opacity-40"
+                data-testid="agent-avatar-import"
+                className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
                 disabled={avatarBusy}
-                aria-label={`Remove avatar for ${agent.name}`}
-                onClick={() => void removeAvatar()}
+                onClick={() => avatarInput.current?.click()}
               >
-                Remove
+                <ImagePlus size={11} aria-hidden="true" />
+                {agent.avatarUrl ? "Replace" : "Import"}
               </ControlButton>
+              {agent.avatarUrl ? (
+                <ControlButton
+                  data-testid="agent-avatar-remove"
+                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-muted hover:text-danger disabled:opacity-40"
+                  disabled={avatarBusy}
+                  aria-label={`Remove avatar for ${agent.name}`}
+                  onClick={() => void removeAvatar()}
+                >
+                  Remove
+                </ControlButton>
+              ) : null}
+            </div>
+          </div>
+          <div className="min-w-[180px] flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              {renameValue !== null ? (
+                <>
+                  <ControlInput
+                    autoFocus
+                    data-testid="agent-rename-input"
+                    className="min-w-[min(16rem,100%)] flex-1 basis-[calc(100%_-_6rem)] rounded-lg border border-border-strong bg-surface px-2 py-1 text-title font-semibold tracking-title text-text-primary outline-none focus:border-accent"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitRename();
+                      if (e.key === "Escape") setRenameValue(null);
+                    }}
+                  />
+                  <ControlButton
+                    data-testid="agent-rename-confirm"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-accent"
+                    title="Rename"
+                    onClick={() => void submitRename()}
+                  >
+                    <Check size={16} />
+                  </ControlButton>
+                  <ControlButton
+                    data-testid="agent-rename-cancel"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-text-primary"
+                    title="Cancel"
+                    onClick={() => setRenameValue(null)}
+                  >
+                    <X size={16} />
+                  </ControlButton>
+                </>
+              ) : (
+                <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
+                  {agent.name}
+                </h2>
+              )}
+              <ScopeChip scope={agent.scope} />
+              {agent.replacesBuiltin ? (
+                <span className="text-detail" style={{ color: "var(--color-warning)" }}>
+                  replaces builtin
+                </span>
+              ) : null}
+            </div>
+            {agent.description ? (
+              <p className="mt-0.5 text-body text-text-secondary">{agent.description}</p>
             ) : null}
           </div>
-        </div>
-        <div className="min-w-[180px] flex-1">
-          <div className="flex items-center gap-2">
-            {renameValue !== null ? (
-              <>
-                <ControlInput
-                  autoFocus
-                  data-testid="agent-rename-input"
-                  className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 text-title font-semibold tracking-title text-text-primary outline-none focus:border-accent"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void submitRename();
-                    if (e.key === "Escape") setRenameValue(null);
+          <div
+            className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-[900px]:w-full"
+            data-testid="agent-detail-actions"
+            aria-label="Agent actions"
+          >
+            <ControlButton
+              data-testid="agent-edit"
+              className="flex min-h-11 items-center gap-1.5 rounded-capsule bg-primary px-4 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+              onClick={onEdit}
+            >
+              <Pencil size={12} /> Edit
+            </ControlButton>
+            <div className="flex flex-wrap items-center gap-2" aria-label="Secondary agent actions">
+              {canCreateReplacement ? (
+                <ControlButton
+                  data-testid="agent-create-replacement"
+                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                  title="Create an editable global custom agent from this builtin"
+                  onClick={onCreateReplacement}
+                >
+                  <RefreshCw size={12} /> Replacement
+                </ControlButton>
+              ) : null}
+              <ControlButton
+                data-testid="agent-disable"
+                className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
+              >
+                {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
+                {agent.disabled ? "Enable" : "Disable"}
+              </ControlButton>
+              {agent.scope !== "builtin" ? (
+                <ControlButton
+                  data-testid="agent-rename"
+                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                  onClick={() => setRenameValue(agent.name)}
+                >
+                  <Tag size={12} /> Rename
+                </ControlButton>
+              ) : null}
+            </div>
+            {agent.scope !== "builtin" ? (
+              <div
+                className="border-l border-border-subtle pl-2"
+                aria-label="Destructive agent actions"
+              >
+                <ControlButton
+                  data-testid="agent-delete"
+                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-danger/50 px-3 py-1 text-detail text-danger hover:bg-danger/10"
+                  onClick={() => {
+                    if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
+                      void deleteAgent(agent.scope, agent.name);
+                    }
                   }}
-                />
-                <ControlButton
-                  data-testid="agent-rename-confirm"
-                  className="rounded p-1 text-text-muted hover:text-accent"
-                  title="Rename"
-                  onClick={() => void submitRename()}
                 >
-                  <Check size={16} />
+                  <Trash2 size={13} /> Delete
                 </ControlButton>
+              </div>
+            ) : agent.overridden ? (
+              <div
+                className="border-l border-border-subtle pl-2"
+                aria-label="Destructive agent actions"
+              >
                 <ControlButton
-                  data-testid="agent-rename-cancel"
-                  className="rounded p-1 text-text-muted hover:text-text-primary"
-                  title="Cancel"
-                  onClick={() => setRenameValue(null)}
+                  data-testid="agent-reset"
+                  className="min-h-11 rounded-capsule border border-danger/50 px-3 py-1 text-detail text-danger hover:bg-danger/10"
+                  title="Clear all overrides and restore the bundled defaults"
+                  onClick={() => {
+                    if (
+                      confirm(`Reset "${agent.name}" — clear all overrides and restore defaults?`)
+                    ) {
+                      void deleteAgent(agent.scope, agent.name);
+                    }
+                  }}
                 >
-                  <X size={16} />
+                  Reset
                 </ControlButton>
-              </>
-            ) : (
-              <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
-                {agent.name}
-              </h2>
-            )}
-            <ScopeChip scope={agent.scope} />
-            {agent.replacesBuiltin ? (
-              <span className="text-detail" style={{ color: "var(--color-warning)" }}>
-                replaces builtin
-              </span>
+              </div>
             ) : null}
           </div>
-          {agent.description ? (
-            <p className="mt-0.5 text-body text-text-secondary">{agent.description}</p>
-          ) : null}
         </div>
-        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-[900px]:w-full">
+
+        {avatarError ? (
+          <div className="mt-3 text-body" role="alert" style={{ color: "var(--color-role-error)" }}>
+            {avatarError}
+          </div>
+        ) : null}
+
+        <div className="mt-5 space-y-4">
           {currentProject && !agent.shadowed ? (
-            <>
-              {customAgent ? (
+            <section
+              className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-project-usage"
+            >
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Project Usage</div>
+              <p className="pb-2 text-caption text-text-muted">
+                Assignment and default changes apply to new sessions.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {customAgent ? (
+                  <ControlButton
+                    data-testid={`assigned-agent-${agent.name}`}
+                    aria-pressed={isAssigned}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
+                      isAssigned
+                        ? "border-accent text-accent"
+                        : "border-border-strong text-text-muted hover:text-text-primary",
+                    )}
+                    onClick={toggleAssignment}
+                  >
+                    <Check size={12} aria-hidden="true" />
+                    {isAssigned ? "assigned to project" : "assign to project"}
+                  </ControlButton>
+                ) : (
+                  <span
+                    className="text-caption text-text-muted"
+                    data-testid="builtin-project-access"
+                  >
+                    available to every project
+                  </span>
+                )}
                 <ControlButton
-                  data-testid={`assigned-agent-${agent.name}`}
-                  aria-pressed={isAssigned}
+                  data-testid={`default-agent-${agent.name}`}
                   className={cn(
                     "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
-                    isAssigned
+                    isDefault
                       ? "border-accent text-accent"
                       : "border-border-strong text-text-muted hover:text-text-primary",
                   )}
-                  onClick={toggleAssignment}
+                  disabled={!isAssigned || agent.disabled}
+                  title={
+                    !isAssigned
+                      ? "Assign this agent to the project before making it the active-session default"
+                      : undefined
+                  }
+                  onClick={() =>
+                    void updateProject(currentProject.id, {
+                      defaultAgentName: isDefault ? null : agent.name,
+                    })
+                  }
                 >
-                  <Check size={12} aria-hidden="true" />
-                  {isAssigned ? "assigned to project" : "assign to project"}
+                  <Star size={12} fill={isDefault ? "currentColor" : "none"} />
+                  {isDefault ? "active-session default" : "make session default"}
                 </ControlButton>
-              ) : (
-                <span className="text-caption text-text-muted" data-testid="builtin-project-access">
-                  available to every project
-                </span>
-              )}
-              <ControlButton
-                data-testid={`default-agent-${agent.name}`}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
-                  isDefault
-                    ? "border-accent text-accent"
-                    : "border-border-strong text-text-muted hover:text-text-primary",
-                )}
-                disabled={!isAssigned || agent.disabled}
-                title={
-                  !isAssigned
-                    ? "Assign this agent to the project before making it the active-session default"
-                    : undefined
-                }
-                onClick={() =>
-                  void updateProject(currentProject.id, {
-                    defaultAgentName: isDefault ? null : agent.name,
-                  })
-                }
-              >
-                <Star size={12} fill={isDefault ? "currentColor" : "none"} />
-                {isDefault ? "active-session default" : "make session default"}
-              </ControlButton>
-            </>
+              </div>
+            </section>
           ) : null}
-          <>
-            {canCreateReplacement ? (
-              <ControlButton
-                data-testid="agent-create-replacement"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-                title="Create an editable global custom agent from this builtin"
-                onClick={onCreateReplacement}
-              >
-                <RefreshCw size={12} />
-                Replacement
-              </ControlButton>
-            ) : null}
-            <ControlButton
-              data-testid="agent-disable"
-              className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-              onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
-            >
-              {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
-              {agent.disabled ? "Enable" : "Disable"}
-            </ControlButton>
-            <ControlButton
-              data-testid="agent-edit"
-              className="flex items-center gap-1.5 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
-              onClick={onEdit}
-            >
-              <Pencil size={12} />
-              Edit
-            </ControlButton>
-            {/* Rename moves a custom agent's file and re-points project
-                  defaults. Builtins keep their name (it's the override key). */}
-            {agent.scope !== "builtin" ? (
-              <ControlButton
-                data-testid="agent-rename"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-                onClick={() => setRenameValue(agent.name)}
-              >
-                <Tag size={12} />
-                Rename
-              </ControlButton>
-            ) : null}
-            {/* Delete removes a custom agent's file. Builtins are bundled
-                  and can only be reset — offered just when overridden, so its
-                  effect ("clear all overrides") is unambiguous. */}
-            {agent.scope !== "builtin" ? (
-              <ControlButton
-                data-testid="agent-delete"
-                className="rounded-capsule border border-border-strong p-1.5 text-text-muted hover:text-danger"
-                title="Delete agent"
-                onClick={() => {
-                  if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
-                    void deleteAgent(agent.scope, agent.name);
-                  }
-                }}
-              >
-                <Trash2 size={13} />
-              </ControlButton>
-            ) : agent.overridden ? (
-              <ControlButton
-                data-testid="agent-reset"
-                className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-muted hover:text-danger"
-                title="Clear all overrides and restore the bundled defaults"
-                onClick={() => {
-                  if (
-                    confirm(`Reset "${agent.name}" — clear all overrides and restore defaults?`)
-                  ) {
-                    void deleteAgent(agent.scope, agent.name);
-                  }
-                }}
-              >
-                Reset
-              </ControlButton>
-            ) : null}
-          </>
-        </div>
-      </div>
 
-      {avatarError ? (
-        <div className="mt-3 text-body" role="alert" style={{ color: "var(--color-role-error)" }}>
-          {avatarError}
-        </div>
-      ) : null}
-
-      <div className="mt-5 space-y-4">
-        {(agent.warnings?.length ?? 0) > 0 ? (
-          <section
-            className="rounded-xl border border-warning bg-surface-elevated px-4 py-3"
-            data-testid="agent-warning-panel"
-            aria-labelledby="agent-warning-heading"
-          >
-            <div className="flex items-center gap-2 text-label font-semibold text-warning">
-              <AlertTriangle size={15} aria-hidden="true" />
-              <h3 id="agent-warning-heading">Configuration warnings</h3>
+          {(agent.warnings?.length ?? 0) > 0 ? (
+            <section
+              className="rounded-xl border border-warning bg-surface-elevated px-4 py-3"
+              data-testid="agent-warning-panel"
+              aria-labelledby="agent-warning-heading"
+            >
+              <div className="flex items-center gap-2 text-label font-semibold text-warning">
+                <AlertTriangle size={15} aria-hidden="true" />
+                <h3 id="agent-warning-heading">Configuration warnings</h3>
+              </div>
+              <p className="mt-1 text-caption text-text-muted">
+                Evaluated against{" "}
+                {currentProject
+                  ? `the current project “${currentProject.name}”`
+                  : "the global catalog (no project selected)"}{" "}
+                and current runtime settings.
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-body text-text-secondary">
+                {agent.warnings!.map((warning) => (
+                  <li key={warning.id} data-warning-id={warning.id}>
+                    {warning.message}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {canCreateReplacement ? (
+            <div
+              className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-replacement-description"
+            >
+              <p className="text-body text-text-secondary">
+                Use Replacement to create a global custom agent seeded from this bundled agent. The
+                builtin stays unchanged.
+              </p>
             </div>
-            <p className="mt-1 text-caption text-text-muted">
-              Evaluated against{" "}
-              {currentProject
-                ? `the current project “${currentProject.name}”`
-                : "the global catalog (no project selected)"}{" "}
-              and current runtime settings.
-            </p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-body text-text-secondary">
-              {agent.warnings!.map((warning) => (
-                <li key={warning.id} data-warning-id={warning.id}>
-                  {warning.message}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-        {canCreateReplacement ? (
-          <div
-            className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-            data-testid="agent-replacement-description"
-          >
-            <p className="text-body text-text-secondary">
-              Use Replacement to create a global custom agent seeded from this bundled agent. The
-              builtin stays unchanged.
-            </p>
-          </div>
-        ) : null}
-        {agent.whenToUse ? (
-          <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>When to use</div>
-            <p className="text-body text-text-secondary">{agent.whenToUse}</p>
-          </div>
-        ) : null}
+          ) : null}
+          {agent.whenToUse ? (
+            <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>When to use</div>
+              <p className="text-body text-text-secondary">{agent.whenToUse}</p>
+            </div>
+          ) : null}
 
-        <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-          <div className="flex items-center justify-between pb-2">
-            <div className={cn(sectionHeaderClass, "text-text-muted")}>System prompt</div>
-            {/* Native "Prompt Mode" row (AgentManagementViews.swift:1335) surfaces
+          <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
+            <div className="flex items-center justify-between pb-2">
+              <div className={cn(sectionHeaderClass, "text-text-muted")}>System prompt</div>
+              {/* Native "Prompt Mode" row (AgentManagementViews.swift:1335) surfaces
                 the mode only when it's set. "replace" is pi's default (an absent
                 mode launches as replace), so — like native, which hides the row
                 for the implicit default — we badge only the notable "append"
                 case: this body is added on top of pi's base prompt, not the
                 whole prompt. */}
-            {agent.systemPromptMode === "append" ? (
-              <span
-                data-testid="agent-prompt-mode"
-                className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro font-medium text-text-secondary"
-                title="append — keeps pi's base system prompt and adds this agent's instructions on top"
-              >
-                append
-              </span>
-            ) : null}
+              {agent.systemPromptMode === "append" ? (
+                <span
+                  data-testid="agent-prompt-mode"
+                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro font-medium text-text-secondary"
+                  title="append — keeps pi's base system prompt and adds this agent's instructions on top"
+                >
+                  append
+                </span>
+              ) : null}
+            </div>
+            <div className="max-w-3xl">
+              <MarkdownDocument source={agent.body || "_(empty — pi's default prompt applies)_"} />
+            </div>
           </div>
-          <MarkdownDocument source={agent.body || "_(empty — pi's default prompt applies)_"} />
-        </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <ChipList
-              label="Tools"
-              items={
-                agent.tools?.length || agent.mcpDirectTools?.length
-                  ? [
-                      ...(agent.tools ?? []),
-                      ...(agent.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
-                    ]
-                  : ["pi defaults"]
-              }
-            />
-          </div>
-          <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
-            <ChipList label="Skills" items={agent.skills?.length ? agent.skills : ["none"]} />
-          </div>
-          {agent.mcpServers?.length ? (
-            <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-mcp-servers"
-            >
-              <ChipList label="MCP Servers" items={agent.mcpServers} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
+              <ChipList
+                label="Tools"
+                items={
+                  agent.tools?.length || agent.mcpDirectTools?.length
+                    ? [
+                        ...(agent.tools ?? []),
+                        ...(agent.mcpDirectTools ?? []).map((name) => `mcp:${name}`),
+                      ]
+                    : ["pi defaults"]
+                }
+              />
             </div>
-          ) : null}
-          {/* Native "Fallback Models" config row (AgentManagementViews.swift:1333)
+            <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
+              <ChipList label="Skills" items={agent.skills?.length ? agent.skills : ["none"]} />
+            </div>
+            {agent.mcpServers?.length ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-mcp-servers"
+              >
+                <ChipList label="MCP Servers" items={agent.mcpServers} />
+              </div>
+            ) : null}
+            {/* Native "Fallback Models" config row (AgentManagementViews.swift:1333)
               — shown only when declared, like native's `if !isEmpty`. */}
-          {agent.fallbackModels?.length ? (
+            {agent.fallbackModels?.length ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-fallback-models"
+              >
+                <ChipList label="Fallback Models" items={agent.fallbackModels} />
+              </div>
+            ) : null}
+            {agent.scope !== "builtin" && agent.output ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-output"
+              >
+                <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
+                  Output Advisory
+                </div>
+                <div className="text-body text-text-secondary">{agent.output}</div>
+              </div>
+            ) : null}
+            {agent.defaultReads?.length ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-default-reads"
+              >
+                <ChipList label="Default Reads" items={agent.defaultReads} />
+              </div>
+            ) : null}
+            {agent.defaultExpectedOutcome ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-default-outcome"
+              >
+                <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
+                  Default Outcome
+                </div>
+                <div className="text-body text-text-secondary">
+                  {SUBAGENT_EXPECTED_OUTCOME_LABELS[agent.defaultExpectedOutcome]}
+                </div>
+              </div>
+            ) : null}
             <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-fallback-models"
+              className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-default-progress"
             >
-              <ChipList label="Fallback Models" items={agent.fallbackModels} />
-            </div>
-          ) : null}
-          {agent.scope !== "builtin" && agent.output ? (
-            <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-output"
-            >
-              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Output Advisory</div>
-              <div className="text-body text-text-secondary">{agent.output}</div>
-            </div>
-          ) : null}
-          {agent.defaultReads?.length ? (
-            <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-default-reads"
-            >
-              <ChipList label="Default Reads" items={agent.defaultReads} />
-            </div>
-          ) : null}
-          {agent.defaultExpectedOutcome ? (
-            <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-default-outcome"
-            >
-              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Default Outcome</div>
+              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Default Progress</div>
               <div className="text-body text-text-secondary">
-                {SUBAGENT_EXPECTED_OUTCOME_LABELS[agent.defaultExpectedOutcome]}
+                {agent.defaultProgress ? "Yes" : "No"}
               </div>
             </div>
-          ) : null}
-          <div
-            className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-            data-testid="agent-default-progress"
-          >
-            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Default Progress</div>
-            <div className="text-body text-text-secondary">
-              {agent.defaultProgress ? "Yes" : "No"}
-            </div>
-          </div>
-          {agent.maxSubagentDepth !== undefined ? (
+            {agent.maxSubagentDepth !== undefined ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-max-subagent-depth"
+              >
+                <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
+                  Max Subagent Depth Metadata
+                </div>
+                <div className="text-body text-text-secondary">{agent.maxSubagentDepth}</div>
+              </div>
+            ) : null}
             <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-max-subagent-depth"
+              className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+              data-testid="agent-interactive"
             >
               <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
-                Max Subagent Depth Metadata
+                Interactive Metadata
               </div>
-              <div className="text-body text-text-secondary">{agent.maxSubagentDepth}</div>
+              <div className="text-body text-text-secondary">
+                {agent.interactive ? "Yes" : "No"}
+              </div>
             </div>
-          ) : null}
-          <div
-            className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-            data-testid="agent-interactive"
-          >
-            <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>
-              Interactive Metadata
-            </div>
-            <div className="text-body text-text-secondary">{agent.interactive ? "Yes" : "No"}</div>
+            {agent.scope !== "builtin" ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="agent-extensions"
+              >
+                <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Extensions</div>
+                {agent.extensions === undefined ? (
+                  <div className="text-body text-text-secondary">Default catalog policy</div>
+                ) : agent.extensions.length === 0 ? (
+                  <div className="text-body text-text-secondary">None (explicit)</div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="text-body text-text-secondary">
+                      {agent.extensions.length} selected
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {agent.extensions.map((extension) => (
+                        <span
+                          key={extension}
+                          title={extension}
+                          className="max-w-full truncate rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
+                        >
+                          {extension}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
-          {agent.scope !== "builtin" ? (
-            <div
-              className="col-span-2 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-              data-testid="agent-extensions"
-            >
-              <div className={cn(sectionHeaderClass, "pb-1 text-text-muted")}>Extensions</div>
-              {agent.extensions === undefined ? (
-                <div className="text-body text-text-secondary">Default catalog policy</div>
-              ) : agent.extensions.length === 0 ? (
-                <div className="text-body text-text-secondary">None (explicit)</div>
-              ) : (
-                <div className="space-y-1">
-                  <div className="text-body text-text-secondary">
-                    {agent.extensions.length} selected
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {agent.extensions.map((extension) => (
-                      <span
-                        key={extension}
-                        title={extension}
-                        className="max-w-full truncate rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
-                      >
-                        {extension}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
 
-        <div className="grid grid-cols-2 gap-4 text-detail text-text-muted">
-          <div>
-            model: <span className="font-mono">{agent.model ?? "pi default"}</span>
-            {agent.thinking ? <span className="font-mono">:{agent.thinking}</span> : null}
-          </div>
-          <div className="truncate" title={agent.filePath}>
-            {agent.filePath}
+          <div className="grid grid-cols-1 gap-2 text-detail text-text-muted sm:grid-cols-2 sm:gap-4">
+            <div>
+              model: <span className="font-mono">{agent.model ?? "pi default"}</span>
+              {agent.thinking ? <span className="font-mono">:{agent.thinking}</span> : null}
+            </div>
+            <div className="truncate" title={agent.filePath}>
+              {agent.filePath}
+            </div>
           </div>
         </div>
       </div>
@@ -704,6 +739,8 @@ export function AgentsScreen() {
   const [filter, setFilter] = useState<AgentFilter>("all");
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(selectedAgentFilePath);
+  const [view, setView] = useState<"catalog" | "detail">("catalog");
+  const catalogRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<AgentInfo | null | "new" | { replacement: AgentInfo }>(
     null,
   );
@@ -723,11 +760,17 @@ export function AgentsScreen() {
     setSelectedKey(selectedAgentFilePath);
   }, [selectedAgentFilePath]);
 
-  const selected =
-    visible.find((a) => a.filePath === selectedKey) ??
-    visible.find((a) => !a.shadowed) ??
+  const detailAgent =
+    agents.find((agent) => agent.filePath === selectedKey) ??
+    (selectedKey === null
+      ? (visible.find((agent) => !agent.shadowed) ?? visible[0] ?? null)
+      : null);
+  const catalogSelection =
+    visible.find((agent) => agent.filePath === selectedKey) ??
+    visible.find((agent) => !agent.shadowed) ??
     visible[0] ??
     null;
+  const effectiveSelectedKey = catalogSelection?.filePath ?? null;
 
   useEffect(() => {
     if (!resourceRequest?.action.startsWith("agent.")) return;
@@ -773,9 +816,17 @@ export function AgentsScreen() {
     });
   }, [agents, currentProjectId, loaded, loadedProjectId, resourceRequest]);
 
-  const selectAgent = (filePath: string): void => {
+  const selectAgent = (filePath: string, openDetail = false): void => {
     setSelectedKey(filePath);
     useAppStore.getState().setSelectedAgentFilePath(filePath);
+    if (openDetail) setView("detail");
+  };
+  const returnToCatalog = (): void => {
+    setView("catalog");
+    requestAnimationFrame(() => {
+      const rows = catalogRef.current?.querySelectorAll<HTMLElement>("[data-agent-path]");
+      [...(rows ?? [])].find((row) => row.dataset.agentPath === effectiveSelectedKey)?.focus();
+    });
   };
   const replacementSeed =
     typeof editing === "object" && editing !== null && "replacement" in editing
@@ -786,58 +837,69 @@ export function AgentsScreen() {
     <PageShell
       width="split"
       testId="agents-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" subtitle="Create specialized agents and configure how they work." />}
+      hero={
+        <SectionHero
+          compact
+          imageSrc="/screen-art/screen-art-agents.jpg"
+          title="Agents"
+          subtitle="Create specialized agents and configure how they work."
+        />
+      }
     >
-      <MasterDetailSplit
-        master={
-          <>
-            <PageToolbar
-              leading={
-                <AppTextField
-                  data-testid="agent-search"
-                  size="sm"
-                  placeholder="Search agents"
-                  value={search}
-                  onChange={setSearch}
-                  showClear
-                  clearLabel="Clear agent search"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              }
-              trailing={
-                <IconButton
-                  data-testid="new-agent"
-                  variant="primary"
-                  shape="circle"
-                  aria-label="New agent"
-                  title="New agent"
-                  icon={<Plus />}
-                  onClick={() => setEditing("new")}
-                />
-              }
-              below={
-                <div className="flex flex-wrap gap-1">
-                  {AGENT_FILTERS.map((f) => (
-                    <ControlButton
-                      key={f}
-                      data-testid={`agent-filter-${f}`}
-                      className={cn(
-                        "rounded-capsule px-2.5 py-0.5 text-detail",
-                        filter === f
-                          ? "bg-selection text-text-primary"
-                          : "text-text-muted hover:bg-hover",
-                      )}
-                      onClick={() => setFilter(f)}
-                    >
-                      {f}
-                    </ControlButton>
-                  ))}
-                </div>
-              }
+      <div
+        ref={catalogRef}
+        className={cn("flex min-h-0 flex-1 flex-col", view !== "catalog" && "hidden")}
+        data-testid="agents-catalog"
+      >
+        <PageToolbar
+          className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-6xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
+          leading={
+            <AppTextField
+              data-testid="agent-search"
+              size="sm"
+              placeholder="Search agents"
+              value={search}
+              onChange={setSearch}
+              showClear
+              clearLabel="Clear agent search"
+              autoComplete="off"
+              spellCheck={false}
             />
-            <AppScrollView className="flex-1">
-          <div className="space-y-3 px-page-x pb-page-y" role="listbox" aria-label="Agents">
+          }
+          trailing={
+            <ControlButton
+              data-testid="new-agent"
+              className="flex shrink-0 items-center gap-1.5 rounded-capsule bg-primary px-3 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+              onClick={() => setEditing("new")}
+            >
+              <Plus size={14} /> New Agent
+            </ControlButton>
+          }
+          below={
+            <label className="flex w-fit items-center gap-2 text-detail text-text-muted">
+              Show
+              <ControlSelect
+                data-testid="agent-filter-control"
+                aria-label="Filter agents"
+                className="min-w-36 rounded-lg border border-border-strong bg-surface px-2.5 py-1 text-label capitalize text-text-primary outline-none focus:border-accent"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value as AgentFilter)}
+              >
+                {AGENT_FILTERS.map((value) => (
+                  <option key={value} value={value} data-testid={`agent-filter-${value}`}>
+                    {value}
+                  </option>
+                ))}
+              </ControlSelect>
+            </label>
+          }
+        />
+        <AppScrollView className="flex-1">
+          <div
+            className="mx-auto w-full max-w-6xl space-y-3 px-4 pb-page-y sm:px-6 lg:px-8"
+            role="listbox"
+            aria-label="Agents"
+          >
             {SECTION_ORDER.map(({ scope, title, hint }) => {
               const sectionAgents = visible.filter((agent) => agent.scope === scope);
               if (sectionAgents.length === 0) return null;
@@ -857,8 +919,8 @@ export function AgentsScreen() {
                       <AgentRow
                         key={agent.filePath}
                         agent={agent}
-                        selected={selectedKey === agent.filePath}
-                        onSelect={() => selectAgent(agent.filePath)}
+                        selected={effectiveSelectedKey === agent.filePath}
+                        onSelect={() => selectAgent(agent.filePath, true)}
                         onEdit={() => {
                           selectAgent(agent.filePath);
                           setEditing(agent);
@@ -873,24 +935,35 @@ export function AgentsScreen() {
               <AppEmptyState heading="No matches" body="Clear search or filters." />
             ) : null}
           </div>
-            </AppScrollView>
-          </>
-        }
-        detail={
-        selected ? (
+        </AppScrollView>
+      </div>
+      <div className={cn("flex min-h-0 flex-1 flex-col", view !== "detail" && "hidden")}>
+        <PageToolbar
+          className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-5xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
+          leading={
+            <ControlButton
+              data-testid="agent-detail-back"
+              className="flex items-center gap-1.5 text-label text-text-muted hover:text-text-primary"
+              onClick={returnToCatalog}
+            >
+              <ArrowLeft size={14} /> Back to Agents
+            </ControlButton>
+          }
+        />
+        {detailAgent ? (
           <AgentDetail
-            agent={selected}
+            agent={detailAgent}
             canCreateReplacement={
-              selected.scope === "builtin" &&
-              !selected.shadowed &&
+              detailAgent.scope === "builtin" &&
+              !detailAgent.shadowed &&
               !agents.some(
                 (agent) =>
-                  agent.name === selected.name &&
+                  agent.name === detailAgent.name &&
                   (agent.scope === "global" || agent.scope === "project"),
               )
             }
-            onCreateReplacement={() => setEditing({ replacement: selected })}
-            onEdit={() => setEditing(selected)}
+            onCreateReplacement={() => setEditing({ replacement: detailAgent })}
+            onEdit={() => setEditing(detailAgent)}
             availableCustomAgentNames={[
               ...new Set(
                 agents
@@ -902,17 +975,21 @@ export function AgentsScreen() {
             ]}
           />
         ) : (
-          <AppEmptyState layout="fill" heading="Select an agent." role="presentation" />
-        )
-        }
-      />
-        {editing !== null ? (
-          <AgentEditSheet
-            agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
-            createFromBuiltin={replacementSeed}
-            onClose={() => setEditing(null)}
+          <AppEmptyState
+            layout="fill"
+            heading="This agent is no longer available."
+            body="Return to Agents to choose another resource."
+            role="status"
           />
-        ) : null}
+        )}
+      </div>
+      {editing !== null ? (
+        <AgentEditSheet
+          agent={editing === "new" || replacementSeed ? null : (editing as AgentInfo)}
+          createFromBuiltin={replacementSeed}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
     </PageShell>
   );
 }

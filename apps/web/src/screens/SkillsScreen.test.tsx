@@ -116,6 +116,8 @@ describe("skill repository per-file conflict review", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-manage-sources"));
+    expect(screen.getByTestId("skill-sources-view").className).not.toContain("hidden");
     const update = await screen.findByTestId("skill-repo-update-repo-1");
     await waitFor(() => expect(update.hasAttribute("disabled")).toBe(false));
     fireEvent.click(update);
@@ -397,10 +399,18 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     expect(screen.getByTestId("skill-source-packaged-tip").textContent).toContain(
       "node_modules/pack",
     );
-    // a declared-but-missing skill path is surfaced, not silent
+    // a declared-but-missing skill path is surfaced in Manage Sources, not silent
+    fireEvent.click(screen.getByTestId("skill-manage-sources"));
+    expect(screen.getByTestId("skill-sources-view").className).not.toContain("hidden");
     expect(screen.getByTestId("skill-package-warnings").textContent).toContain(
       "Package ghost-pack declares skills at skill-dir, but that path was not found.",
     );
+    fireEvent.click(screen.getByTestId("skill-sources-back"));
+    fireEvent.click(screen.getByTestId("skill-row"));
+    expect(screen.queryByTestId("skill-edit")).toBeNull();
+    expect(screen.queryByTestId("skill-rename")).toBeNull();
+    expect(screen.queryByTestId("skill-delete")).toBeNull();
+    expect(screen.getByTestId("skill-disable")).toBeTruthy();
   });
 
   it("known-source scan merges labeled roots and imports grouped by folder (SKL-07/10)", async () => {
@@ -1004,6 +1014,7 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
       return Promise.resolve(jsonResponse({}, 404));
     });
     render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-row"));
 
     // the selected skill's duplicate diagnostic lists the OTHER copy…
     const card = await screen.findByTestId("skill-duplicates");
@@ -1011,18 +1022,32 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     // the selected copy itself is NOT listed — exactly one duplicate row exists
     expect(within(card).queryByTestId("skill-compare-1")).toBeNull();
 
-    // …and Compare opens the two-pane side-by-side view (native SkillCompareSheet)
-    fireEvent.click(within(card).getByTestId("skill-compare-0"));
+    // …and Compare opens a trapped modal and restores its trigger.
+    const compareTrigger = within(card).getByTestId("skill-compare-0");
+    compareTrigger.focus();
+    fireEvent.click(compareTrigger);
     const dialog = await screen.findByTestId("skill-compare-dialog");
     expect(dialog.textContent).toContain("C:/home/.agents/skills/alpha/SKILL.md");
     expect(dialog.textContent).toContain("C:/proj/.agents/skills/alpha/SKILL.md");
     expect(dialog.textContent).toContain("Global body text");
     expect(dialog.textContent).toContain("Project body text");
+    const done = screen.getByTestId("skill-compare-done");
+    await waitFor(() => expect(document.activeElement).toBe(done));
+    expect(screen.getByTestId("skills-screen").hasAttribute("inert")).toBe(true);
+    expect(screen.getByTestId("skills-screen").getAttribute("aria-hidden")).toBe("true");
+    fireEvent.keyDown(done, { key: "Tab" });
+    expect(document.activeElement).toBe(done);
+    fireEvent.keyDown(done, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(done);
 
-    fireEvent.click(screen.getByTestId("skill-compare-done"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("skill-compare-dialog")).toBeNull();
-    });
+    fireEvent.keyDown(done, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(compareTrigger));
+    expect(screen.queryByTestId("skill-compare-dialog")).toBeNull();
+    expect(screen.getByTestId("skills-screen").hasAttribute("inert")).toBe(false);
+
+    fireEvent.click(compareTrigger);
+    fireEvent.click(await screen.findByTestId("skill-compare-done"));
+    await waitFor(() => expect(document.activeElement).toBe(compareTrigger));
   });
 
   it("a repository with no skills reports an error instead of opening the dialog", async () => {
@@ -1038,5 +1063,148 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
       expect(useAppStore.getState().error).toContain("No skills with a SKILL.md");
     });
     expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+  });
+});
+
+describe("SkillsScreen catalog navigation", () => {
+  it("opens detail and preserves search, bulk selection, and the current row on Back", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "alpha",
+                description: "Alpha workflow",
+                scope: "global",
+                filePath: "/home/.agents/skills/alpha/SKILL.md",
+                baseDir: "/home/.agents/skills/alpha",
+                body: "# Alpha",
+                disabled: false,
+              },
+              {
+                name: "beta",
+                description: "Beta workflow",
+                scope: "global",
+                filePath: "/home/.agents/skills/beta/SKILL.md",
+                baseDir: "/home/.agents/skills/beta",
+                body: "# Beta",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skills/visibility") {
+        return Promise.resolve(jsonResponse({ skills: [] }));
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") {
+        return Promise.resolve(jsonResponse({ repos: [] }));
+      }
+      if (url === "/settings") {
+        return Promise.resolve(jsonResponse({ settings: { defaultSkills: [] } }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SkillsScreen />);
+    const betaRow = (await screen.findAllByTestId("skill-row"))[1]!;
+    fireEvent.change(screen.getByTestId("skill-search"), { target: { value: "beta" } });
+    fireEvent.click(screen.getByTestId("skill-check-beta"));
+    fireEvent.click(betaRow);
+
+    expect(screen.getByTestId("skills-catalog").getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByTestId("skill-detail").textContent).toContain("beta");
+    fireEvent.change(screen.getByTestId("skill-search"), { target: { value: "alpha" } });
+    expect(screen.getByTestId("skill-detail").textContent).toContain("beta");
+    fireEvent.change(screen.getByTestId("skill-search"), { target: { value: "beta" } });
+    fireEvent.click(screen.getByTestId("skill-detail-back"));
+
+    const restoredBetaRow = screen.getByTestId("skill-row");
+    await waitFor(() => expect(document.activeElement).toBe(restoredBetaRow));
+    expect((screen.getByTestId("skill-search") as HTMLInputElement).value).toBe("beta");
+    expect(screen.getByTestId("skills-bulk-bar").textContent).toContain("1 selected");
+    expect(restoredBetaRow.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(screen.getByTestId("skill-manage-sources"));
+    expect(screen.getByTestId("skill-sources-view").className).not.toContain("hidden");
+    expect(screen.getByRole("heading", { name: "Manage Sources" })).toBeTruthy();
+    expect(screen.getByText(/Review imported repositories/)).toBeTruthy();
+    expect(screen.getByTestId("skill-sources-back").textContent).toContain("Back to Skills");
+    fireEvent.click(screen.getByTestId("skill-sources-back"));
+    expect((screen.getByTestId("skill-search") as HTMLInputElement).value).toBe("beta");
+
+    const importMenu = screen.getByTestId("skill-import-menu");
+    const importSummary = importMenu.querySelector("summary")!;
+    importSummary.focus();
+    fireEvent.click(importSummary);
+    expect(importSummary.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Import skills from a local folder or .md file" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Scan Claude and Codex skill folders" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Import skills from a git repository" }),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(importSummary));
+    expect(importSummary.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(importSummary);
+    fireEvent.mouseDown(document.body);
+    expect(importSummary.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(importSummary);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Import skills from a local folder or .md file" }),
+    );
+    expect(importSummary.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(document.activeElement).toBe(importSummary));
+  });
+
+  it("shows a stable unavailable state when an open skill disappears", async () => {
+    let liveSkills = [
+      {
+        name: "alpha",
+        description: "Alpha workflow",
+        scope: "global",
+        filePath: "/home/.agents/skills/alpha/SKILL.md",
+        baseDir: "/home/.agents/skills/alpha",
+        body: "# Alpha",
+        disabled: false,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/resources/skills")
+          return Promise.resolve(jsonResponse({ skills: liveSkills }));
+        if (url === "/resources/skills/visibility")
+          return Promise.resolve(jsonResponse({ skills: [] }));
+        if (url === "/resources/skill-recoveries")
+          return Promise.resolve(jsonResponse({ recoveries: [] }));
+        if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+        if (url === "/settings")
+          return Promise.resolve(jsonResponse({ settings: { defaultSkills: [] } }));
+        return Promise.resolve(jsonResponse({}, 404));
+      }),
+    );
+
+    render(<SkillsScreen />);
+    fireEvent.click(await screen.findByTestId("skill-row"));
+    liveSkills = [];
+    useAppStore.setState({ resourcesVersion: useAppStore.getState().resourcesVersion + 1 });
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("no longer available"),
+    );
+    expect(screen.getByTestId("skill-detail-back")).toBeTruthy();
   });
 });

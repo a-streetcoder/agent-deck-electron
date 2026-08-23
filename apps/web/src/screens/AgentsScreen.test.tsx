@@ -4,8 +4,18 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentInfo } from "@agent-deck/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
-import { AgentDetail } from "./AgentsScreen.tsx";
+import { AgentDetail, AgentsScreen } from "./AgentsScreen.tsx";
 import { updateProject } from "../state/wsBridge.ts";
+
+const catalogMock = vi.hoisted(() => ({
+  agents: [] as AgentInfo[],
+  loaded: true,
+  projectId: null as string | null,
+}));
+
+vi.mock("../state/useAgents.ts", () => ({
+  useAgentsCatalog: () => catalogMock,
+}));
 
 vi.mock("../state/wsBridge.ts", () => ({
   deleteAgent: vi.fn(),
@@ -37,6 +47,74 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("AgentsScreen catalog navigation", () => {
+  it("opens a full-width detail and restores the filtered catalog selection", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    catalogMock.agents = [
+      agent,
+      {
+        ...agent,
+        name: "reviewer",
+        description: "Reviews changes",
+        filePath: "/tmp/reviewer.md",
+      },
+    ];
+    useAppStore.setState({
+      projects: [],
+      currentProjectId: null,
+      selectedAgentFilePath: null,
+    });
+
+    render(<AgentsScreen />);
+    fireEvent.change(screen.getByTestId("agent-search"), { target: { value: "review" } });
+    const row = screen.getByTestId("agent-row");
+    fireEvent.click(row);
+
+    expect(screen.getByTestId("agents-catalog").className).toContain("hidden");
+    expect(screen.getByTestId("agent-detail").textContent).toContain("reviewer");
+    fireEvent.change(screen.getByTestId("agent-search"), { target: { value: "writer" } });
+    expect(screen.getByTestId("agent-detail").textContent).toContain("reviewer");
+    fireEvent.change(screen.getByTestId("agent-search"), { target: { value: "review" } });
+    fireEvent.click(screen.getByTestId("agent-detail-back"));
+
+    const restoredRow = screen.getByTestId("agent-row");
+    await vi.waitFor(() => expect(document.activeElement).toBe(restoredRow));
+    expect((screen.getByTestId("agent-search") as HTMLInputElement).value).toBe("review");
+    expect(restoredRow.getAttribute("aria-selected")).toBe("true");
+    expect(useAppStore.getState().selectedAgentFilePath).toBe("/tmp/reviewer.md");
+  });
+
+  it("keeps the single-choice filter accessible and fails safely if an open agent disappears", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    catalogMock.agents = [agent];
+    useAppStore.setState({ projects: [], currentProjectId: null, selectedAgentFilePath: null });
+    const { rerender } = render(<AgentsScreen />);
+
+    const filter = screen.getByTestId("agent-filter-control") as HTMLSelectElement;
+    expect(filter.options).toHaveLength(9);
+    fireEvent.change(filter, { target: { value: "global" } });
+    expect(filter.value).toBe("global");
+    fireEvent.click(screen.getByTestId("agent-row"));
+
+    catalogMock.agents = [];
+    rerender(<AgentsScreen />);
+    expect(screen.getByText("This agent is no longer available.")).toBeTruthy();
+    expect(screen.getByTestId("agent-detail-back")).toBeTruthy();
+  });
 });
 
 describe("AgentDetail delegation metadata", () => {
