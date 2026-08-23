@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { MessageSquarePlus } from "lucide-react";
 import {
   coerceTranscriptVisibility,
   DEFAULT_TRANSCRIPT_VISIBILITY,
   type KeybindingBinding,
 } from "@agent-deck/contracts";
 import { Composer } from "./components/Composer.tsx";
+import { AppEmptyState } from "./design-system/components/AppEmptyState.tsx";
 import { AppTitleBar } from "./components/AppTitleBar.tsx";
 import { ChatToolbar } from "./components/ChatToolbar.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -35,7 +37,7 @@ import { DoctorScreen, EnvironmentScreen } from "./screens/RuntimeScreens.tsx";
 import { SkillsScreen } from "./screens/SkillsScreen.tsx";
 import { cn } from "@/lib/cn";
 import { hasIntegratedDesktopChrome } from "@/lib/native";
-import { refreshCheckpoints } from "./state/wsBridge.ts";
+import { newChat, refreshCheckpoints } from "./state/wsBridge.ts";
 import { useAppStore } from "./state/store.ts";
 import { useKeyboardShortcuts } from "./state/useKeyboardShortcuts.ts";
 import { useMenuCommands } from "./state/useMenuCommands.ts";
@@ -53,30 +55,46 @@ const DETAIL_MOVE = "transform 340ms cubic-bezier(0.3, 1.04, 0.4, 1)";
 const DETAIL_FADE = "opacity 200ms ease-out";
 
 function ChatColumn() {
+  const session = useAppStore((state) => state.session);
   const agentStatus = useAppStore((state) => state.transcript.agentStatus);
   return (
     <div className="flex h-full min-w-0 flex-col">
       <ChatToolbar />
-      <div className="flex min-h-0 flex-1">
-        <div className="flex h-full min-w-0 flex-1 flex-col">
-          <Transcript />
-          <PiAgentProcessingIndicatorBar
-            message={agentStatus === "running" ? "Pi is working…" : null}
-            className="px-6"
+      {session ? (
+        <>
+          <div className="flex min-h-0 flex-1">
+            <div className="flex h-full min-w-0 flex-1 flex-col">
+              <Transcript />
+              <PiAgentProcessingIndicatorBar
+                message={agentStatus === "running" ? "Pi is working…" : null}
+                className="px-6"
+              />
+              <Composer />
+            </div>
+            <DeckPanel />
+            {/* The single right-side workspace pane (Slice L1): a Chrome-style tab
+                strip + one tool body. The diff / files / preview / checkpoints tools
+                open as TABS here instead of four side-by-side asides; renders null
+                when the current session has no open tab. The DeckPanel (above) stays
+                its own auto aside and the terminal (below) stays the bottom drawer. */}
+            <TabbedPane />
+          </div>
+          {/* The per-session terminal drawer (Slice 8b) spans the full chat surface
+              bottom, like the donor's thread drawer. Renders null while closed. */}
+          <TerminalDrawer />
+        </>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto p-6" data-testid="no-active-session">
+          <AppEmptyState
+            layout="fill"
+            className="min-h-48"
+            icon={<MessageSquarePlus size={28} aria-hidden="true" />}
+            heading="No active session"
+            body="Select a session from the sidebar or start a new chat."
+            action={{ label: "New chat", onClick: () => void newChat() }}
           />
-          <Composer />
         </div>
-        <DeckPanel />
-        {/* The single right-side workspace pane (Slice L1): a Chrome-style tab
-            strip + one tool body. The diff / files / preview / checkpoints tools
-            open as TABS here instead of four side-by-side asides; renders null
-            when the current session has no open tab. The DeckPanel (above) stays
-            its own auto aside and the terminal (below) stays the bottom drawer. */}
-        <TabbedPane />
-      </div>
-      {/* The per-session terminal drawer (Slice 8b) spans the full chat surface
-          bottom, like the donor's thread drawer. Renders null while closed. */}
-      <TerminalDrawer />
+      )}
     </div>
   );
 }

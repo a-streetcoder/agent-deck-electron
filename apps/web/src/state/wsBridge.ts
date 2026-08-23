@@ -43,6 +43,13 @@ let currentSessionId: string | null = null;
 const mergeRequests = new Set<string>();
 const deferredMergeExits = new Map<string, string>();
 const expectedCleanupExits = new Set<string>();
+/** Successful removals are terminal for an id in this renderer lifetime. This
+ * also fences a resume response that was already in flight when removal was
+ * published, without cancelling an unrelated activation. */
+const removedSessionIds = new Set<string>();
+/** Session exits caused by our own DELETE are expected while its HTTP response
+ * is pending and must not flash a stale runtime error. */
+const deletionRequests = new Map<string, number>();
 const historyActionClaims = new Map<string, number>();
 const historyActionClaimListeners = new Set<() => void>();
 const updateHistoryClaim = (sessionId: string, delta: 1 | -1): void => {
@@ -749,6 +756,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "session_exit":
       if (message.sessionId !== currentSessionId) return;
+      if (deletionRequests.has(message.sessionId)) return;
       if (expectedCleanupExits.delete(message.sessionId)) return;
       if (historyActionPending(message.sessionId)) return;
       if (mergeRequests.has(message.sessionId)) {
@@ -791,16 +799,11 @@ function handleMessage(message: ServerMessage): void {
       transport.resubscribe(message.sessionId);
       break;
     case "session_removed":
-      store.removeSession(message.sessionId);
+      removeSessionLocally(message.sessionId);
       // Its terminals AND script runs died server-side with the session
       // (rpcHandler teardown funnels both into the session-exit hook).
       sessionTerminals.delete(message.sessionId);
       sessionRuns.delete(message.sessionId);
-      // If ANOTHER client deleted the session we're viewing, drop it and open
-      // a fresh chat so we're not pointing at (or subscribed to) a dead id.
-      if (useAppStore.getState().session?.id === message.sessionId) {
-        void newChat();
-      }
       break;
     case "hello_ok":
       break;
@@ -940,7 +943,13 @@ async function activateSession(projectId: string | null, agentName: string | nul
     store.resetTranscript();
     store.setSession(null);
     const session = await findOrCreateSession(projectId, agentName);
-    if (token !== activationToken) return;
+    if (
+      token !== activationToken ||
+      removedSessionIds.has(session.id) ||
+      deletionRequests.has(session.id)
+    ) {
+      return;
+    }
     useAppStore.getState().setSession(session);
     connect(session.id);
     await refreshSessionsForActivation(token);
@@ -961,7 +970,15 @@ async function switchToSessionAtActivation(target: SessionMeta, token: number): 
     store.resetTranscript();
     store.setSession(null);
     const session = await resumeSession(target.id);
-    if (token !== activationToken) return;
+    if (
+      token !== activationToken ||
+      removedSessionIds.has(target.id) ||
+      removedSessionIds.has(session.id) ||
+      deletionRequests.has(target.id) ||
+      deletionRequests.has(session.id)
+    ) {
+      return;
+    }
     useAppStore.getState().setSession(session);
     connect(session.id);
     await refreshSessionsForActivation(token);
@@ -1100,19 +1117,46 @@ export async function setSessionPinned(sessionId: string, pinned: boolean): Prom
   }
 }
 
+function removeSessionLocally(sessionId: string): void {
+  removedSessionIds.add(sessionId);
+  const store = useAppStore.getState();
+  store.removeSession(sessionId);
+  if (store.session?.id !== sessionId) return;
+
+  // An empty catalog is a valid resting state. Invalidate any pending activation
+  // and release the deleted session's subscription without manufacturing a
+  // replacement draft or leaving its transcript/side panels visible.
+  activationToken += 1;
+  disconnect();
+  store.setSession(null);
+  store.resetTranscript();
+  store.resetDiffState();
+  store.setCheckpoints([]);
+  store.setSessionSubscriptionSettled(false);
+  store.setTerminalOpen(false);
+  if (store.pendingComposerText?.sessionId === sessionId) store.setPendingComposerText(null);
+  // An exit can precede session_removed when another client performs deletion.
+  // Clear only that session-exit-shaped banner, never an unrelated error.
+  if (/^pi exited \(code .+\)$/.test(store.error ?? "")) store.setError(null);
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
+  deletionRequests.set(sessionId, (deletionRequests.get(sessionId) ?? 0) + 1);
   try {
     const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
     });
     if (!response.ok) throw new Error(await response.text());
-    // If the deleted session was open, fall back to a new chat.
-    if (useAppStore.getState().session?.id === sessionId) {
-      await newChat();
-    }
+    // The websocket publication normally removes first; this is the idempotent
+    // fallback for a disconnected client or a publication delayed past HTTP.
+    removeSessionLocally(sessionId);
     await refreshSessions();
   } catch (error) {
     useAppStore.getState().setError(String(error));
+  } finally {
+    const remaining = (deletionRequests.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) deletionRequests.set(sessionId, remaining);
+    else deletionRequests.delete(sessionId);
   }
 }
 
