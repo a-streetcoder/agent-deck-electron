@@ -1551,7 +1551,7 @@ export function SkillsScreen() {
     <PageShell
       width="split"
       testId="skills-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-skills.jpg" title="Skills" />}
+      hero={<SectionHero imageSrc="/screen-art/screen-art-skills.jpg" title="Skills" subtitle="Manage reusable capabilities and assign them to projects." />}
     >
       <MasterDetailSplit
         master={

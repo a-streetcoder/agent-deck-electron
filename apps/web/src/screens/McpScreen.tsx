@@ -877,6 +877,7 @@ export function McpScreen() {
         <SectionHero
           imageSrc="/screen-art/screen-art-mcp.jpg"
           title="MCP"
+          subtitle="Configure MCP servers that connect agents to external tools."
           actions={
             <>
               <SectionHeroButton

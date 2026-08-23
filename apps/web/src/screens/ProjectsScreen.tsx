@@ -5,10 +5,9 @@ import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
 import { Card } from "@/design-system/components/Card";
-import { IconButton } from "@/design-system/components/IconButton";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
-import { SectionHero } from "@/design-system/components/SectionHero";
+import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useState } from "react";
 import {
   EyeOff,
@@ -300,17 +299,17 @@ export function ProjectsScreen() {
         <SectionHero
           imageSrc="/screen-art/screen-art-projects.jpg"
           title="Projects"
+          subtitle="Register project folders and control where Agent Deck can work."
           actions={
-            <IconButton
+            <SectionHeroButton
               data-testid="projects-add"
               aria-label="Add project"
               title="Add project"
-              icon={<Plus />}
               variant="primary"
-              size="sm"
-              shape="circle"
               onClick={() => void startAdd()}
-            />
+            >
+              <Plus size={13} /> Add project
+            </SectionHeroButton>
           }
         />
       }
@@ -471,7 +470,7 @@ export function ProjectsScreen() {
             {visible.length === 0 ? (
               <AppEmptyState
                 heading={filter === "all" ? "No projects" : "No matches"}
-                body={filter === "all" ? "Add one with +." : `No ${filter} projects.`}
+                body={filter === "all" ? "Use Add project to register one." : `No ${filter} projects.`}
               />
             ) : null}
           </div>

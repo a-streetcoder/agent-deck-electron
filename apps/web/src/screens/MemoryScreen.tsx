@@ -1028,7 +1028,7 @@ export function MemoryScreen() {
       <PageShell
         width="page"
         testId="memory-screen"
-        hero={<SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" />}
+        hero={<SectionHero imageSrc="/screen-art/screen-art-memory.jpg" title="Memory" subtitle="Manage durable project knowledge agents recall across sessions." />}
       >
         <p className="pb-2 text-caption text-text-muted">
           Durable project knowledge agents recall across sessions.
@@ -1079,6 +1079,7 @@ export function MemoryScreen() {
       <SectionHero
         imageSrc="/screen-art/screen-art-memory.jpg"
         title="Memory"
+        subtitle="Manage durable project knowledge agents recall across sessions."
         actions={
           <>
             {visibleStaleIds.length > 0 ? (

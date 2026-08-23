@@ -551,7 +551,7 @@ export function IssuesScreen() {
       <PageShell
         width="page"
         testId="issues-screen"
-        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
       >
         <AppEmptyState
           data-testid="issues-no-project"
@@ -566,7 +566,7 @@ export function IssuesScreen() {
       <PageShell
         width="page"
         testId="issues-screen"
-        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
         toolbar={
           <PageToolbar
             leading={
@@ -839,7 +839,7 @@ export function IssuesScreen() {
     <PageShell
       width="page"
       testId="issues-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" />}
+      hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
       toolbar={
         <PageToolbar
           leading={

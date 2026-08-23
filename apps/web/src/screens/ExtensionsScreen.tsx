@@ -479,6 +479,7 @@ export function ExtensionsScreen() {
         <SectionHero
           imageSrc="/screen-art/screen-art-extensions.jpg"
           title="Extensions"
+          subtitle="Manage Pi extensions that add tools and runtime behavior."
           actions={
             <>
               <SectionHeroButton

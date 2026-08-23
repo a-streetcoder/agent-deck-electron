@@ -612,7 +612,7 @@ export function GitScreen() {
       <PageShell
         width="page"
         testId="git-screen"
-        hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" />}
+        hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" subtitle="Review project changes, commit work, and prepare releases." />}
       >
         <AppEmptyState
           data-testid="git-no-project"
@@ -648,7 +648,7 @@ export function GitScreen() {
     <PageShell
       width="page"
       testId="git-screen"
-      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" actions={gitHeroActions} />}
+      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Git" subtitle="Review project changes, commit work, and prepare releases." actions={gitHeroActions} />}
     >
           {releaseOpen ? (
             <div

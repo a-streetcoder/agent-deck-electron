@@ -6,7 +6,7 @@ import { Button, type ButtonProps } from "./Button";
 export type SectionHeroProps = {
   imageSrc: string;
   title: ReactNode;
-  subtitle?: ReactNode;
+  subtitle: ReactNode;
   actions?: ReactNode;
 };
 
@@ -25,23 +25,21 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
     >
       <img alt="" src={imageSrc} className="absolute inset-0 size-full object-cover" />
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 px-page-x pb-4 pt-6">
+      <div className="absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 px-page-x pb-4 pt-6">
         <div className="min-w-0">
           <h2
-            className="text-heading font-semibold tracking-heading text-on-media"
+            className="truncate text-heading font-semibold tracking-heading text-on-media"
             style={{ fontStretch: "expanded" }}
             data-testid="app-view-title"
           >
             {title}
           </h2>
-          {subtitle ? (
-            <div className="mt-0.5 line-clamp-2 text-caption text-on-media/80">{subtitle}</div>
-          ) : null}
+          <div className="mt-0.5 truncate text-caption text-on-media/80">{subtitle}</div>
         </div>
         {actions ? (
           <div
             className={cn(
-              "flex shrink-0 items-center gap-2",
+              "-m-1 flex min-w-0 max-w-[min(65vw,100%)] shrink items-center gap-2 overflow-x-auto p-1",
               macDesktop && "[-webkit-app-region:no-drag]",
             )}
           >
@@ -53,7 +51,7 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
   );
 }
 
-/** Small on-media capsule for CTAs and secondary actions composited on the hero art. */
+/** On-media CTA aligned to the hero's two-line heading block. */
 export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
   function SectionHeroButton({ className, size = "sm", tone = "on-media", ...props }, ref) {
     return (
@@ -61,7 +59,10 @@ export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         size={size}
         tone={tone}
-        className={cn("rounded-capsule", className)}
+        className={cn(
+          "h-11 shrink-0 rounded-capsule px-4 whitespace-nowrap [&>span]:whitespace-nowrap",
+          className,
+        )}
         {...props}
       />
     );
@@ -73,7 +74,7 @@ export function SectionHeroMeta({ className, ...props }: HTMLAttributes<HTMLSpan
   return (
     <span
       className={cn(
-        "rounded-capsule border border-on-media/30 bg-media-overlay px-2 py-0.5 font-mono text-detail text-on-media",
+        "max-w-[min(12rem,30vw)] min-w-0 truncate rounded-capsule border border-on-media/30 bg-media-overlay px-2 py-0.5 font-mono text-detail text-on-media",
         className,
       )}
       {...props}

@@ -93,7 +93,7 @@ export function PerformanceScreen() {
     <PageShell
       width="page"
       testId="performance-screen"
-      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Performance" />}
+      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Performance" subtitle="Tune runtime behavior and resource usage." />}
     >
       {loadState === "loading" ? (
         <AppEmptyState

@@ -274,7 +274,7 @@ export function InstructionsScreen() {
     <PageShell
       width="split"
       testId="instructions-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-instructions.jpg" title="Instructions" />}
+      hero={<SectionHero imageSrc="/screen-art/screen-art-instructions.jpg" title="Instructions" subtitle="Manage the project and system guidance agents receive." />}
       toolbar={
         <PageToolbar
           leading={

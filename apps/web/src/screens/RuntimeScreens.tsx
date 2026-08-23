@@ -90,17 +90,19 @@ export function EnvironmentScreen() {
         <SectionHero
           imageSrc="/screen-art/screen-art-environment.jpg"
           title="Environment"
+          subtitle="Manage environment variables available to agent runs."
           actions={
             <SectionHeroButton
               data-testid="env-add"
               variant="primary"
+              aria-label="Add environment variable"
               title="Add variable"
               onClick={() => {
                 setAdding((v) => !v);
                 setNewScope(currentProjectId ? "project" : "global");
               }}
             >
-              <Plus size={14} />
+              <Plus size={14} /> Add variable
             </SectionHeroButton>
           }
         />

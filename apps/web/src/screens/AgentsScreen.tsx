@@ -786,7 +786,7 @@ export function AgentsScreen() {
     <PageShell
       width="split"
       testId="agents-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" />}
+      hero={<SectionHero imageSrc="/screen-art/screen-art-agents.jpg" title="Agents" subtitle="Create specialized agents and configure how they work." />}
     >
       <MasterDetailSplit
         master={

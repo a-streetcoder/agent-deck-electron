@@ -481,6 +481,7 @@ export function PromptsScreen() {
         <SectionHero
           imageSrc="/screen-art/screen-art-prompts.jpg"
           title="Prompts"
+          subtitle="Create reusable prompts and reference files in place."
           actions={
             <>
               <SectionHeroButton
