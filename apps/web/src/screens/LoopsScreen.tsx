@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -2557,16 +2558,19 @@ export function LoopsScreen() {
                 </div>
               ) : null}
               <div className="flex justify-end gap-2 pt-1">
-                <ControlButton
+                <Button
                   data-testid="loop-cancel"
-                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
+                  size="md"
+                  className="rounded-capsule"
                   onClick={closeEditor}
                 >
                   Cancel
-                </ControlButton>
-                <ControlButton
+                </Button>
+                <Button
+                  size="md"
+                  variant="primary"
+                  className="rounded-capsule"
                   data-testid="loop-save"
-                  className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                   disabled={saving || Boolean(draftError)}
                   aria-describedby={
                     !isRunnableLoopStructure(draft.structure)
@@ -2578,7 +2582,7 @@ export function LoopsScreen() {
                   onClick={() => void save()}
                 >
                   {saving ? "Saving…" : "Save"}
-                </ControlButton>
+                </Button>
               </div>
             </div>
           </div>
@@ -2820,17 +2824,20 @@ export function LoopsScreen() {
                 </div>
               ) : null}
               <div className="flex justify-end gap-2">
-                <ControlButton
+                <Button
                   data-testid="loop-launch-cancel"
-                  className="rounded-capsule border border-border-strong px-4 py-1.5 text-label"
+                  size="md"
+                  className="rounded-capsule"
                   disabled={runPending}
                   onClick={closeLaunch}
                 >
                   Cancel
-                </ControlButton>
-                <ControlButton
+                </Button>
+                <Button
+                  size="md"
+                  variant="primary"
+                  className="rounded-capsule"
                   data-testid="loop-launch-confirm"
-                  className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent hover:bg-primary-hover disabled:opacity-40"
                   disabled={
                     runPending ||
                     launchAgentIssues.length > 0 ||
@@ -2849,7 +2856,7 @@ export function LoopsScreen() {
                   onClick={() => void startRun()}
                 >
                   {runPending ? "Starting…" : launchDraft.retryOf ? "Start retry" : "Start run"}
-                </ControlButton>
+                </Button>
               </div>
             </div>
           </div>

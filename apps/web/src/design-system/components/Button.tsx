@@ -6,7 +6,13 @@ import { cn } from "../../lib/cn";
  * AppSecondaryButtonStyle, AppPillButtonStyle, plus a ghost (transparent)
  * and a destructive (role-error filled) variant.
  */
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "pill" | "destructive";
+export type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "pill"
+  | "destructive"
+  | "destructiveOutline";
 
 /** sm/md/lg map onto AppKit control sizes mini / small / regular. */
 export type ButtonSize = "sm" | "md" | "lg";
@@ -24,6 +30,11 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Stretches the button to fill its container. */
   fullWidth?: boolean;
   /**
+   * Allows genuinely long labels to wrap while preserving the size's minimum
+   * height. CTA labels stay on one line by default.
+   */
+  allowLabelWrap?: boolean;
+  /**
    * Active-state styling used by the pill variant (mirrors
    * AppPillButtonStyle's `isActive`: brand-tinted glass + accent text).
    */
@@ -31,8 +42,8 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const baseClasses = [
-  "inline-flex items-center justify-center gap-1.5",
-  "select-none whitespace-nowrap",
+  "relative inline-flex items-center justify-center gap-control-gap align-middle",
+  "select-none",
   "font-medium leading-none tracking-ui",
   "border transition-colors duration-150 ease-spring",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface",
@@ -40,9 +51,9 @@ const baseClasses = [
 ].join(" ");
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-detail rounded-md",
-  md: "h-8 px-3 text-label rounded-md",
-  lg: "h-10 px-4 text-label rounded-lg",
+  sm: "min-h-control-sm px-control-x-sm text-detail rounded-md",
+  md: "min-h-control-md px-control-x-md text-label rounded-md",
+  lg: "min-h-control-lg px-control-x-lg text-label rounded-lg",
 };
 
 /**
@@ -82,6 +93,10 @@ const variantClasses: Record<ButtonVariant, string> = {
     "bg-danger hover:opacity-90 active:opacity-80",
     "shadow-capsule",
   ),
+  destructiveOutline: cn(
+    "border-danger/50 bg-transparent text-danger",
+    "hover:bg-danger/10 active:bg-danger/15",
+  ),
 };
 
 /**
@@ -105,6 +120,10 @@ const onMediaToneClasses: Record<ButtonVariant, string> = {
     "data-[active=true]:bg-on-media/20 data-[active=true]:text-on-media",
   ),
   destructive: "focus-visible:ring-offset-0 text-on-media",
+  destructiveOutline: cn(
+    "focus-visible:ring-offset-0",
+    "border-danger/70 bg-media-overlay text-white hover:bg-danger/20",
+  ),
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -116,6 +135,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     trailingIcon,
     isLoading = false,
     fullWidth = false,
+    allowLabelWrap = false,
     isActive = false,
     className,
     children,
@@ -140,15 +160,28 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         sizeClasses[size],
         variantClasses[variant],
         tone === "on-media" && onMediaToneClasses[variant],
-        fullWidth && "w-full",
+        fullWidth && "w-full max-w-full",
+        allowLabelWrap && "max-w-full",
         className,
       )}
       {...rest}
     >
       {leadingIcon ? (
-        <span className="-ml-0.5 flex shrink-0 items-center">{leadingIcon}</span>
+        <span className="-ml-0.5 flex shrink-0 items-center" aria-hidden>
+          {leadingIcon}
+        </span>
       ) : null}
-      <span className={cn(isLoading && "opacity-0")}>{children}</span>
+      <span
+        className={cn(
+          "inline-flex min-w-0 items-center justify-center gap-control-gap",
+          allowLabelWrap
+            ? "whitespace-normal py-1.5 text-center leading-label"
+            : "whitespace-nowrap",
+          isLoading && "opacity-0",
+        )}
+      >
+        {children}
+      </span>
       {trailingIcon && !isLoading ? (
         <span className="-mr-0.5 flex shrink-0 items-center">{trailingIcon}</span>
       ) : null}

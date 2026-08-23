@@ -1,4 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { Button } from "@/design-system/components/Button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, Loader2, XCircle } from "lucide-react";
 import { openExternal } from "../lib/native.ts";
@@ -243,14 +244,16 @@ export function ProviderLoginSheet({
               {doneEvent || fatal ? "Close" : "Cancel"}
             </ControlButton>
             {visiblePrompt ? (
-              <ControlButton
+                            <Button
+                size="md"
+                variant="primary"
+                className="rounded-capsule"
                 type="submit"
                 form={promptFormId}
                 data-testid="login-prompt-submit"
-                className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
               >
                 Submit
-              </ControlButton>
+              </Button>
             ) : null}
           </div>
         </div>

@@ -47,7 +47,29 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   // Create. The responsive modal is named, traps focus, closes on Escape,
   // and restores focus to its trigger.
   const newLoop = page.getByTestId("new-loop");
-  await page.setViewportSize({ width: 500, height: 600 });
+  await page.setViewportSize({ width: 320, height: 600 });
+  await expect(newLoop).toBeVisible();
+  const heroCtaGeometry = await newLoop.evaluate((button) => {
+    const label = button.querySelector("span:not([aria-hidden])");
+    const buttonRect = button.getBoundingClientRect();
+    const labelRect = label?.getBoundingClientRect();
+    const view = button.ownerDocument.defaultView;
+    return {
+      whiteSpace: label && view ? view.getComputedStyle(label).whiteSpace : null,
+      buttonLeft: buttonRect.left,
+      buttonRight: buttonRect.right,
+      labelLeft: labelRect?.left ?? -1,
+      labelRight: labelRect?.right ?? -1,
+      labelHeight: labelRect?.height ?? -1,
+      lineHeight: label && view ? Number.parseFloat(view.getComputedStyle(label).lineHeight) : -1,
+    };
+  });
+  expect(heroCtaGeometry.whiteSpace).toBe("nowrap");
+  expect(heroCtaGeometry.buttonLeft).toBeGreaterThanOrEqual(0);
+  expect(heroCtaGeometry.buttonRight).toBeLessThanOrEqual(320);
+  expect(heroCtaGeometry.labelLeft).toBeGreaterThanOrEqual(heroCtaGeometry.buttonLeft);
+  expect(heroCtaGeometry.labelRight).toBeLessThanOrEqual(heroCtaGeometry.buttonRight);
+  expect(heroCtaGeometry.labelHeight).toBeLessThanOrEqual(heroCtaGeometry.lineHeight + 1);
   await newLoop.click();
   const editor = page.getByTestId("loop-editor");
   await expect(editor).toHaveAccessibleName("New Loop");
@@ -55,7 +77,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   const editorBox = await editor.boundingBox();
   expect(editorBox).not.toBeNull();
   expect(editorBox!.x).toBeGreaterThanOrEqual(0);
-  expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(500);
+  expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(320);
   expect(editorBox!.y + editorBox!.height).toBeLessThanOrEqual(600);
 
   await page.keyboard.press("Shift+Tab");

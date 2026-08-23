@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -203,15 +204,15 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </div>
       ) : null}
       <div className="mt-3 flex justify-end gap-2">
-        <ControlButton
+                <Button
+          size="md"
+          variant="primary"
           data-testid="editor-save"
-          className="rounded-md bg-primary px-4 py-2 text-label font-medium disabled:opacity-40"
-          style={{ color: "var(--color-accent-foreground)" }}
           disabled={saving || (!agent && !name.trim())}
           onClick={() => void save()}
         >
           {saving ? "Saving…" : "Save"}
-        </ControlButton>
+        </Button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlSelect,
@@ -144,15 +145,16 @@ function InlineCommentEditor(props: {
         >
           Cancel
         </ControlButton>
-        <ControlButton
+                <Button
+          size="sm"
+          variant="primary"
           type="button"
           data-testid="diff-comment-save"
           disabled={text.trim().length === 0}
-          className="rounded-md bg-primary px-2.5 py-1 text-detail font-medium text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-40"
           onClick={() => props.onSubmit(text)}
         >
           {props.mode === "edit" ? "Save" : "Comment"}
-        </ControlButton>
+        </Button>
       </div>
     </div>
   );
@@ -358,16 +360,18 @@ function WorktreeMergeToolbar(props: {
         <ArrowRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden />
         <span className="shrink-0 text-text-primary">{props.worktreeSourceBranch}</span>
       </div>
-      <ControlButton
+            <Button
+        size="sm"
+        variant="primary"
+        className="shrink-0 rounded-capsule"
         type="button"
         data-testid="diff-merge"
-        className="shrink-0 rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
         disabled={merging || running}
         title={running ? "Wait for the current turn to finish" : undefined}
         onClick={() => void merge()}
       >
         {merging ? "Merging…" : `Merge to ${props.worktreeSourceBranch}`}
-      </ControlButton>
+      </Button>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -410,16 +411,17 @@ export function ScriptsRunner(props: {
             Stop
           </ControlButton>
         ) : (
-          <ControlButton
+          <Button
+            size="sm"
+            variant="primary"
+            leadingIcon={<Play className="h-3 w-3" />}
             type="button"
-            className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-50"
             data-testid="preview-run"
             disabled={!hasScripts || selected === null}
             onClick={onRun}
           >
-            <Play className="h-3 w-3" />
             Run
-          </ControlButton>
+          </Button>
         )}
       </div>
 
@@ -1034,22 +1036,24 @@ function ElementCaptureForm(props: {
         }}
       />
       <div className="flex items-center justify-end gap-2">
-        <ControlButton
+        <Button
           type="button"
-          className="rounded-md px-2.5 py-1 text-detail text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
+          size="sm"
+          variant="ghost"
           data-testid="preview-element-cancel"
           onClick={onClose}
         >
           Cancel
-        </ControlButton>
-        <ControlButton
+        </Button>
+        <Button
+          size="sm"
+          variant="primary"
           type="submit"
-          className="rounded-md bg-primary px-2.5 py-1 text-detail font-semibold text-on-accent transition-opacity hover:bg-primary-hover disabled:opacity-50"
           data-testid="preview-element-add"
           disabled={!canAdd}
         >
           Add
-        </ControlButton>
+        </Button>
       </div>
     </form>
   );

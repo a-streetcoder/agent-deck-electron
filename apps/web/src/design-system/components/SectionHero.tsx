@@ -36,7 +36,7 @@ export function SectionHero({
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4",
+          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 max-[480px]:grid-cols-1 max-[480px]:gap-2",
           compact ? "px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6 lg:px-8" : "px-page-x pb-4 pt-6",
         )}
       >
@@ -58,7 +58,7 @@ export function SectionHero({
         {actions ? (
           <div
             className={cn(
-              "-m-1 flex min-w-0 max-w-[min(65vw,100%)] shrink items-center gap-2 overflow-x-auto p-1",
+              "-m-1 flex min-w-0 max-w-[min(65vw,100%)] shrink items-center gap-2 overflow-x-auto p-1 max-[480px]:m-0 max-[480px]:w-full max-[480px]:max-w-full max-[480px]:justify-end max-[480px]:overflow-visible max-[480px]:p-0",
               macDesktop && "[-webkit-app-region:no-drag]",
             )}
           >
@@ -78,10 +78,7 @@ export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         size={size}
         tone={tone}
-        className={cn(
-          "h-11 shrink-0 rounded-capsule px-4 whitespace-nowrap [&>span]:whitespace-nowrap",
-          className,
-        )}
+        className={cn("min-h-control-hero shrink-0 rounded-capsule px-control-x-lg", className)}
         {...props}
       />
     );

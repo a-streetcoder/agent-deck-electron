@@ -1,4 +1,5 @@
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
+import { Button } from "@/design-system/components/Button";
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
 import { AppSwitch } from "@/design-system/components/AppSwitch";
@@ -775,14 +776,16 @@ export function GitScreen() {
                   >
                     <Sparkles size={12} /> {draftingNotes ? "Drafting…" : "Generate notes"}
                   </ControlButton>
-                  <ControlButton
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="rounded-capsule"
                     data-testid="git-release-confirm"
-                    className="rounded-capsule bg-primary px-4 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                     disabled={releasing || preflighting || preflight?.state !== "ready"}
                     onClick={() => void release()}
                   >
                     {releasing ? "Releasing…" : `Release ${preflight?.nextVersions[bump] ?? ""}`}
-                  </ControlButton>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -865,15 +868,17 @@ export function GitScreen() {
                 brings its commits back into{" "}
                 <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
               </div>
-              <ControlButton
+                            <Button
+                size="sm"
+                variant="primary"
+                className="shrink-0 rounded-capsule"
                 data-testid="git-merge"
-                className="shrink-0 rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={merging || agentRunning}
                 title={agentRunning ? "Wait for the current turn to finish" : undefined}
                 onClick={() => void merge()}
               >
                 {merging ? "Merging…" : `Merge to ${session.worktreeSourceBranch}`}
-              </ControlButton>
+              </Button>
             </div>
           ) : null}
 
@@ -963,14 +968,16 @@ export function GitScreen() {
                     >
                       {committing ? "Committing…" : "Commit all"}
                     </ControlButton>
-                    <ControlButton
+                    <Button
+                      size="md"
+                      variant="primary"
+                      className="rounded-capsule"
                       data-testid="git-commit-push"
-                      className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                       disabled={committing || status.clean || !message.trim()}
                       onClick={() => void commit(true)}
                     >
                       Commit &amp; Push
-                    </ControlButton>
+                    </Button>
                   </div>
                 </div>
               )}

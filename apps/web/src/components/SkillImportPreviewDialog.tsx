@@ -1,4 +1,5 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { Button } from "@/design-system/components/Button";
 import { FolderInput, GitBranch, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -246,25 +247,28 @@ export function SkillImportPreviewDialog({
             {error}
           </p>
           <div className="flex shrink-0 items-center gap-2">
-            <ControlButton
+            <Button
               ref={cancelRef}
               data-testid="skill-import-preview-cancel"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+              size="sm"
+              className="rounded-capsule"
               disabled={importing}
               onClick={cancelSafely}
             >
               Cancel
-            </ControlButton>
-            <ControlButton
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              className="rounded-capsule"
               data-testid="skill-import-preview-import"
-              className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent hover:bg-primary-hover disabled:opacity-40"
               disabled={selected.size === 0 || importing}
               onClick={() => void doImport()}
             >
               {importing
                 ? "Importing…"
                 : `Import ${selected.size} skill${selected.size === 1 ? "" : "s"}`}
-            </ControlButton>
+            </Button>
           </div>
         </footer>
       </div>

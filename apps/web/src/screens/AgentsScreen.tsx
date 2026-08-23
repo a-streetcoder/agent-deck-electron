@@ -1,6 +1,7 @@
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppScrollView } from "@/design-system/components/AppScrollView";
 import { AppTextField } from "@/design-system/components/AppTextField";
+import { Button } from "@/design-system/components/Button";
 
 import {
   ControlButton,
@@ -368,40 +369,45 @@ export function AgentDetail({
             data-testid="agent-detail-actions"
             aria-label="Agent actions"
           >
-            <ControlButton
+            <Button
               data-testid="agent-edit"
-              className="flex min-h-11 items-center gap-1.5 rounded-capsule bg-primary px-4 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+              size="lg"
+              variant="primary"
+              leadingIcon={<Pencil size={12} />}
               onClick={onEdit}
             >
-              <Pencil size={12} /> Edit
-            </ControlButton>
+              Edit
+            </Button>
             <div className="flex flex-wrap items-center gap-2" aria-label="Secondary agent actions">
               {canCreateReplacement ? (
-                <ControlButton
+                <Button
                   data-testid="agent-create-replacement"
-                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                  size="lg"
+                  leadingIcon={<RefreshCw size={12} />}
                   title="Create an editable global custom agent from this builtin"
                   onClick={onCreateReplacement}
                 >
-                  <RefreshCw size={12} /> Replacement
-                </ControlButton>
+                  Replacement
+                </Button>
               ) : null}
-              <ControlButton
+              <Button
                 data-testid="agent-disable"
-                className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                size="lg"
+                className="rounded-capsule text-detail text-text-secondary"
+                leadingIcon={agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
               >
-                {agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 {agent.disabled ? "Enable" : "Disable"}
-              </ControlButton>
+              </Button>
               {agent.scope !== "builtin" ? (
-                <ControlButton
+                <Button
                   data-testid="agent-rename"
-                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                  size="lg"
+                  leadingIcon={<Tag size={12} />}
                   onClick={() => setRenameValue(agent.name)}
                 >
-                  <Tag size={12} /> Rename
-                </ControlButton>
+                  Rename
+                </Button>
               ) : null}
             </div>
             {agent.scope !== "builtin" ? (
@@ -409,26 +415,29 @@ export function AgentDetail({
                 className="border-l border-border-subtle pl-2"
                 aria-label="Destructive agent actions"
               >
-                <ControlButton
+                <Button
                   data-testid="agent-delete"
-                  className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-danger/50 px-3 py-1 text-detail text-danger hover:bg-danger/10"
+                  size="lg"
+                  variant="destructiveOutline"
+                  leadingIcon={<Trash2 size={13} />}
                   onClick={() => {
                     if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
                       void deleteAgent(agent.scope, agent.name);
                     }
                   }}
                 >
-                  <Trash2 size={13} /> Delete
-                </ControlButton>
+                  Delete
+                </Button>
               </div>
             ) : agent.overridden ? (
               <div
                 className="border-l border-border-subtle pl-2"
                 aria-label="Destructive agent actions"
               >
-                <ControlButton
+                <Button
                   data-testid="agent-reset"
-                  className="min-h-11 rounded-capsule border border-danger/50 px-3 py-1 text-detail text-danger hover:bg-danger/10"
+                  size="lg"
+                  variant="destructiveOutline"
                   title="Clear all overrides and restore the bundled defaults"
                   onClick={() => {
                     if (
@@ -439,7 +448,7 @@ export function AgentDetail({
                   }}
                 >
                   Reset
-                </ControlButton>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -867,13 +876,16 @@ export function AgentsScreen() {
             />
           }
           trailing={
-            <ControlButton
+            <Button
               data-testid="new-agent"
-              className="flex shrink-0 items-center gap-1.5 rounded-capsule bg-primary px-3 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+              size="md"
+              variant="primary"
+              className="shrink-0 rounded-capsule"
+              leadingIcon={<Plus size={14} />}
               onClick={() => setEditing("new")}
             >
-              <Plus size={14} /> New Agent
-            </ControlButton>
+              New Agent
+            </Button>
           }
           below={
             <label className="flex w-fit items-center gap-2 text-detail text-text-muted">

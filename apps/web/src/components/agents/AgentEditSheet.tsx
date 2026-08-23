@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -1216,22 +1217,21 @@ export function AgentEditSheet({
         </div>
 
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-          <ControlButton
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
-            onClick={onClose}
-          >
+          <Button size="md" className="rounded-capsule" onClick={onClose}>
             Cancel
-          </ControlButton>
-          <ControlButton
+          </Button>
+          <Button
+            size="md"
+            variant="primary"
+            className="rounded-capsule"
             data-testid="editor-save"
-            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
             disabled={
               saving || extensionCatalogLoading || skillCatalogLoading || (!agent && !name.trim())
             }
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}
-          </ControlButton>
+          </Button>
         </div>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -58,15 +59,14 @@ export function QuestionAnswerControls({
     <>
       {question.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <ControlButton
+          <Button
             type="button"
             data-testid={`${testidPrefix}-confirm-yes`}
-            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium"
-            style={{ color: "var(--color-accent-foreground)" }}
+            size="md" variant="primary" className="rounded-capsule"
             onClick={() => answer({ confirmed: true })}
           >
             Yes
-          </ControlButton>
+          </Button>
           <ControlButton
             type="button"
             data-testid={`${testidPrefix}-confirm-no`}
@@ -100,15 +100,14 @@ export function QuestionAnswerControls({
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
-          <ControlButton
+          <Button
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-label font-medium"
-            style={{ color: "var(--color-accent-foreground)" }}
+            size="md" variant="primary" className="self-end rounded-capsule"
             onClick={() => answer({ value: inputValue })}
           >
             Send
-          </ControlButton>
+          </Button>
         </div>
       ) : (
         <div className="mt-3 flex gap-2">
@@ -126,15 +125,14 @@ export function QuestionAnswerControls({
               }
             }}
           />
-          <ControlButton
+          <Button
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            className="rounded-capsule bg-primary px-3 py-1.5 text-label font-medium"
-            style={{ color: "var(--color-accent-foreground)" }}
+            size="md" variant="primary" className="rounded-capsule"
             onClick={() => answer({ value: inputValue })}
           >
             Send
-          </ControlButton>
+          </Button>
         </div>
       )}
       <ControlButton

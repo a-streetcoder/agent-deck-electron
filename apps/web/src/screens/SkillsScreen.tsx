@@ -70,6 +70,7 @@ interface SkillRepo {
 }
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppTextField } from "@/design-system/components/AppTextField";
+import { Button } from "@/design-system/components/Button";
 
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
@@ -260,20 +261,19 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-          <ControlButton
-            className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
-            onClick={onClose}
-          >
+          <Button size="md" className="rounded-capsule" onClick={onClose}>
             Cancel
-          </ControlButton>
-          <ControlButton
+          </Button>
+          <Button
             data-testid="skill-editor-save"
-            className="rounded-capsule bg-primary px-4 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
+            size="md"
+            variant="primary"
+            className="rounded-capsule"
             disabled={!form.name.trim()}
             onClick={() => void save()}
           >
             Save
-          </ControlButton>
+          </Button>
         </div>
       </div>
     </div>
@@ -1739,15 +1739,18 @@ export function SkillsScreen() {
               />
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
-              <ControlButton
+              <Button
                 data-testid="new-skill"
-                className="flex shrink-0 items-center gap-1.5 rounded-capsule bg-primary px-3 py-1.5 text-label font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+                size="md"
+                variant="primary"
+                className="shrink-0 rounded-capsule"
+                leadingIcon={<Plus size={14} />}
                 onClick={() =>
                   setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
                 }
               >
-                <Plus size={14} /> New Skill
-              </ControlButton>
+                New Skill
+              </Button>
               <details
                 ref={importMenuRef}
                 open={importOpen}
@@ -2568,34 +2571,38 @@ export function SkillsScreen() {
                 aria-label="Skill actions"
               >
                 {!isReadOnlyScope(selected.scope) ? (
-                  <ControlButton
+                  <Button
                     data-testid="skill-edit"
-                    className="flex min-h-11 items-center gap-1.5 rounded-capsule bg-primary px-4 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
+                    size="lg"
+                    variant="primary"
+                    leadingIcon={<Pencil size={12} />}
                     onClick={() => setEditing(editDraft(selected))}
                   >
-                    <Pencil size={12} /> Edit SKILL.md
-                  </ControlButton>
+                    Edit SKILL.md
+                  </Button>
                 ) : null}
                 <div
                   className="flex flex-wrap items-center gap-2"
                   aria-label="Secondary skill actions"
                 >
-                  <ControlButton
+                  <Button
                     data-testid="skill-disable"
-                    className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                    size="lg"
+                    leadingIcon={selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                     onClick={() => void setSkillDisabled(selected.name, !selected.disabled)}
                   >
-                    {selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                     {selected.disabled ? "Enable" : "Disable"}
-                  </ControlButton>
+                  </Button>
                   {!isReadOnlyScope(selected.scope) ? (
-                    <ControlButton
+                    <Button
                       data-testid="skill-rename"
-                      className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                      size="lg"
+                      className="rounded-capsule text-detail text-text-secondary"
+                      leadingIcon={<Tag size={12} />}
                       onClick={() => setRenameValue(selected.name)}
                     >
-                      <Tag size={12} /> Rename
-                    </ControlButton>
+                      Rename
+                    </Button>
                   ) : null}
                 </div>
                 {!isReadOnlyScope(selected.scope) ? (
@@ -2603,9 +2610,11 @@ export function SkillsScreen() {
                     className="border-l border-border-subtle pl-2"
                     aria-label="Destructive skill actions"
                   >
-                    <ControlButton
+                    <Button
                       data-testid="skill-delete"
-                      className="flex min-h-11 items-center gap-1.5 rounded-capsule border border-danger/50 px-3 py-1 text-detail text-danger hover:bg-danger/10"
+                      size="lg"
+                      variant="destructiveOutline"
+                      leadingIcon={<Trash2 size={13} />}
                       onClick={() => {
                         if (
                           confirm(`Delete skill "${selected.name}"? This removes its SKILL.md.`)
@@ -2614,8 +2623,8 @@ export function SkillsScreen() {
                         }
                       }}
                     >
-                      <Trash2 size={13} /> Delete
-                    </ControlButton>
+                      Delete
+                    </Button>
                   </div>
                 ) : null}
               </div>

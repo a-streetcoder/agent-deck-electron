@@ -1,4 +1,5 @@
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { Button } from "@/design-system/components/Button";
 import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { AppSwitch } from "@/design-system/components/AppSwitch";
@@ -1094,14 +1095,16 @@ export function McpScreen() {
                 )}
               </div>
               <div className="flex items-center justify-end">
-                <ControlButton
+                <Button
+                  size="sm"
+                  variant="primary"
+                  className="rounded-capsule"
                   type="submit"
                   data-testid={editing ? "mcp-edit-confirm" : "mcp-add-confirm"}
-                  className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                   disabled={!canSubmit}
                 >
                   {saving ? (editing ? "Saving…" : "Adding…") : editing ? "Save" : "Add"}
-                </ControlButton>
+                </Button>
               </div>
               {replacedByPaste.length > 0 ? (
                 <p
@@ -1535,22 +1538,26 @@ export function McpScreen() {
                                   if (e.key === "Escape") void cancelLogin();
                                 }}
                               />
-                              <ControlButton
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="rounded-capsule"
                                 data-testid={`mcp-login-submit-${server.id}`}
-                                className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                                 disabled={!code.trim() || loginSubmitting}
                                 onClick={() => void submitCode()}
                               >
                                 Connect
-                              </ControlButton>
-                              <ControlButton
+                              </Button>
+                              <Button
                                 data-testid={`mcp-login-cancel-${server.id}`}
-                                className="rounded-capsule px-2 py-1.5 text-detail text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                                size="sm"
+                                variant="ghost"
+                                className="rounded-capsule"
                                 disabled={loginSubmitting}
                                 onClick={() => void cancelLogin()}
                               >
                                 Cancel
-                              </ControlButton>
+                              </Button>
                             </div>
                           </>
                         ) : (

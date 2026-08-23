@@ -1,4 +1,5 @@
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
+import { Button } from "@/design-system/components/Button";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Card } from "@/design-system/components/Card";
@@ -574,14 +575,16 @@ export function ExtensionsScreen() {
                   if (e.key === "Escape") setAdding(false);
                 }}
               />
-              <ControlButton
+              <Button
+  size="sm"
+                  variant="primary"
+                  className="rounded-capsule"
                 data-testid="extension-add-confirm"
-                className="rounded-capsule bg-primary px-3 py-1.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={!draft.trim()}
                 onClick={() => void add()}
               >
                 Add
-              </ControlButton>
+              </Button>
             </div>
           ) : null}
 

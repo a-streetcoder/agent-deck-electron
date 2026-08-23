@@ -1,3 +1,4 @@
+import { Button } from "@/design-system/components/Button";
 import {
   ControlButton,
   ControlInput,
@@ -1358,14 +1359,16 @@ export function MemoryScreen() {
                   >
                     Cancel
                   </ControlButton>
-                  <ControlButton
+                  <Button
+  size="sm"
+                      variant="primary"
+                      className="rounded-capsule"
                     data-testid="memory-save"
-                    className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                     disabled={!draft.title.trim() || !draft.summary.trim() || !draft.body.trim()}
                     onClick={() => void save()}
                   >
                     Save
-                  </ControlButton>
+                  </Button>
                 </div>
               </div>
             </AppScrollView>

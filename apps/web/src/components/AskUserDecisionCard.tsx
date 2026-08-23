@@ -1,4 +1,5 @@
 import { useId, useState, type FormEvent } from "react";
+import { Button } from "@/design-system/components/Button";
 import type { AskUserCell } from "@agent-deck/domain";
 import {
   ControlButton,
@@ -156,22 +157,24 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
             </div>
           ) : null}
           <div className="flex justify-end gap-2">
-            <ControlButton
+            <Button
               type="button"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-label disabled:opacity-50"
+              size="md"
+              className="rounded-capsule"
               disabled={busy !== null}
               onClick={() => void cancel()}
             >
               {busy === "cancel" ? "Cancelling…" : "Cancel"}
-            </ControlButton>
-            <ControlButton
+            </Button>
+            <Button
+              size="md"
+              variant="primary"
+              className="rounded-capsule"
               type="submit"
-              className="rounded-capsule bg-primary px-3 py-1.5 text-label font-medium disabled:opacity-50"
-              style={{ color: "var(--color-accent-foreground)" }}
               disabled={!canAnswer || busy !== null}
             >
               {busy === "answer" ? "Answering…" : "Answer"}
-            </ControlButton>
+            </Button>
           </div>
           <div className="min-h-5 text-body text-text-muted" role="status" aria-live="polite">
             {status}

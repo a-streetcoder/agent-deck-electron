@@ -1,4 +1,5 @@
 import { AppCopyButton } from "@/design-system/components/AppCopyButton";
+import { Button } from "@/design-system/components/Button";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
@@ -508,15 +509,16 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
-          <ControlButton
+                    <Button
+            size="md"
+            variant="primary"
+            className="self-end rounded-capsule"
             data-testid="supervisor-submit"
-            className="self-end rounded-capsule bg-primary px-3 py-1.5 text-label font-medium disabled:opacity-50"
-            style={{ color: "var(--color-accent-foreground)" }}
             disabled={!inputValue.trim()}
             onClick={() => answer(inputValue)}
           >
             Send response
-          </ControlButton>
+          </Button>
         </div>
       )}
     </div>

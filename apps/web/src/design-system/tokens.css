@@ -166,6 +166,9 @@
   --space-card: var(--space-4);
   --space-row: var(--space-3);
   --space-control-gap: var(--space-1-5);
+  --space-control-x-sm: var(--space-2-5);
+  --space-control-x-md: var(--space-3);
+  --space-control-x-lg: var(--space-4);
   --space-sheet: var(--space-8);
   --space-page-x: 40px;
   --space-page-y: var(--space-6);
@@ -175,6 +178,7 @@
   --size-control-sm: 28px;
   --size-control-md: 32px;
   --size-control-lg: 40px;
+  --size-control-hero: 44px;
   --size-icon-sm: 14px;
   --size-icon-md: 16px;
   --size-icon-lg: 20px;

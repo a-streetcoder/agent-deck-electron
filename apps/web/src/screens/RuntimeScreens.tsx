@@ -138,9 +138,11 @@ export function EnvironmentScreen() {
                 <option value="global">global</option>
                 {currentProjectId ? <option value="project">project</option> : null}
               </ControlSelect>
-              <ControlButton
+              <Button
+  size="sm"
+                  variant="primary"
+                  className="rounded-capsule"
                 data-testid="env-new-save"
-                className="rounded-capsule bg-primary px-3 py-1 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover disabled:opacity-40"
                 disabled={!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newKey)}
                 onClick={() =>
                   void writeVar(newScope, newKey, newValue).then(() => {
@@ -151,7 +153,7 @@ export function EnvironmentScreen() {
                 }
               >
                 Add
-              </ControlButton>
+              </Button>
             </div>
           ) : null}
 
