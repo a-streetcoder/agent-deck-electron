@@ -158,6 +158,40 @@ test.afterAll(async () => {
   }
 });
 
+test("the desktop drop bridge resolves and classifies only user-provided File handles", async () => {
+  const window = await app.firstWindow();
+  await window.evaluate(() => {
+    const browser = globalThis as unknown as {
+      document: {
+        createElement(tag: string): { type: string; dataset: Record<string, string> };
+        body: { append(node: unknown): void };
+      };
+    };
+    const input = browser.document.createElement("input");
+    input.type = "file";
+    input.dataset.testid = "drop-bridge-file";
+    browser.document.body.append(input);
+  });
+  const input = window.getByTestId("drop-bridge-file");
+  await input.setInputFiles(path.join(projectDir, "README.md"));
+
+  const result = await window.evaluate(async () => {
+    const browser = globalThis as unknown as {
+      document: { querySelector(selector: string): { files?: ArrayLike<unknown> } | null };
+      agentDeck?: {
+        resolveDroppedItems?(
+          files: unknown[],
+        ): Promise<Array<{ index: number; path: string; kind: string }>>;
+      };
+    };
+    const file = browser.document.querySelector('[data-testid="drop-bridge-file"]')?.files?.[0];
+    const bridge = browser.agentDeck;
+    return file && bridge?.resolveDroppedItems ? bridge.resolveDroppedItems([file]) : [];
+  });
+
+  expect(result).toEqual([{ index: 0, path: path.join(projectDir, "README.md"), kind: "file" }]);
+});
+
 test("the desktop shell boots the server and mounts the UI", async () => {
   const window = await app.firstWindow();
   await window.waitForLoadState("domcontentloaded");

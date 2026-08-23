@@ -57,15 +57,14 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
     mimeType: "image/png",
     buffer: PNG,
   });
-  await expect(
-    page.getByTestId("attachments").getByRole("img", { name: "pixel.png" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Preview image pixel.png" })).toBeVisible();
   await page.getByTestId("composer-input").fill("keep this pixel");
   await page.getByTestId("send-button").click();
 
   const gallery = page.getByTestId("sent-image-gallery");
-  const thumbnail = gallery.getByRole("img", { name: "Sent image 1" });
-  await expect(thumbnail).toBeVisible({ timeout: 30_000 });
+  const previewButton = gallery.getByRole("button", { name: "Preview pixel.png" });
+  const thumbnail = previewButton.locator("img");
+  await expect(previewButton).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
     timeout: 30_000,
   });
@@ -89,11 +88,11 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   await page.getByRole("button", { name: "Transcript display" }).click();
   await page.getByRole("switch", { name: "Images" }).click();
   await expect(
-    page.getByTestId("sent-image-gallery").getByRole("img", { name: "Sent image 1" }),
+    page.getByTestId("sent-image-gallery").getByRole("button", { name: "Preview pixel.png" }),
   ).toBeVisible();
 
-  await gallery.getByRole("button", { name: "Expand Sent image 1" }).click();
-  await expect(page.getByRole("dialog").getByRole("img", { name: "Sent image 1" })).toBeVisible();
+  await gallery.getByRole("button", { name: "Preview pixel.png" }).click();
+  await expect(page.getByRole("dialog").getByRole("img", { name: "pixel.png" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
@@ -101,7 +100,7 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   // snapshot/replay. The transcript must still resolve the lazy app-data URL.
   await page.reload();
   await expect(
-    page.getByTestId("sent-image-gallery").getByRole("img", { name: "Sent image 1" }),
+    page.getByTestId("sent-image-gallery").getByRole("button", { name: "Preview pixel.png" }),
   ).toBeVisible({
     timeout: 30_000,
   });
@@ -117,11 +116,11 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   });
   expect(resume.status, await resume.text()).toBe(200);
   await page.reload();
-  const resumedThumbnail = page
+  const resumedPreview = page
     .getByTestId("sent-image-gallery")
-    .getByRole("img", { name: "Sent image 1" });
-  await expect(resumedThumbnail).toBeVisible({ timeout: 30_000 });
-  expect(await resumedThumbnail.getAttribute("src")).toBe(sourceSrc);
+    .getByRole("button", { name: "Preview pixel.png" });
+  await expect(resumedPreview).toBeVisible({ timeout: 30_000 });
+  expect(await resumedPreview.locator("img").getAttribute("src")).toBe(sourceSrc);
 
   const forkResponse = await fetch(
     `${harness.baseUrl}/sessions/${encodeURIComponent(sourceId)}/fork`,
@@ -130,11 +129,11 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   expect(forkResponse.status).toBe(201);
   const { session: forkMeta } = (await forkResponse.json()) as { session: SessionMeta };
   await page.getByTestId("chat-list").getByTestId(`chat-${forkMeta.id}`).click();
-  const forkThumbnail = page
+  const forkPreview = page
     .getByTestId("sent-image-gallery")
-    .getByRole("img", { name: "Sent image 1" });
-  await expect(forkThumbnail).toBeVisible({ timeout: 30_000 });
-  const forkSrc = await forkThumbnail.getAttribute("src");
+    .getByRole("button", { name: "Preview pixel.png" });
+  await expect(forkPreview).toBeVisible({ timeout: 30_000 });
+  const forkSrc = await forkPreview.locator("img").getAttribute("src");
   expect(forkSrc).toBeTruthy();
   expect(new URL(forkSrc!, harness.baseUrl).pathname.split("/").at(-1)).toBe(
     new URL(sourceSrc!, harness.baseUrl).pathname.split("/").at(-1),
@@ -143,7 +142,7 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
 
   await deleteSession(sourceId);
   expect((await fetch(absoluteImageUrl(sourceSrc!))).status).toBe(404);
-  await expect(forkThumbnail).toBeVisible();
+  await expect(forkPreview).toBeVisible();
   expect((await fetch(absoluteImageUrl(forkSrc!))).status).toBe(200);
 
   await deleteSession(forkMeta.id);

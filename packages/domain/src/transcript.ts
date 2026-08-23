@@ -16,6 +16,8 @@ export interface AssistantBlock {
 export interface UserImageRef {
   /** Opaque, session-scoped identifier. Never a path, hash, MIME, or image bytes. */
   id: string;
+  /** Original display filename when submitted through Agent Deck. */
+  name?: string;
   width: number;
   height: number;
 }

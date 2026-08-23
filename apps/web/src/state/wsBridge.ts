@@ -1401,6 +1401,7 @@ export interface ImageAttachment {
   type: "image";
   data: string;
   mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  name?: string;
 }
 
 export function sendPrompt(

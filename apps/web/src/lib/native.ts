@@ -38,6 +38,12 @@ export type NativeMenuAction =
   | "prompt.openFile"
   | "prompt.reveal";
 
+export interface DroppedPathItem {
+  index: number;
+  path: string;
+  kind: "file" | "folder";
+}
+
 export interface AgentDeckBridge {
   isElectron?: boolean;
   platform?: string;
@@ -54,6 +60,8 @@ export interface AgentDeckBridge {
     /** Picker extension filters (PRM-07); narrows the dialog, never a capability. */
     filters?: { name: string; extensions: string[] }[];
   }): Promise<string[]>;
+  /** Resolve only user-dropped File handles to validated desktop paths and kinds. */
+  resolveDroppedItems?(files: File[]): Promise<DroppedPathItem[]>;
   revealSubagentArtifacts?(runId: string): Promise<boolean>;
   revealLoopArtifacts?(runId: string): Promise<boolean>;
   revealLoopWorktree?(runId: string): Promise<boolean>;
@@ -230,6 +238,31 @@ export async function chooseFiles(
     const result: unknown = await bridge.chooseFiles(options);
     if (!Array.isArray(result)) return [];
     return result.filter((value): value is string => typeof value === "string").slice(0, 16);
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve desktop drop handles without relying on the removed/deprecated File.path API. */
+export async function resolveDroppedItems(files: readonly File[]): Promise<DroppedPathItem[]> {
+  const bridge = nativeBridge();
+  if (!bridge?.resolveDroppedItems || files.length === 0) return [];
+  try {
+    const result: unknown = await bridge.resolveDroppedItems([...files].slice(0, 16));
+    if (!Array.isArray(result)) return [];
+    return result
+      .filter(
+        (item): item is DroppedPathItem =>
+          !!item &&
+          typeof item === "object" &&
+          Number.isSafeInteger((item as DroppedPathItem).index) &&
+          (item as DroppedPathItem).index >= 0 &&
+          (item as DroppedPathItem).index < 16 &&
+          typeof (item as DroppedPathItem).path === "string" &&
+          ((item as DroppedPathItem).kind === "file" ||
+            (item as DroppedPathItem).kind === "folder"),
+      )
+      .slice(0, 16);
   } catch {
     return [];
   }

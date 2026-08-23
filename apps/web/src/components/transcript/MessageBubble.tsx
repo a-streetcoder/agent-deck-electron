@@ -34,6 +34,8 @@ export interface MessageBubbleAttachment {
   kind: "paste" | "file" | "folder" | "image" | "issue" | "skill" | "command";
   label: string;
   title?: string;
+  thumbnailSrc?: string;
+  onThumbnailError?: () => void;
   onActivate?: () => void;
 }
 
@@ -146,7 +148,14 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
       </div>
 
       {attachments && attachments.length > 0 ? (
-        <ul data-testid="message-bubble-attachments" className="flex flex-wrap gap-1.5">
+        <ul
+          data-testid={
+            attachments.some((attachment) => attachment.kind === "image" && attachment.thumbnailSrc)
+              ? "sent-image-gallery"
+              : "message-bubble-attachments"
+          }
+          className="flex flex-wrap gap-1.5"
+        >
           {attachments.map((attachment) => (
             <li
               key={attachment.id}
@@ -165,9 +174,22 @@ export const MessageBubble = forwardRef<HTMLDivElement, MessageBubbleProps>(func
                   type="button"
                   className="rounded-sm outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
                   aria-label={`Preview ${attachment.label}`}
+                  title={attachment.label}
                   onClick={attachment.onActivate}
                 >
-                  {attachment.label}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {attachment.thumbnailSrc ? (
+                      <img
+                        src={attachment.thumbnailSrc}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className="h-8 w-8 shrink-0 rounded object-cover"
+                        onError={attachment.onThumbnailError}
+                      />
+                    ) : null}
+                    <span className="max-w-[18ch] truncate">{attachment.label}</span>
+                  </span>
                 </ControlButton>
               ) : (
                 attachment.label

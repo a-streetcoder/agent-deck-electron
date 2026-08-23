@@ -76,7 +76,9 @@ import {
   chooseDirectory as chooseNativeFolders,
   chooseFiles as chooseNativeFiles,
   isElectron,
+  resolveDroppedItems,
 } from "../lib/native.ts";
+import { promptImageMime, supportsComposerDrop } from "../lib/composerDrop.ts";
 import {
   createPendingImageId,
   isCurrentComposerSubmission,
@@ -93,23 +95,14 @@ const EMPTY_COMMENTS: readonly PendingReviewComment[] = [];
 /** Stable empty reference for the pending element-context selector (Slice 16). */
 const EMPTY_ELEMENT_CONTEXTS: readonly PendingElementContext[] = [];
 
-const PROMPT_IMAGE_MIMES = new Set<ComposerDraftImage["mimeType"]>([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-function isPromptImageMime(value: string): value is ComposerDraftImage["mimeType"] {
-  return PROMPT_IMAGE_MIMES.has(value as ComposerDraftImage["mimeType"]);
-}
-
 function stripSlashTrigger(text: string): string {
   if (!text.startsWith("/")) return text;
   const token = text.match(/^\/\S*/)?.[0] ?? "/";
   return text.slice(token.length).replace(/^\s+/, "");
 }
 async function fileToImage(file: File): Promise<ComposerDraftImage | null> {
-  if (!isPromptImageMime(file.type) || file.size > 15_000_000) return null;
+  const mimeType = promptImageMime(file);
+  if (!mimeType || file.size > 15_000_000) return null;
   const buffer = await file.arrayBuffer();
   let binary = "";
   const bytes = new Uint8Array(buffer);
@@ -117,7 +110,7 @@ async function fileToImage(file: File): Promise<ComposerDraftImage | null> {
   return {
     type: "image",
     data: btoa(binary),
-    mimeType: file.type,
+    mimeType,
     id: createPendingImageId(),
     name: file.name || "pasted image",
   };
@@ -441,6 +434,8 @@ export function Composer() {
   // Full-size preview overlay: the id of the pending image being expanded, or
   // null. Cleared when its image is removed so a stale id can't reopen it.
   const [expandedImageId, setExpandedImageId] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepthRef = useRef(0);
   // @-file mentions in the draft, surfaced as removable chips (a view over the
   // text — the literal @path tokens stay in the prompt).
   const fileMentions = useMemo(() => parseFileMentions(draft), [draft]);
@@ -531,9 +526,9 @@ export function Composer() {
   };
 
   const addFiles = useCallback(
-    async (files: FileList | File[]): Promise<void> => {
-      const imageFiles = [...files].filter((file) => isPromptImageMime(file.type));
-      if (imageFiles.length === 0 || !sessionId) return;
+    async (files: FileList | File[]): Promise<boolean> => {
+      const imageFiles = [...files].filter((file) => promptImageMime(file) !== null);
+      if (imageFiles.length === 0 || !sessionId) return false;
       const originatingSessionId = sessionId;
       const generation = imageLoadGenerationRef.current;
       setSubmitStatus(null);
@@ -542,11 +537,17 @@ export function Composer() {
           kind: "image",
           message: "Images can only be added while Pi is idle.",
         });
-        return;
+        return true;
       }
-      // Cap before encoding so discarded files cannot freeze the renderer.
-      const remaining = 8 - images.length;
-      if (remaining <= 0) return;
+      // Read authoritative draft state: native path resolution or another image
+      // batch can settle between render and this invocation.
+      const currentImages =
+        useAppStore.getState().composerDrafts[originatingSessionId]?.images ?? [];
+      const remaining = 8 - currentImages.length;
+      if (remaining <= 0) {
+        setSubmitStatus({ kind: "rejection", message: "Up to 8 images can be attached." });
+        return false;
+      }
       const candidates = imageFiles.slice(0, remaining);
       const imgs = await settleComposerImageBatch(
         candidates.map(fileToImage),
@@ -558,7 +559,7 @@ export function Composer() {
         }),
       );
       // A stale batch must not mutate the newly active session's images or status.
-      if (imgs === null) return;
+      if (imgs === null) return false;
       // Pi may have started while File.arrayBuffer() was pending. Discard the
       // completion rather than introducing an attachment queue_update cannot represent.
       if (runningRef.current) {
@@ -568,11 +569,22 @@ export function Composer() {
             message: "Image loading finished after Pi started; the new image was not added.",
           });
         }
-        return;
+        return true;
       }
-      if (imgs.length > 0) setImages((previous) => [...previous, ...imgs].slice(0, 8));
+      const latestImages =
+        useAppStore.getState().composerDrafts[originatingSessionId]?.images ?? [];
+      const accepted = imgs.slice(0, Math.max(0, 8 - latestImages.length));
+      if (accepted.length > 0) setImages((previous) => [...previous, ...accepted].slice(0, 8));
+      const rejected = imageFiles.length - accepted.length;
+      if (rejected > 0) {
+        setSubmitStatus({
+          kind: "rejection",
+          message: `${rejected} image${rejected === 1 ? " was" : "s were"} not attached because it was unsupported, too large, or over the 8-image limit.`,
+        });
+      }
+      return false;
     },
-    [images.length, sessionId],
+    [sessionId, setImages],
   );
 
   const pickPathFiles = useCallback(async (): Promise<void> => {
@@ -636,6 +648,104 @@ export function Composer() {
     });
   }, [sessionId, setFolders]);
 
+  const attachDroppedItems = useCallback(
+    async (dropped: readonly File[]): Promise<void> => {
+      if (dropped.length === 0) return;
+      if (!sessionId) {
+        setSubmitStatus({
+          kind: "rejection",
+          message: "Wait for the chat to connect before attaching dropped items.",
+        });
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      const originatingSessionId = sessionId;
+      try {
+        if (!isElectron()) {
+          const imageFiles = dropped.filter((file) => promptImageMime(file) !== null);
+          const preserveImageStatus = imageFiles.length > 0 ? await addFiles(imageFiles) : false;
+          if (!preserveImageStatus && imageFiles.length !== dropped.length) {
+            setSubmitStatus({
+              kind: "rejection",
+              message:
+                "Files and folders need the desktop app; dropped images can still be attached here.",
+            });
+          }
+          return;
+        }
+        // Main classifies every resolved path before a directory can be mistaken
+        // for an image. Unresolved image bytes remain usable for cross-app drops.
+        const resolved = (await resolveDroppedItems(dropped)).filter(
+          (item) =>
+            Number.isSafeInteger(item.index) && item.index >= 0 && item.index < dropped.length,
+        );
+        if (useAppStore.getState().session?.id !== originatingSessionId) return;
+        const classification = new Map(resolved.map((item) => [item.index, item]));
+        const imageIndexes = new Set(
+          dropped.flatMap((file, index) => {
+            if (promptImageMime(file) === null) return [];
+            const item = classification.get(index);
+            return !item || item.kind === "file" ? [index] : [];
+          }),
+        );
+        const imageFiles = dropped.filter((_file, index) => imageIndexes.has(index));
+        const preserveImageStatus = imageFiles.length > 0 ? await addFiles(imageFiles) : false;
+        if (useAppStore.getState().session?.id !== originatingSessionId) return;
+        const pathItems = [...classification.values()].filter(
+          (item) => item.kind === "folder" || !imageIndexes.has(item.index),
+        );
+        const filePaths = pathItems.filter((item) => item.kind === "file").map((item) => item.path);
+        const droppedFiles = fileAttachmentRefs(filePaths);
+        const folderPaths = pathItems
+          .filter((item) => item.kind === "folder")
+          .map((item) => item.path);
+        const droppedFolders = folderAttachmentRefs(folderPaths);
+        let rejected =
+          dropped.filter(
+            (file, index) => !classification.has(index) && promptImageMime(file) === null,
+          ).length +
+          (filePaths.length - droppedFiles.length) +
+          (folderPaths.length - droppedFolders.length);
+        updateComposerDraft(originatingSessionId, (current) => {
+          const seenFiles = new Set(current.files.map((file) => file.path));
+          const novelFiles = droppedFiles.filter((file) => !seenFiles.has(file.path));
+          const acceptedFiles = novelFiles.slice(
+            0,
+            Math.max(0, MAX_FILE_ATTACHMENTS - current.files.length),
+          );
+          const seenFolders = new Set(current.folders.map((folder) => folder.path));
+          const novelFolders = droppedFolders.filter((folder) => !seenFolders.has(folder.path));
+          const acceptedFolders = novelFolders.slice(
+            0,
+            Math.max(0, MAX_FOLDER_ATTACHMENTS - current.folders.length),
+          );
+          rejected +=
+            novelFiles.length - acceptedFiles.length + novelFolders.length - acceptedFolders.length;
+          return {
+            ...current,
+            files: [
+              ...current.files,
+              ...acceptedFiles.map((file) => ({ ...file, id: crypto.randomUUID() })),
+            ],
+            folders: [
+              ...current.folders,
+              ...acceptedFolders.map((folder) => ({ ...folder, id: crypto.randomUUID() })),
+            ],
+          };
+        });
+        if (!preserveImageStatus && rejected > 0) {
+          setSubmitStatus({
+            kind: "rejection",
+            message: `${rejected} dropped item${rejected === 1 ? " was" : "s were"} not attached because its path was unavailable, unsupported, or over the attachment limit.`,
+          });
+        }
+      } finally {
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
+    },
+    [addFiles, sessionId, updateComposerDraft],
+  );
+
   const submit = (): void => {
     if (sendLockRef.current) return;
     const submittedDraft = draft;
@@ -696,7 +806,7 @@ export function Composer() {
       originatingSessionId,
       outgoing,
       submittedImages.length > 0
-        ? submittedImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
+        ? submittedImages.map(({ type, data, mimeType, name }) => ({ type, data, mimeType, name }))
         : undefined,
       running ? streamingBehavior : undefined,
       submittedPastes.length > 0
@@ -767,7 +877,44 @@ export function Composer() {
 
   return (
     <div className="px-6 pb-5 pt-2">
-      <div className="relative rounded-3xl border border-border-subtle bg-surface-elevated shadow-card">
+      <div
+        className={`relative rounded-3xl border bg-surface-elevated shadow-card ${dropActive ? "border-accent ring-2 ring-accent/40" : "border-border-subtle"}`}
+        data-testid="composer-drop-target"
+        data-drop-active={dropActive ? "true" : "false"}
+        onDragEnter={(event) => {
+          if (!supportsComposerDrop(event.dataTransfer, isElectron())) return;
+          event.preventDefault();
+          dragDepthRef.current += 1;
+          setDropActive(true);
+        }}
+        onDragOver={(event) => {
+          if (!supportsComposerDrop(event.dataTransfer, isElectron())) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDragLeave={(event) => {
+          if (!supportsComposerDrop(event.dataTransfer, isElectron())) return;
+          event.preventDefault();
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDropActive(false);
+        }}
+        onDrop={(event) => {
+          if (!supportsComposerDrop(event.dataTransfer, isElectron())) return;
+          event.preventDefault();
+          dragDepthRef.current = 0;
+          setDropActive(false);
+          void attachDroppedItems([...event.dataTransfer.files]);
+        }}
+      >
+        {dropActive ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-3xl bg-accent/10 px-4 text-center text-label font-medium text-accent backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+          >
+            {isElectron() ? "Drop images, files, or folders to attach" : "Drop images to attach"}
+          </div>
+        ) : null}
         {suggestions.mode === "slash" ? (
           <SlashSuggestionPanel
             rows={suggestions.slashRows}
@@ -888,8 +1035,12 @@ export function Composer() {
           }}
         />
 
-        {files.length > 0 ? (
-          <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="file-attachments">
+        {files.length > 0 || folders.length > 0 || images.length > 0 ? (
+          <div
+            className="flex flex-wrap gap-2 px-3 pt-3"
+            data-testid="attachments"
+            aria-label="Pending attachments"
+          >
             {files.map((file) => (
               <span
                 key={file.id}
@@ -911,11 +1062,6 @@ export function Composer() {
                 </ControlButton>
               </span>
             ))}
-          </div>
-        ) : null}
-
-        {folders.length > 0 ? (
-          <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="folder-attachments">
             {folders.map((folder) => (
               <span
                 key={folder.id}
@@ -937,11 +1083,6 @@ export function Composer() {
                 </ControlButton>
               </span>
             ))}
-          </div>
-        ) : null}
-
-        {images.length > 0 ? (
-          <div className="flex flex-wrap gap-2 px-3 pt-3" data-testid="attachments">
             {images.map((image) => (
               <span
                 key={image.id}
@@ -950,21 +1091,22 @@ export function Composer() {
               >
                 <ControlButton
                   type="button"
-                  className="rounded outline-none focus-visible:ring-1 focus-visible:ring-accent"
-                  aria-label={`Expand ${image.name}`}
+                  title={image.name}
+                  className="flex min-w-0 items-center gap-1.5 rounded outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label={`Preview image ${image.name}`}
                   data-testid={`attachment-expand-${image.id}`}
                   onClick={() => setExpandedImageId(image.id)}
                 >
                   <img
                     src={`data:${image.mimeType};base64,${image.data}`}
-                    alt={image.name}
-                    className="h-8 w-8 cursor-zoom-in rounded object-cover"
+                    alt=""
+                    className="h-8 w-8 shrink-0 cursor-zoom-in rounded object-cover"
                   />
+                  <span className="max-w-[16ch] truncate">{image.name}</span>
                 </ControlButton>
-                <span className="max-w-[12ch] truncate">{image.name}</span>
                 <ControlButton
-                  className="text-text-muted hover:text-danger"
-                  aria-label="Remove attachment"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-text-muted outline-none hover:bg-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label={`Remove ${image.name} image attachment`}
                   onClick={() => {
                     setSubmitStatus(null);
                     setImages((prev) => {

@@ -3,7 +3,7 @@
 // Exposes a tiny, allow-listed surface on window.agentDeck. The web UI checks
 // `window.agentDeck?.isElectron` to prefer the native folder picker over the
 // type-a-path fallback it uses in a plain browser.
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
@@ -22,6 +22,24 @@ contextBridge.exposeInMainWorld("agentDeck", {
    * @returns {Promise<string[]>}
    */
   chooseFiles: (options) => ipcRenderer.invoke("dialog:openFiles", options),
+  /**
+   * Resolve only File objects received from an OS drag. Electron owns path
+   * extraction; main validates and classifies each resulting path.
+   * @param {File[]} files
+   * @returns {Promise<Array<{ index: number, path: string, kind: "file" | "folder" }>>}
+   */
+  resolveDroppedItems: (files) => {
+    if (!Array.isArray(files)) return Promise.resolve([]);
+    const paths = files.slice(0, 16).flatMap((file, index) => {
+      try {
+        const resolved = webUtils.getPathForFile(file);
+        return resolved ? [{ index, path: resolved }] : [];
+      } catch {
+        return [];
+      }
+    });
+    return ipcRenderer.invoke("drop:classifyPaths", paths);
+  },
   /** Open a native menu at a renderer-provided titlebar anchor. */
   openAppMenu: (name, anchor) => ipcRenderer.invoke("app-menu:open", name, anchor),
   /** Reveal a backend/native-validated subagent artifact root by opaque run id. */

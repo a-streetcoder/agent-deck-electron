@@ -719,7 +719,7 @@ function UserCellView({
   }, [showImages]);
   const items = (cell.images ?? []).map((image, index) => ({
     src: sessionImageUrl(sessionId, image.id),
-    name: `Sent image ${index + 1}`,
+    name: image.name ?? `Sent image ${index + 1}`,
   }));
   const fileAttachments = (cell.files ?? []).map((file, index) => ({
     id: `${cell.id}-file-${index}`,
@@ -740,6 +740,25 @@ function UserCellView({
     title: "Preview pasted text",
     onActivate: () => setExpandedPaste(index),
   }));
+  const imageAttachments = showImages
+    ? items.map((item, index) => {
+        const ref = cell.images![index]!;
+        const unavailable = failed.has(ref.id) || !item.src;
+        return {
+          id: `${cell.id}-image-${ref.id}`,
+          kind: "image" as const,
+          label: unavailable ? `${item.name} (unavailable)` : item.name,
+          title: unavailable ? "Image preview unavailable" : "Preview sent image",
+          ...(unavailable
+            ? {}
+            : {
+                thumbnailSrc: item.src,
+                onThumbnailError: () => setFailed((old) => new Set(old).add(ref.id)),
+                onActivate: () => setExpanded(index),
+              }),
+        };
+      })
+    : [];
   const hiddenImageAttachments =
     !showImages && items.length > 0
       ? [
@@ -755,6 +774,7 @@ function UserCellView({
     ...fileAttachments,
     ...folderAttachments,
     ...pasteAttachments,
+    ...imageAttachments,
     ...hiddenImageAttachments,
   ];
   const fileSummary = fileAttachments.length === 1 ? "1 file" : `${fileAttachments.length} files`;
@@ -797,42 +817,6 @@ function UserCellView({
           ) : (
             <MessageBubble role="user" text={visibleText} attachments={attachments} />
           )
-        ) : null}
-        {showImages && items.length ? (
-          <div className="flex flex-wrap justify-end gap-2" data-testid="sent-image-gallery">
-            {items.map((item, index) => {
-              const ref = cell.images![index]!;
-              return failed.has(ref.id) || !item.src ? (
-                <div
-                  key={ref.id}
-                  className="flex h-24 w-24 items-center justify-center rounded-lg border border-border-strong bg-surface text-center text-detail text-text-muted"
-                  role="img"
-                  aria-label={`${item.name} unavailable`}
-                >
-                  Image unavailable
-                </div>
-              ) : (
-                <ControlButton
-                  key={ref.id}
-                  type="button"
-                  className="rounded-lg focus-visible:ring-2 focus-visible:ring-accent"
-                  aria-label={`Expand ${item.name}`}
-                  onClick={() => setExpanded(index)}
-                >
-                  <img
-                    src={item.src}
-                    alt={item.name}
-                    width={ref.width}
-                    height={ref.height}
-                    loading="lazy"
-                    decoding="async"
-                    className="h-24 w-24 cursor-zoom-in rounded-lg border border-border-strong bg-surface object-cover"
-                    onError={() => setFailed((old) => new Set(old).add(ref.id))}
-                  />
-                </ControlButton>
-              );
-            })}
-          </div>
         ) : null}
         {cell.entryId ? <UserHistoryActions entryId={cell.entryId} /> : null}
         {showImages && expanded !== null ? (

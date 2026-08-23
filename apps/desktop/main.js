@@ -768,6 +768,35 @@ function boundedPickerPaths(filePaths) {
     .slice(0, 16);
 }
 
+ipcMain.handle("drop:classifyPaths", async (event, rawPaths) => {
+  assertTrustedPickerSender(event, "Dropped attachments are unavailable");
+  const paths = (Array.isArray(rawPaths) ? rawPaths : []).slice(0, 16).flatMap((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      !Number.isSafeInteger(item.index) ||
+      item.index < 0 ||
+      item.index >= 16
+    )
+      return [];
+    const validated = boundedPickerPaths([item.path]);
+    return validated.length > 0 ? [{ index: item.index, path: validated[0] }] : [];
+  });
+  const classified = await Promise.all(
+    paths.map(async ({ index, path: candidate }) => {
+      try {
+        const info = await stat(candidate);
+        if (info.isFile()) return { index, path: candidate, kind: "file" };
+        if (info.isDirectory()) return { index, path: candidate, kind: "folder" };
+      } catch {
+        // A disappeared or unreadable drop is omitted and reported by the renderer.
+      }
+      return null;
+    }),
+  );
+  return classified.filter(Boolean);
+});
+
 ipcMain.handle("dialog:openDirectory", async (event, options = {}) => {
   assertTrustedPickerSender(event, "Folder chooser is unavailable");
   const pickerOptions = options && typeof options === "object" ? options : {};

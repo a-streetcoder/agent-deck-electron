@@ -775,7 +775,7 @@ export function createRpcConnection(deps: {
               : undefined;
             await session.prompt(
               request.message,
-              request.images,
+              request.images?.map(({ type, data, mimeType }) => ({ type, data, mimeType })),
               request.streamingBehavior,
               request.titleSource,
             );

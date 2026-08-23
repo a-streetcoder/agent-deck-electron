@@ -5,6 +5,7 @@ import {
   chooseFiles,
   notifyAttention,
   onFocusSession,
+  resolveDroppedItems,
   syncAttention,
 } from "./native.ts";
 
@@ -104,6 +105,32 @@ describe("chooseFiles", () => {
 
     stubBridge({ chooseFiles: vi.fn().mockRejectedValue(new Error("cancelled")) });
     await expect(chooseFiles()).resolves.toEqual([]);
+  });
+});
+
+describe("resolveDroppedItems", () => {
+  it("bounds File handles and validates the narrow path-kind result", async () => {
+    const resolve = vi.fn().mockResolvedValue([
+      { index: 0, path: "/tmp/a.txt", kind: "file" },
+      { index: 1, path: "/tmp/project", kind: "folder" },
+      { index: 2, path: 42, kind: "file" },
+      { index: 3, path: "/tmp/no", kind: "symlink" },
+    ]);
+    stubBridge({ isElectron: true, resolveDroppedItems: resolve });
+    const files = Array.from({ length: 20 }, (_, index) => ({ name: `${index}` }) as File);
+
+    await expect(resolveDroppedItems(files)).resolves.toEqual([
+      { index: 0, path: "/tmp/a.txt", kind: "file" },
+      { index: 1, path: "/tmp/project", kind: "folder" },
+    ]);
+    expect(resolve.mock.calls[0]![0]).toHaveLength(16);
+  });
+
+  it("fails closed when the desktop capability is absent or rejects", async () => {
+    stubBridge(undefined);
+    await expect(resolveDroppedItems([{} as File])).resolves.toEqual([]);
+    stubBridge({ resolveDroppedItems: vi.fn().mockRejectedValue(new Error("gone")) });
+    await expect(resolveDroppedItems([{} as File])).resolves.toEqual([]);
   });
 });
 

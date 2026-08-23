@@ -608,7 +608,7 @@ describe("createRpcConnection", () => {
   it("prompt forwards message + images and acks", async () => {
     const { session, ops } = makeSession("s1");
     const { conn, frames } = harness(makeManager({ s1: session }));
-    const images = [{ type: "image", data: "aGk=", mimeType: "image/png" }];
+    const images = [{ type: "image", data: "aGk=", mimeType: "image/png", name: "1.png" }];
     await conn.handleMessage(
       frame(1, {
         type: "prompt",
@@ -618,8 +618,29 @@ describe("createRpcConnection", () => {
         streamingBehavior: "followUp",
       }),
     );
-    expect(ops.prompt).toHaveBeenCalledWith("hi", images, "followUp", undefined);
+    expect(ops.prompt).toHaveBeenCalledWith(
+      "hi",
+      [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+      "followUp",
+      undefined,
+    );
     expect(frames).toEqual([{ kind: "reply", id: 1, ok: true }]);
+  });
+
+  it("rejects control characters in image display names at the request boundary", async () => {
+    const { session, ops } = makeSession("s1");
+    const { conn, frames } = harness(makeManager({ s1: session }));
+    await conn.handleMessage(
+      frame(2, {
+        type: "prompt",
+        sessionId: "s1",
+        message: "hi",
+        images: [{ type: "image", data: "aGk=", mimeType: "image/png", name: "bad\nname.png" }],
+      }),
+    );
+
+    expect(ops.prompt).not.toHaveBeenCalled();
+    expect(frames).toEqual([expect.objectContaining({ kind: "reply", id: 2, ok: false })]);
   });
 
   it("forwards an optional titleSource on prompt", async () => {

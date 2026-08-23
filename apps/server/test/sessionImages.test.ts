@@ -86,6 +86,31 @@ describe("SessionImageStore", () => {
     expect(images.read("s1", one.images![0]!.id)?.data).toEqual(png);
   });
 
+  it("persists a submitted filename only as safe display metadata", () => {
+    const images = store();
+    images.stage("s1", "one", [{ ...attachment, name: "1.png" }]);
+    const cell = images.attachToUserCell(
+      "s1",
+      { kind: "user", id: "user-1", entryId: "entry-1", text: "one" },
+      message("one"),
+    );
+
+    expect(cell.images).toEqual([expect.objectContaining({ name: "1.png", width: 1, height: 1 })]);
+    expect(images.promptImages("s1", "entry-1")).toEqual([attachment]);
+    expect(images.promptImages("s1", "entry-1")[0]).not.toHaveProperty("name");
+    expect(JSON.stringify(cell)).not.toContain(attachment.data);
+  });
+
+  it("rejects invalid display names before writing image data", () => {
+    const images = store();
+    expect(() => images.stage("s1", "one", [{ ...attachment, name: "bad\nname.png" }])).toThrow(
+      /display name/,
+    );
+    expect(readdirSync(path.join(images.root, "blobs"))).toEqual([]);
+
+    expect(() => images.stage("s1", "one", [{ ...attachment, name: "ok.png" }])).not.toThrow();
+  });
+
   it("accepts structurally valid PNG, JPEG, GIF, and WebP files", () => {
     const images = store();
     for (const [mimeType, data] of [

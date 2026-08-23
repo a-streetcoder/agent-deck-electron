@@ -445,6 +445,19 @@ function messageParts(
         : "",
   };
 }
+function checkedImageName(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 255 ||
+    [...value].some((character) => character.charCodeAt(0) < 32)
+  ) {
+    throw new Error("invalid image display name");
+  }
+  return value;
+}
+
 function signatureFor(
   text: string,
   decoded: ReadonlyArray<{ data: Buffer; mimeType: string }>,
@@ -577,6 +590,11 @@ export class SessionImageStore {
         image.width > MAX_IMAGE_DIMENSION ||
         image.height > MAX_IMAGE_DIMENSION ||
         image.width * image.height > MAX_IMAGE_PIXELS ||
+        (image.name !== undefined &&
+          (typeof image.name !== "string" ||
+            image.name.length < 1 ||
+            image.name.length > 255 ||
+            [...image.name].some((character) => character.charCodeAt(0) < 32))) ||
         (image.entryId !== undefined && typeof image.entryId !== "string") ||
         (image.cellId !== undefined && typeof image.cellId !== "string") ||
         (image.messageKey !== undefined && !HASH_RE.test(image.messageKey))
@@ -591,7 +609,11 @@ export class SessionImageStore {
   ): { rollback: () => void } {
     if (values.length < 1 || values.length > MAX_PROMPT_IMAGES)
       throw new Error("invalid image count");
-    const decoded = values.map((value) => ({ value, ...decodeCanonicalImage(value) }));
+    const decoded = values.map((value) => ({
+      value,
+      name: checkedImageName(value.name),
+      ...decodeCanonicalImage(value),
+    }));
     if (decoded.reduce((sum, image) => sum + image.data.length, 0) > MAX_PROMPT_IMAGE_BYTES)
       throw new Error("prompt images exceed decoded size limit");
     const signature = signatureFor(
@@ -623,6 +645,7 @@ export class SessionImageStore {
         blobHash,
         size: image.data.length,
         mimeType: image.value.mimeType,
+        ...(image.name ? { name: image.name } : {}),
         width: image.width,
         height: image.height,
       });
@@ -730,7 +753,12 @@ export class SessionImageStore {
     return {
       ...cell,
       id: stableCellId,
-      images: selected.map(({ id, width, height }) => ({ id, width, height })),
+      images: selected.map(({ id, name, width, height }) => ({
+        id,
+        ...(name ? { name } : {}),
+        width,
+        height,
+      })),
     };
   }
   reconcileHistory(sessionId: string, users: readonly SessionImageHistoryUser[]): void {

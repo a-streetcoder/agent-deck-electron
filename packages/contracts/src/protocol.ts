@@ -52,6 +52,17 @@ export const ImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
   data: CanonicalImageBase64,
   mimeType: Schema.Literal("image/png", "image/jpeg", "image/gif", "image/webp"),
+  /** Display-only source filename. The server strips it before forwarding to Pi. */
+  name: Schema.optional(
+    Schema.String.pipe(
+      Schema.maxLength(255),
+      Schema.filter(
+        (value) =>
+          (value.length > 0 && ![...value].some((character) => character.charCodeAt(0) < 32)) ||
+          "must be a non-empty filename without control characters",
+      ),
+    ),
+  ),
 });
 export type ImageAttachment = typeof ImageAttachment.Type;
 

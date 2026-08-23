@@ -18,27 +18,46 @@ const cell = {
 };
 
 describe("sent image gallery", () => {
-  it("renders image-only messages lazily with opaque URLs and accessible labels", () => {
+  it("renders image-only messages as preview pills with lazy thumbnails and accessible labels", () => {
     useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
     setImageReadToken("secret");
     render(<CellView cell={cell} />);
-    const images = screen.getAllByRole("img");
+    expect(screen.getByRole("button", { name: "Preview Sent image 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Preview Sent image 2" })).toBeTruthy();
+    const images = document.querySelectorAll("img");
     expect(images).toHaveLength(2);
     expect(images[0]!.getAttribute("loading")).toBe("lazy");
     expect(images[0]!.getAttribute("decoding")).toBe("async");
     expect(images[0]!.getAttribute("src")).toContain("/session-images/s1/a?token=secret");
     expect(document.body.textContent).not.toContain("base64");
   });
+  it("uses the submitted filename and opens the persisted image from its pill", () => {
+    useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
+    setImageReadToken("secret");
+    render(
+      <CellView cell={{ ...cell, images: [{ id: "a", name: "1.png", width: 10, height: 20 }] }} />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Preview 1.png" });
+    expect(trigger.getAttribute("title")).toBe("1.png");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Expanded image preview" })).toBeTruthy();
+    expect(screen.getAllByText("1.png")).toHaveLength(2);
+    expect(screen.getByAltText("1.png").getAttribute("src")).toContain(
+      "/session-images/s1/a?token=secret",
+    );
+  });
+
   it("uses the generalized trapped dialog and restores focus", () => {
     useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
     setImageReadToken("secret");
     render(<CellView cell={cell} />);
-    const trigger = screen.getByRole("button", { name: "Expand Sent image 1" });
+    const trigger = screen.getByRole("button", { name: "Preview Sent image 1" });
     trigger.focus();
     fireEvent.click(trigger);
     expect(screen.getByRole("dialog")).toBeTruthy();
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(screen.getByText(/Sent image 2/)).toBeTruthy();
+    expect(screen.getAllByText(/Sent image 2/)).toHaveLength(2);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
@@ -47,17 +66,19 @@ describe("sent image gallery", () => {
     useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
     setImageReadToken("secret");
     render(<CellView cell={cell} />);
-    fireEvent.error(screen.getAllByRole("img")[0]!);
-    expect(screen.getByRole("img", { name: "Sent image 1 unavailable" })).toBeTruthy();
+    fireEvent.error(document.querySelectorAll("img")[0]!);
+    expect(screen.getByText("Sent image 1 (unavailable)")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Preview Sent image 1" })).toBeNull();
     act(() => setImageReadToken("replacement"));
-    expect(screen.getByAltText("Sent image 1").getAttribute("src")).toContain("token=replacement");
+    expect(screen.getByRole("button", { name: "Preview Sent image 1" })).toBeTruthy();
+    expect(document.querySelector("img")?.getAttribute("src")).toContain("token=replacement");
   });
 
   it("keeps an image-only message readable while previews are hidden and does not reopen", async () => {
     useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
     setImageReadToken("secret");
     const { rerender } = render(<CellView cell={cell} />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand Sent image 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Sent image 1" }));
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     rerender(
@@ -67,12 +88,12 @@ describe("sent image gallery", () => {
       />,
     );
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByRole("img")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
     await waitFor(() => expect(screen.getByText("Attached 2 images.")).toBeTruthy());
 
     rerender(<CellView cell={cell} transcriptVisibility={DEFAULT_TRANSCRIPT_VISIBILITY} />);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(document.querySelectorAll("img")).toHaveLength(2);
   });
 
   it("retains hidden image provenance beside text and other attachment kinds", async () => {
