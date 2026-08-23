@@ -10,6 +10,7 @@ import type {
 import type { FastifyInstance } from "fastify";
 import type { AskUserCoordinator } from "./askUserCoordinator.ts";
 import type { AgentAvatarStore } from "./agentAvatars.ts";
+import type { ProjectImageStore } from "./projectImages.ts";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
 import type { McpManager, McpServerConfig } from "./mcpTools.ts";
@@ -120,6 +121,7 @@ export interface ServerContext {
   planEvents: PlanEventServiceShape;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;
+  projectImages: ProjectImageStore;
   sessionPastes: SessionPasteStore;
   index: SessionIndex;
   projects: ProjectIndex;

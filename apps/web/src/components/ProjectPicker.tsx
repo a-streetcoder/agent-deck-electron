@@ -1,10 +1,11 @@
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { Button } from "@/design-system/components/Button";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ChevronDown, LayoutGrid, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { chooseDirectory, isElectron } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
-import { ProjectTypeIcon } from "./ProjectTypeIcon.tsx";
+import { ProjectImage } from "./ProjectImage.tsx";
 import { addProject, switchToProject } from "../state/wsBridge.ts";
 
 /**
@@ -170,13 +171,11 @@ export function ProjectPicker() {
         }}
       >
         {current ? (
-          <ProjectTypeIcon type={current.type} size={14} />
+          <ProjectImage project={current} size={18} className="border-0" />
         ) : (
           <LayoutGrid size={14} className="text-text-secondary" />
         )}
-        <span className="max-w-[20ch] truncate">
-          {current ? current.name : "All Projects"}
-        </span>
+        <span className="max-w-[20ch] truncate">{current ? current.name : "All Projects"}</span>
         <ChevronDown size={12} className="opacity-60" />
       </ControlButton>
 
@@ -209,9 +208,7 @@ export function ProjectPicker() {
               }}
             />
             <span className="min-w-0 flex-1">
-              <span className="block truncate">
-                All Projects
-              </span>
+              <span className="block truncate">All Projects</span>
               <span className="block truncate text-detail text-text-muted">
                 Sessions across every project
               </span>
@@ -234,14 +231,12 @@ export function ProjectPicker() {
               )}
               onClick={() => void pick(project.id)}
             >
-              <ProjectTypeIcon
-                type={project.type}
-                size={15}
-                className={currentProjectId === project.id ? "text-accent" : undefined}
+              <ProjectImage
+                project={project}
+                size={28}
+                className={cn("border-0", currentProjectId === project.id && "text-accent")}
               />
-              <span className="truncate">
-                {project.name}
-              </span>
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
             </ControlButton>
           ))}
 
@@ -261,14 +256,16 @@ export function ProjectPicker() {
                   if (event.key === "Escape") setAdding(false);
                 }}
               />
-              <ControlButton
+              <Button
+                size="sm"
+                variant="primary"
+                fullWidth
+                className="rounded-capsule"
                 data-testid="add-project-confirm"
-                className="w-full rounded-capsule bg-primary px-2 py-1.5 text-detail font-medium"
-                style={{ color: "var(--color-accent-foreground)" }}
                 onClick={() => void submitPath()}
               >
                 Add project
-              </ControlButton>
+              </Button>
             </div>
           ) : (
             <ControlButton

@@ -15,8 +15,10 @@ import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 import type { ProjectMeta } from "@agent-deck/contracts";
+import type { FastifyReply } from "fastify";
 import { detectProjectType, discoverProjects, scanAgents } from "@agent-deck/resources";
 import { projectAllowsAgent } from "../agentCuration.ts";
+import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import {
@@ -68,17 +70,102 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     mcpAssignments,
     broadcast,
     rootsFor,
+    projectImages,
   } = ctx;
+
+  const withManagedImage = (project: ProjectMeta): ProjectMeta => {
+    const image = projectImages.assignment(project.id);
+    return image
+      ? { ...project, imageUrl: `/project-images/${image.id}?v=${image.blobHash}` }
+      : project;
+  };
 
   fastify.get("/projects", async () => ({
     projects: projects
       .list()
       .filter((p) => !p.hidden)
-      .map((project) => ({
-        ...project,
-        assignedMcpServers: [...mcpAssignments.projectServerNames(project.id)],
-      })),
+      .map((project) =>
+        withManagedImage({
+          ...project,
+          assignedMcpServers: [...mcpAssignments.projectServerNames(project.id)],
+        }),
+      ),
   }));
+
+  const sendImageNotFound = (reply: FastifyReply) =>
+    reply
+      .code(404)
+      .headers({
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin",
+      })
+      .send();
+
+  fastify.get("/project-images/:imageId", async (request, reply) => {
+    const { imageId } = request.params as { imageId: string };
+    const version = (request.query as { v?: unknown }).v;
+    const image = projectImages.read(imageId);
+    if (!image || version !== image.blobHash) return sendImageNotFound(reply);
+    return reply
+      .headers({
+        "content-type": image.mimeType,
+        "content-length": String(image.data.length),
+        "cache-control": "private, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin",
+      })
+      .send(image.data);
+  });
+
+  const PROJECT_IMAGE_BODY_LIMIT = 20_100_000;
+  const projectImageBody = z.object({
+    mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+    data: z.string().max(20_000_000),
+  });
+
+  fastify.put(
+    "/projects/:id/image",
+    { bodyLimit: PROJECT_IMAGE_BODY_LIMIT },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!projects.find((project) => project.id === id))
+        return reply.status(404).send({ error: "unknown project" });
+      const parsed = projectImageBody.safeParse(request.body);
+      if (!parsed.success)
+        return reply.status(400).send({ error: "Choose a PNG, JPEG, or WebP image up to 15 MB." });
+      try {
+        projectImages.assign(id, { type: "image", ...parsed.data });
+      } catch (error) {
+        if (error instanceof AgentAvatarStoreError)
+          return reply.status(409).send({ error: error.message });
+        return reply.status(400).send({
+          error: "That file is not a valid supported image or exceeds the 15 MB/dimension limits.",
+        });
+      }
+      broadcast({ type: "resources_changed" });
+      return { ok: true };
+    },
+  );
+
+  fastify.delete("/projects/:id/image", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!projects.find((project) => project.id === id))
+      return reply.status(404).send({ error: "unknown project" });
+    try {
+      projectImages.remove(id);
+    } catch (error) {
+      if (error instanceof AgentAvatarStoreError)
+        return reply.status(409).send({ error: error.message });
+      throw error;
+    }
+    broadcast({ type: "resources_changed" });
+    return { ok: true };
+  });
 
   // Root folders that are too broad to scan (filesystem/system roots) — a
   // huge fan-out would block the sync scan. Users add specific dev folders.

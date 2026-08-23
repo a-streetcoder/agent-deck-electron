@@ -1,77 +1,67 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DiscoveredProject, ProjectMeta } from "@agent-deck/contracts";
+import {
+  EyeOff,
+  ImagePlus,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
-import { Card } from "@/design-system/components/Card";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
-import { useCallback, useEffect, useState } from "react";
-import {
-  EyeOff,
-  Github,
-  Plus,
-  RefreshCw,
-  Search,
-  Send,
-  Users,
-  WandSparkles,
-  X,
-} from "lucide-react";
-import type { DiscoveredProject, ProjectMeta } from "@agent-deck/contracts";
-import { cn } from "@/lib/cn";
+import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { chooseDirectory, isElectron } from "@/lib/native";
+import { ProjectImage } from "../components/ProjectImage.tsx";
 import { ProjectTypeIcon } from "../components/ProjectTypeIcon.tsx";
 import { useAppStore } from "../state/store.ts";
 import { addProject, refreshProjects, updateProject } from "../state/wsBridge.ts";
 
-/**
- * Native ProjectsScreen (ProjectViews.swift): a scrollable page with one
- * "Library" card — segmented All/Enabled/Disabled filter, helper caption,
- * then radius-14 project rows: icon, expanded-width name, "Active" accent
- * tag, mono middle-truncated path, Enabled switch, recap glyph buttons,
- * and a destructive hide button. Disabled rows dim.
- */
+type Filter = "all" | "available" | "unavailable";
 
-type Filter = "all" | "enabled" | "disabled";
+const PROJECT_FILTERS = [
+  { id: "all" as const, label: "All", "data-testid": "project-filter-all" },
+  { id: "available" as const, label: "Available", "data-testid": "project-filter-enabled" },
+  {
+    id: "unavailable" as const,
+    label: "Unavailable",
+    "data-testid": "project-filter-disabled",
+  },
+];
 
-function isEnabled(project: ProjectMeta): boolean {
+function isAvailable(project: ProjectMeta): boolean {
   return project.enabled !== false;
 }
 
-function RecapButton({
-  icon: Icon,
-  title,
-  count,
-}: {
-  icon: typeof Send;
-  title: string;
-  count: number;
-}) {
-  return (
-    <span
-      className={cn(
-        "flex items-center gap-1 rounded-capsule border border-border-subtle px-2 py-0.5 text-detail",
-        count > 0 ? "text-text-secondary" : "text-text-muted opacity-50",
-      )}
-      title={`${title}: ${count}`}
-    >
-      <Icon size={11} />
-      {count}
-    </span>
-  );
+function assignmentSummary(project: ProjectMeta): string {
+  const parts: string[] = [];
+  if (project.defaultAgentName) parts.push(`Default: ${project.defaultAgentName}`);
+  const agents = project.assignedAgentNames?.length ?? 0;
+  const skills = project.assignedSkills?.length ?? 0;
+  const prompts = project.assignedPrompts?.length ?? 0;
+  if (agents) parts.push(`${agents} agent${agents === 1 ? "" : "s"}`);
+  if (skills) parts.push(`${skills} skill${skills === 1 ? "" : "s"}`);
+  if (prompts) parts.push(`${prompts} prompt${prompts === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : "No custom assignments";
 }
 
-function DiscoveryPanel() {
+function AddProjectsDialog({ onClose }: { onClose: () => void }) {
   const setError = useAppStore((state) => state.setError);
   const [roots, setRoots] = useState<string[]>([]);
   const [discovered, setDiscovered] = useState<DiscoveredProject[]>([]);
   const [rootDraft, setRootDraft] = useState("");
-  const [scanning, setScanning] = useState(false);
+  const [projectDraft, setProjectDraft] = useState("");
+  const [scanning, setScanning] = useState(true);
 
-  const scan = useCallback(async (): Promise<void> => {
+  const scan = useCallback(async () => {
     setScanning(true);
     try {
       const response = await fetch("/projects/discovery");
@@ -79,8 +69,8 @@ function DiscoveryPanel() {
       const data = (await response.json()) as { roots: string[]; discovered: DiscoveredProject[] };
       setRoots(data.roots);
       setDiscovered(data.discovered);
-    } catch (err) {
-      setError(String(err));
+    } catch (error) {
+      setError(String(error));
     } finally {
       setScanning(false);
     }
@@ -88,207 +78,343 @@ function DiscoveryPanel() {
 
   useEffect(() => {
     void scan();
-  }, [scan]);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose, scan]);
 
-  const postRoot = async (root: string): Promise<boolean> => {
+  const postRoot = async (root: string) => {
     const response = await fetch("/projects/discovery/roots", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ root }),
     });
-    if (!response.ok) {
-      setError(await response.text());
-      return false;
-    }
-    return true;
+    if (!response.ok) throw new Error(await response.text());
   };
 
-  const addRoot = async (): Promise<void> => {
-    const root = rootDraft.trim();
-    if (!root) return;
-    if (await postRoot(root)) {
+  const addRoot = async (root: string) => {
+    try {
+      await postRoot(root);
       setRootDraft("");
       await scan();
+    } catch (error) {
+      setError(String(error));
     }
   };
 
-  // Desktop: pick one or more parent folders with the native chooser.
-  const browseRoots = async (): Promise<void> => {
+  const browseRoots = async () => {
     const picked = await chooseDirectory({
       title: "Choose Projects Folder",
       message: "Choose one or more parent folders that contain your projects",
       multiple: true,
     });
-    let any = false;
-    for (const root of picked) any = (await postRoot(root)) || any;
-    if (any) await scan();
+    try {
+      for (const root of picked) await postRoot(root);
+      if (picked.length) await scan();
+    } catch (error) {
+      setError(String(error));
+    }
   };
 
-  const removeRoot = async (root: string): Promise<void> => {
-    await fetch("/projects/discovery/roots", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ root }),
-    }).catch(() => {});
+  const chooseProject = async () => {
+    if (isElectron()) {
+      const [picked] = await chooseDirectory({
+        title: "Choose Project Folder",
+        message: "Choose a repo or project root to add",
+      });
+      if (picked) await addProject(picked);
+    } else if (projectDraft.trim()) {
+      await addProject(projectDraft.trim());
+      setProjectDraft("");
+    }
     await scan();
   };
 
-  const unregistered = discovered.filter((d) => !d.registered);
+  const removeRoot = async (root: string) => {
+    const response = await fetch("/projects/discovery/roots", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ root }),
+    });
+    if (!response.ok) setError(await response.text());
+    await scan();
+  };
+
+  const candidates = discovered.filter((project) => !project.registered);
 
   return (
-    <Card className="mb-4 rounded-2xl" padding="md">
-      <div className="flex items-center justify-between pb-1">
-        <div className="flex items-center gap-2">
-          <Search size={15} className="text-text-secondary" />
-          <h3 className="text-label font-semibold text-text-primary">Discover</h3>
-        </div>
-        <ControlButton
-          data-testid="discovery-rescan"
-          className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-0.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
-          disabled={scanning}
-          onClick={() => void scan()}
-        >
-          <RefreshCw size={11} className={scanning ? "animate-spin" : undefined} />
-          Rescan
-        </ControlButton>
-      </div>
-      <p className="pb-2 text-caption text-text-muted">
-        Scan folders for git repos and known project types, then add them with one click.
-      </p>
-
-      <div className="flex gap-2 pb-2">
-        {isElectron() ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay px-3 py-4 sm:px-6"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-projects-title"
+        data-testid="add-projects-dialog"
+        className="flex max-h-[min(88vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface-elevated shadow-elevated"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border-subtle px-4 py-3 sm:px-5">
+          <div>
+            <h2 id="add-projects-title" className="text-title font-semibold text-text-primary">
+              Add Projects
+            </h2>
+            <p className="mt-0.5 text-caption text-text-muted">
+              Choose a folder directly or add projects found in monitored folders.
+            </p>
+          </div>
           <ControlButton
-            data-testid="discovery-root-browse"
-            className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary"
-            onClick={() => void browseRoots()}
+            autoFocus
+            aria-label="Close Add Projects"
+            className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
+            onClick={onClose}
           >
-            Choose folder…
+            <X size={16} />
           </ControlButton>
-        ) : (
-          <>
-            <ControlInput
-              data-testid="discovery-root-input"
-              className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
-              placeholder="/path/to/dev/folder"
-              value={rootDraft}
-              onChange={(e) => setRootDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void addRoot();
-              }}
-            />
-            <ControlButton
-              data-testid="discovery-root-add"
-              className="rounded-capsule border border-border-strong px-3 py-1.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
-              disabled={!rootDraft.trim()}
-              onClick={() => void addRoot()}
-            >
-              Add root
-            </ControlButton>
-          </>
-        )}
-      </div>
-
-      {roots.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 pb-2">
-          {roots.map((root) => (
-            <span
-              key={root}
-              data-testid="discovery-root-chip"
-              className="flex items-center gap-1 rounded-capsule border border-border-subtle bg-surface px-2 py-0.5 font-mono text-detail text-text-secondary"
-            >
-              {root}
-              <ControlButton
-                className="text-text-muted hover:text-danger"
-                title="Remove root"
-                onClick={() => void removeRoot(root)}
-              >
-                <X size={11} />
-              </ControlButton>
-            </span>
-          ))}
         </div>
-      ) : null}
 
-      <div className="space-y-1" data-testid="discovery-results">
-        {unregistered.map((candidate) => (
-          <div
-            key={candidate.path}
-            className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-1.5"
-            data-testid="discovery-candidate"
-            data-candidate-name={candidate.name}
-          >
-            <ProjectTypeIcon
-              type={candidate.type}
-              size={15}
-              className="shrink-0 text-text-secondary"
-            />
-            <span className="text-label font-medium text-text-primary">{candidate.name}</span>
-            <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
-              {candidate.type}
-            </span>
-            <span className="min-w-0 flex-1 truncate font-mono text-detail text-text-muted">
-              {candidate.path}
-            </span>
-            <ControlButton
-              data-testid={`discovery-add-${candidate.name}`}
-              className="rounded-capsule bg-primary px-2.5 py-0.5 text-detail font-medium text-on-accent shadow-capsule hover:bg-primary-hover"
-              onClick={() => void addProject(candidate.path).then(() => void scan())}
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
+          <section>
+            <h3 className="text-label font-semibold text-text-primary">Choose a project</h3>
+            <div className="mt-2 flex min-w-0 gap-2">
+              {!isElectron() ? (
+                <AppTextField
+                  data-testid="projects-add-path"
+                  size="sm"
+                  className="min-w-0 flex-1 font-mono text-code"
+                  placeholder="/path/to/project"
+                  value={projectDraft}
+                  onChange={setProjectDraft}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void chooseProject();
+                  }}
+                />
+              ) : null}
+              <Button
+                data-testid={isElectron() ? "choose-project-folder" : "projects-add-confirm"}
+                size="sm"
+                variant="primary"
+                disabled={!isElectron() && !projectDraft.trim()}
+                onClick={() => void chooseProject()}
+              >
+                <Plus size={14} /> Choose Project Folder…
+              </Button>
+            </div>
+          </section>
+
+          <section>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-label font-semibold text-text-primary">Discovered projects</h3>
+                <p className="text-caption text-text-muted">From your monitored folders</p>
+              </div>
+              <ControlButton
+                data-testid="discovery-rescan"
+                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                disabled={scanning}
+                onClick={() => void scan()}
+              >
+                <RefreshCw size={12} className={scanning ? "animate-spin" : undefined} /> Rescan
+              </ControlButton>
+            </div>
+
+            <div
+              className="mt-2 overflow-hidden rounded-xl border border-border-subtle"
+              data-testid="discovery-results"
             >
-              Add
-            </ControlButton>
-          </div>
-        ))}
-        {roots.length > 0 && unregistered.length === 0 ? (
-          <div className="py-2 text-center text-detail text-text-muted">
-            No new projects found under the configured roots.
-          </div>
-        ) : null}
-        {roots.length === 0 ? (
-          <div className="py-2 text-center text-detail text-text-muted">
-            Add a root folder above to discover projects.
-          </div>
-        ) : null}
+              {scanning ? (
+                <div className="px-3 py-6 text-center text-detail text-text-muted">Scanning…</div>
+              ) : candidates.length ? (
+                <div className="divide-y divide-border-subtle">
+                  {candidates.map((candidate) => (
+                    <div
+                      key={candidate.path}
+                      data-testid="discovery-candidate"
+                      data-candidate-name={candidate.name}
+                      className="flex min-h-14 items-center gap-3 px-3 py-2"
+                    >
+                      <ProjectTypeIcon
+                        type={candidate.type}
+                        size={17}
+                        className="shrink-0 text-text-secondary"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-label font-medium text-text-primary">
+                            {candidate.name}
+                          </span>
+                          <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                            {candidate.type}
+                          </span>
+                        </div>
+                        <div
+                          className="truncate font-mono text-detail text-text-muted"
+                          title={candidate.path}
+                        >
+                          {candidate.path}
+                        </div>
+                      </div>
+                      <Button
+                        data-testid={`discovery-add-${candidate.name}`}
+                        size="sm"
+                        onClick={() => void addProject(candidate.path).then(scan)}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-3 py-6 text-center text-detail text-text-muted">
+                  {roots.length
+                    ? "No new projects found."
+                    : "Add a monitored folder to discover projects."}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-label font-semibold text-text-primary">Monitored folders</h3>
+            <div className="mt-2 flex gap-2">
+              {isElectron() ? (
+                <Button
+                  data-testid="discovery-root-browse"
+                  size="sm"
+                  onClick={() => void browseRoots()}
+                >
+                  Choose Folder…
+                </Button>
+              ) : (
+                <>
+                  <ControlInput
+                    data-testid="discovery-root-input"
+                    className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
+                    placeholder="/path/to/dev/folder"
+                    value={rootDraft}
+                    onChange={(event) => setRootDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && rootDraft.trim()) void addRoot(rootDraft.trim());
+                    }}
+                  />
+                  <Button
+                    data-testid="discovery-root-add"
+                    size="sm"
+                    disabled={!rootDraft.trim()}
+                    onClick={() => void addRoot(rootDraft.trim())}
+                  >
+                    Add folder
+                  </Button>
+                </>
+              )}
+            </div>
+            {roots.length ? (
+              <div className="mt-2 space-y-1.5">
+                {roots.map((root) => (
+                  <div
+                    key={root}
+                    data-testid="discovery-root-chip"
+                    className="flex min-w-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5"
+                  >
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-detail text-text-secondary"
+                      title={root}
+                    >
+                      {root}
+                    </span>
+                    <ControlButton
+                      aria-label={`Stop monitoring ${root}`}
+                      className="shrink-0 rounded-capsule p-1 text-text-muted hover:text-danger"
+                      onClick={() => void removeRoot(root)}
+                    >
+                      <Trash2 size={13} />
+                    </ControlButton>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        </div>
       </div>
-    </Card>
+    </div>
   );
 }
-
-const PROJECT_FILTERS = [
-  { id: "all" as const, label: "All", "data-testid": "project-filter-all" },
-  { id: "enabled" as const, label: "Enabled", "data-testid": "project-filter-enabled" },
-  { id: "disabled" as const, label: "Disabled", "data-testid": "project-filter-disabled" },
-];
 
 export function ProjectsScreen() {
   const projects = useAppStore((state) => state.projects);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
-  const [filter, setFilter] = useState<Filter>("enabled");
-  const [draftPath, setDraftPath] = useState("");
-  const [adding, setAdding] = useState(false);
+  const setError = useAppStore((state) => state.setError);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
+  const [imageProject, setImageProject] = useState<ProjectMeta | null>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
 
-  const visible = projects.filter((project) =>
-    filter === "all" ? true : filter === "enabled" ? isEnabled(project) : !isEnabled(project),
-  );
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visible = projects.filter((project) => {
+    const available = isAvailable(project);
+    const matchesFilter = filter === "all" || (filter === "available" ? available : !available);
+    const matchesSearch =
+      !normalizedSearch ||
+      project.name.toLocaleLowerCase().includes(normalizedSearch) ||
+      project.path.toLocaleLowerCase().includes(normalizedSearch);
+    return matchesFilter && matchesSearch;
+  });
 
-  const hide = async (project: ProjectMeta): Promise<void> => {
-    await fetch(`/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" }).catch(
-      () => {},
-    );
+  const hide = async (project: ProjectMeta) => {
+    const response = await fetch(`/projects/${encodeURIComponent(project.id)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) setError(await response.text());
     await refreshProjects();
   };
 
-  // Desktop uses the native folder chooser; browser toggles the path input.
-  const startAdd = async (): Promise<void> => {
-    if (isElectron()) {
-      const [picked] = await chooseDirectory({
-        title: "Add Project",
-        message: "Choose a repo or project root to add",
+  const chooseImage = (project: ProjectMeta) => {
+    setImageProject(project);
+    setMenuProjectId(null);
+    imageInput.current?.click();
+  };
+
+  const uploadImage = async (file: File) => {
+    if (!imageProject) return;
+    try {
+      if (file.size > 15_000_000) throw new Error("Choose an image no larger than 15 MB.");
+      if (!["image/png", "image/jpeg", "image/webp"].includes(file.type))
+        throw new Error("Choose a PNG, JPEG, or WebP image.");
+      const url = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("The image could not be read."));
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsDataURL(file);
       });
-      if (picked) await addProject(picked);
-      return;
+      const response = await fetch(`/projects/${encodeURIComponent(imageProject.id)}/image`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mimeType: file.type, data: url.slice(url.indexOf(",") + 1) }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await refreshProjects();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImageProject(null);
+      if (imageInput.current) imageInput.current.value = "";
     }
-    setAdding((v) => !v);
+  };
+
+  const removeImage = async (project: ProjectMeta) => {
+    setMenuProjectId(null);
+    const response = await fetch(`/projects/${encodeURIComponent(project.id)}/image`, {
+      method: "DELETE",
+    });
+    if (!response.ok) setError(await response.text());
+    await refreshProjects();
   };
 
   return (
@@ -297,124 +423,110 @@ export function ProjectsScreen() {
       testId="projects-screen"
       hero={
         <SectionHero
+          compact
           imageSrc="/screen-art/screen-art-projects.jpg"
           title="Projects"
-          subtitle="Register project folders and control where Agent Deck can work."
+          subtitle="Manage the folders Agent Deck can use"
           actions={
             <SectionHeroButton
               data-testid="projects-add"
-              aria-label="Add project"
-              title="Add project"
               variant="primary"
-              onClick={() => void startAdd()}
+              onClick={() => setAddOpen(true)}
             >
-              <Plus size={13} /> Add project
+              <Plus size={13} /> Add Projects…
             </SectionHeroButton>
           }
         />
       }
       toolbar={
         <PageToolbar
+          className="sticky top-0 [&>div:first-child]:h-auto [&>div:first-child]:min-h-page-toolbar [&>div:first-child]:py-2"
           leading={
-            <AppSegmentedPicker
-              size="sm"
-              aria-label="Filter projects"
-              options={PROJECT_FILTERS}
-              value={filter}
-              onChange={setFilter}
-            />
-          }
-          below={
-            <p className="text-caption text-text-muted">
-              Registered project folders. Disabled projects are hidden from the sidebar and can't
-              host new sessions; hiding removes the entry without touching files.
-            </p>
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
+                <Search
+                  size={14}
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
+                />
+                <ControlInput
+                  data-testid="projects-search"
+                  aria-label="Search projects"
+                  className="h-8 w-full rounded-lg border border-border-strong bg-surface pl-8 pr-8 text-label text-text-primary outline-none placeholder:text-text-muted focus:border-accent"
+                  placeholder="Search projects"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+                {search ? (
+                  <ControlButton
+                    aria-label="Clear project search"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-capsule p-1 text-text-muted hover:text-text-primary"
+                    onClick={() => setSearch("")}
+                  >
+                    <X size={13} />
+                  </ControlButton>
+                ) : null}
+              </div>
+              <AppSegmentedPicker
+                size="sm"
+                aria-label="Filter projects"
+                options={PROJECT_FILTERS}
+                value={filter}
+                onChange={setFilter}
+              />
+            </div>
           }
         />
       }
     >
-        <DiscoveryPanel />
+      <ControlInput
+        ref={imageInput}
+        type="file"
+        className="sr-only"
+        accept="image/png,image/jpeg,image/webp"
+        aria-label="Choose project image"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void uploadImage(file);
+        }}
+      />
 
-          {adding ? (
-            <div className="mb-3 flex gap-2">
-              <AppTextField
-                autoFocus
-                data-testid="projects-add-path"
-                size="sm"
-                className="font-mono text-code"
-                placeholder="/path/to/project"
-                value={draftPath}
-                onChange={setDraftPath}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && draftPath.trim()) {
-                    void addProject(draftPath.trim()).then(() => {
-                      setDraftPath("");
-                      setAdding(false);
-                    });
-                  }
-                  if (event.key === "Escape") setAdding(false);
-                }}
-              />
-              <Button
-                data-testid="projects-add-confirm"
-                size="sm"
-                variant="primary"
-                disabled={!draftPath.trim()}
-                onClick={() =>
-                  void addProject(draftPath.trim()).then(() => {
-                    setDraftPath("");
-                    setAdding(false);
-                  })
-                }
-              >
-                Add
-              </Button>
-            </div>
-          ) : null}
-
-          <div className="space-y-2">
+      {visible.length ? (
+        <div
+          className="overflow-visible rounded-xl border border-border-subtle bg-surface"
+          data-testid="projects-list"
+        >
+          <div className="divide-y divide-border-subtle">
             {visible.map((project) => {
-              const enabled = isEnabled(project);
-              const active = project.id === currentProjectId;
+              const available = isAvailable(project);
+              const current = project.id === currentProjectId;
+              const menuOpen = menuProjectId === project.id;
               return (
                 <div
                   key={project.id}
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5",
-                    !enabled && "opacity-60 saturate-50",
-                  )}
                   data-testid="project-row"
                   data-project-name={project.name}
+                  className="relative flex min-h-16 items-center gap-3 px-3 py-2 sm:px-4"
                 >
-                  <ProjectTypeIcon
-                    type={project.type}
-                    size={20}
-                    className="shrink-0 text-text-secondary"
-                  />
+                  <ProjectImage project={project} size={40} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                       <span className="truncate text-label font-semibold text-text-primary">
                         {project.name}
                       </span>
-                      {project.type && project.type !== "unknown" && project.type !== "git" ? (
+                      {current ? (
                         <span
-                          className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                          data-testid="project-type-badge"
+                          data-testid="project-active-tag"
+                          className="shrink-0 rounded-capsule border border-accent px-1.5 text-micro font-medium text-accent"
                         >
-                          {project.type}
+                          Current
                         </span>
                       ) : null}
-                      {project.path.includes("github") ? <Github size={12} /> : null}
-                      {active ? (
+                      {project.type && project.type !== "unknown" && project.type !== "git" ? (
                         <span
-                          className="rounded-capsule border px-1.5 py-0 text-micro font-medium"
-                          style={{
-                            color: "var(--color-brand-accent)",
-                            borderColor: "var(--color-brand-accent)",
-                          }}
-                          data-testid="project-active-tag"
+                          data-testid="project-type-badge"
+                          className="hidden shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted sm:inline"
                         >
-                          Active
+                          {project.type}
                         </span>
                       ) : null}
                     </div>
@@ -426,54 +538,91 @@ export function ProjectsScreen() {
                       {project.path}
                     </div>
                   </div>
-                  <RecapButton
-                    icon={Send}
-                    title="Active-session default agent"
-                    count={project.defaultAgentName ? 1 : 0}
-                  />
-                  <RecapButton
-                    icon={Users}
-                    title={
-                      project.assignedAgentNames === undefined
-                        ? "Assigned agents (legacy open catalog)"
-                        : "Assigned custom agents"
-                    }
-                    count={project.assignedAgentNames?.length ?? 0}
-                  />
-                  <RecapButton
-                    icon={WandSparkles}
-                    title="Assigned skills"
-                    count={project.assignedSkills?.length ?? 0}
-                  />
-                  {/* The active session's project can't be disabled or hidden. */}
-                  <span title={active ? "Can't change the active project" : undefined}>
-                    <AppSwitch
-                      checked={enabled}
-                      disabled={active}
-                      data-testid={`project-enabled-${project.name}`}
-                      aria-label={`Enable ${project.name}`}
-                      onCheckedChange={(next) => void updateProject(project.id, { enabled: next })}
-                    />
-                  </span>
-                  <ControlButton
-                    data-testid={`project-hide-${project.name}`}
-                    className="rounded-capsule p-1.5 text-text-muted hover:text-danger disabled:opacity-30 disabled:hover:text-text-muted"
-                    title={active ? "Can't hide the active project" : "Hide from list"}
-                    disabled={active}
-                    onClick={() => void hide(project)}
+                  <div
+                    className="hidden min-w-0 max-w-[32%] flex-1 truncate text-right text-detail text-text-secondary lg:block"
+                    title={assignmentSummary(project)}
                   >
-                    <EyeOff size={14} />
-                  </ControlButton>
+                    {assignmentSummary(project)}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="hidden text-detail text-text-secondary md:inline">
+                      {available ? "Available" : "Unavailable"}
+                    </span>
+                    <span title={current ? "Can't change the current project" : undefined}>
+                      <AppSwitch
+                        checked={available}
+                        disabled={current}
+                        data-testid={`project-enabled-${project.name}`}
+                        aria-label={`Make ${project.name} available for new sessions`}
+                        onCheckedChange={(next) =>
+                          void updateProject(project.id, { enabled: next })
+                        }
+                      />
+                    </span>
+                  </div>
+                  <div className="relative shrink-0">
+                    <ControlButton
+                      data-testid={`project-actions-${project.name}`}
+                      aria-label={`Actions for ${project.name}`}
+                      aria-haspopup="menu"
+                      aria-expanded={menuOpen}
+                      className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
+                      onClick={() => setMenuProjectId(menuOpen ? null : project.id)}
+                    >
+                      <MoreHorizontal size={16} />
+                    </ControlButton>
+                    {menuOpen ? (
+                      <div
+                        role="menu"
+                        className="absolute right-0 top-full z-20 mt-1 w-44 rounded-lg border border-border-strong bg-surface-elevated p-1 shadow-elevated"
+                      >
+                        <ControlButton
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-label text-text-secondary hover:bg-hover hover:text-text-primary"
+                          onClick={() => chooseImage(project)}
+                        >
+                          <ImagePlus size={14} />{" "}
+                          {project.imageUrl ? "Replace Image" : "Choose Image"}
+                        </ControlButton>
+                        {project.imageUrl ? (
+                          <ControlButton
+                            role="menuitem"
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-label text-text-secondary hover:bg-hover hover:text-danger"
+                            onClick={() => void removeImage(project)}
+                          >
+                            <Trash2 size={14} /> Remove Image
+                          </ControlButton>
+                        ) : null}
+                        <ControlButton
+                          role="menuitem"
+                          data-testid={`project-hide-${project.name}`}
+                          disabled={current}
+                          title={current ? "Can't hide the current project" : undefined}
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-label text-text-secondary hover:bg-hover hover:text-danger disabled:opacity-40"
+                          onClick={() => void hide(project)}
+                        >
+                          <EyeOff size={14} /> Hide
+                        </ControlButton>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
-            {visible.length === 0 ? (
-              <AppEmptyState
-                heading={filter === "all" ? "No projects" : "No matches"}
-                body={filter === "all" ? "Use Add project to register one." : `No ${filter} projects.`}
-              />
-            ) : null}
           </div>
+        </div>
+      ) : (
+        <AppEmptyState
+          heading={projects.length === 0 ? "No projects yet" : "No matching projects"}
+          body={
+            projects.length === 0
+              ? "Add a project folder to get started."
+              : "Try another search or availability filter."
+          }
+        />
+      )}
+
+      {addOpen ? <AddProjectsDialog onClose={() => setAddOpen(false)} /> : null}
     </PageShell>
   );
 }

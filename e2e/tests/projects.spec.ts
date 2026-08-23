@@ -32,13 +32,16 @@ test("adding projects registers folders; chats stay project-scoped without a glo
   await expect(page.getByTestId("app-view-title")).toHaveText("Projects");
 
   await page.getByTestId("projects-add").click();
+  await expect(page.getByTestId("add-projects-dialog")).toBeVisible();
   await page.getByTestId("projects-add-path").fill(projectA);
   await page.getByTestId("projects-add-confirm").click();
+  await page.getByRole("button", { name: "Close Add Projects" }).click();
   await expect(page.locator(`[data-project-name="${path.basename(projectA)}"]`)).toBeVisible();
 
   await page.getByTestId("projects-add").click();
   await page.getByTestId("projects-add-path").fill(projectB);
   await page.getByTestId("projects-add-confirm").click();
+  await page.getByRole("button", { name: "Close Add Projects" }).click();
   await expect(page.locator(`[data-project-name="${path.basename(projectB)}"]`)).toBeVisible();
   await expect(page.getByTestId("project-active-tag")).toHaveCount(0);
 
@@ -92,12 +95,13 @@ test("the Projects screen toggles enabled state and hides entries", async ({ pag
   await expect(row).toBeVisible();
 
   await page.getByTestId(`project-enabled-${name}`).click();
-  await expect(row).toHaveCount(0);
+  await expect(row).toBeVisible();
   await page.getByTestId("project-filter-disabled").click();
   await expect(row).toBeVisible();
 
   await page.getByTestId(`project-enabled-${name}`).click();
   await page.getByTestId("project-filter-all").click();
+  await page.getByTestId(`project-actions-${name}`).click();
   await page.getByTestId(`project-hide-${name}`).click();
   await expect(row).toHaveCount(0);
 });

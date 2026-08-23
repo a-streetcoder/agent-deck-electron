@@ -303,6 +303,8 @@ export const ProjectMeta = Schema.mutable(
     assignedAgentNames: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
     /** Agent preselected when switching to this project (separate from curation). */
     defaultAgentName: Schema.optional(Schema.String),
+    /** Opaque app-managed artwork URL; source filesystem paths are never exposed. */
+    imageUrl: Schema.optional(Schema.String),
     /** Disabled projects are hidden from the sidebar and session creation. */
     enabled: Schema.optional(Schema.Boolean),
     /**

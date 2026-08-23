@@ -31,6 +31,7 @@ import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
 import { FileAgentAvatarStore } from "./agentAvatars.ts";
+import { ProjectImageStore } from "./projectImages.ts";
 import { registerAskUserBridgeTool } from "./askUserBridgeTool.ts";
 import { BridgeRegistry } from "./bridge.ts";
 import {
@@ -224,6 +225,7 @@ async function initServer(
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
   const sessionImages = new SessionImageStore(dataDir);
   const agentAvatars = new FileAgentAvatarStore(dataDir);
+  const projectImages = new ProjectImageStore(agentAvatars);
   const sessionPastes = new SessionPasteStore(dataDir);
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
@@ -1193,6 +1195,7 @@ async function initServer(
     planEvents,
     sessionImages,
     agentAvatars,
+    projectImages,
     sessionPastes,
     index,
     projects,

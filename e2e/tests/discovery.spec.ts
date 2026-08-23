@@ -35,6 +35,8 @@ test.afterAll(async () => {
 test("configure a root, discover projects, and add one", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-projects").click();
+  await page.getByTestId("projects-add").click();
+  await expect(page.getByTestId("add-projects-dialog")).toBeVisible();
 
   // Add the dev root.
   await page.getByTestId("discovery-root-input").fill(devRoot);
@@ -49,8 +51,9 @@ test("configure a root, discover projects, and add one", async ({ page }) => {
   // Add rusty → it appears in the Library with its type badge and leaves
   // the discovery list (now registered).
   await page.getByTestId("discovery-add-rusty").click();
+  await expect(page.locator('[data-candidate-name="rusty"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Close Add Projects" }).click();
   const row = page.locator('[data-project-name="rusty"]');
   await expect(row).toBeVisible();
   await expect(row.getByTestId("project-type-badge")).toHaveText("rust");
-  await expect(page.locator('[data-candidate-name="rusty"]')).toHaveCount(0);
 });
