@@ -178,18 +178,18 @@
   --size-control-sm: 28px;
   --size-control-md: 32px;
   --size-control-lg: 40px;
-  --size-control-hero: 44px;
+  --size-control-hero: var(--size-control-md);
   --size-icon-sm: 14px;
   --size-icon-md: 16px;
   --size-icon-lg: 20px;
   --size-hit-target: 32px;
   --size-titlebar: 40px;
-  --size-section-hero: 16rem;
+  --size-section-hero: 8rem;
   --size-page-column: 48rem;
   --size-page-column-narrow: 36rem;
   --size-master-pane: 22rem;
   --size-master-pane-min: 18rem;
-  --size-page-toolbar: 40px;
+  --size-page-toolbar: 48px;
   --size-switch-track-w: 36px;
   --size-switch-track-h: 20px;
   --size-switch-thumb: 14px;
@@ -201,6 +201,7 @@
   --radius-xs: 4px;
   --radius-icon: 5px;
   --radius-sm: 6px;
+  --radius-control: var(--radius-sm);
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 14px;
@@ -275,6 +276,18 @@
   --color-terminal-bright-magenta: #8d56c2;
   --color-terminal-bright-cyan: #0b969e;
   --color-terminal-bright-white: #ffffff;
+}
+
+@media (max-width: 1199px) {
+  :root {
+    --space-page-x: var(--space-6);
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --space-page-x: var(--space-4);
+  }
 }
 
 @keyframes indeterminate-bar {

@@ -24,9 +24,9 @@ const baseClasses = [
 ].join(" ");
 
 const sizeClasses: Record<IconButtonSize, string> = {
-  sm: "h-6 w-6 [&_svg]:h-3.5 [&_svg]:w-3.5",
-  md: "h-8 w-8 [&_svg]:h-4 [&_svg]:w-4",
-  lg: "h-10 w-10 [&_svg]:h-5 [&_svg]:w-5",
+  sm: "h-control-sm w-control-sm [&_svg]:h-3.5 [&_svg]:w-3.5",
+  md: "h-control-md w-control-md [&_svg]:h-4 [&_svg]:w-4",
+  lg: "h-control-lg w-control-lg [&_svg]:h-5 [&_svg]:w-5",
 };
 
 const variantClasses: Record<IconButtonVariant, string> = {
@@ -52,7 +52,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         baseClasses,
         sizeClasses[size],
         variantClasses[variant],
-        shape === "circle" ? "rounded-full" : "rounded-md",
+        shape === "circle" ? "rounded-full" : "rounded-control",
         className,
       )}
       {...rest}

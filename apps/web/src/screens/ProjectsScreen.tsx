@@ -423,7 +423,6 @@ export function ProjectsScreen() {
       testId="projects-screen"
       hero={
         <SectionHero
-          compact
           imageSrc="/screen-art/screen-art-projects.jpg"
           title="Projects"
           subtitle="Manage the folders Agent Deck can use"
@@ -440,32 +439,21 @@ export function ProjectsScreen() {
       }
       toolbar={
         <PageToolbar
-          className="sticky top-0 [&>div:first-child]:h-auto [&>div:first-child]:min-h-page-toolbar [&>div:first-child]:py-2"
+          className="sticky top-0"
           leading={
-            <div className="flex w-full flex-wrap items-center gap-2">
-              <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
-                <Search
-                  size={14}
-                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
-                />
-                <ControlInput
-                  data-testid="projects-search"
-                  aria-label="Search projects"
-                  className="h-8 w-full rounded-lg border border-border-strong bg-surface pl-8 pr-8 text-label text-text-primary outline-none placeholder:text-text-muted focus:border-accent"
-                  placeholder="Search projects"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-                {search ? (
-                  <ControlButton
-                    aria-label="Clear project search"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-capsule p-1 text-text-muted hover:text-text-primary"
-                    onClick={() => setSearch("")}
-                  >
-                    <X size={13} />
-                  </ControlButton>
-                ) : null}
-              </div>
+            <>
+              <AppTextField
+                data-testid="projects-search"
+                size="sm"
+                className="min-w-48 flex-1 sm:max-w-sm"
+                leadingIcon={<Search aria-hidden />}
+                aria-label="Search projects"
+                placeholder="Search projects"
+                value={search}
+                onChange={setSearch}
+                showClear
+                clearLabel="Clear project search"
+              />
               <AppSegmentedPicker
                 size="sm"
                 aria-label="Filter projects"
@@ -473,7 +461,7 @@ export function ProjectsScreen() {
                 value={filter}
                 onChange={setFilter}
               />
-            </div>
+            </>
           }
         />
       }

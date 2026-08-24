@@ -29,15 +29,38 @@ export const ControlTextArea = forwardRef<
   return <textarea ref={ref} {...props} />;
 });
 
-export const ControlSelect = forwardRef<HTMLSelectElement, ComponentPropsWithoutRef<"select">>(
-  function ControlSelect({ className, ...props }, ref) {
+export interface ControlSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "size"> {
+  size?: "sm" | "md" | "lg";
+  /** Keep toolbar selects intrinsic; form selects fill their available width. */
+  fullWidth?: boolean;
+}
+
+const selectSizeClasses: Record<NonNullable<ControlSelectProps["size"]>, string> = {
+  sm: "min-h-control-sm px-control-x-sm pe-8 text-detail",
+  md: "min-h-control-md px-control-x-md pe-9 text-label",
+  lg: "min-h-control-lg px-control-x-lg pe-10 text-label",
+};
+
+export const ControlSelect = forwardRef<HTMLSelectElement, ControlSelectProps>(
+  function ControlSelect({ className, size = "md", fullWidth = true, ...props }, ref) {
     return (
-      <div className="relative block w-full">
-        <select ref={ref} className={cn("w-full appearance-none", className, "pe-8")} {...props} />
+      <div className={cn("relative block", fullWidth ? "w-full" : "w-fit shrink-0")}>
+        <select
+          ref={ref}
+          className={cn(
+            "box-border appearance-none rounded-control border border-border-strong bg-surface-elevated text-text-primary outline-none",
+            "transition-colors duration-150 ease-spring focus:border-primary focus:ring-2 focus:ring-primary/30",
+            "disabled:pointer-events-none disabled:opacity-55",
+            fullWidth ? "w-full" : "w-auto",
+            selectSizeClasses[size],
+            className,
+          )}
+          {...props}
+        />
         <ChevronDown
           aria-hidden
-          size={16}
-          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted"
+          size={14}
+          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted"
         />
       </div>
     );

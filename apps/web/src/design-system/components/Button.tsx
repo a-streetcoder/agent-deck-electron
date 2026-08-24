@@ -44,16 +44,16 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const baseClasses = [
   "relative inline-flex items-center justify-center gap-control-gap align-middle",
   "select-none",
-  "font-medium leading-none tracking-ui",
+  "font-medium leading-label tracking-ui",
   "border transition-colors duration-150 ease-spring",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface",
   "disabled:opacity-55 disabled:pointer-events-none",
 ].join(" ");
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "min-h-control-sm px-control-x-sm text-detail rounded-md",
-  md: "min-h-control-md px-control-x-md text-label rounded-md",
-  lg: "min-h-control-lg px-control-x-lg text-label rounded-lg",
+  sm: "min-h-control-sm px-control-x-sm text-detail rounded-control",
+  md: "min-h-control-md px-control-x-md text-label rounded-control",
+  lg: "min-h-control-lg px-control-x-lg text-label rounded-md",
 };
 
 /**
@@ -72,7 +72,7 @@ const sizeClasses: Record<ButtonSize, string> = {
 const variantClasses: Record<ButtonVariant, string> = {
   primary: cn(
     "border-transparent text-on-accent",
-    "bg-primary hover:bg-primary-hover active:opacity-86",
+    "bg-primary hover:bg-primary-hover active:brightness-90",
     "shadow-capsule",
   ),
   secondary: cn(
@@ -80,7 +80,10 @@ const variantClasses: Record<ButtonVariant, string> = {
     "border-border-strong hover:bg-hover",
     "shadow-card",
   ),
-  ghost: cn("bg-transparent text-text-primary border-transparent", "hover:bg-hover"),
+  ghost: cn(
+    "bg-transparent text-text-primary border-transparent",
+    "hover:bg-hover active:bg-pressed",
+  ),
   pill: cn(
     "rounded-full border-transparent",
     "bg-surface-elevated/80 text-text-primary",

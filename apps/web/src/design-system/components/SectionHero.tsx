@@ -8,7 +8,7 @@ export type SectionHeroProps = {
   title: ReactNode;
   subtitle: ReactNode;
   actions?: ReactNode;
-  /** Use on catalog-heavy workspaces where vertical working area is the priority. */
+  /** @deprecated All sidebar section heroes now use the shared height token. */
   compact?: boolean;
 };
 
@@ -16,19 +16,12 @@ export type SectionHeroProps = {
  * Compact full-bleed illustration banner for Electron section screens.
  * Sits under the app titlebar; keep it out of cards and max-width columns.
  */
-export function SectionHero({
-  imageSrc,
-  title,
-  subtitle,
-  actions,
-  compact = false,
-}: SectionHeroProps) {
+export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroProps) {
   const macDesktop = isMacDesktop();
   return (
     <div
       className={cn(
-        "relative shrink-0 overflow-hidden",
-        compact ? "h-20 sm:h-24" : "h-section-hero",
+        "relative h-section-hero shrink-0 overflow-hidden",
         macDesktop && "[-webkit-app-region:drag]",
       )}
     >
@@ -36,29 +29,23 @@ export function SectionHero({
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 max-[480px]:grid-cols-1 max-[480px]:gap-2",
-          compact ? "px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6 lg:px-8" : "px-page-x pb-4 pt-6",
+          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 px-page-x pb-4 pt-6 max-[480px]:grid-cols-1 max-[480px]:gap-2",
         )}
       >
         <div className="min-w-0">
           <h2
-            className={cn(
-              "truncate font-semibold text-on-media",
-              compact
-                ? "text-title tracking-title sm:text-heading sm:tracking-heading"
-                : "text-heading tracking-heading",
-            )}
+            className="font-semibold text-heading tracking-heading text-on-media"
             style={{ fontStretch: "expanded" }}
             data-testid="app-view-title"
           >
             {title}
           </h2>
-          <div className="mt-0.5 truncate text-caption text-on-media/80">{subtitle}</div>
+          <div className="mt-0.5 line-clamp-2 text-caption text-on-media/80">{subtitle}</div>
         </div>
         {actions ? (
           <div
             className={cn(
-              "-m-1 flex min-w-0 max-w-[min(65vw,100%)] shrink items-center gap-2 overflow-x-auto p-1 max-[480px]:m-0 max-[480px]:w-full max-[480px]:max-w-full max-[480px]:justify-end max-[480px]:overflow-visible max-[480px]:p-0",
+              "-m-1 flex min-w-0 max-w-full shrink flex-wrap items-center justify-end gap-2 p-1 max-[480px]:m-0 max-[480px]:w-full max-[480px]:p-0",
               macDesktop && "[-webkit-app-region:no-drag]",
             )}
           >
@@ -78,7 +65,7 @@ export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         size={size}
         tone={tone}
-        className={cn("min-h-control-hero shrink-0 rounded-capsule px-control-x-lg", className)}
+        className={cn("min-h-control-hero shrink-0 rounded-control px-control-x-md", className)}
         {...props}
       />
     );

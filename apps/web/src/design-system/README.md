@@ -10,7 +10,7 @@ The design system is the single visual and interaction boundary for the Electron
 4. **Domain adapters** — `themes/` translates tokens for CodeMirror, Shiki, and xterm.
 5. **Feature views** — compose the layers above and retain only domain state and unique layout.
 
-Page layout tokens (aliases unless noted): `--space-page-x` (40px), `--space-page-y` (`--space-6`), `--space-toolbar` (`--space-3`), `--size-master-pane` (22rem), `--size-master-pane-min` (18rem), `--size-page-toolbar` (40px), `--size-section-hero` (16rem), switch track/thumb sizes. `PageShell` widths: `page` (default canvas, page-x/page-y inset) and `split` (inspector / sticky editor, no page scroller).
+Page layout tokens (aliases unless noted): `--space-page-x` (16px compact / 24px medium / 40px wide), `--space-page-y` (`--space-6`), `--space-toolbar` (`--space-3`), `--size-master-pane` (22rem), `--size-master-pane-min` (18rem), `--size-page-toolbar` (48px minimum), `--size-section-hero` (8rem), switch track/thumb sizes. `PageShell` widths: `page` (default canvas, page-x/page-y inset) and `split` (inspector / sticky editor, no page scroller).
 
 ## Typography
 
@@ -58,7 +58,8 @@ Approved type exceptions:
 - Prefer `Button`, `IconButton`, and `TextField` when their supported contract fits.
 - Specialized native controls must use `ControlButton`, `ControlInput`, `ControlTextArea`, or `ControlSelect`; do not render raw controls in feature files.
 - Sheet/dialog chrome uses `SheetHeader` (bottom hairline) and `SheetFooter` (top hairline); the body has no trailing divider. Inner width and padding are `--size-sheet` / `--space-sheet`; page overlays clear traffic lights with `--size-titlebar` (`pt-titlebar`), not on the header primitive.
-- Sidebar-launched views compose `PageShell` + optional `PageToolbar` / `MasterDetailSplit` / `DetailHeader`. Use `width="page"` unless the view is a split/sticky editor (`split`). Hero title and canvas share `--space-page-x` so they line up; do not center a second column. `SectionHero` is 16rem (`--size-section-hero`). Settings rows use `AppSwitch`; inline status uses `AppInlineNotice`.
+- Sidebar-launched views compose `PageShell` + optional `PageToolbar` / `MasterDetailSplit` / `DetailHeader`. Use `width="page"` unless the view is a split/sticky editor (`split`). Hero title and canvas share `--space-page-x` so they line up; do not center a second column. `SectionHero` is 8rem (`--size-section-hero`). Settings rows use `AppSwitch`; inline status uses `AppInlineNotice`.
+- Controls use three minimum-height tiers: compact 28px, standard 32px, and large 40px. Buttons, fields, and selects use the shared 6px control radius (8px at the large tier), semantic horizontal padding, and visible focus rings. Ordinary actions are not capsules; reserve pills for filters, status, and segmented controls. `PageToolbar` wraps controls within its 48px minimum row rather than clipping them.
 - Flex/grid, responsive layout, percentages, viewport sizes, and runtime geometry may remain local.
 - Reusable colors, typography, radii, shadows, layers, and motion belong in `tokens.css` and must be mapped through Tailwind.
 - A repeated composition should become a component after it has at least two real consumers or when it owns shared accessibility behavior.

@@ -18,6 +18,7 @@ import {
   Power,
   PowerOff,
   Plus,
+  Search,
   Tag,
   Trash2,
   WandSparkles,
@@ -1705,7 +1706,6 @@ export function SkillsScreen() {
       testId="skills-screen"
       hero={
         <SectionHero
-          compact
           imageSrc="/screen-art/screen-art-skills.jpg"
           title="Skills"
           subtitle="Manage reusable capabilities and assign them to projects."
@@ -1724,11 +1724,13 @@ export function SkillsScreen() {
             view !== "catalog" && "hidden",
           )}
         >
-          <div className="mx-auto flex w-full max-w-7xl flex-col gap-2 px-4 py-2 sm:flex-row sm:items-center sm:px-6 lg:px-8">
+          <div className="mx-auto flex min-h-page-toolbar w-full max-w-7xl flex-col gap-2 px-page-x py-2 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
               <AppTextField
                 data-testid="skill-search"
                 size="sm"
+                leadingIcon={<Search aria-hidden />}
+                aria-label="Search skills"
                 placeholder="Search skills"
                 value={search}
                 onChange={setSearch}
@@ -1741,9 +1743,9 @@ export function SkillsScreen() {
             <div className="flex flex-wrap items-center gap-1.5">
               <Button
                 data-testid="new-skill"
-                size="md"
+                size="sm"
                 variant="primary"
-                className="shrink-0 rounded-capsule"
+                className="shrink-0"
                 leadingIcon={<Plus size={14} />}
                 onClick={() =>
                   setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })

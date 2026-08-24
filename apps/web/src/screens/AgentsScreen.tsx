@@ -22,6 +22,7 @@ import {
   PowerOff,
   Plus,
   RefreshCw,
+  Search,
   Star,
   Tag,
   Trash2,
@@ -848,7 +849,6 @@ export function AgentsScreen() {
       testId="agents-screen"
       hero={
         <SectionHero
-          compact
           imageSrc="/screen-art/screen-art-agents.jpg"
           title="Agents"
           subtitle="Create specialized agents and configure how they work."
@@ -861,11 +861,13 @@ export function AgentsScreen() {
         data-testid="agents-catalog"
       >
         <PageToolbar
-          className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-6xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
           leading={
             <AppTextField
               data-testid="agent-search"
               size="sm"
+              className="min-w-48 flex-1"
+              leadingIcon={<Search aria-hidden />}
+              aria-label="Search agents"
               placeholder="Search agents"
               value={search}
               onChange={setSearch}
@@ -876,34 +878,36 @@ export function AgentsScreen() {
             />
           }
           trailing={
-            <Button
-              data-testid="new-agent"
-              size="md"
-              variant="primary"
-              className="shrink-0 rounded-capsule"
-              leadingIcon={<Plus size={14} />}
-              onClick={() => setEditing("new")}
-            >
-              New Agent
-            </Button>
-          }
-          below={
-            <label className="flex w-fit items-center gap-2 text-detail text-text-muted">
-              Show
-              <ControlSelect
-                data-testid="agent-filter-control"
-                aria-label="Filter agents"
-                className="min-w-36 rounded-lg border border-border-strong bg-surface px-2.5 py-1 text-label capitalize text-text-primary outline-none focus:border-accent"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value as AgentFilter)}
+            <>
+              <label className="flex items-center gap-2 text-detail text-text-muted">
+                Show
+                <ControlSelect
+                  data-testid="agent-filter-control"
+                  aria-label="Filter agents"
+                  size="sm"
+                  fullWidth={false}
+                  className="min-w-36 capitalize"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as AgentFilter)}
+                >
+                  {AGENT_FILTERS.map((value) => (
+                    <option key={value} value={value} data-testid={`agent-filter-${value}`}>
+                      {value}
+                    </option>
+                  ))}
+                </ControlSelect>
+              </label>
+              <Button
+                data-testid="new-agent"
+                size="sm"
+                variant="primary"
+                className="shrink-0"
+                leadingIcon={<Plus size={14} />}
+                onClick={() => setEditing("new")}
               >
-                {AGENT_FILTERS.map((value) => (
-                  <option key={value} value={value} data-testid={`agent-filter-${value}`}>
-                    {value}
-                  </option>
-                ))}
-              </ControlSelect>
-            </label>
+                New Agent
+              </Button>
+            </>
           }
         />
         <AppScrollView className="flex-1">

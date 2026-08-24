@@ -23,9 +23,9 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 }
 
 const sizeClasses: Record<NonNullable<TextFieldProps["size"]>, string> = {
-  sm: "h-7 text-detail px-2",
-  md: "h-8 text-label tracking-ui px-2.5",
-  lg: "h-10 text-label tracking-ui px-3",
+  sm: "min-h-control-sm text-detail px-control-x-sm",
+  md: "min-h-control-md text-label tracking-ui px-control-x-md",
+  lg: "min-h-control-lg text-label tracking-ui px-control-x-lg",
 };
 
 /**
@@ -94,7 +94,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
       <div
         className={cn(
           "group relative flex items-center gap-1.5",
-          "rounded-sm border border-border-strong",
+          "box-border rounded-control border border-border-strong",
           "bg-surface-elevated text-text-primary",
           "transition-colors duration-150 ease-spring",
           "focus-within:border-primary",

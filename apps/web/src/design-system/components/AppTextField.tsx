@@ -38,9 +38,9 @@ export interface AppTextFieldProps
 }
 
 const sizeClasses: Record<AppTextFieldSize, string> = {
-  sm: "h-7 text-detail",
-  md: "h-8 text-label tracking-ui",
-  lg: "h-10 text-label tracking-ui",
+  sm: "min-h-control-sm px-control-x-sm text-detail",
+  md: "min-h-control-md px-control-x-md text-label tracking-ui",
+  lg: "min-h-control-lg px-control-x-lg text-label tracking-ui",
 };
 
 /**
@@ -103,9 +103,9 @@ export const AppTextField = forwardRef<HTMLInputElement, AppTextFieldProps>(func
   return (
     <div
       className={cn(
-        "group flex w-full items-center gap-1.5 rounded-sm border",
-        "border-border-subtle bg-surface-elevated text-text-primary",
-        "px-2 transition-colors duration-150 ease-spring",
+        "group box-border flex w-full items-center gap-control-gap rounded-control border",
+        "border-border-strong bg-surface-elevated text-text-primary",
+        "transition-colors duration-150 ease-spring",
         "focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30",
         disabled && "opacity-55",
         sizeClasses[size],
@@ -133,7 +133,7 @@ export const AppTextField = forwardRef<HTMLInputElement, AppTextFieldProps>(func
           aria-label={clearLabel}
           onClick={handleClear}
           className={cn(
-            "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
+            "-mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control",
             "text-text-muted hover:bg-hover hover:text-text-primary",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
           )}

@@ -93,6 +93,7 @@ const config: Config = {
         sm: "var(--radius-sm)",
         md: "var(--radius-md)",
         lg: "var(--radius-lg)",
+        control: "var(--radius-control)",
         xl: "var(--radius-xl)",
         "2xl": "var(--radius-2xl)",
         "3xl": "var(--radius-3xl)",

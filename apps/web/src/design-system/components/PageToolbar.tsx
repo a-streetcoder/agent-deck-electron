@@ -14,19 +14,18 @@ export type PageToolbarProps = {
  */
 export function PageToolbar({ leading, trailing, below, className }: PageToolbarProps) {
   return (
-    <div
-      className={cn(
-        "z-sticky shrink-0 border-b border-border-subtle bg-surface",
-        className,
-      )}
-    >
-      <div className="flex h-page-toolbar min-h-page-toolbar items-center gap-2 px-page-x">
-        <div className="flex min-w-0 flex-1 items-center gap-2">{leading}</div>
+    <div className={cn("z-sticky shrink-0 border-b border-border-subtle bg-surface", className)}>
+      <div className="flex min-h-page-toolbar flex-wrap items-center gap-2 px-page-x py-2">
+        <div className="flex min-w-[12rem] flex-1 flex-wrap items-center gap-2">{leading}</div>
         {trailing ? (
-          <div className="flex shrink-0 items-center gap-2">{trailing}</div>
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {trailing}
+          </div>
         ) : null}
       </div>
-      {below ? <div className="px-page-x pb-2">{below}</div> : null}
+      {below ? (
+        <div className="flex flex-wrap items-center gap-2 px-page-x pb-2">{below}</div>
+      ) : null}
     </div>
   );
 }
