@@ -1,11 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { Button } from "@/design-system/components/Button";
 import type { AskUserCell } from "@agent-deck/domain";
-import {
-  ControlButton,
-  ControlInput,
-  ControlTextArea,
-} from "@/design-system/components/NativeControls";
+import { ControlInput, ControlTextArea } from "@/design-system/components/NativeControls";
 import { sendAskUserAnswer, sendAskUserCancel } from "@/state/wsBridge";
 
 /** One independent, accessible decision form for a parent ask_user call. */
