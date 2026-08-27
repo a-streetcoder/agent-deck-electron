@@ -93,7 +93,13 @@ export function PerformanceScreen() {
     <PageShell
       width="page"
       testId="performance-screen"
-      hero={<SectionHero imageSrc="/onboarding/pop-hero.jpg" title="Performance" subtitle="Tune runtime behavior and resource usage." />}
+      hero={
+        <SectionHero
+          imageSrc="/onboarding/pop-hero.jpg"
+          title="Performance"
+          subtitle="Tune runtime behavior and resource usage."
+        />
+      }
     >
       {loadState === "loading" ? (
         <AppEmptyState
@@ -120,8 +126,8 @@ export function PerformanceScreen() {
               <div className="min-w-0" id="idle-parking-description">
                 <div className="text-label font-medium text-text-primary">Pause idle chats</div>
                 <p className="mt-1 text-caption text-text-muted">
-                  Release an idle chat’s Pi process to save resources. The chat resumes automatically
-                  when you send the next command.
+                  Release an idle chat’s Pi process to save resources. The chat resumes
+                  automatically when you send the next command.
                 </p>
               </div>
               <AppSwitch

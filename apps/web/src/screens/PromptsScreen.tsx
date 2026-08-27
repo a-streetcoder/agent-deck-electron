@@ -521,277 +521,281 @@ export function PromptsScreen() {
               }
             />
             <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
-          {externalPath !== null ? (
-            <div className="mb-3 flex gap-2">
-              <ControlInput
-                autoFocus
-                data-testid="prompt-external-path"
-                className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
-                placeholder="absolute path to an existing prompt file (.md, .markdown, .mdown, .txt)"
-                value={externalPath}
-                onChange={(event) => setExternalPath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void addExternalRef();
-                  if (event.key === "Escape") setExternalPath(null);
-                }}
-              />
-              <ControlButton
-                data-testid="prompt-external-confirm"
-                className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
-                disabled={!externalPath.trim()}
-                onClick={() => void addExternalRef()}
-              >
-                Reference
-              </ControlButton>
-            </div>
-          ) : null}
-          <p className="pb-3 text-caption text-text-muted">
-            Reusable prompts pi exposes as <code className="font-mono">/&lt;name&gt;</code> slash
-            commands. Project prompts override global ones of the same name.
-          </p>
+              {externalPath !== null ? (
+                <div className="mb-3 flex gap-2">
+                  <ControlInput
+                    autoFocus
+                    data-testid="prompt-external-path"
+                    className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
+                    placeholder="absolute path to an existing prompt file (.md, .markdown, .mdown, .txt)"
+                    value={externalPath}
+                    onChange={(event) => setExternalPath(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void addExternalRef();
+                      if (event.key === "Escape") setExternalPath(null);
+                    }}
+                  />
+                  <ControlButton
+                    data-testid="prompt-external-confirm"
+                    className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                    disabled={!externalPath.trim()}
+                    onClick={() => void addExternalRef()}
+                  >
+                    Reference
+                  </ControlButton>
+                </div>
+              ) : null}
+              <p className="pb-3 text-caption text-text-muted">
+                Reusable prompts pi exposes as <code className="font-mono">/&lt;name&gt;</code>{" "}
+                slash commands. Project prompts override global ones of the same name.
+              </p>
 
-          {packageWarnings.length > 0 ? (
-            <div data-testid="prompt-package-warnings" className="mb-2">
-              <AppInlineNotice tone="neutral">
-                {packageWarnings.map((warning) => (
-                  <div key={warning} className="truncate" title={warning}>
-                    {warning}
-                  </div>
-                ))}
-              </AppInlineNotice>
-            </div>
-          ) : null}
-          <div
-            className="space-y-1.5"
-            data-testid="prompt-list"
-            role="list"
-            aria-label="Prompt templates"
-          >
-            {visiblePrompts.map((prompt) => (
+              {packageWarnings.length > 0 ? (
+                <div data-testid="prompt-package-warnings" className="mb-2">
+                  <AppInlineNotice tone="neutral">
+                    {packageWarnings.map((warning) => (
+                      <div key={warning} className="truncate" title={warning}>
+                        {warning}
+                      </div>
+                    ))}
+                  </AppInlineNotice>
+                </div>
+              ) : null}
               <div
-                key={prompt.filePath}
-                data-prompt-name={prompt.name}
-                data-selected={selectedPromptFilePath === prompt.filePath}
-                className={cn(
-                  "group flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-2.5",
-                  selectedPromptFilePath === prompt.filePath
-                    ? "border-selection-stroke bg-selection"
-                    : "border-border-subtle",
-                )}
-                role="listitem"
-                aria-current={selectedPromptFilePath === prompt.filePath ? "true" : undefined}
-                aria-label={`${prompt.invocation}${
-                  selectedPromptFilePath === prompt.filePath ? ", selected" : ""
-                }`}
-                tabIndex={0}
-                onClick={() => useAppStore.getState().setSelectedPromptFilePath(prompt.filePath)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget) return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    useAppStore.getState().setSelectedPromptFilePath(prompt.filePath);
-                  }
-                }}
+                className="space-y-1.5"
+                data-testid="prompt-list"
+                role="list"
+                aria-label="Prompt templates"
               >
-                {renaming?.name === prompt.name && renaming.scope === prompt.scope ? (
-                  <>
-                    <span className="font-mono text-code text-text-muted">/</span>
-                    <ControlInput
-                      autoFocus
-                      data-testid={`prompt-rename-input-${prompt.name}`}
-                      className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 font-mono text-code text-text-primary outline-none focus:border-accent"
-                      value={renaming.value}
-                      onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void rename();
-                        if (e.key === "Escape") setRenaming(null);
-                      }}
-                    />
-                    <ControlButton
-                      data-testid={`prompt-rename-confirm-${prompt.name}`}
-                      className="rounded p-1 text-text-muted hover:text-accent"
-                      title="Rename"
-                      onClick={() => void rename()}
-                    >
-                      <Check size={14} />
-                    </ControlButton>
-                    <ControlButton
-                      data-testid={`prompt-rename-cancel-${prompt.name}`}
-                      className="rounded p-1 text-text-muted hover:text-text-primary"
-                      title="Cancel"
-                      onClick={() => setRenaming(null)}
-                    >
-                      <X size={14} />
-                    </ControlButton>
-                  </>
-                ) : (
-                  <>
-                    <ControlButton
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                      onClick={() => startEdit(prompt)}
-                    >
-                      <span
-                        data-testid="prompt-invocation"
-                        className="font-mono text-code font-medium text-text-primary"
-                      >
-                        {prompt.invocation}
-                      </span>
-                      {prompt.argumentHint ? (
-                        <span
-                          data-testid="prompt-argument-hint"
-                          className="shrink-0 rounded-capsule border border-border-subtle px-1.5 font-mono text-micro text-text-muted"
+                {visiblePrompts.map((prompt) => (
+                  <div
+                    key={prompt.filePath}
+                    data-prompt-name={prompt.name}
+                    data-selected={selectedPromptFilePath === prompt.filePath}
+                    className={cn(
+                      "group flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-2.5",
+                      selectedPromptFilePath === prompt.filePath
+                        ? "border-selection-stroke bg-selection"
+                        : "border-border-subtle",
+                    )}
+                    role="listitem"
+                    aria-current={selectedPromptFilePath === prompt.filePath ? "true" : undefined}
+                    aria-label={`${prompt.invocation}${
+                      selectedPromptFilePath === prompt.filePath ? ", selected" : ""
+                    }`}
+                    tabIndex={0}
+                    onClick={() =>
+                      useAppStore.getState().setSelectedPromptFilePath(prompt.filePath)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        useAppStore.getState().setSelectedPromptFilePath(prompt.filePath);
+                      }
+                    }}
+                  >
+                    {renaming?.name === prompt.name && renaming.scope === prompt.scope ? (
+                      <>
+                        <span className="font-mono text-code text-text-muted">/</span>
+                        <ControlInput
+                          autoFocus
+                          data-testid={`prompt-rename-input-${prompt.name}`}
+                          className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-2 py-1 font-mono text-code text-text-primary outline-none focus:border-accent"
+                          value={renaming.value}
+                          onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void rename();
+                            if (e.key === "Escape") setRenaming(null);
+                          }}
+                        />
+                        <ControlButton
+                          data-testid={`prompt-rename-confirm-${prompt.name}`}
+                          className="rounded p-1 text-text-muted hover:text-accent"
+                          title="Rename"
+                          onClick={() => void rename()}
                         >
-                          {prompt.argumentHint}
-                        </span>
-                      ) : null}
-                      <span
-                        data-testid="scope-chip"
-                        data-scope={prompt.scope}
-                        className={cn(
-                          "rounded-capsule border px-1.5 text-micro",
-                          prompt.scope === "library"
-                            ? "border-border-strong text-text-secondary"
-                            : "border-border-subtle text-text-muted",
-                        )}
-                      >
-                        {prompt.scope}
-                      </span>
-                      {prompt.description ? (
-                        <span className="min-w-0 flex-1 truncate text-caption text-text-muted">
-                          {prompt.description}
-                        </span>
-                      ) : null}
-                    </ControlButton>
-                    {/* "All Projects" default is a GLOBAL concept — the backend
+                          <Check size={14} />
+                        </ControlButton>
+                        <ControlButton
+                          data-testid={`prompt-rename-cancel-${prompt.name}`}
+                          className="rounded p-1 text-text-muted hover:text-text-primary"
+                          title="Cancel"
+                          onClick={() => setRenaming(null)}
+                        >
+                          <X size={14} />
+                        </ControlButton>
+                      </>
+                    ) : (
+                      <>
+                        <ControlButton
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          onClick={() => startEdit(prompt)}
+                        >
+                          <span
+                            data-testid="prompt-invocation"
+                            className="font-mono text-code font-medium text-text-primary"
+                          >
+                            {prompt.invocation}
+                          </span>
+                          {prompt.argumentHint ? (
+                            <span
+                              data-testid="prompt-argument-hint"
+                              className="shrink-0 rounded-capsule border border-border-subtle px-1.5 font-mono text-micro text-text-muted"
+                            >
+                              {prompt.argumentHint}
+                            </span>
+                          ) : null}
+                          <span
+                            data-testid="scope-chip"
+                            data-scope={prompt.scope}
+                            className={cn(
+                              "rounded-capsule border px-1.5 text-micro",
+                              prompt.scope === "library"
+                                ? "border-border-strong text-text-secondary"
+                                : "border-border-subtle text-text-muted",
+                            )}
+                          >
+                            {prompt.scope}
+                          </span>
+                          {prompt.description ? (
+                            <span className="min-w-0 flex-1 truncate text-caption text-text-muted">
+                              {prompt.description}
+                            </span>
+                          ) : null}
+                        </ControlButton>
+                        {/* "All Projects" default is a GLOBAL concept — the backend
                       resolves a default name global-first, so the toggle shows for
                       global-scope prompts, plus EXTERNAL references (PRM-05): they
                       resolve as launchable defaults too. */}
-                    {(prompt.scope === "global" || prompt.external) &&
-                      (() => {
-                        const on = defaultPrompts.includes(prompt.name);
-                        return (
-                          <ControlButton
-                            data-testid={`prompt-default-${prompt.name}`}
-                            aria-pressed={on}
-                            className={cn(
-                              "flex shrink-0 items-center gap-1 rounded-capsule border px-1.5 py-0.5 text-micro transition-colors",
-                              on
-                                ? "border-border-strong bg-selection text-text-primary"
-                                : "border-border-subtle text-text-muted opacity-0 hover:text-text-primary group-hover:opacity-100",
-                            )}
-                            title={
-                              on
-                                ? "Enabled for All Projects — remove"
-                                : "Enable this prompt for All Projects (injected as --prompt-template)"
-                            }
-                            onClick={() => void toggleDefault(prompt.name, !on)}
+                        {(prompt.scope === "global" || prompt.external) &&
+                          (() => {
+                            const on = defaultPrompts.includes(prompt.name);
+                            return (
+                              <ControlButton
+                                data-testid={`prompt-default-${prompt.name}`}
+                                aria-pressed={on}
+                                className={cn(
+                                  "flex shrink-0 items-center gap-1 rounded-capsule border px-1.5 py-0.5 text-micro transition-colors",
+                                  on
+                                    ? "border-border-strong bg-selection text-text-primary"
+                                    : "border-border-subtle text-text-muted opacity-0 hover:text-text-primary group-hover:opacity-100",
+                                )}
+                                title={
+                                  on
+                                    ? "Enabled for All Projects — remove"
+                                    : "Enable this prompt for All Projects (injected as --prompt-template)"
+                                }
+                                onClick={() => void toggleDefault(prompt.name, !on)}
+                              >
+                                <Globe size={11} /> All Projects
+                              </ControlButton>
+                            );
+                          })()}
+                        {prompt.scope === "builtin" && prompt.disabled ? (
+                          <span
+                            data-testid={`prompt-disabled-badge-${prompt.name}`}
+                            className="shrink-0 rounded-capsule border border-border-strong px-1.5 text-micro text-text-muted"
+                            title="Disabled: excluded from launches until re-enabled"
                           >
-                            <Globe size={11} /> All Projects
+                            disabled
+                          </span>
+                        ) : null}
+                        {prompt.scope === "builtin" ? (
+                          <ControlButton
+                            data-testid={`prompt-builtin-toggle-${prompt.name}`}
+                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+                            title={
+                              prompt.disabled
+                                ? "Re-enable this builtin prompt"
+                                : "Disable this builtin prompt (excluded from launches)"
+                            }
+                            onClick={() => void toggleBuiltinDisabled(prompt)}
+                          >
+                            {prompt.disabled ? "Enable" : "Disable"}
                           </ControlButton>
-                        );
-                      })()}
-                    {prompt.scope === "builtin" && prompt.disabled ? (
-                      <span
-                        data-testid={`prompt-disabled-badge-${prompt.name}`}
-                        className="shrink-0 rounded-capsule border border-border-strong px-1.5 text-micro text-text-muted"
-                        title="Disabled: excluded from launches until re-enabled"
-                      >
-                        disabled
-                      </span>
-                    ) : null}
-                    {prompt.scope === "builtin" ? (
-                      <ControlButton
-                        data-testid={`prompt-builtin-toggle-${prompt.name}`}
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
-                        title={
-                          prompt.disabled
-                            ? "Re-enable this builtin prompt"
-                            : "Disable this builtin prompt (excluded from launches)"
-                        }
-                        onClick={() => void toggleBuiltinDisabled(prompt)}
-                      >
-                        {prompt.disabled ? "Enable" : "Disable"}
-                      </ControlButton>
-                    ) : null}
-                    {prompt.source === "settings" ? (
-                      <span
-                        data-testid={`prompt-settings-${prompt.name}`}
-                        className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                        title={`Declared by settings.json: ${prompt.filePath}`}
-                      >
-                        settings
-                      </span>
-                    ) : null}
-                    {prompt.external ? (
-                      <>
-                        <span
-                          data-testid={`prompt-external-${prompt.name}`}
-                          className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                          title={`Referenced in place: ${prompt.filePath}`}
-                        >
-                          external
-                        </span>
-                        <ControlButton
-                          data-testid={`prompt-remove-external-${prompt.name}`}
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                          title="Remove the reference — the file itself is not deleted"
-                          onClick={() => void removeExternalRef(prompt)}
-                        >
-                          Remove reference
-                        </ControlButton>
-                      </>
-                    ) : null}
-                    {/* Builtin/package prompts are bundled/installed and immutable, and an
+                        ) : null}
+                        {prompt.source === "settings" ? (
+                          <span
+                            data-testid={`prompt-settings-${prompt.name}`}
+                            className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                            title={`Declared by settings.json: ${prompt.filePath}`}
+                          >
+                            settings
+                          </span>
+                        ) : null}
+                        {prompt.external ? (
+                          <>
+                            <span
+                              data-testid={`prompt-external-${prompt.name}`}
+                              className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                              title={`Referenced in place: ${prompt.filePath}`}
+                            >
+                              external
+                            </span>
+                            <ControlButton
+                              data-testid={`prompt-remove-external-${prompt.name}`}
+                              className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                              title="Remove the reference — the file itself is not deleted"
+                              onClick={() => void removeExternalRef(prompt)}
+                            >
+                              Remove reference
+                            </ControlButton>
+                          </>
+                        ) : null}
+                        {/* Builtin/package prompts are bundled/installed and immutable, and an
                       external reference's file is not a catalog file — no rename/delete;
                       opening one drafts a global copy instead (PRM-02/03/05). */}
-                    {!isReadOnlyPrompt(prompt) ? (
-                      <>
-                        <ControlButton
-                          data-testid={`prompt-rename-${prompt.name}`}
-                          className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
-                          title="Rename"
-                          onClick={() =>
-                            setRenaming({
-                              name: prompt.name,
-                              scope: prompt.scope,
-                              value: prompt.name,
-                            })
-                          }
-                        >
-                          <Pencil size={13} />
-                        </ControlButton>
-                        <ControlButton
-                          data-testid={`prompt-delete-${prompt.name}`}
-                          className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                          title="Delete"
-                          onClick={() => {
-                            if (confirm(`Delete prompt "${prompt.name}"? This removes its file.`)) {
-                              void remove(prompt);
-                            }
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </ControlButton>
+                        {!isReadOnlyPrompt(prompt) ? (
+                          <>
+                            <ControlButton
+                              data-testid={`prompt-rename-${prompt.name}`}
+                              className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+                              title="Rename"
+                              onClick={() =>
+                                setRenaming({
+                                  name: prompt.name,
+                                  scope: prompt.scope,
+                                  value: prompt.name,
+                                })
+                              }
+                            >
+                              <Pencil size={13} />
+                            </ControlButton>
+                            <ControlButton
+                              data-testid={`prompt-delete-${prompt.name}`}
+                              className="rounded p-1 text-text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                              title="Delete"
+                              onClick={() => {
+                                if (
+                                  confirm(`Delete prompt "${prompt.name}"? This removes its file.`)
+                                ) {
+                                  void remove(prompt);
+                                }
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </ControlButton>
+                          </>
+                        ) : null}
                       </>
-                    ) : null}
-                  </>
-                )}
+                    )}
+                  </div>
+                ))}
+                {promptsLoaded &&
+                prompts.length > 0 &&
+                hasSearchQuery &&
+                visiblePrompts.length === 0 ? (
+                  <AppEmptyState
+                    data-testid="prompt-search-empty"
+                    heading="No matches"
+                    body="No prompt templates match your search."
+                  />
+                ) : null}
+                {promptsLoaded && prompts.length === 0 && !draft ? (
+                  <AppEmptyState heading="No prompt templates yet. Create one to use it as a slash command." />
+                ) : null}
               </div>
-            ))}
-            {promptsLoaded &&
-            prompts.length > 0 &&
-            hasSearchQuery &&
-            visiblePrompts.length === 0 ? (
-              <AppEmptyState
-                data-testid="prompt-search-empty"
-                heading="No matches"
-                body="No prompt templates match your search."
-              />
-            ) : null}
-            {promptsLoaded && prompts.length === 0 && !draft ? (
-              <AppEmptyState heading="No prompt templates yet. Create one to use it as a slash command." />
-            ) : null}
-          </div>
             </AppScrollView>
           </>
         }
@@ -848,8 +852,8 @@ export function PromptsScreen() {
                       Available in projects
                     </div>
                     <p className="pb-1.5 text-detail text-text-muted">
-                      Inject this prompt as a <code className="font-mono">/{draft.name}</code> command
-                      in specific projects (in addition to any All Projects default).
+                      Inject this prompt as a <code className="font-mono">/{draft.name}</code>{" "}
+                      command in specific projects (in addition to any All Projects default).
                     </p>
                     <div className="space-y-0.5">
                       {projects.map((project) => {
@@ -888,9 +892,9 @@ export function PromptsScreen() {
                     Cancel
                   </ControlButton>
                   <Button
-  size="sm"
-                      variant="primary"
-                      className="rounded-capsule"
+                    size="sm"
+                    variant="primary"
+                    className="rounded-capsule"
                     data-testid="prompt-save"
                     disabled={!draft.name.trim()}
                     onClick={() => void save()}

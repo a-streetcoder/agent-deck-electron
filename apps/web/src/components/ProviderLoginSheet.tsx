@@ -244,7 +244,7 @@ export function ProviderLoginSheet({
               {doneEvent || fatal ? "Close" : "Cancel"}
             </ControlButton>
             {visiblePrompt ? (
-                            <Button
+              <Button
                 size="md"
                 variant="primary"
                 className="rounded-capsule"

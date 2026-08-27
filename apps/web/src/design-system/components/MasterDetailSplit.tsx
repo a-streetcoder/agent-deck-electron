@@ -40,9 +40,7 @@ export function MasterDetailSplit({ master, detail, className }: MasterDetailSpl
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col border-border-subtle",
-          stacked
-            ? "min-h-[38%] w-full border-b"
-            : "min-w-master-pane-min border-r",
+          stacked ? "min-h-[38%] w-full border-b" : "min-w-master-pane-min border-r",
         )}
         style={stacked ? undefined : { width: pane.width }}
       >

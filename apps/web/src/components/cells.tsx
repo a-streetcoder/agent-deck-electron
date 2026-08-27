@@ -509,7 +509,7 @@ function SupervisorQuestionCellView({ cell }: { cell: SupervisorQuestionCell }) 
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           />
-                    <Button
+          <Button
             size="md"
             variant="primary"
             className="self-end rounded-capsule"

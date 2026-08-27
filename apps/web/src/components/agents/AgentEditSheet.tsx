@@ -556,9 +556,7 @@ export function AgentEditSheet({
         <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3">
           <AgentAvatar agent={agent ?? { scope, name }} size={32} />
           <div className="min-w-0 flex-1">
-            <div
-              className="truncate text-label font-semibold text-text-primary"
-            >
+            <div className="truncate text-label font-semibold text-text-primary">
               {agent
                 ? `Edit ${agent.name}`
                 : isReplacement

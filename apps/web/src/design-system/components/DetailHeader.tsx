@@ -19,7 +19,9 @@ export function DetailHeader({ title, subtitle, leading, trailing, className }: 
     >
       {leading ? <div className="shrink-0">{leading}</div> : null}
       <div className="min-w-0 flex-1">
-        <h3 className="truncate text-title font-semibold tracking-title text-text-primary">{title}</h3>
+        <h3 className="truncate text-title font-semibold tracking-title text-text-primary">
+          {title}
+        </h3>
         {subtitle ? (
           <div className="truncate text-caption text-text-secondary">{subtitle}</div>
         ) : null}
