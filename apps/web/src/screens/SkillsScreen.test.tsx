@@ -476,6 +476,117 @@ describe("git import preview + per-skill selection (SKL-03/04)", () => {
     });
   });
 
+  it("known-source scan greys out skills already in the catalog and never posts them", async () => {
+    // `~/.claude/skills` after fan-out is mostly symlinks back into `~/.agents/skills`: every one
+    // of them is already imported, and importing it can only collide (the engine refuses to
+    // clobber, and one collision fails the whole folder). The dialog must show them greyed out,
+    // unselectable and excluded from the default selection — so only the genuinely new skill
+    // is posted.
+    const fetchMock = stubPreviewFetch();
+    fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/resources/skills") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "handoff",
+                description: "already in the catalog",
+                scope: "global",
+                filePath: "C:/home/.agents/skills/handoff/SKILL.md",
+                disabled: false,
+              },
+              {
+                name: "teardown",
+                description: "same name, but only in a PROJECT catalog — no global collision",
+                scope: "project",
+                filePath: "C:/proj/.agents/skills/teardown/SKILL.md",
+                disabled: false,
+              },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skill-recoveries") {
+        return Promise.resolve(jsonResponse({ recoveries: [] }));
+      }
+      if (url === "/resources/skill-repos") return Promise.resolve(jsonResponse({ repos: [] }));
+      if (url === "/resources/skills/known-sources") {
+        return Promise.resolve(
+          jsonResponse({
+            sources: [
+              { path: "C:/home/.claude/skills", label: "Claude · Global", provider: "claude" },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skills/inspect-local") {
+        return Promise.resolve(
+          jsonResponse({
+            skills: [
+              {
+                name: "handoff",
+                displayName: "handoff",
+                extraFileCount: 0,
+                // the engine followed the fan-out link and reports where it resolves
+                linkTarget: "C:/home/.agents/skills/handoff",
+              },
+              { name: "teardown", displayName: "Teardown", extraFileCount: 4 },
+            ],
+          }),
+        );
+      }
+      if (url === "/resources/skills/import-local-folder") {
+        return Promise.resolve(jsonResponse({ imported: ["teardown"] }));
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    render(<SkillsScreen />);
+    // the catalog must be loaded before the scan, or nothing is known to be imported yet
+    await screen.findAllByText("already in the catalog");
+    fireEvent.click(await screen.findByTestId("skill-scan-known"));
+    const dialog = await screen.findByTestId("skill-import-preview-dialog");
+
+    const handoff = within(dialog).getByTestId(
+      "skill-import-preview-check-C:/home/.claude/skills::handoff",
+    ) as HTMLInputElement;
+    const teardown = within(dialog).getByTestId(
+      "skill-import-preview-check-C:/home/.claude/skills::teardown",
+    ) as HTMLInputElement;
+    expect(handoff.checked).toBe(false);
+    expect(handoff.disabled).toBe(true);
+    expect(teardown.checked).toBe(true);
+    expect(teardown.disabled).toBe(false);
+    // greyed row + badges: "Already imported", and "linked" for the followed symlink
+    within(dialog).getByTestId("skill-import-preview-imported-C:/home/.claude/skills::handoff");
+    expect(within(dialog).getAllByText("Already imported")).toHaveLength(1);
+    expect(within(dialog).getByText("linked").getAttribute("title")).toContain(
+      "C:/home/.agents/skills/handoff",
+    );
+    expect(within(dialog).getByTestId("skill-import-preview-count").textContent).toContain(
+      "1 selected • 1 already imported",
+    );
+    // the bulk toggle skips the greyed-out row (a direct click is inert: the input is disabled;
+    // jsdom still flips the DOM checkedness of a disabled checkbox, so that is not asserted here)
+    fireEvent.click(within(dialog).getByTestId("skill-import-preview-toggle-all")); // deselect
+    fireEvent.click(within(dialog).getByTestId("skill-import-preview-toggle-all")); // select all
+    expect(handoff.checked).toBe(false);
+    expect(teardown.checked).toBe(true);
+
+    fireEvent.click(within(dialog).getByTestId("skill-import-preview-import"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("skill-import-preview-dialog")).toBeNull();
+    });
+    const importCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/resources/skills/import-local-folder",
+    );
+    expect(importCalls).toHaveLength(1);
+    expect(JSON.parse(String(importCalls[0]?.[1]?.body))).toEqual({
+      path: "C:/home/.claude/skills",
+      selected: ["teardown"],
+    });
+  });
+
   it("known-source scan merges Codex plugin skills as REFERENCES (SKL-09)", async () => {
     const fetchMock = stubPreviewFetch();
     fetchMock.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {

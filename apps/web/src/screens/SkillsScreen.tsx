@@ -755,6 +755,15 @@ export function SkillsScreen() {
   // diagnostic + compare sheet. Diagnostic-only, so a failed fetch degrades to
   // "no duplicates" instead of an error.
   const [skillCandidates, setSkillCandidates] = useState<SkillInfo[]>([]);
+  // Names already in the GLOBAL catalog — where every folder/known-source import lands. The
+  // import dialog greys these out instead of letting a scan of `~/.claude/skills` (mostly
+  // fan-out links back into the catalog) pre-select 20 guaranteed collisions.
+  const importedGlobalNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const s of skills) if (s.scope === "global") names.add(s.name);
+    for (const s of skillCandidates) if (s.scope === "global") names.add(s.name);
+    return names;
+  }, [skills, skillCandidates]);
   const [compare, setCompare] = useState<{ left: SkillInfo; right: SkillInfo } | null>(null);
   const compareTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -947,7 +956,13 @@ export function SkillsScreen() {
       if (data.skills.length === 0) {
         throw new Error("No skills with a SKILL.md were found in that folder.");
       }
-      setLocalPreview({ path: folder, skills: data.skills });
+      setLocalPreview({
+        path: folder,
+        skills: data.skills.map((s) => ({
+          ...s,
+          alreadyImported: importedGlobalNames.has(s.name),
+        })),
+      });
     } catch (err) {
       if (seq === inspectSeq.current) setGlobalError(String(err));
     } finally {
@@ -995,6 +1010,8 @@ export function SkillsScreen() {
               id: `${src.path}::${s.name}`,
               sourceLabel: src.label,
               sourcePath: src.path,
+              // greyed out in the dialog: importing it can only collide with the catalog copy
+              alreadyImported: importedGlobalNames.has(s.name),
             });
           }
         } catch {
@@ -1049,6 +1066,7 @@ export function SkillsScreen() {
       const seenNames = new Set<string>();
       const defaultSelected: string[] = [];
       for (const item of items) {
+        if (item.alreadyImported) continue; // never pre-select a guaranteed collision
         if (seenNames.has(item.name)) continue;
         seenNames.add(item.name);
         if (item.id) defaultSelected.push(item.id);
