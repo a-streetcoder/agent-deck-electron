@@ -110,6 +110,45 @@ describe.skipIf(!hasLocalFolder)("engine 0.1.7 local folder import routes (SKL-0
     expect(() => readFileSync(skillFile("beta", "SKILL.md"))).toThrow();
   }, 60_000);
 
+  it("a skill with a binary asset previews and imports byte-identical (engine 0.2.0, Syncr #206)", async () => {
+    // Codex's bundled .system skills ship assets/*.png; on engine <=0.1.10 ONE non-UTF-8 file made
+    // the WHOLE folder unreadable ("couldn't read: Codex · Global"). The fileset carries bytes now.
+    // The fixture gets its own skill name: `alpha` is already in the catalog from the first test,
+    // and a second import of the same name is (correctly) a 409 — not what this test is about.
+    const folder = path.join(root, "folder-binary");
+    const iconic = path.join(folder, "iconic");
+    mkdirSync(path.join(iconic, "assets"), { recursive: true });
+    writeFileSync(
+      path.join(iconic, "SKILL.md"),
+      "---\nname: Iconic\ndescription: Ships an icon\n---\nBody\n",
+    );
+    writeFileSync(path.join(iconic, "reference.md"), "extra material\n");
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x0d, 0x0a, 0x42,
+    ]);
+    writeFileSync(path.join(iconic, "assets", "icon.png"), png);
+
+    const inspect = await api("POST", "/resources/skills/inspect-local", { path: folder });
+    expect(inspect.statusCode).toBe(200);
+    const preview = (await inspect.json()) as {
+      skills: { name: string; extraFileCount: number }[];
+    };
+    expect(preview.skills.map((s) => s.name)).toEqual(["iconic"]);
+    // reference.md + assets/icon.png — the binary counts like any other file
+    expect(preview.skills[0]!.extraFileCount).toBe(2);
+
+    const imp = await api("POST", "/resources/skills/import-local-folder", {
+      path: folder,
+      selected: ["iconic"],
+    });
+    expect(imp.statusCode).toBe(200);
+    // byte-identical, CRLF bytes inside the PNG untouched
+    expect(Buffer.from(readFileSync(skillFile("iconic", path.join("assets", "icon.png"))))).toEqual(
+      png,
+    );
+    expect(readFileSync(skillFile("iconic", "reference.md"), "utf8")).toBe("extra material\n");
+  }, 60_000);
+
   it("known sources list existing Claude/Codex folders and feed the same preview flow (SKL-07/10)", async () => {
     // a Claude global skills folder in the test home — the discovery catalog must find it,
     // and the folder previews/imports through the same local pipeline

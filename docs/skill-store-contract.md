@@ -93,8 +93,19 @@ Private GitHub Packages, scope `@a-streetcoder` (must match repo owner). Project
 
 Install needs a `GITHUB_TOKEN` with `read:packages` (`gh auth token`); **end users need none** — the
 `.node` is resolved via `optionalDependencies` (win32-x64, darwin-arm64/x64, linux-x64-gnu) and
-bundled at build. agent-deck currently pins `@a-streetcoder/skill-engine-native` 0.1.5 in
+bundled at build. agent-deck currently pins `@a-streetcoder/skill-engine-native` **0.2.0** in
 `apps/server`.
+
+**0.2.0 (Syncr #206) — filesets carry BYTES.** A skill folder or repo with a non-UTF-8 file (PNG icons
+under `assets/`, as Codex's bundled `.system` skills ship) inspects and imports with every file present
+and byte-identical; on ≤0.1.10 one such file failed the whole folder (`couldn't read: Codex · Global`).
+Contract widenings a host must handle: `GitPathConflict.localKind/remoteKind` may now be `"binary"`
+(a fourth kind next to `file|directory|missing` — resolve whole-file, never offer a text diff);
+`GitSkillPreview.skillMd` is also absent when SKILL.md exists but is binary; `RESOURCE_INVALID_UTF8`
+now means a non-UTF-8 PATH only, and a fifo/socket reports `RESOURCE_UNSAFE_COMPONENT` with its own
+message. One-time identity note: a text file that carried a 0x00 byte reads as edited once on the
+first sync after the upgrade, then is stable. 0.2.0 also carries 0.1.10 (top-level symlinked skills
+in local folders, `GitSkillPreview.linkTarget`).
 
 ## Reference shapes
 

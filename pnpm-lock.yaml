@@ -67,8 +67,8 @@ importers:
   apps/server:
     dependencies:
       '@a-streetcoder/skill-engine-native':
-        specifier: 0.1.9
-        version: 0.1.9
+        specifier: 0.2.0
+        version: 0.2.0
       '@agent-deck/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -382,28 +382,28 @@ importers:
 
 packages:
 
-  '@a-streetcoder/skill-engine-native-darwin-arm64@0.1.9':
-    resolution: {integrity: sha512-V4Dv24zVphQpGXbFhiEwIDthcnDK73yogcldFZz3ts8IoscHPMzl3SQCr3CTRxPx4aSaDNI4AfYcwWLoApkZEA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-arm64/0.1.9/bfd193a403fd279ed2279bfd5dab9aeb16623761}
+  '@a-streetcoder/skill-engine-native-darwin-arm64@0.2.0':
+    resolution: {integrity: sha512-9E7oEeMA3sakzklwsCsxqu2Lh/UcXgi1SpAh/TLVd5ntc8BEInNHxKG9mMmEBawMxTvbWwqFDvpd/xzsG1oing==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-arm64/0.2.0/73c3e444a626ca77b7dd3ba696eb06db140b9943}
     cpu: [arm64]
     os: [darwin]
 
-  '@a-streetcoder/skill-engine-native-darwin-x64@0.1.9':
-    resolution: {integrity: sha512-CnLMCY7uCTmGt++Up6bYyinr4aMQBUQ2zxI219+xh0Lw5ElcGdVVN7I8e0b3381+OwPgN1dSheLtpX2ekK0yDw==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-x64/0.1.9/367acd630e80e83f48a867e94c66e8d406d236bb}
+  '@a-streetcoder/skill-engine-native-darwin-x64@0.2.0':
+    resolution: {integrity: sha512-KfvDKpbwJjI3YOkoFbzffJUhQVI/Ca/OU7C2i+SGk1Vt+dU6fH4zDeGkrUsXCOVrGfBbmfRhLYXMQgfraWU6bg==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-x64/0.2.0/347420540db3560e3aed4dc20cb42bbb3b56312a}
     cpu: [x64]
     os: [darwin]
 
-  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.1.9':
-    resolution: {integrity: sha512-qoAHST6aF/8FIJPFcGg6k9bWdMlWyXCEfo/pkL+h1s3BmNFxuobbe/YdXOaVp5DfRpVAE9rzRn3co7Dgbdtg3Q==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-linux-x64-gnu/0.1.9/16923d8b9873374152de4a83bbab3dae8b1a8713}
+  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.2.0':
+    resolution: {integrity: sha512-GvEJ+1o+E6L8mzVs/Ha7AMN/F86FH9G6jARb/Gqa1gRkxP6f2PtyhkZTufMoSkWU4ofimYPV36USApWmBo0EFw==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-linux-x64-gnu/0.2.0/4fefd6ffe8ba1bfa115f5fd26702082f1f340b40}
     cpu: [x64]
     os: [linux]
 
-  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.1.9':
-    resolution: {integrity: sha512-Cj4AD0bV6xiqEbUTi1rXtBbQ5V6ENwzxyhB/r5uGHcSwjThqTUBGq3SeCuHWTW909dfgAI2+/45kOyn9iFc+Pw==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-win32-x64-msvc/0.1.9/ef6d99df74ea7e6b44302d6a6441aeec2493d635}
+  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.2.0':
+    resolution: {integrity: sha512-u2KCxKtLhAbKVy6OkQ4hth7Yo+u0p7ea8VaYG97OffCAy/LrScx7rT1og0LK7TYAwVHa3pIgq5IkTW6djF0D3g==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-win32-x64-msvc/0.2.0/ea48903318e575460b7b5955801299f245b270f1}
     cpu: [x64]
     os: [win32]
 
-  '@a-streetcoder/skill-engine-native@0.1.9':
-    resolution: {integrity: sha512-kY+pSlNb4nafXtKVARkild9a1WFMnybmOcdbSEkM9HaA875w0TFQpj7s6RcM6DtM0mzAqIKbQAiB/AEp0HEMDA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native/0.1.9/982cf713d80bafa0b6d783725749c5ddc12394f9}
+  '@a-streetcoder/skill-engine-native@0.2.0':
+    resolution: {integrity: sha512-jl1HO7DKGS6dCCM2sK3CMzJnc6oKcNyVpWaS+Y/x7JEuxZl2a/+uu0EYOubX4Ek1y714mBDqHgKXgZXgcmMJaA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native/0.2.0/cc509b9038ba6d089fabb9ab7473219e62ce1b2a}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -4947,24 +4947,24 @@ packages:
 
 snapshots:
 
-  '@a-streetcoder/skill-engine-native-darwin-arm64@0.1.9':
+  '@a-streetcoder/skill-engine-native-darwin-arm64@0.2.0':
     optional: true
 
-  '@a-streetcoder/skill-engine-native-darwin-x64@0.1.9':
+  '@a-streetcoder/skill-engine-native-darwin-x64@0.2.0':
     optional: true
 
-  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.1.9':
+  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.2.0':
     optional: true
 
-  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.1.9':
+  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.2.0':
     optional: true
 
-  '@a-streetcoder/skill-engine-native@0.1.9':
+  '@a-streetcoder/skill-engine-native@0.2.0':
     optionalDependencies:
-      '@a-streetcoder/skill-engine-native-darwin-arm64': 0.1.9
-      '@a-streetcoder/skill-engine-native-darwin-x64': 0.1.9
-      '@a-streetcoder/skill-engine-native-linux-x64-gnu': 0.1.9
-      '@a-streetcoder/skill-engine-native-win32-x64-msvc': 0.1.9
+      '@a-streetcoder/skill-engine-native-darwin-arm64': 0.2.0
+      '@a-streetcoder/skill-engine-native-darwin-x64': 0.2.0
+      '@a-streetcoder/skill-engine-native-linux-x64-gnu': 0.2.0
+      '@a-streetcoder/skill-engine-native-win32-x64-msvc': 0.2.0
 
   '@alloc/quick-lru@5.2.0': {}
 
