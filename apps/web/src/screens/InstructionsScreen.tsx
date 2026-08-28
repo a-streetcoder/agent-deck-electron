@@ -333,15 +333,21 @@ export function InstructionsScreen() {
               >
                 Preview
               </Button>
-              <Button
-                size="sm"
-                variant="primary"
-                data-testid="instructions-save"
-                disabled={!dirty || saving || !loaded || needsProject}
-                onClick={() => void save()}
-              >
-                {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-              </Button>
+              {dirty || saving ? (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  data-testid="instructions-save"
+                  disabled={saving || !loaded || needsProject}
+                  onClick={() => void save()}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </Button>
+              ) : (
+                <span className="text-detail text-text-muted" data-testid="instructions-saved">
+                  Saved
+                </span>
+              )}
             </>
           }
         />

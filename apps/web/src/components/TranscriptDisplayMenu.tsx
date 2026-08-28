@@ -5,6 +5,7 @@ import {
 import { Brain, Eye, FileDiff, Globe, Image, Lightbulb, Plug, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { cn } from "@/lib/cn";
 import { useAppStore } from "../state/store.ts";
@@ -203,27 +204,15 @@ export function TranscriptDisplayMenu() {
                         {description}
                       </div>
                     </div>
-                    <ControlButton
-                      type="button"
-                      role="switch"
-                      aria-checked={visibility[key]}
+                    <AppSwitch
+                      className="mt-0.5 shrink-0"
                       aria-label={label}
                       aria-describedby={descriptionId}
                       disabled={loadPending || pendingKey !== null}
                       data-testid={`transcript-display-${key}`}
-                      onClick={() => void toggle(key)}
-                      className={cn(
-                        "relative mt-0.5 h-6 w-11 shrink-0 rounded-capsule transition-colors disabled:opacity-50",
-                        visibility[key] ? "bg-accent" : "bg-border-strong",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
-                          visibility[key] ? "left-[22px]" : "left-0.5",
-                        )}
-                      />
-                    </ControlButton>
+                      checked={visibility[key]}
+                      onCheckedChange={() => void toggle(key)}
+                    />
                   </div>
                 );
               })}

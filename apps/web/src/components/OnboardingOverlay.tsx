@@ -1,5 +1,6 @@
 import { AppSpinner } from "@/design-system/components/AppSpinner";
 import { Button } from "@/design-system/components/Button";
+import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
 import { SheetContainer } from "@/design-system/components/SheetContainer";
 import { SheetFooter } from "@/design-system/components/SheetFooter";
@@ -1378,27 +1379,15 @@ function PrefToggle({
           {disabled && disabledDescription ? ` ${disabledDescription}` : ""}
         </div>
       </div>
-      <ControlButton
-        type="button"
-        role="switch"
-        aria-checked={checked}
+      <AppSwitch
+        className="mt-0.5 shrink-0"
         aria-label={label}
         aria-describedby={descriptionId}
         data-testid={testid}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={cn(
-          "relative mt-0.5 h-5 w-9 shrink-0 rounded-capsule transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-          checked ? "bg-accent" : "bg-border-strong",
-        )}
-      >
-        <span
-          className={cn(
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-            checked ? "left-[18px]" : "left-0.5",
-          )}
-        />
-      </ControlButton>
+        checked={checked}
+        onCheckedChange={onChange}
+      />
     </div>
   );
 }

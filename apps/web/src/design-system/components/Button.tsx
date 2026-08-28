@@ -52,7 +52,7 @@ const baseClasses = [
 const sizeClasses: Record<ButtonSize, string> = {
   sm: "min-h-control-sm px-control-x-sm text-detail rounded-control",
   md: "min-h-control-md px-control-x-md text-label rounded-control",
-  lg: "min-h-control-lg px-control-x-lg text-label rounded-md",
+  lg: "min-h-control-lg px-control-x-lg text-label rounded-control",
 };
 
 /**

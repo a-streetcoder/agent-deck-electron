@@ -280,7 +280,7 @@ function RunFixButton({ checkId, projectId }: { checkId: string; projectId?: str
     <Button
       data-testid="doctor-fix-run"
       size="sm"
-      variant="ghost"
+      variant="secondary"
       title="Run this fix in your terminal"
       leadingIcon={<SquareTerminal size={11} />}
       disabled={state === "busy"}
@@ -319,7 +319,7 @@ function UpdatePiButton() {
     <Button
       data-testid="doctor-update-pi"
       size="sm"
-      variant="ghost"
+      variant="secondary"
       title="Update pi in your terminal (pi update pi)"
       leadingIcon={<SquareTerminal size={11} />}
       disabled={state === "busy"}

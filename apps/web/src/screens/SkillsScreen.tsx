@@ -1713,29 +1713,25 @@ export function SkillsScreen() {
         aria-hidden={view === "detail"}
         className={cn("flex min-h-0 flex-1 flex-col", view === "detail" && "hidden")}
       >
-        <div
-          className={cn(
-            "shrink-0 border-b border-border-subtle bg-surface",
-            view !== "catalog" && "hidden",
-          )}
-        >
-          <div className="mx-auto flex min-h-page-toolbar w-full max-w-7xl flex-col gap-2 px-page-x py-2 sm:flex-row sm:items-center">
-            <div className="min-w-0 flex-1">
-              <AppTextField
-                data-testid="skill-search"
-                size="sm"
-                leadingIcon={<Search aria-hidden />}
-                aria-label="Search skills"
-                placeholder="Search skills"
-                value={search}
-                onChange={setSearch}
-                showClear
-                clearLabel="Clear skill search"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
+        <PageToolbar
+          className={cn(view !== "catalog" && "hidden")}
+          leading={
+            <AppTextField
+              data-testid="skill-search"
+              size="sm"
+              leadingIcon={<Search aria-hidden />}
+              aria-label="Search skills"
+              placeholder="Search skills"
+              value={search}
+              onChange={setSearch}
+              showClear
+              clearLabel="Clear skill search"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          }
+          trailing={
+            <>
               <Button
                 data-testid="new-skill"
                 size="sm"
@@ -1814,14 +1810,11 @@ export function SkillsScreen() {
               >
                 Manage Sources
               </Button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        />
         <PageToolbar
-          className={cn(
-            "[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-7xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8",
-            view !== "sources" && "hidden",
-          )}
+          className={cn(view !== "sources" && "hidden")}
           leading={
             <Button
               data-testid="skill-sources-back"
@@ -2494,7 +2487,6 @@ export function SkillsScreen() {
       </div>
       <div className={cn("flex min-h-0 flex-1 flex-col", view !== "detail" && "hidden")}>
         <PageToolbar
-          className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-5xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
           leading={
             <Button
               data-testid="skill-detail-back"

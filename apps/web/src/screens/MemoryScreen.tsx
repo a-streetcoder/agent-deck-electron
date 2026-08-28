@@ -1046,9 +1046,6 @@ export function MemoryScreen() {
           />
         }
       >
-        <p className="pb-2 text-caption text-text-muted">
-          Durable project knowledge agents recall across sessions.
-        </p>
         <AgentMemoryPreference />
         <SemanticMemoryPreference
           onChanged={semanticPreferenceChanged}
