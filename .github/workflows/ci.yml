@@ -205,6 +205,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Healthy runs take ~13 min (ubuntu) / ~25 min (windows). Without a bound, a suite full of
+    # 90 s locator timeouts × retries occupied a runner for hours (2026-08-28) and CI never reported.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
