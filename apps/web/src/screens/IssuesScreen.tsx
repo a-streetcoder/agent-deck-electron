@@ -3,10 +3,7 @@ import { Button } from "@/design-system/components/Button";
 import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { AppTextField } from "@/design-system/components/AppTextField";
-import {
-  ControlButton,
-  ControlTextArea,
-} from "@/design-system/components/NativeControls";
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -552,7 +549,13 @@ export function IssuesScreen() {
       <PageShell
         width="page"
         testId="issues-screen"
-        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
+        hero={
+          <SectionHero
+            imageSrc="/screen-art/screen-art-issues.jpg"
+            title="Issues"
+            subtitle="Review and manage GitHub issues for the current project."
+          />
+        }
       >
         <AppEmptyState
           data-testid="issues-no-project"
@@ -567,7 +570,13 @@ export function IssuesScreen() {
       <PageShell
         width="page"
         testId="issues-screen"
-        hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
+        hero={
+          <SectionHero
+            imageSrc="/screen-art/screen-art-issues.jpg"
+            title="Issues"
+            subtitle="Review and manage GitHub issues for the current project."
+          />
+        }
         toolbar={
           <PageToolbar
             leading={
@@ -582,259 +591,252 @@ export function IssuesScreen() {
           />
         }
       >
-          <div data-testid="issue-detail">
-            {detailError ? (
-              <div data-testid="issue-detail-error">
-                <AppInlineNotice tone="danger">{detailError}</AppInlineNotice>
-              </div>
-            ) : !detail ? (
-              <AppEmptyState heading={`Loading issue #${detailNumber}…`} />
-            ) : (
-              <>
-                <div className="flex items-center gap-2 pb-1">
-                  <span
-                    data-testid="issue-detail-state"
-                    data-state={detail.state.toLowerCase()}
-                    className={cn(
-                      "rounded-capsule border px-2 py-0.5 text-detail capitalize",
-                      detail.state.toLowerCase() === "open"
-                        ? "border-success text-success"
-                        : "border-border-strong text-text-muted",
-                    )}
-                  >
-                    {detail.state.toLowerCase()}
-                  </span>
-                  {detail.stateReason ? (
-                    <span
-                      data-testid="issue-detail-state-reason"
-                      className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail lowercase text-text-muted"
-                    >
-                      {detail.stateReason.toLowerCase().replaceAll("_", " ")}
-                    </span>
-                  ) : null}
-                  {detail.type ? (
-                    <span
-                      data-testid="issue-detail-type"
-                      className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail text-text-secondary"
-                    >
-                      {detail.type}
-                    </span>
-                  ) : null}
-                  <span className="font-mono text-code-sm text-text-muted">#{detail.number}</span>
-                </div>
-                <h2 className="text-title font-semibold tracking-title text-text-primary">
-                  {detail.title}
-                </h2>
-                <div className="flex flex-wrap items-center gap-2 pt-1.5 text-detail text-text-muted">
-                  {detail.author ? (
-                    <span className="flex items-center gap-1">
-                      <User size={11} /> {detail.author}
-                    </span>
-                  ) : null}
-                  {detail.assignees.length ? (
-                    <span data-testid="issue-detail-assignees">
-                      assigned: {detail.assignees.join(", ")}
-                    </span>
-                  ) : null}
-                  {detail.labels.map((label) => (
-                    <span
-                      key={label}
-                      className="rounded-capsule border border-border-subtle px-1.5"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    className="rounded-capsule"
-                    leadingIcon={<Sparkles size={13} />}
-                    data-testid="issue-open-in-pi"
-                    onClick={() => void start(detail)}
-                  >
-                    Open in Pi
-                  </Button>
-                  {detail.state.toLowerCase() === "open" ? (
-                    <>
-                      <ControlButton
-                        data-testid="issue-close-completed"
-                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-                        onClick={() => void closeIssue("completed")}
-                      >
-                        <CheckCircle2 size={13} /> Close as completed
-                      </ControlButton>
-                      <ControlButton
-                        data-testid="issue-close-not-planned"
-                        className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-muted hover:text-text-primary"
-                        onClick={() => void closeIssue("not_planned")}
-                      >
-                        <CircleSlash size={13} /> Not planned
-                      </ControlButton>
-                    </>
-                  ) : (
-                    <ControlButton
-                      data-testid="issue-reopen"
-                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
-                      onClick={() => void reopenIssue()}
-                    >
-                      <CircleDot size={13} /> Reopen
-                    </ControlButton>
+        <div data-testid="issue-detail">
+          {detailError ? (
+            <div data-testid="issue-detail-error">
+              <AppInlineNotice tone="danger">{detailError}</AppInlineNotice>
+            </div>
+          ) : !detail ? (
+            <AppEmptyState heading={`Loading issue #${detailNumber}…`} />
+          ) : (
+            <>
+              <div className="flex items-center gap-2 pb-1">
+                <span
+                  data-testid="issue-detail-state"
+                  data-state={detail.state.toLowerCase()}
+                  className={cn(
+                    "rounded-capsule border px-2 py-0.5 text-detail capitalize",
+                    detail.state.toLowerCase() === "open"
+                      ? "border-success text-success"
+                      : "border-border-strong text-text-muted",
                   )}
-                </div>
-                <div
-                  className="mt-4 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-                  data-testid="issue-detail-body"
                 >
-                  <MarkdownDocument source={detail.body || "_No description provided._"} />
-                </div>
-                <div
-                  data-testid="issue-detail-timestamps"
-                  className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 px-1 text-detail text-text-muted"
-                >
-                  {detail.createdAt ? (
-                    <span>Created {formatRelative(detail.createdAt)}</span>
-                  ) : null}
-                  {detail.updatedAt ? (
-                    <span>Updated {formatRelative(detail.updatedAt)}</span>
-                  ) : null}
-                  {detail.closedAt ? <span>Closed {formatRelative(detail.closedAt)}</span> : null}
-                </div>
-                {(() => {
-                  const rel = detail.relationships;
-                  const groups: Array<
-                    [
-                      string,
-                      typeof rel extends undefined ? never : NonNullable<typeof rel>["subIssues"],
-                    ]
-                  > = [];
-                  if (rel?.parent) groups.push(["Parent", [rel.parent]]);
-                  if (rel && rel.subIssues.length > 0) groups.push(["Sub-issues", rel.subIssues]);
-                  if (rel && rel.blockedBy.length > 0) groups.push(["Blocked by", rel.blockedBy]);
-                  if (rel && rel.blocking.length > 0) groups.push(["Blocking", rel.blocking]);
-                  if (groups.length === 0) return null;
-                  return (
-                    <div
-                      data-testid="issue-relationships"
-                      className="mt-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
-                    >
-                      <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>
-                        Relationships
-                      </div>
-                      <div className="space-y-1.5">
-                        {groups.map(([title, refs]) => (
-                          <div key={title} className="text-detail">
-                            <span className="text-text-muted">{title}</span>
-                            {refs.map((ref) => (
-                              <div
-                                key={`${title}-${ref.number}`}
-                                className="truncate pl-2 text-text-secondary"
-                              >
-                                {ref.repository
-                                  ? `${ref.repository}#${ref.number}`
-                                  : `#${ref.number}`}{" "}
-                                {ref.title}{" "}
-                                <span className="text-text-muted">{`{${ref.state}}`}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                <div className="mt-5" data-testid="issue-comments">
-                  <div
-                    className={cn(
-                      sectionHeaderClass,
-                      "flex items-center gap-1.5 pb-2 text-text-muted",
-                    )}
+                  {detail.state.toLowerCase()}
+                </span>
+                {detail.stateReason ? (
+                  <span
+                    data-testid="issue-detail-state-reason"
+                    className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail lowercase text-text-muted"
                   >
-                    <MessageSquare size={12} /> Comments
-                    <span className="rounded-capsule border border-border-subtle px-1 tabular-nums">
-                      {detail.comments.length}
-                    </span>
-                  </div>
-                  {detail.comments.length === 0 ? (
-                    <div className="text-detail text-text-muted">No comments yet.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {detail.comments.map((comment, i) => (
-                        <div
-                          key={i}
-                          data-testid="issue-comment"
-                          className="rounded-xl border border-border-subtle bg-surface px-4 py-2.5"
-                        >
-                          <div className="flex items-center gap-2 pb-1 text-detail text-text-muted">
-                            <span className="flex items-center gap-1 font-medium text-text-secondary">
-                              <User size={11} />{" "}
-                              {comment.author && detail.url.startsWith("https://github.com/") ? (
-                                <a
-                                  data-testid="issue-comment-author-link"
-                                  href={`https://github.com/${comment.author}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="hover:underline"
-                                  title={`Open ${comment.author}'s GitHub profile`}
-                                >
-                                  {comment.author}
-                                </a>
-                              ) : (
-                                (comment.author ?? "unknown")
-                              )}
-                            </span>
-                            {formatDate(comment.createdAt) ? (
-                              <span>{formatDate(comment.createdAt)}</span>
-                            ) : null}
-                            {comment.updatedAt && comment.updatedAt !== comment.createdAt ? (
-                              <span data-testid="issue-comment-edited">
-                                edited {formatRelative(comment.updatedAt)}
-                              </span>
-                            ) : null}
-                            {comment.url ? (
-                              <a
-                                data-testid="issue-comment-link"
-                                href={comment.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="ml-auto text-text-muted underline hover:text-text-primary"
-                                title="Open this comment on GitHub"
-                              >
-                                permalink
-                              </a>
-                            ) : null}
-                          </div>
-                          <MarkdownDocument source={comment.body || "_(empty)_"} />
+                    {detail.stateReason.toLowerCase().replaceAll("_", " ")}
+                  </span>
+                ) : null}
+                {detail.type ? (
+                  <span
+                    data-testid="issue-detail-type"
+                    className="rounded-capsule border border-border-subtle px-2 py-0.5 text-detail text-text-secondary"
+                  >
+                    {detail.type}
+                  </span>
+                ) : null}
+                <span className="font-mono text-code-sm text-text-muted">#{detail.number}</span>
+              </div>
+              <h2 className="text-title font-semibold tracking-title text-text-primary">
+                {detail.title}
+              </h2>
+              <div className="flex flex-wrap items-center gap-2 pt-1.5 text-detail text-text-muted">
+                {detail.author ? (
+                  <span className="flex items-center gap-1">
+                    <User size={11} /> {detail.author}
+                  </span>
+                ) : null}
+                {detail.assignees.length ? (
+                  <span data-testid="issue-detail-assignees">
+                    assigned: {detail.assignees.join(", ")}
+                  </span>
+                ) : null}
+                {detail.labels.map((label) => (
+                  <span key={label} className="rounded-capsule border border-border-subtle px-1.5">
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  className="rounded-capsule"
+                  leadingIcon={<Sparkles size={13} />}
+                  data-testid="issue-open-in-pi"
+                  onClick={() => void start(detail)}
+                >
+                  Open in Pi
+                </Button>
+                {detail.state.toLowerCase() === "open" ? (
+                  <>
+                    <ControlButton
+                      data-testid="issue-close-completed"
+                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
+                      onClick={() => void closeIssue("completed")}
+                    >
+                      <CheckCircle2 size={13} /> Close as completed
+                    </ControlButton>
+                    <ControlButton
+                      data-testid="issue-close-not-planned"
+                      className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-muted hover:text-text-primary"
+                      onClick={() => void closeIssue("not_planned")}
+                    >
+                      <CircleSlash size={13} /> Not planned
+                    </ControlButton>
+                  </>
+                ) : (
+                  <ControlButton
+                    data-testid="issue-reopen"
+                    className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
+                    onClick={() => void reopenIssue()}
+                  >
+                    <CircleDot size={13} /> Reopen
+                  </ControlButton>
+                )}
+              </div>
+              <div
+                className="mt-4 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                data-testid="issue-detail-body"
+              >
+                <MarkdownDocument source={detail.body || "_No description provided._"} />
+              </div>
+              <div
+                data-testid="issue-detail-timestamps"
+                className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 px-1 text-detail text-text-muted"
+              >
+                {detail.createdAt ? <span>Created {formatRelative(detail.createdAt)}</span> : null}
+                {detail.updatedAt ? <span>Updated {formatRelative(detail.updatedAt)}</span> : null}
+                {detail.closedAt ? <span>Closed {formatRelative(detail.closedAt)}</span> : null}
+              </div>
+              {(() => {
+                const rel = detail.relationships;
+                const groups: Array<
+                  [
+                    string,
+                    typeof rel extends undefined ? never : NonNullable<typeof rel>["subIssues"],
+                  ]
+                > = [];
+                if (rel?.parent) groups.push(["Parent", [rel.parent]]);
+                if (rel && rel.subIssues.length > 0) groups.push(["Sub-issues", rel.subIssues]);
+                if (rel && rel.blockedBy.length > 0) groups.push(["Blocked by", rel.blockedBy]);
+                if (rel && rel.blocking.length > 0) groups.push(["Blocking", rel.blocking]);
+                if (groups.length === 0) return null;
+                return (
+                  <div
+                    data-testid="issue-relationships"
+                    className="mt-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+                  >
+                    <div className={cn(sectionHeaderClass, "pb-2 text-text-muted")}>
+                      Relationships
+                    </div>
+                    <div className="space-y-1.5">
+                      {groups.map(([title, refs]) => (
+                        <div key={title} className="text-detail">
+                          <span className="text-text-muted">{title}</span>
+                          {refs.map((ref) => (
+                            <div
+                              key={`${title}-${ref.number}`}
+                              className="truncate pl-2 text-text-secondary"
+                            >
+                              {ref.repository
+                                ? `${ref.repository}#${ref.number}`
+                                : `#${ref.number}`}{" "}
+                              {ref.title}{" "}
+                              <span className="text-text-muted">{`{${ref.state}}`}</span>
+                            </div>
+                          ))}
                         </div>
                       ))}
                     </div>
+                  </div>
+                );
+              })()}
+
+              <div className="mt-5" data-testid="issue-comments">
+                <div
+                  className={cn(
+                    sectionHeaderClass,
+                    "flex items-center gap-1.5 pb-2 text-text-muted",
                   )}
-                  <div className="mt-3 space-y-1.5" data-testid="issue-reply">
-                    <ControlTextArea
-                      data-testid="issue-reply-body"
-                      className="min-h-20 w-full rounded-xl border border-border-subtle bg-surface px-3 py-2 text-body text-text-primary placeholder:text-text-muted"
-                      placeholder="Write a reply (Markdown)…"
-                      value={replyDraft}
-                      disabled={replyBusy}
-                      onChange={(e) => setReplyDraft(e.target.value)}
-                    />
-                    <div className="flex justify-end">
-                      <ControlButton
-                        data-testid="issue-reply-post"
-                        className="rounded-capsule border border-border-strong px-3 py-1 text-label text-text-secondary hover:text-text-primary disabled:opacity-40"
-                        disabled={replyBusy || replyDraft.trim() === ""}
-                        onClick={() => void postComment()}
+                >
+                  <MessageSquare size={12} /> Comments
+                  <span className="rounded-capsule border border-border-subtle px-1 tabular-nums">
+                    {detail.comments.length}
+                  </span>
+                </div>
+                {detail.comments.length === 0 ? (
+                  <div className="text-detail text-text-muted">No comments yet.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {detail.comments.map((comment, i) => (
+                      <div
+                        key={i}
+                        data-testid="issue-comment"
+                        className="rounded-xl border border-border-subtle bg-surface px-4 py-2.5"
                       >
-                        {replyBusy ? "Posting…" : "Comment"}
-                      </ControlButton>
-                    </div>
+                        <div className="flex items-center gap-2 pb-1 text-detail text-text-muted">
+                          <span className="flex items-center gap-1 font-medium text-text-secondary">
+                            <User size={11} />{" "}
+                            {comment.author && detail.url.startsWith("https://github.com/") ? (
+                              <a
+                                data-testid="issue-comment-author-link"
+                                href={`https://github.com/${comment.author}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:underline"
+                                title={`Open ${comment.author}'s GitHub profile`}
+                              >
+                                {comment.author}
+                              </a>
+                            ) : (
+                              (comment.author ?? "unknown")
+                            )}
+                          </span>
+                          {formatDate(comment.createdAt) ? (
+                            <span>{formatDate(comment.createdAt)}</span>
+                          ) : null}
+                          {comment.updatedAt && comment.updatedAt !== comment.createdAt ? (
+                            <span data-testid="issue-comment-edited">
+                              edited {formatRelative(comment.updatedAt)}
+                            </span>
+                          ) : null}
+                          {comment.url ? (
+                            <a
+                              data-testid="issue-comment-link"
+                              href={comment.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ml-auto text-text-muted underline hover:text-text-primary"
+                              title="Open this comment on GitHub"
+                            >
+                              permalink
+                            </a>
+                          ) : null}
+                        </div>
+                        <MarkdownDocument source={comment.body || "_(empty)_"} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-3 space-y-1.5" data-testid="issue-reply">
+                  <ControlTextArea
+                    data-testid="issue-reply-body"
+                    className="min-h-20 w-full rounded-xl border border-border-subtle bg-surface px-3 py-2 text-body text-text-primary placeholder:text-text-muted"
+                    placeholder="Write a reply (Markdown)…"
+                    value={replyDraft}
+                    disabled={replyBusy}
+                    onChange={(e) => setReplyDraft(e.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <ControlButton
+                      data-testid="issue-reply-post"
+                      className="rounded-capsule border border-border-strong px-3 py-1 text-label text-text-secondary hover:text-text-primary disabled:opacity-40"
+                      disabled={replyBusy || replyDraft.trim() === ""}
+                      onClick={() => void postComment()}
+                    >
+                      {replyBusy ? "Posting…" : "Comment"}
+                    </ControlButton>
                   </div>
                 </div>
-              </>
-            )}
-          </div>
+              </div>
+            </>
+          )}
+        </div>
       </PageShell>
     );
   }
@@ -843,7 +845,13 @@ export function IssuesScreen() {
     <PageShell
       width="page"
       testId="issues-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-issues.jpg" title="Issues" subtitle="Review and manage GitHub issues for the current project." />}
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-issues.jpg"
+          title="Issues"
+          subtitle="Review and manage GitHub issues for the current project."
+        />
+      }
       toolbar={
         <PageToolbar
           leading={
@@ -964,235 +972,235 @@ export function IssuesScreen() {
               availableTypes.length > 0 ||
               availableReasons.length > 0) ? (
               <div className="flex flex-wrap items-center gap-1.5" data-testid="issues-facets">
-              {availableTypes.length > 0 ? (
-                <div className="flex items-center gap-1" data-testid="issues-type-filter">
-                  <CircleDot size={12} className="text-text-muted" aria-hidden />
-                  {availableTypes.map((issueType) => {
-                    const on = typeFilter === issueType;
-                    return (
-                      <ControlButton
-                        key={issueType}
-                        data-testid={`issues-type-${issueType}`}
-                        aria-pressed={on}
-                        className={cn(
-                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                          on
-                            ? "border-border-strong bg-selection text-text-primary"
-                            : "border-border-subtle text-text-muted hover:text-text-primary",
-                        )}
-                        onClick={() => setTypeFilter(on ? null : issueType)}
-                      >
-                        {issueType}
-                      </ControlButton>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {availableReasons.length > 0 ? (
-                <div className="flex items-center gap-1" data-testid="issues-reason-filter">
-                  <CheckCircle2 size={12} className="text-text-muted" aria-hidden />
-                  {availableReasons.map((reason) => {
-                    const on = reasonFilter === reason;
-                    return (
-                      <ControlButton
-                        key={reason}
-                        data-testid={`issues-reason-${reason}`}
-                        aria-pressed={on}
-                        className={cn(
-                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                          on
-                            ? "border-border-strong bg-selection text-text-primary"
-                            : "border-border-subtle text-text-muted hover:text-text-primary",
-                        )}
-                        onClick={() => setReasonFilter(on ? null : reason)}
-                      >
-                        {reason.toLowerCase().replaceAll("_", " ")}
-                      </ControlButton>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {availableAuthors.length > 0 ? (
-                <div className="flex items-center gap-1" data-testid="issues-author-filter">
-                  <PenLine size={12} className="text-text-muted" aria-hidden />
-                  {availableAuthors.map((author) => {
-                    const on = authorFilter === author;
-                    return (
-                      <ControlButton
-                        key={author}
-                        data-testid={`issues-author-${author}`}
-                        aria-pressed={on}
-                        className={cn(
-                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                          on
-                            ? "border-border-strong bg-selection text-text-primary"
-                            : "border-border-subtle text-text-muted hover:text-text-primary",
-                        )}
-                        onClick={() => setAuthorFilter(on ? null : author)}
-                      >
-                        {author}
-                      </ControlButton>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {availableAssignees.length > 0 ? (
-                <div className="flex items-center gap-1" data-testid="issues-assignee-filter">
-                  <User size={12} className="text-text-muted" aria-hidden />
-                  {availableAssignees.map((assignee) => {
-                    const on = assigneeFilter === assignee;
-                    return (
-                      <ControlButton
-                        key={assignee}
-                        data-testid={`issues-assignee-${assignee}`}
-                        aria-pressed={on}
-                        className={cn(
-                          "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                          on
-                            ? "border-border-strong bg-selection text-text-primary"
-                            : "border-border-subtle text-text-muted hover:text-text-primary",
-                        )}
-                        onClick={() => setAssigneeFilter(on ? null : assignee)}
-                      >
-                        {assignee}
-                      </ControlButton>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {availableLabels.map((label) => {
-                const on = labelFilters.includes(label);
-                return (
+                {availableTypes.length > 0 ? (
+                  <div className="flex items-center gap-1" data-testid="issues-type-filter">
+                    <CircleDot size={12} className="text-text-muted" aria-hidden />
+                    {availableTypes.map((issueType) => {
+                      const on = typeFilter === issueType;
+                      return (
+                        <ControlButton
+                          key={issueType}
+                          data-testid={`issues-type-${issueType}`}
+                          aria-pressed={on}
+                          className={cn(
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                            on
+                              ? "border-border-strong bg-selection text-text-primary"
+                              : "border-border-subtle text-text-muted hover:text-text-primary",
+                          )}
+                          onClick={() => setTypeFilter(on ? null : issueType)}
+                        >
+                          {issueType}
+                        </ControlButton>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {availableReasons.length > 0 ? (
+                  <div className="flex items-center gap-1" data-testid="issues-reason-filter">
+                    <CheckCircle2 size={12} className="text-text-muted" aria-hidden />
+                    {availableReasons.map((reason) => {
+                      const on = reasonFilter === reason;
+                      return (
+                        <ControlButton
+                          key={reason}
+                          data-testid={`issues-reason-${reason}`}
+                          aria-pressed={on}
+                          className={cn(
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                            on
+                              ? "border-border-strong bg-selection text-text-primary"
+                              : "border-border-subtle text-text-muted hover:text-text-primary",
+                          )}
+                          onClick={() => setReasonFilter(on ? null : reason)}
+                        >
+                          {reason.toLowerCase().replaceAll("_", " ")}
+                        </ControlButton>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {availableAuthors.length > 0 ? (
+                  <div className="flex items-center gap-1" data-testid="issues-author-filter">
+                    <PenLine size={12} className="text-text-muted" aria-hidden />
+                    {availableAuthors.map((author) => {
+                      const on = authorFilter === author;
+                      return (
+                        <ControlButton
+                          key={author}
+                          data-testid={`issues-author-${author}`}
+                          aria-pressed={on}
+                          className={cn(
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                            on
+                              ? "border-border-strong bg-selection text-text-primary"
+                              : "border-border-subtle text-text-muted hover:text-text-primary",
+                          )}
+                          onClick={() => setAuthorFilter(on ? null : author)}
+                        >
+                          {author}
+                        </ControlButton>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {availableAssignees.length > 0 ? (
+                  <div className="flex items-center gap-1" data-testid="issues-assignee-filter">
+                    <User size={12} className="text-text-muted" aria-hidden />
+                    {availableAssignees.map((assignee) => {
+                      const on = assigneeFilter === assignee;
+                      return (
+                        <ControlButton
+                          key={assignee}
+                          data-testid={`issues-assignee-${assignee}`}
+                          aria-pressed={on}
+                          className={cn(
+                            "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                            on
+                              ? "border-border-strong bg-selection text-text-primary"
+                              : "border-border-subtle text-text-muted hover:text-text-primary",
+                          )}
+                          onClick={() => setAssigneeFilter(on ? null : assignee)}
+                        >
+                          {assignee}
+                        </ControlButton>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {availableLabels.map((label) => {
+                  const on = labelFilters.includes(label);
+                  return (
+                    <ControlButton
+                      key={label}
+                      data-testid={`issues-label-${label}`}
+                      aria-pressed={on}
+                      className={cn(
+                        "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
+                        on
+                          ? "border-border-strong bg-selection text-text-primary"
+                          : "border-border-subtle text-text-muted hover:text-text-primary",
+                      )}
+                      onClick={() =>
+                        setLabelFilters((prev) =>
+                          prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label],
+                        )
+                      }
+                    >
+                      {label}
+                    </ControlButton>
+                  );
+                })}
+                {filtersActive ? (
                   <ControlButton
-                    key={label}
-                    data-testid={`issues-label-${label}`}
-                    aria-pressed={on}
-                    className={cn(
-                      "rounded-capsule border px-2 py-0.5 text-detail transition-colors",
-                      on
-                        ? "border-border-strong bg-selection text-text-primary"
-                        : "border-border-subtle text-text-muted hover:text-text-primary",
-                    )}
-                    onClick={() =>
-                      setLabelFilters((prev) =>
-                        prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label],
-                      )
-                    }
+                    data-testid="issues-clear-filters"
+                    className="rounded-capsule px-2 py-0.5 text-detail text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
+                    onClick={clearFilters}
                   >
-                    {label}
+                    Clear filters
                   </ControlButton>
-                );
-              })}
-              {filtersActive ? (
-                <ControlButton
-                  data-testid="issues-clear-filters"
-                  className="rounded-capsule px-2 py-0.5 text-detail text-text-muted underline-offset-2 hover:text-text-primary hover:underline"
-                  onClick={clearFilters}
-                >
-                  Clear filters
-                </ControlButton>
-              ) : null}
-            </div>
+                ) : null}
+              </div>
             ) : null
           }
         />
       }
     >
-          <p className="pb-3 text-caption text-text-muted">
-            {stateFilter === "all"
-              ? "All GitHub issues for this project."
-              : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
-            Select one to start a session on it.
-          </p>
+      <p className="pb-3 text-caption text-text-muted">
+        {stateFilter === "all"
+          ? "All GitHub issues for this project."
+          : `${stateFilter === "open" ? "Open" : "Closed"} GitHub issues for this project.`}{" "}
+        Select one to start a session on it.
+      </p>
 
-          {incompleteResults && !loading && !error ? (
-            <div
-              data-testid="issues-incomplete-results"
-              className="mb-3"
-              role="status"
-              aria-live="polite"
+      {incompleteResults && !loading && !error ? (
+        <div
+          data-testid="issues-incomplete-results"
+          className="mb-3"
+          role="status"
+          aria-live="polite"
+        >
+          <AppInlineNotice tone="neutral">
+            Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
+            type, and close-reason filters apply only to these results.
+          </AppInlineNotice>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div data-testid="issues-error">
+          <AppInlineNotice tone="danger">{error}</AppInlineNotice>
+        </div>
+      ) : (
+        <div className="space-y-1.5" data-testid="issues-list">
+          {visibleIssues.map((issue) => (
+            <ControlButton
+              key={`${issue.repository ?? ""}#${issue.number}`}
+              data-testid={`issue-${issue.number}`}
+              className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
+              onClick={() => {
+                // a PR row has no issue detail — open it on GitHub (the
+                // main-window policy routes _blank/window.open externally)
+                if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
+                  window.open(issue.url, "_blank", "noreferrer");
+                  return;
+                }
+                void openDetail(issue.number, issue.projectId ?? undefined);
+              }}
             >
-              <AppInlineNotice tone="neutral">
-                Showing the first 50 issues returned by GitHub. Search and label, assignee, author,
-                type, and close-reason filters apply only to these results.
-              </AppInlineNotice>
-            </div>
-          ) : null}
-
-          {error ? (
-            <div data-testid="issues-error">
-              <AppInlineNotice tone="danger">{error}</AppInlineNotice>
-            </div>
-          ) : (
-            <div className="space-y-1.5" data-testid="issues-list">
-              {visibleIssues.map((issue) => (
-                <ControlButton
-                  key={`${issue.repository ?? ""}#${issue.number}`}
-                  data-testid={`issue-${issue.number}`}
-                  className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
-                  onClick={() => {
-                    // a PR row has no issue detail — open it on GitHub (the
-                    // main-window policy routes _blank/window.open externally)
-                    if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
-                      window.open(issue.url, "_blank", "noreferrer");
-                      return;
-                    }
-                    void openDetail(issue.number, issue.projectId ?? undefined);
-                  }}
-                >
-                  <span className="font-mono text-code text-text-muted">
-                    {issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
-                    {issue.title}
-                  </span>
-                  {/* Native list-row meta leads with the author (GitHubIssuesViews
+              <span className="font-mono text-code text-text-muted">
+                {issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
+                {issue.title}
+              </span>
+              {/* Native list-row meta leads with the author (GitHubIssuesViews
                         .swift:143-145): who filed the issue. */}
-                  {issue.author ? (
-                    <span
-                      data-testid="issue-author"
-                      className="flex shrink-0 items-center gap-1 text-detail text-text-muted"
-                    >
-                      <User size={11} className="shrink-0" />
-                      <span className="max-w-[16ch] truncate">{issue.author}</span>
-                    </span>
-                  ) : null}
-                  {/* Relative last-updated time (native meta row, after author). */}
-                  {issue.updatedAt ? (
-                    <span
-                      data-testid="issue-updated"
-                      className="shrink-0 whitespace-nowrap text-detail text-text-muted"
-                      title={formatDate(issue.updatedAt)}
-                    >
-                      {formatRelative(issue.updatedAt)}
-                    </span>
-                  ) : null}
-                  {issue.labels.slice(0, 3).map((label) => (
-                    <span
-                      key={label}
-                      className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </ControlButton>
-              ))}
-              {visibleIssues.length === 0 && !loading ? (
-                <AppEmptyState
-                  data-testid="issues-empty"
-                  heading={
-                    search
-                      ? `No issues match “${searchQuery.trim()}”.`
-                      : filtersActive
-                        ? "Try clearing the filters or changing the state."
-                        : stateFilter === "all"
-                          ? "No issues."
-                          : `No ${stateFilter} issues.`
-                  }
-                />
+              {issue.author ? (
+                <span
+                  data-testid="issue-author"
+                  className="flex shrink-0 items-center gap-1 text-detail text-text-muted"
+                >
+                  <User size={11} className="shrink-0" />
+                  <span className="max-w-[16ch] truncate">{issue.author}</span>
+                </span>
               ) : null}
-            </div>
-          )}
+              {/* Relative last-updated time (native meta row, after author). */}
+              {issue.updatedAt ? (
+                <span
+                  data-testid="issue-updated"
+                  className="shrink-0 whitespace-nowrap text-detail text-text-muted"
+                  title={formatDate(issue.updatedAt)}
+                >
+                  {formatRelative(issue.updatedAt)}
+                </span>
+              ) : null}
+              {issue.labels.slice(0, 3).map((label) => (
+                <span
+                  key={label}
+                  className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+                >
+                  {label}
+                </span>
+              ))}
+            </ControlButton>
+          ))}
+          {visibleIssues.length === 0 && !loading ? (
+            <AppEmptyState
+              data-testid="issues-empty"
+              heading={
+                search
+                  ? `No issues match “${searchQuery.trim()}”.`
+                  : filtersActive
+                    ? "Try clearing the filters or changing the state."
+                    : stateFilter === "all"
+                      ? "No issues."
+                      : `No ${stateFilter} issues.`
+              }
+            />
+          ) : null}
+        </div>
+      )}
     </PageShell>
   );
 }

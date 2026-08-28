@@ -145,7 +145,7 @@ function InlineCommentEditor(props: {
         >
           Cancel
         </ControlButton>
-                <Button
+        <Button
           size="sm"
           variant="primary"
           type="button"
@@ -360,7 +360,7 @@ function WorktreeMergeToolbar(props: {
         <ArrowRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden />
         <span className="shrink-0 text-text-primary">{props.worktreeSourceBranch}</span>
       </div>
-            <Button
+      <Button
         size="sm"
         variant="primary"
         className="shrink-0 rounded-capsule"

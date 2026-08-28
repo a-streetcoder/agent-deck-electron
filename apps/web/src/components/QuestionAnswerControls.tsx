@@ -62,7 +62,9 @@ export function QuestionAnswerControls({
           <Button
             type="button"
             data-testid={`${testidPrefix}-confirm-yes`}
-            size="md" variant="primary" className="rounded-capsule"
+            size="md"
+            variant="primary"
+            className="rounded-capsule"
             onClick={() => answer({ confirmed: true })}
           >
             Yes
@@ -103,7 +105,9 @@ export function QuestionAnswerControls({
           <Button
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            size="md" variant="primary" className="self-end rounded-capsule"
+            size="md"
+            variant="primary"
+            className="self-end rounded-capsule"
             onClick={() => answer({ value: inputValue })}
           >
             Send
@@ -128,7 +132,9 @@ export function QuestionAnswerControls({
           <Button
             type="button"
             data-testid={`${testidPrefix}-submit`}
-            size="md" variant="primary" className="rounded-capsule"
+            size="md"
+            variant="primary"
+            className="rounded-capsule"
             onClick={() => answer({ value: inputValue })}
           >
             Send

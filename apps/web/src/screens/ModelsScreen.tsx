@@ -284,187 +284,179 @@ export function ModelsScreen() {
         ) : null
       }
     >
-          {!sessionId && discoveryState === "loading" ? (
-            <AppEmptyState
-              heading="Discovering available models…"
-              icon={<AppSpinner size="md" />}
-              role="status"
-              data-testid="models-loading"
-            />
-          ) : !sessionId && discoveryState === "error" ? (
-            <div data-testid="models-error">
-            <AppInlineNotice
-              tone="danger"
-              action={
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  data-testid="models-retry"
-                  onClick={() => loadSource(true)}
+      {!sessionId && discoveryState === "loading" ? (
+        <AppEmptyState
+          heading="Discovering available models…"
+          icon={<AppSpinner size="md" />}
+          role="status"
+          data-testid="models-loading"
+        />
+      ) : !sessionId && discoveryState === "error" ? (
+        <div data-testid="models-error">
+          <AppInlineNotice
+            tone="danger"
+            action={
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                data-testid="models-retry"
+                onClick={() => loadSource(true)}
+              >
+                Retry
+              </Button>
+            }
+          >
+            Models could not be discovered.
+          </AppInlineNotice>
+        </div>
+      ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
+        (sessionId && models.length === 0) ? (
+        <AppEmptyState
+          heading="No models available — check your provider configuration in Environment."
+          data-testid="models-empty"
+        />
+      ) : showCatalog ? (
+        <>
+          {filtered.length === 0 ? (
+            <AppEmptyState heading="No matches" data-testid="models-search-empty" />
+          ) : null}
+          <div className="space-y-4">
+            {[...byProvider.entries()].map(([provider, providerModels]) => (
+              <div key={provider}>
+                <div
+                  className={cn(
+                    sectionHeaderClass,
+                    "flex items-center gap-1.5 px-1 pb-1 text-text-muted",
+                  )}
                 >
-                  Retry
-                </Button>
-              }
-            >
-              Models could not be discovered.
-            </AppInlineNotice>
-            </div>
-          ) : (!sessionId && discoveryState === "success" && models.length === 0) ||
-            (sessionId && models.length === 0) ? (
-            <AppEmptyState
-              heading="No models available — check your provider configuration in Environment."
-              data-testid="models-empty"
-            />
-          ) : showCatalog ? (
-            <>
-              {filtered.length === 0 ? (
-                <AppEmptyState heading="No matches" data-testid="models-search-empty" />
-              ) : null}
-              <div className="space-y-4">
-                {[...byProvider.entries()].map(([provider, providerModels]) => (
-                  <div key={provider}>
-                    <div
-                      className={cn(
-                        sectionHeaderClass,
-                        "flex items-center gap-1.5 px-1 pb-1 text-text-muted",
-                      )}
-                    >
-                      <ProviderLogo
-                        providerId={provider}
-                        size={13}
-                        className="text-text-secondary"
-                      />
-                      {provider}
-                    </div>
-                    <div className="space-y-1.5">
-                      {providerModels.map((model) => {
-                        const isActive =
-                          Boolean(sessionId) &&
-                          active?.provider === provider &&
-                          active?.id === model.id;
-                        const modelKey = `${model.provider}:${model.id}`;
-                        const isCurationPending = pendingCuration.has(modelKey);
-                        const ctx = formatTokens(model.contextWindow);
-                        const out = formatTokens(model.maxTokens);
-                        return (
+                  <ProviderLogo providerId={provider} size={13} className="text-text-secondary" />
+                  {provider}
+                </div>
+                <div className="space-y-1.5">
+                  {providerModels.map((model) => {
+                    const isActive =
+                      Boolean(sessionId) &&
+                      active?.provider === provider &&
+                      active?.id === model.id;
+                    const modelKey = `${model.provider}:${model.id}`;
+                    const isCurationPending = pendingCuration.has(modelKey);
+                    const ctx = formatTokens(model.contextWindow);
+                    const out = formatTokens(model.maxTokens);
+                    return (
+                      <div
+                        key={model.id}
+                        data-testid={`model-${model.id}`}
+                        data-active={isActive}
+                        data-disabled={model.disabled ? "true" : "false"}
+                        className={cn(
+                          "flex items-center gap-1 rounded-xl border transition-colors",
+                          isActive
+                            ? "border-accent bg-selection"
+                            : "border-border-subtle bg-surface",
+                        )}
+                      >
+                        <ControlButton
+                          type="button"
+                          data-testid={`model-select-${model.id}`}
+                          disabled={!sessionId || model.disabled}
+                          title={!sessionId ? "Start a session to activate this model" : undefined}
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-3 rounded-l-[14px] px-3.5 py-2.5 text-left",
+                            sessionId && !model.disabled && !isActive && "hover:bg-hover",
+                            (!sessionId || model.disabled) && "cursor-default",
+                          )}
+                          onClick={() => select(model)}
+                        >
+                          <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-label font-medium text-text-primary">
+                                {model.name ?? model.id}
+                              </span>
+                              {model.reasoning ? (
+                                <span
+                                  data-testid="reasoning-badge"
+                                  className="flex items-center gap-0.5 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-secondary"
+                                >
+                                  <Sparkles size={9} aria-hidden /> reasoning
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="truncate font-mono text-detail text-text-muted">
+                              {model.id}
+                            </div>
+                          </div>
                           <div
-                            key={model.id}
-                            data-testid={`model-${model.id}`}
-                            data-active={isActive}
-                            data-disabled={model.disabled ? "true" : "false"}
                             className={cn(
-                              "flex items-center gap-1 rounded-xl border transition-colors",
-                              isActive
-                                ? "border-accent bg-selection"
-                                : "border-border-subtle bg-surface",
+                              "flex shrink-0 items-center gap-3 text-detail text-text-muted",
+                              model.disabled && "opacity-60",
                             )}
                           >
-                            <ControlButton
-                              type="button"
-                              data-testid={`model-select-${model.id}`}
-                              disabled={!sessionId || model.disabled}
-                              title={
-                                !sessionId ? "Start a session to activate this model" : undefined
-                              }
-                              className={cn(
-                                "flex min-w-0 flex-1 items-center gap-3 rounded-l-[14px] px-3.5 py-2.5 text-left",
-                                sessionId && !model.disabled && !isActive && "hover:bg-hover",
-                                (!sessionId || model.disabled) && "cursor-default",
-                              )}
-                              onClick={() => select(model)}
-                            >
-                              <div className={cn("min-w-0 flex-1", model.disabled && "opacity-60")}>
-                                <div className="flex items-center gap-2">
-                                  <span className="truncate text-label font-medium text-text-primary">
-                                    {model.name ?? model.id}
-                                  </span>
-                                  {model.reasoning ? (
-                                    <span
-                                      data-testid="reasoning-badge"
-                                      className="flex items-center gap-0.5 rounded-capsule border border-border-subtle px-1.5 text-micro text-text-secondary"
-                                    >
-                                      <Sparkles size={9} aria-hidden /> reasoning
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <div className="truncate font-mono text-detail text-text-muted">
-                                  {model.id}
-                                </div>
-                              </div>
-                              <div
-                                className={cn(
-                                  "flex shrink-0 items-center gap-3 text-detail text-text-muted",
-                                  model.disabled && "opacity-60",
-                                )}
-                              >
-                                {ctx ? <span title="Context window">{ctx} ctx</span> : null}
-                                {out ? <span title="Max output tokens">{out} out</span> : null}
-                                {model.input?.includes("image") ? <span>image</span> : null}
-                                {!sessionId ? (
-                                  <span data-testid={`model-activation-help-${model.id}`}>
-                                    Browse only · Start a session to activate
-                                  </span>
-                                ) : null}
-                                {isActive ? (
-                                  <Check
-                                    size={15}
-                                    style={{ color: "var(--color-brand-accent)" }}
-                                    aria-label="Active model"
-                                  />
-                                ) : null}
-                              </div>
-                            </ControlButton>
-                            <ControlButton
-                              type="button"
-                              data-testid={`model-toggle-${model.id}`}
-                              aria-label={model.disabled ? "Enable model" : "Disable model"}
-                              aria-busy={isCurationPending}
-                              title={model.disabled ? "Show in picker" : "Hide from picker"}
-                              disabled={isCurationPending}
-                              className="flex shrink-0 items-center gap-1.5 rounded-r-[14px] px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
-                              onClick={() => void toggleDisabled(model)}
-                            >
-                              {model.disabled ? (
-                                <EyeOff size={15} aria-hidden />
-                              ) : (
-                                <Eye size={15} aria-hidden />
-                              )}
-                              <span>
-                                {model.disabled ? "Hidden from pickers" : "Shown in pickers"}
+                            {ctx ? <span title="Context window">{ctx} ctx</span> : null}
+                            {out ? <span title="Max output tokens">{out} out</span> : null}
+                            {model.input?.includes("image") ? <span>image</span> : null}
+                            {!sessionId ? (
+                              <span data-testid={`model-activation-help-${model.id}`}>
+                                Browse only · Start a session to activate
                               </span>
-                            </ControlButton>
-                            {model.fastEligible ? (
-                              <ControlButton
-                                type="button"
-                                data-testid={`model-fast-${model.id}`}
-                                aria-label={model.fast ? "Turn off Fast" : "Turn on Fast"}
-                                aria-pressed={model.fast === true}
-                                aria-busy={isCurationPending}
-                                title="Ask OpenAI for the priority service tier on this model"
-                                disabled={isCurationPending}
-                                className="flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
-                                onClick={() => void toggleFast(model)}
-                              >
-                                <Zap
-                                  size={15}
-                                  aria-hidden
-                                  style={
-                                    model.fast ? { color: "var(--color-brand-accent)" } : undefined
-                                  }
-                                />
-                                <span>{model.fast ? "Fast" : "Standard"}</span>
-                              </ControlButton>
+                            ) : null}
+                            {isActive ? (
+                              <Check
+                                size={15}
+                                style={{ color: "var(--color-brand-accent)" }}
+                                aria-label="Active model"
+                              />
                             ) : null}
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                        </ControlButton>
+                        <ControlButton
+                          type="button"
+                          data-testid={`model-toggle-${model.id}`}
+                          aria-label={model.disabled ? "Enable model" : "Disable model"}
+                          aria-busy={isCurationPending}
+                          title={model.disabled ? "Show in picker" : "Hide from picker"}
+                          disabled={isCurationPending}
+                          className="flex shrink-0 items-center gap-1.5 rounded-r-[14px] px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
+                          onClick={() => void toggleDisabled(model)}
+                        >
+                          {model.disabled ? (
+                            <EyeOff size={15} aria-hidden />
+                          ) : (
+                            <Eye size={15} aria-hidden />
+                          )}
+                          <span>{model.disabled ? "Hidden from pickers" : "Shown in pickers"}</span>
+                        </ControlButton>
+                        {model.fastEligible ? (
+                          <ControlButton
+                            type="button"
+                            data-testid={`model-fast-${model.id}`}
+                            aria-label={model.fast ? "Turn off Fast" : "Turn on Fast"}
+                            aria-pressed={model.fast === true}
+                            aria-busy={isCurationPending}
+                            title="Ask OpenAI for the priority service tier on this model"
+                            disabled={isCurationPending}
+                            className="flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-detail text-text-secondary outline-none hover:bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-wait"
+                            onClick={() => void toggleFast(model)}
+                          >
+                            <Zap
+                              size={15}
+                              aria-hidden
+                              style={
+                                model.fast ? { color: "var(--color-brand-accent)" } : undefined
+                              }
+                            />
+                            <span>{model.fast ? "Fast" : "Standard"}</span>
+                          </ControlButton>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </>
-          ) : null}
+            ))}
+          </div>
+        </>
+      ) : null}
     </PageShell>
   );
 }
