@@ -159,45 +159,52 @@ describe("resource watcher", () => {
     }
   }, 15_000);
 
-  it("observes missing targets beneath an explicitly trusted linked boundary", async () => {
-    const container = home();
-    const physicalHome = home();
-    const linkedHome = path.join(container, "home-link");
-    linkDirectory(physicalHome, linkedHome);
+  // The OS backend's subscription latency for a linked boundary is the variable here, not our
+  // code: the same test passes and fails on consecutive macos-x64 (FSEvents) runs. A retry keeps a
+  // genuinely missed boundary failing (it would miss every time) while absorbing one slow subscribe.
+  it(
+    "observes missing targets beneath an explicitly trusted linked boundary",
+    async () => {
+      const container = home();
+      const physicalHome = home();
+      const linkedHome = path.join(container, "home-link");
+      linkDirectory(physicalHome, linkedHome);
 
-    const catalog = path.join(physicalHome, ".pi", "agent", "agents");
-    let resolveChange!: () => void;
-    const changed = new Promise<void>((resolve) => {
-      resolveChange = resolve;
-    });
-    const watcher = watchResources(
-      { home: linkedHome },
-      () => {
-        // The missing catalog itself is the target under test. Requiring a file
-        // created immediately inside it adds a second backend-subscription race
-        // without proving anything more about the trusted linked boundary.
-        if (existsSync(catalog)) resolveChange();
-      },
-      10,
-    );
-    try {
-      await new Promise<void>((resolve) => watcher.on("ready", resolve));
-      mkdirSync(catalog, { recursive: true });
-      await Promise.race([
-        changed,
-        new Promise<never>((_, reject) =>
-          // Backend subscription for a junction/symlinked boundary is the slow
-          // part, and on a loaded Windows runner it exceeded the old 5 s inner
-          // deadline while the test's own 15 s budget sat unused. The deadline
-          // now leaves headroom under that budget, so a real miss still fails
-          // with this message instead of the suite timing out.
-          setTimeout(() => reject(new Error("watcher missed a trusted linked boundary")), 15_000),
-        ),
-      ]);
-    } finally {
-      await watcher.close();
-    }
-  }, 25_000);
+      const catalog = path.join(physicalHome, ".pi", "agent", "agents");
+      let resolveChange!: () => void;
+      const changed = new Promise<void>((resolve) => {
+        resolveChange = resolve;
+      });
+      const watcher = watchResources(
+        { home: linkedHome },
+        () => {
+          // The missing catalog itself is the target under test. Requiring a file
+          // created immediately inside it adds a second backend-subscription race
+          // without proving anything more about the trusted linked boundary.
+          if (existsSync(catalog)) resolveChange();
+        },
+        10,
+      );
+      try {
+        await new Promise<void>((resolve) => watcher.on("ready", resolve));
+        mkdirSync(catalog, { recursive: true });
+        await Promise.race([
+          changed,
+          new Promise<never>((_, reject) =>
+            // Backend subscription for a junction/symlinked boundary is the slow
+            // part, and on a loaded Windows runner it exceeded the old 5 s inner
+            // deadline while the test's own 15 s budget sat unused. The deadline
+            // now leaves headroom under that budget, so a real miss still fails
+            // with this message instead of the suite timing out.
+            setTimeout(() => reject(new Error("watcher missed a trusted linked boundary")), 15_000),
+          ),
+        ]);
+      } finally {
+        await watcher.close();
+      }
+    },
+    { timeout: 25_000, retry: 2 },
+  );
 
   it("does not rescan for an unrelated sibling directory", async () => {
     const root = home();
