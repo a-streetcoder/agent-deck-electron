@@ -15,6 +15,7 @@ import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicke
 import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
+import { IconButton } from "@/design-system/components/IconButton";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
@@ -168,14 +169,13 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
               Choose a folder directly or add projects found in monitored folders.
             </p>
           </div>
-          <ControlButton
+          <IconButton
             autoFocus
             aria-label="Close Add Projects"
-            className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
+            size="md"
+            icon={<X />}
             onClick={onClose}
-          >
-            <X size={16} />
-          </ControlButton>
+          />
         </div>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
@@ -213,14 +213,18 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
                 <h3 className="text-label font-semibold text-text-primary">Discovered projects</h3>
                 <p className="text-caption text-text-muted">From your monitored folders</p>
               </div>
-              <ControlButton
+              <Button
                 data-testid="discovery-rescan"
-                className="flex items-center gap-1.5 rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+                size="sm"
+                variant="ghost"
+                leadingIcon={
+                  <RefreshCw size={12} className={scanning ? "animate-spin" : undefined} />
+                }
                 disabled={scanning}
                 onClick={() => void scan()}
               >
-                <RefreshCw size={12} className={scanning ? "animate-spin" : undefined} /> Rescan
-              </ControlButton>
+                Rescan
+              </Button>
             </div>
 
             <div
@@ -327,13 +331,13 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
                     >
                       {root}
                     </span>
-                    <ControlButton
+                    <IconButton
                       aria-label={`Stop monitoring ${root}`}
-                      className="shrink-0 rounded-capsule p-1 text-text-muted hover:text-danger"
+                      size="sm"
+                      variant="destructive"
+                      icon={<Trash2 />}
                       onClick={() => void removeRoot(root)}
-                    >
-                      <Trash2 size={13} />
-                    </ControlButton>
+                    />
                   </div>
                 ))}
               </div>
@@ -549,16 +553,15 @@ export function ProjectsScreen() {
                     </span>
                   </div>
                   <div className="relative shrink-0">
-                    <ControlButton
+                    <IconButton
                       data-testid={`project-actions-${project.name}`}
                       aria-label={`Actions for ${project.name}`}
                       aria-haspopup="menu"
                       aria-expanded={menuOpen}
-                      className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
+                      size="sm"
+                      icon={<MoreHorizontal />}
                       onClick={() => setMenuProjectId(menuOpen ? null : project.id)}
-                    >
-                      <MoreHorizontal size={16} />
-                    </ControlButton>
+                    />
                     {menuOpen ? (
                       <div
                         role="menu"

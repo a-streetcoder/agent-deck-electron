@@ -1,4 +1,4 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
+import { ControlInput } from "@/design-system/components/NativeControls";
 import { Button } from "@/design-system/components/Button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, Loader2, XCircle } from "lucide-react";
@@ -208,14 +208,15 @@ export function ProviderLoginSheet({
         {awaitingSelect ? (
           <div className="flex flex-wrap gap-2" data-testid="login-select">
             {awaitingSelect.options.map((option) => (
-              <ControlButton
+              <Button
                 key={option.id}
                 data-testid={`login-select-${option.id}`}
-                className="rounded-capsule border border-border-strong px-3 py-1.5 text-label text-text-primary hover:border-accent"
+                size="sm"
+                variant="secondary"
                 onClick={() => void respond(option.id)}
               >
                 {option.label}
-              </ControlButton>
+              </Button>
             ))}
           </div>
         ) : null}
@@ -225,29 +226,25 @@ export function ProviderLoginSheet({
           data-testid="provider-login-actions"
         >
           {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
-            <ControlButton
+            <Button
               type="button"
-              className="text-detail text-text-muted hover:text-text-primary"
+              size="sm"
+              variant="ghost"
               onClick={() => setShowManualEntry(true)}
             >
               Enter a code manually
-            </ControlButton>
+            </Button>
           ) : (
             <span />
           )}
           <div className="ml-auto flex items-center gap-2">
-            <ControlButton
-              type="button"
-              className="rounded-capsule border border-border-strong px-4 py-1.5 text-label text-text-secondary hover:text-text-primary"
-              onClick={onClose}
-            >
+            <Button type="button" size="md" variant="secondary" onClick={onClose}>
               {doneEvent || fatal ? "Close" : "Cancel"}
-            </ControlButton>
+            </Button>
             {visiblePrompt ? (
-                            <Button
+              <Button
                 size="md"
                 variant="primary"
-                className="rounded-capsule"
                 type="submit"
                 form={promptFormId}
                 data-testid="login-prompt-submit"
@@ -271,13 +268,16 @@ function LoginStep({ event }: { event: LoginEvent }) {
           <div className="mt-1 text-detail text-text-muted">
             Sign in securely with the provider, then return to Agent Deck.
           </div>
-          <ControlButton
-            className="mt-3 inline-flex items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1.5 text-detail font-medium text-text-primary hover:border-accent"
+          <Button
+            className="mt-3"
+            size="sm"
+            variant="secondary"
+            leadingIcon={<ExternalLink size={12} />}
             data-testid="login-auth-url"
             onClick={() => void openExternal(event.url)}
           >
-            <ExternalLink size={12} /> Open browser again
-          </ControlButton>
+            Open browser again
+          </Button>
           {event.instructions ? (
             <div className="mt-2 text-detail text-text-muted">{event.instructions}</div>
           ) : null}

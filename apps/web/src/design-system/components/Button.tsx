@@ -2,9 +2,8 @@ import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
 /**
- * Visual variants. Mirrors the macOS app's AppPrimaryButtonStyle,
- * AppSecondaryButtonStyle, AppPillButtonStyle, plus a ghost (transparent)
- * and a destructive (role-error filled) variant.
+ * Visual variants. Ordinary commands use the 6px control radius.
+ * `pill` is reserved for chips, tags, and independent multi-select filters.
  */
 export type ButtonVariant =
   | "primary"
@@ -60,14 +59,12 @@ const sizeClasses: Record<ButtonSize, string> = {
  * Variant chrome. Notes on the mapping:
  *
  * - `primary` — solid action fill (`bg-primary` / `hover:bg-primary-hover`)
- *   with `text-on-accent`. Capsule shadow approximates
- *   AppPrimaryButtonStyle elevation.
- * - `secondary` — glass capsule chrome via the secondary card tokens.
+ *   with `text-on-accent`. Never cyan accent fill.
+ * - `secondary` — elevated surface with a strong border.
  * - `ghost` — transparent default with neutral hover wash.
- * - `pill` — translucent glass capsule that brightens with `isActive` to
- *   match AppPillButtonStyle's brandAccent-tint behaviour.
- * - `destructive` — solid role-error capsule (no equivalent in
- *   DesignSystem.swift; matches sheet-level Delete affordances).
+ * - `pill` — translucent capsule for chips/tags only (`isActive` uses accent wash).
+ * - `destructive` — solid role-error fill.
+ * - `destructiveOutline` — danger border and text, transparent fill.
  */
 const variantClasses: Record<ButtonVariant, string> = {
   primary: cn(
@@ -104,7 +101,7 @@ const variantClasses: Record<ButtonVariant, string> = {
 
 /**
  * On-media overrides. Primary and destructive keep their fills; secondary,
- * ghost, and pill become frosted pills that read on dark photography.
+ * ghost, and pill become frosted controls that read on dark photography.
  * Ring offset is dropped so the surface-colored halo does not flash on photos.
  */
 const onMediaToneClasses: Record<ButtonVariant, string> = {

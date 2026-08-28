@@ -29,7 +29,7 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
       <div className="absolute inset-0 bg-gradient-to-t from-media-overlay-strong via-media-overlay to-transparent" />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 px-page-x pb-4 pt-6 max-[480px]:grid-cols-1 max-[480px]:gap-2",
+          "absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 px-page-x pb-5 pt-6 max-[480px]:grid-cols-1 max-[480px]:gap-2",
         )}
       >
         <div className="min-w-0">
@@ -59,16 +59,8 @@ export function SectionHero({ imageSrc, title, subtitle, actions }: SectionHeroP
 
 /** On-media CTA aligned to the hero's two-line heading block. */
 export const SectionHeroButton = forwardRef<HTMLButtonElement, ButtonProps>(
-  function SectionHeroButton({ className, size = "sm", tone = "on-media", ...props }, ref) {
-    return (
-      <Button
-        ref={ref}
-        size={size}
-        tone={tone}
-        className={cn("min-h-control-hero shrink-0 rounded-control px-control-x-md", className)}
-        {...props}
-      />
-    );
+  function SectionHeroButton({ size = "md", tone = "on-media", ...props }, ref) {
+    return <Button ref={ref} size={size} tone={tone} {...props} />;
   },
 );
 

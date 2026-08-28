@@ -36,8 +36,8 @@ export interface AppSegmentedPickerProps<TValue extends string = string> {
 }
 
 const sizeClasses: Record<AppSegmentedPickerSize, string> = {
-  sm: "h-7 text-detail",
-  md: "h-8 text-label tracking-ui",
+  sm: "h-control-sm text-detail",
+  md: "h-control-md text-label tracking-ui",
 };
 
 const segmentSizeClasses: Record<AppSegmentedPickerSize, string> = {
@@ -46,11 +46,10 @@ const segmentSizeClasses: Record<AppSegmentedPickerSize, string> = {
 };
 
 /**
- * Pill segmented control. Mirrors the macOS `appSegmentedPicker` modifier
- * (`Picker.pickerStyle(.segmented)` + brand-accent tint):
+ * Segmented control with the shared 6px control radius.
  *
- *  - Selected segment renders with primary-accent background, white label
- *  - Unselected segments render transparent with muted text
+ *  - Selected segment: primary teal fill, white label
+ *  - Unselected segments: transparent with muted text
  *  - Arrow keys roving-focus through enabled segments (skips disabled)
  *  - Home/End jump to first/last enabled segment
  *  - Wraps at edges
@@ -154,7 +153,7 @@ export const AppSegmentedPicker = forwardRef(function AppSegmentedPicker<
       aria-labelledby={ariaLabelledBy}
       aria-disabled={disabled || undefined}
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-capsule border border-border-subtle",
+        "inline-flex items-center gap-0.5 rounded-segmented border border-border-subtle",
         "bg-surface-elevated p-0.5",
         disabled && "opacity-55",
         sizeClasses[size],
@@ -188,7 +187,7 @@ export const AppSegmentedPicker = forwardRef(function AppSegmentedPicker<
             }}
             onKeyDown={(event) => handleKeyDown(event, index)}
             className={cn(
-              "inline-flex h-full shrink-0 items-center justify-center rounded-capsule",
+              "inline-flex h-full shrink-0 items-center justify-center rounded-segmented",
               "whitespace-nowrap font-medium transition-colors duration-150 ease-spring",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
               "disabled:cursor-not-allowed disabled:opacity-55",

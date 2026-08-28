@@ -72,6 +72,7 @@ interface SkillRepo {
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
+import { IconButton } from "@/design-system/components/IconButton";
 
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
@@ -201,13 +202,7 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           <div className="flex-1 truncate text-label font-semibold text-text-primary">
             {draft.isNew ? "New Skill" : `Edit ${draft.name}`}
           </div>
-          <ControlButton
-            className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            <X size={15} />
-          </ControlButton>
+          <IconButton aria-label="Close" size="md" icon={<X />} onClick={onClose} />
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
           {draft.isNew ? (
@@ -262,14 +257,13 @@ function SkillEditSheet({ draft, onClose }: { draft: SkillDraft; onClose: () => 
           ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-          <Button size="md" className="rounded-capsule" onClick={onClose}>
+          <Button size="md" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button
             data-testid="skill-editor-save"
             size="md"
             variant="primary"
-            className="rounded-capsule"
             disabled={!form.name.trim()}
             onClick={() => void save()}
           >
@@ -363,14 +357,15 @@ function SkillCompareDialog({
           ))}
         </div>
         <div className="flex justify-end border-t border-border-subtle px-5 py-3">
-          <ControlButton
+          <Button
             ref={doneRef}
             data-testid="skill-compare-done"
-            className="rounded-capsule border border-border-strong px-3 py-1 text-label text-text-secondary hover:text-text-primary"
+            size="md"
+            variant="secondary"
             onClick={onClose}
           >
             Done
-          </ControlButton>
+          </Button>
         </div>
       </div>
     </div>,
@@ -1745,7 +1740,6 @@ export function SkillsScreen() {
                 data-testid="new-skill"
                 size="sm"
                 variant="primary"
-                className="shrink-0"
                 leadingIcon={<Plus size={14} />}
                 onClick={() =>
                   setEditing({ name: "", scope: "global", description: "", body: "", isNew: true })
@@ -1764,7 +1758,7 @@ export function SkillsScreen() {
                   ref={importSummaryRef}
                   aria-expanded={importOpen}
                   aria-haspopup="menu"
-                  className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-capsule border border-border-strong px-3 py-1 text-detail text-text-secondary hover:text-text-primary"
+                  className="flex min-h-control-sm cursor-pointer list-none items-center gap-1.5 rounded-control border border-border-strong bg-surface-elevated px-control-x-sm text-detail font-medium tracking-ui text-text-primary shadow-card hover:bg-hover"
                   onClick={(event) => {
                     event.preventDefault();
                     setImportOpen((open) => !open);
@@ -1812,13 +1806,14 @@ export function SkillsScreen() {
                   </ControlButton>
                 </div>
               </details>
-              <ControlButton
+              <Button
                 data-testid="skill-manage-sources"
-                className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary"
+                size="sm"
+                variant="secondary"
                 onClick={() => setView("sources")}
               >
                 Manage Sources
-              </ControlButton>
+              </Button>
             </div>
           </div>
         </div>
@@ -1828,13 +1823,15 @@ export function SkillsScreen() {
             view !== "sources" && "hidden",
           )}
           leading={
-            <ControlButton
+            <Button
               data-testid="skill-sources-back"
-              className="flex items-center gap-1.5 text-label text-text-muted hover:text-text-primary"
+              size="sm"
+              variant="ghost"
+              leadingIcon={<ArrowLeft size={14} />}
               onClick={() => setView("catalog")}
             >
-              <ArrowLeft size={14} /> Back to Skills
-            </ControlButton>
+              Back to Skills
+            </Button>
           }
           trailing={<span className="text-detail text-text-muted">Manage Sources</span>}
         />
@@ -1857,14 +1854,15 @@ export function SkillsScreen() {
                 if (event.key === "Escape") setImportPath(null);
               }}
             />
-            <ControlButton
+            <Button
               data-testid="skill-import-confirm"
-              className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+              size="sm"
+              variant="secondary"
               disabled={!importPath.trim()}
               onClick={() => void doImport()}
             >
               Import
-            </ControlButton>
+            </Button>
           </div>
         ) : null}
         {gitUrl !== null ? (
@@ -1889,14 +1887,15 @@ export function SkillsScreen() {
                 }
               }}
             />
-            <ControlButton
+            <Button
               data-testid="skill-import-git-confirm"
-              className="rounded-capsule border border-border-strong px-2.5 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+              size="sm"
+              variant="secondary"
               disabled={!gitUrl.trim() || gitImporting}
               onClick={() => void doGitInspect()}
             >
               {gitImporting ? "Fetching…" : "Preview"}
-            </ControlButton>
+            </Button>
           </div>
         ) : null}
         {gitPreview ? (
@@ -1975,13 +1974,14 @@ export function SkillsScreen() {
                         {ref.plugin} · {ref.relPath}{" "}
                         <span className="text-text-muted">({ref.marketplace})</span>
                       </span>
-                      <ControlButton
+                      <Button
                         data-testid={`skill-plugin-ref-remove-${key}`}
-                        className="rounded-capsule border border-border-strong px-2 text-micro text-text-secondary hover:text-text-primary"
+                        size="sm"
+                        variant="ghost"
                         onClick={() => void removePluginRef(ref)}
                       >
                         Remove
-                      </ControlButton>
+                      </Button>
                     </div>
                   );
                 })}
@@ -2024,31 +2024,35 @@ export function SkillsScreen() {
                               : "A displaced or interrupted tree was retained safely. Restore is available only while the active skill is absent, or move this retained tree to OS Trash."}
                           </p>
                           {busy === "trash" ? null : (
-                            <div className="mt-1 flex gap-1">
-                              <ControlButton
+                            <div className="mt-1 flex gap-2">
+                              <Button
                                 ref={(element) => {
                                   if (element)
                                     recoveryActionRefs.current.set(recovery.token, element);
                                   else recoveryActionRefs.current.delete(recovery.token);
                                 }}
+                                size="sm"
+                                variant="destructiveOutline"
                                 disabled={busy !== undefined}
                                 onClick={() => void moveRecoveryToTrash(recovery)}
                                 data-testid={`skill-recovery-trash-${recovery.skillName}`}
                               >
                                 Move to Trash
-                              </ControlButton>
-                              <ControlButton
+                              </Button>
+                              <Button
                                 ref={(element) => {
                                   const key = `${recovery.token}:restore`;
                                   if (element) recoveryActionRefs.current.set(key, element);
                                   else recoveryActionRefs.current.delete(key);
                                 }}
+                                size="sm"
+                                variant="secondary"
                                 disabled={busy !== undefined}
                                 onClick={() => void restoreRecovery(recovery)}
                                 data-testid={`skill-recovery-restore-${recovery.skillName}`}
                               >
                                 {busy === "restore" ? "Restoring…" : "Restore"}
-                              </ControlButton>
+                              </Button>
                             </div>
                           )}
                         </div>
@@ -2111,9 +2115,10 @@ export function SkillsScreen() {
                               Update available
                             </span>
                           ) : null}
-                          <ControlButton
+                          <Button
                             data-testid={`skill-repo-add-${repo.id}`}
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                            size="sm"
+                            variant="ghost"
                             title="Preview this repository and add more of its skills to the collection"
                             disabled={
                               !repo.remoteUrl ||
@@ -2129,22 +2134,25 @@ export function SkillsScreen() {
                             }
                           >
                             Add skills
-                          </ControlButton>
-                          <ControlButton
+                          </Button>
+                          <Button
                             ref={(element) => {
                               if (element) repoUpdateRefs.current.set(repo.id, element);
                               else repoUpdateRefs.current.delete(repo.id);
                             }}
                             data-testid={`skill-repo-update-${repo.id}`}
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                            size="sm"
+                            variant="secondary"
                             disabled={repo.available === false || repoBusy[repo.id] !== undefined}
                             onClick={() => void updateRepo(repo.id)}
                           >
                             {repoBusy[repo.id] === "update" ? "Updating…" : "Update"}
-                          </ControlButton>
-                          <ControlButton
+                          </Button>
+                          <IconButton
                             data-testid={`skill-repo-forget-${repo.id}`}
-                            className="rounded-capsule p-1 text-text-muted hover:text-danger disabled:opacity-40"
+                            size="sm"
+                            variant="ghost"
+                            icon={<X />}
                             title={
                               repo.storageMode === "collection-v1"
                                 ? "Forget this repository and remove its managed skill collection"
@@ -2155,24 +2163,23 @@ export function SkillsScreen() {
                             }
                             disabled={repo.available === false || repoBusy[repo.id] !== undefined}
                             onClick={() => void forgetRepo(repo.id)}
-                          >
-                            <X size={12} />
-                          </ControlButton>
+                          />
                           {repo.available === false ? (
-                            <ControlButton
+                            <Button
                               ref={(element) => {
                                 if (element) repoRemoveRecordRefs.current.set(repo.id, element);
                                 else repoRemoveRecordRefs.current.delete(repo.id);
                               }}
                               data-testid={`skill-repo-remove-record-${repo.id}`}
-                              className="rounded-capsule border border-danger px-2 py-0.5 text-micro text-danger hover:bg-danger hover:text-surface disabled:opacity-40"
+                              size="sm"
+                              variant="destructiveOutline"
                               disabled={repoBusy[repo.id] !== undefined}
                               onClick={() => void removeUnavailableRecord(repo)}
                             >
                               {repoBusy[repo.id] === "remove-record"
                                 ? "Removing…"
                                 : "Remove record only"}
-                            </ControlButton>
+                            </Button>
                           ) : null}
                         </div>
                         {repo.available === false ? (
@@ -2260,29 +2267,32 @@ export function SkillsScreen() {
                                     })}
                                   </div>
                                   {staleConflicts[key] ? (
-                                    <ControlButton
+                                    <Button
                                       data-testid={`skill-conflict-refresh-${repo.id}-${conflict.name}`}
+                                      size="sm"
+                                      variant="ghost"
                                       disabled={conflictBusy}
                                       onClick={() => void refreshConflict(repo.id, conflict)}
                                     >
                                       {resolvingConflicts[key] === "refresh"
                                         ? "Refreshing…"
                                         : "Refresh review"}
-                                    </ControlButton>
+                                    </Button>
                                   ) : null}
-                                  <ControlButton
+                                  <Button
                                     ref={(element) => {
                                       if (element) conflictActionRefs.current.set(key, element);
                                       else conflictActionRefs.current.delete(key);
                                     }}
                                     data-conflict-primary="true"
                                     data-testid={`skill-conflict-apply-${repo.id}-${conflict.name}`}
-                                    className="sticky bottom-0 rounded-capsule border border-border-strong bg-surface px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                                    size="sm"
+                                    variant="secondary"
                                     disabled={conflictBusy}
                                     onClick={() => void resolveConflict(repo.id, conflict)}
                                   >
                                     {conflictBusy ? "Applying…" : "Apply choices"}
-                                  </ControlButton>
+                                  </Button>
                                 </div>
                               );
                             })}
@@ -2308,12 +2318,9 @@ export function SkillsScreen() {
               {sourceIssueCount} source {sourceIssueCount === 1 ? "item needs" : "items need"}{" "}
               attention
             </span>
-            <ControlButton
-              className="text-text-secondary underline-offset-2 hover:underline"
-              onClick={() => setView("sources")}
-            >
+            <Button size="sm" variant="ghost" onClick={() => setView("sources")}>
               Manage Sources
-            </ControlButton>
+            </Button>
           </div>
         ) : null}
         {view === "catalog" && checkedSkills.length > 0 ? (
@@ -2322,16 +2329,19 @@ export function SkillsScreen() {
             data-testid="skills-bulk-bar"
           >
             <span className="flex-1 text-text-secondary">{checkedSkills.length} selected</span>
-            <ControlButton
+            <Button
               data-testid="skills-bulk-clear"
-              className="rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary"
+              size="sm"
+              variant="ghost"
               onClick={() => setChecked(new Set())}
             >
               Clear
-            </ControlButton>
-            <ControlButton
+            </Button>
+            <Button
               data-testid="skills-bulk-delete"
-              className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-text-muted hover:text-danger"
+              size="sm"
+              variant="destructiveOutline"
+              leadingIcon={<Trash2 size={12} />}
               onClick={() => {
                 const n = checkedSkills.length;
                 if (confirm(`Delete ${n} skill${n === 1 ? "" : "s"}? This removes their files.`)) {
@@ -2339,8 +2349,8 @@ export function SkillsScreen() {
                 }
               }}
             >
-              <Trash2 size={12} /> Delete
-            </ControlButton>
+              Delete
+            </Button>
           </div>
         ) : null}
         <div
@@ -2457,8 +2467,10 @@ export function SkillsScreen() {
                     })()}
                   </div>
                   {!isReadOnlyScope(skill.scope) ? (
-                    <ControlButton
-                      className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
                       onClick={(event) => {
                         event.stopPropagation();
                         selectSkill(skill.filePath);
@@ -2466,7 +2478,7 @@ export function SkillsScreen() {
                       }}
                     >
                       Edit
-                    </ControlButton>
+                    </Button>
                   ) : null}
                 </div>
               );
@@ -2484,13 +2496,15 @@ export function SkillsScreen() {
         <PageToolbar
           className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-5xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
           leading={
-            <ControlButton
+            <Button
               data-testid="skill-detail-back"
-              className="flex items-center gap-1.5 text-label text-text-muted hover:text-text-primary"
+              size="sm"
+              variant="ghost"
+              leadingIcon={<ArrowLeft size={14} />}
               onClick={returnToCatalog}
             >
-              <ArrowLeft size={14} /> Back to Skills
-            </ControlButton>
+              Back to Skills
+            </Button>
           }
         />
         {selected ? (
@@ -2517,22 +2531,22 @@ export function SkillsScreen() {
                           if (e.key === "Escape") setRenameValue(null);
                         }}
                       />
-                      <ControlButton
+                      <IconButton
                         data-testid="skill-rename-confirm"
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-accent"
+                        size="sm"
+                        aria-label="Rename"
                         title="Rename"
+                        icon={<Check />}
                         onClick={() => void submitRename(selected)}
-                      >
-                        <Check size={16} />
-                      </ControlButton>
-                      <ControlButton
+                      />
+                      <IconButton
                         data-testid="skill-rename-cancel"
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-text-primary"
+                        size="sm"
+                        aria-label="Cancel"
                         title="Cancel"
+                        icon={<X />}
                         onClick={() => setRenameValue(null)}
-                      >
-                        <X size={16} />
-                      </ControlButton>
+                      />
                     </>
                   ) : (
                     <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
@@ -2575,7 +2589,7 @@ export function SkillsScreen() {
                 {!isReadOnlyScope(selected.scope) ? (
                   <Button
                     data-testid="skill-edit"
-                    size="lg"
+                    size="sm"
                     variant="primary"
                     leadingIcon={<Pencil size={12} />}
                     onClick={() => setEditing(editDraft(selected))}
@@ -2589,7 +2603,8 @@ export function SkillsScreen() {
                 >
                   <Button
                     data-testid="skill-disable"
-                    size="lg"
+                    size="sm"
+                    variant="secondary"
                     leadingIcon={selected.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                     onClick={() => void setSkillDisabled(selected.name, !selected.disabled)}
                   >
@@ -2598,8 +2613,8 @@ export function SkillsScreen() {
                   {!isReadOnlyScope(selected.scope) ? (
                     <Button
                       data-testid="skill-rename"
-                      size="lg"
-                      className="rounded-capsule text-detail text-text-secondary"
+                      size="sm"
+                      variant="ghost"
                       leadingIcon={<Tag size={12} />}
                       onClick={() => setRenameValue(selected.name)}
                     >
@@ -2614,7 +2629,7 @@ export function SkillsScreen() {
                   >
                     <Button
                       data-testid="skill-delete"
-                      size="lg"
+                      size="sm"
                       variant="destructiveOutline"
                       leadingIcon={<Trash2 size={13} />}
                       onClick={() => {
@@ -2643,14 +2658,15 @@ export function SkillsScreen() {
                   >
                     <div className="flex items-center justify-between pb-2">
                       <span className={cn(sectionHeaderClass, "text-text-muted")}>AI summary</span>
-                      <ControlButton
+                      <Button
                         data-testid="skill-summarize"
-                        className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                        size="sm"
+                        variant="ghost"
                         disabled={s?.busy === true}
                         onClick={() => void doSummarize(selected)}
                       >
                         {s?.busy ? "Summarizing…" : s?.text ? "Regenerate" : "Summarize"}
-                      </ControlButton>
+                      </Button>
                     </div>
                     {s?.text ? (
                       <div className="text-detail text-text-secondary">{s.text}</div>
@@ -2688,16 +2704,17 @@ export function SkillsScreen() {
                             {copy.filePath}
                           </span>
                           <ScopeChip scope={copy.scope} />
-                          <ControlButton
+                          <Button
                             data-testid={`skill-compare-${index}`}
-                            className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary"
+                            size="sm"
+                            variant="ghost"
                             onClick={(event) => {
                               compareTriggerRef.current = event.currentTarget;
                               setCompare({ left: selected, right: copy });
                             }}
                           >
                             Compare
-                          </ControlButton>
+                          </Button>
                         </div>
                       ))}
                     </div>
@@ -2753,14 +2770,15 @@ export function SkillsScreen() {
                         >
                           Update available
                         </span>
-                        <ControlButton
+                        <Button
                           data-testid="skill-detail-collection-update"
-                          className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                          size="sm"
+                          variant="secondary"
                           disabled={repoBusy[repo.id] !== undefined}
                           onClick={() => void updateRepo(repo.id)}
                         >
                           {repoBusy[repo.id] === "update" ? "Updating…" : "Update collection"}
-                        </ControlButton>
+                        </Button>
                       </div>
                     ) : null}
                   </div>

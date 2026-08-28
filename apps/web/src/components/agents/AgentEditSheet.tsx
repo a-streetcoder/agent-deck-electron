@@ -1,4 +1,5 @@
 import { Button } from "@/design-system/components/Button";
+import { IconButton } from "@/design-system/components/IconButton";
 import {
   ControlButton,
   ControlInput,
@@ -556,9 +557,7 @@ export function AgentEditSheet({
         <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3">
           <AgentAvatar agent={agent ?? { scope, name }} size={32} />
           <div className="min-w-0 flex-1">
-            <div
-              className="truncate text-label font-semibold text-text-primary"
-            >
+            <div className="truncate text-label font-semibold text-text-primary">
               {agent
                 ? `Edit ${agent.name}`
                 : isReplacement
@@ -575,13 +574,7 @@ export function AgentEditSheet({
               </div>
             ) : null}
           </div>
-          <ControlButton
-            className="rounded-capsule p-1.5 text-text-muted hover:bg-hover hover:text-text-primary"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            <X size={15} />
-          </ControlButton>
+          <IconButton aria-label="Close" size="md" icon={<X />} onClick={onClose} />
         </div>
 
         {/* Tab strip */}
@@ -1217,13 +1210,12 @@ export function AgentEditSheet({
         </div>
 
         <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-          <Button size="md" className="rounded-capsule" onClick={onClose}>
+          <Button size="md" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button
             size="md"
             variant="primary"
-            className="rounded-capsule"
             data-testid="editor-save"
             disabled={
               saving || extensionCatalogLoading || skillCatalogLoading || (!agent && !name.trim())

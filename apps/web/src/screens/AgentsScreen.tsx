@@ -2,12 +2,9 @@ import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppScrollView } from "@/design-system/components/AppScrollView";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
+import { IconButton } from "@/design-system/components/IconButton";
 
-import {
-  ControlButton,
-  ControlInput,
-  ControlSelect,
-} from "@/design-system/components/NativeControls";
+import { ControlInput, ControlSelect } from "@/design-system/components/NativeControls";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
@@ -134,16 +131,18 @@ function AgentRow({
           <div className="line-clamp-2 text-caption text-text-secondary">{agent.description}</div>
         ) : null}
       </div>
-      <ControlButton
+      <Button
         data-testid={`agent-row-edit-${agent.name}`}
-        className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary opacity-0 transition-opacity hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
+        size="sm"
+        variant="ghost"
+        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
         onClick={(event) => {
           event.stopPropagation();
           onEdit();
         }}
       >
         Edit
-      </ControlButton>
+      </Button>
     </div>
   );
 }
@@ -295,25 +294,27 @@ export function AgentDetail({
               }}
             />
             <div className="flex gap-1">
-              <ControlButton
+              <Button
                 data-testid="agent-avatar-import"
-                className="flex items-center gap-1 rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-secondary hover:text-text-primary disabled:opacity-40"
+                size="sm"
+                variant="ghost"
+                leadingIcon={<ImagePlus size={11} aria-hidden="true" />}
                 disabled={avatarBusy}
                 onClick={() => avatarInput.current?.click()}
               >
-                <ImagePlus size={11} aria-hidden="true" />
                 {agent.avatarUrl ? "Replace" : "Import"}
-              </ControlButton>
+              </Button>
               {agent.avatarUrl ? (
-                <ControlButton
+                <Button
                   data-testid="agent-avatar-remove"
-                  className="rounded-capsule border border-border-strong px-2 py-0.5 text-micro text-text-muted hover:text-danger disabled:opacity-40"
+                  size="sm"
+                  variant="destructiveOutline"
                   disabled={avatarBusy}
                   aria-label={`Remove avatar for ${agent.name}`}
                   onClick={() => void removeAvatar()}
                 >
                   Remove
-                </ControlButton>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -332,22 +333,22 @@ export function AgentDetail({
                       if (e.key === "Escape") setRenameValue(null);
                     }}
                   />
-                  <ControlButton
+                  <IconButton
                     data-testid="agent-rename-confirm"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-accent"
+                    size="sm"
+                    aria-label="Rename"
                     title="Rename"
+                    icon={<Check />}
                     onClick={() => void submitRename()}
-                  >
-                    <Check size={16} />
-                  </ControlButton>
-                  <ControlButton
+                  />
+                  <IconButton
                     data-testid="agent-rename-cancel"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-text-muted hover:text-text-primary"
+                    size="sm"
+                    aria-label="Cancel"
                     title="Cancel"
+                    icon={<X />}
                     onClick={() => setRenameValue(null)}
-                  >
-                    <X size={16} />
-                  </ControlButton>
+                  />
                 </>
               ) : (
                 <h2 className="truncate text-title font-semibold tracking-title text-text-primary">
@@ -372,7 +373,7 @@ export function AgentDetail({
           >
             <Button
               data-testid="agent-edit"
-              size="lg"
+              size="sm"
               variant="primary"
               leadingIcon={<Pencil size={12} />}
               onClick={onEdit}
@@ -383,7 +384,8 @@ export function AgentDetail({
               {canCreateReplacement ? (
                 <Button
                   data-testid="agent-create-replacement"
-                  size="lg"
+                  size="sm"
+                  variant="secondary"
                   leadingIcon={<RefreshCw size={12} />}
                   title="Create an editable global custom agent from this builtin"
                   onClick={onCreateReplacement}
@@ -393,8 +395,8 @@ export function AgentDetail({
               ) : null}
               <Button
                 data-testid="agent-disable"
-                size="lg"
-                className="rounded-capsule text-detail text-text-secondary"
+                size="sm"
+                variant="destructiveOutline"
                 leadingIcon={agent.disabled ? <Power size={12} /> : <PowerOff size={12} />}
                 onClick={() => void setAgentDisabled(agent.scope, agent.name, !agent.disabled)}
               >
@@ -403,7 +405,8 @@ export function AgentDetail({
               {agent.scope !== "builtin" ? (
                 <Button
                   data-testid="agent-rename"
-                  size="lg"
+                  size="sm"
+                  variant="ghost"
                   leadingIcon={<Tag size={12} />}
                   onClick={() => setRenameValue(agent.name)}
                 >
@@ -418,8 +421,8 @@ export function AgentDetail({
               >
                 <Button
                   data-testid="agent-delete"
-                  size="lg"
-                  variant="destructiveOutline"
+                  size="sm"
+                  variant="destructive"
                   leadingIcon={<Trash2 size={13} />}
                   onClick={() => {
                     if (confirm(`Delete agent "${agent.name}"? This removes its file.`)) {
@@ -437,7 +440,7 @@ export function AgentDetail({
               >
                 <Button
                   data-testid="agent-reset"
-                  size="lg"
+                  size="sm"
                   variant="destructiveOutline"
                   title="Clear all overrides and restore the bundled defaults"
                   onClick={() => {
@@ -473,20 +476,17 @@ export function AgentDetail({
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {customAgent ? (
-                  <ControlButton
+                  <Button
                     data-testid={`assigned-agent-${agent.name}`}
+                    size="sm"
+                    variant="pill"
+                    isActive={isAssigned}
                     aria-pressed={isAssigned}
-                    className={cn(
-                      "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
-                      isAssigned
-                        ? "border-accent text-accent"
-                        : "border-border-strong text-text-muted hover:text-text-primary",
-                    )}
+                    leadingIcon={<Check size={12} aria-hidden="true" />}
                     onClick={toggleAssignment}
                   >
-                    <Check size={12} aria-hidden="true" />
                     {isAssigned ? "assigned to project" : "assign to project"}
-                  </ControlButton>
+                  </Button>
                 ) : (
                   <span
                     className="text-caption text-text-muted"
@@ -495,14 +495,12 @@ export function AgentDetail({
                     available to every project
                   </span>
                 )}
-                <ControlButton
+                <Button
                   data-testid={`default-agent-${agent.name}`}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail",
-                    isDefault
-                      ? "border-accent text-accent"
-                      : "border-border-strong text-text-muted hover:text-text-primary",
-                  )}
+                  size="sm"
+                  variant="pill"
+                  isActive={isDefault}
+                  leadingIcon={<Star size={12} fill={isDefault ? "currentColor" : "none"} />}
                   disabled={!isAssigned || agent.disabled}
                   title={
                     !isAssigned
@@ -515,9 +513,8 @@ export function AgentDetail({
                     })
                   }
                 >
-                  <Star size={12} fill={isDefault ? "currentColor" : "none"} />
                   {isDefault ? "active-session default" : "make session default"}
-                </ControlButton>
+                </Button>
               </div>
             </section>
           ) : null}
@@ -957,13 +954,15 @@ export function AgentsScreen() {
         <PageToolbar
           className="[&>div]:mx-auto [&>div]:w-full [&>div]:max-w-5xl [&>div]:px-4 sm:[&>div]:px-6 lg:[&>div]:px-8"
           leading={
-            <ControlButton
+            <Button
               data-testid="agent-detail-back"
-              className="flex items-center gap-1.5 text-label text-text-muted hover:text-text-primary"
+              size="sm"
+              variant="ghost"
+              leadingIcon={<ArrowLeft size={14} />}
               onClick={returnToCatalog}
             >
-              <ArrowLeft size={14} /> Back to Agents
-            </ControlButton>
+              Back to Agents
+            </Button>
           }
         />
         {detailAgent ? (

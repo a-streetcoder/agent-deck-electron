@@ -184,7 +184,7 @@
   --size-icon-lg: 20px;
   --size-hit-target: 32px;
   --size-titlebar: 40px;
-  --size-section-hero: 8rem;
+  --size-section-hero: 9rem;
   --size-page-column: 48rem;
   --size-page-column-narrow: 36rem;
   --size-master-pane: 22rem;
@@ -202,6 +202,7 @@
   --radius-icon: 5px;
   --radius-sm: 6px;
   --radius-control: var(--radius-sm);
+  --radius-segmented: var(--radius-sm);
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 14px;
@@ -235,6 +236,9 @@
   --color-accent: var(--color-brand-accent);
   --color-accent-foreground: var(--color-text-on-accent);
   --color-on-primary: var(--color-text-on-accent);
+  --color-switch-on: var(--color-brand-action);
+  --color-switch-on-hover: var(--color-brand-action-hover);
+  --color-switch-thumb: var(--color-text-on-accent);
 }
 
 [data-theme="light"] {

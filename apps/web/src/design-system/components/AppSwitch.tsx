@@ -67,16 +67,13 @@ export const AppSwitch = forwardRef<HTMLButtonElement, AppSwitchProps>(function 
           "transition-colors duration-fast ease-standard",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 focus-visible:ring-offset-surface",
           checked
-            ? "justify-end border border-transparent bg-accent"
+            ? "justify-end border border-transparent bg-switch-on hover:bg-switch-on-hover"
             : "justify-start border border-border-strong bg-surface-subtle",
         )}
       >
         <span
           aria-hidden
-          className={cn(
-            "size-switch-thumb rounded-capsule shadow-capsule",
-            checked ? "bg-text-on-accent" : "bg-surface-elevated",
-          )}
+          className="size-switch-thumb rounded-capsule bg-switch-thumb shadow-capsule"
         />
       </button>
       {children}

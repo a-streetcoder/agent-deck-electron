@@ -274,7 +274,13 @@ export function InstructionsScreen() {
     <PageShell
       width="split"
       testId="instructions-screen"
-      hero={<SectionHero imageSrc="/screen-art/screen-art-instructions.jpg" title="Instructions" subtitle="Manage the project and system guidance agents receive." />}
+      hero={
+        <SectionHero
+          imageSrc="/screen-art/screen-art-instructions.jpg"
+          title="Instructions"
+          subtitle="Manage the project and system guidance agents receive."
+        />
+      }
       toolbar={
         <PageToolbar
           leading={
@@ -305,7 +311,7 @@ export function InstructionsScreen() {
               {fileKind !== "context" && fileExists && !needsProject ? (
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="destructiveOutline"
                   data-testid="instructions-remove-override"
                   title={
                     fileKind === "system"
@@ -319,7 +325,7 @@ export function InstructionsScreen() {
               ) : null}
               <Button
                 size="sm"
-                variant="secondary"
+                variant="ghost"
                 data-testid="instructions-preview-toggle"
                 aria-pressed={preview !== null}
                 title="Preview the assembled system prompt pi builds from these files"
@@ -329,6 +335,7 @@ export function InstructionsScreen() {
               </Button>
               <Button
                 size="sm"
+                variant="primary"
                 data-testid="instructions-save"
                 disabled={!dirty || saving || !loaded || needsProject}
                 onClick={() => void save()}
@@ -341,126 +348,125 @@ export function InstructionsScreen() {
       }
     >
       <div className="flex min-h-0 w-full flex-1 flex-col px-page-x py-page-y">
-          {needsProject ? (
-            <AppEmptyState
-              layout="fill"
-              data-testid="instructions-no-project"
-              heading={`Select a project in the sidebar to edit its ${fallbackName}, or switch to Global to edit the instructions that apply to every session.`}
-            />
-          ) : (
-            <>
-              <div className="flex items-center gap-2 pb-3">
-                <p className="min-w-0 truncate font-mono text-detail text-text-muted" title={filePath}>
-                  {filePath}
-                </p>
-                {statusChip ? (
-                  <AppLabelTag data-testid="instructions-status" variant="neutral">
-                    {statusChip}
-                  </AppLabelTag>
-                ) : null}
-              </div>
-              {fileKind === "system" ? (
-                <p
-                  className="pb-3 text-caption text-text-muted"
-                  data-testid="instructions-system-note"
-                >
-                  {fileExists
-                    ? "This file REPLACES pi's built-in base prompt for this scope."
-                    : scope === "project"
-                      ? "Creating SYSTEM.md overrides pi's base prompt for this project (it wins over the global SYSTEM.md)."
-                      : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
-                </p>
+        {needsProject ? (
+          <AppEmptyState
+            layout="fill"
+            data-testid="instructions-no-project"
+            heading={`Select a project in the sidebar to edit its ${fallbackName}, or switch to Global to edit the instructions that apply to every session.`}
+          />
+        ) : (
+          <>
+            <div className="flex items-center gap-2 pb-3">
+              <p
+                className="min-w-0 truncate font-mono text-detail text-text-muted"
+                title={filePath}
+              >
+                {filePath}
+              </p>
+              {statusChip ? (
+                <AppLabelTag data-testid="instructions-status" variant="neutral">
+                  {statusChip}
+                </AppLabelTag>
               ) : null}
-              {fileKind === "append" ? (
-                <p
-                  className="pb-3 text-caption text-text-muted"
-                  data-testid="instructions-append-note"
-                >
-                  {scope === "project"
-                    ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
-                    : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
-                </p>
-              ) : null}
-              {preview ? (
-                <div
-                  data-testid="instructions-preview"
-                  className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border-subtle px-2.5 py-1.5"
-                >
-                  {preview.map((section, index) => (
-                    <div key={`${section.kind}-${index}`}>
-                      <div className={cn(sectionHeaderClass, "text-text-muted")}>
-                        {section.title}
-                        {section.contentTruncated ? " (truncated)" : ""}
+            </div>
+            {fileKind === "system" ? (
+              <p
+                className="pb-3 text-caption text-text-muted"
+                data-testid="instructions-system-note"
+              >
+                {fileExists
+                  ? "This file REPLACES pi's built-in base prompt for this scope."
+                  : scope === "project"
+                    ? "Creating SYSTEM.md overrides pi's base prompt for this project (it wins over the global SYSTEM.md)."
+                    : "Creating SYSTEM.md overrides pi's built-in base prompt for every session without a project override."}
+              </p>
+            ) : null}
+            {fileKind === "append" ? (
+              <p
+                className="pb-3 text-caption text-text-muted"
+                data-testid="instructions-append-note"
+              >
+                {scope === "project"
+                  ? "APPEND_SYSTEM.md is tacked onto the end of the base prompt — this project's file wins over the global one."
+                  : "APPEND_SYSTEM.md is tacked onto the end of the base prompt for sessions without a project append file."}
+              </p>
+            ) : null}
+            {preview ? (
+              <div
+                data-testid="instructions-preview"
+                className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border-subtle px-2.5 py-1.5"
+              >
+                {preview.map((section, index) => (
+                  <div key={`${section.kind}-${index}`}>
+                    <div className={cn(sectionHeaderClass, "text-text-muted")}>
+                      {section.title}
+                      {section.contentTruncated ? " (truncated)" : ""}
+                    </div>
+                    {section.path ? (
+                      <div
+                        className="truncate font-mono text-micro text-text-muted"
+                        title={section.path}
+                      >
+                        {section.path}
                       </div>
-                      {section.path ? (
-                        <div
-                          className="truncate font-mono text-micro text-text-muted"
-                          title={section.path}
-                        >
-                          {section.path}
-                        </div>
-                      ) : null}
-                      <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-text-secondary">
-                        {section.content ?? ""}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {contextShadowed ? (
-                <p
-                  className="pb-3 text-detail text-text-muted"
-                  data-testid="instructions-context-shadowed"
-                >
-                  Shadowed in this folder (AGENTS.md wins): {contextShadowed}
+                    ) : null}
+                    <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-text-secondary">
+                      {section.content ?? ""}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {contextShadowed ? (
+              <p
+                className="pb-3 text-detail text-text-muted"
+                data-testid="instructions-context-shadowed"
+              >
+                Shadowed in this folder (AGENTS.md wins): {contextShadowed}
+              </p>
+            ) : null}
+            {showAncestors && ancestors.length > 0 ? (
+              <div
+                data-testid="instructions-ancestors"
+                className="mb-3 rounded-lg border border-border-subtle px-2.5 py-1.5 text-detail text-text-secondary"
+              >
+                <div className={cn(sectionHeaderClass, "text-text-muted")}>Inherited context</div>
+                <p className="pb-1 text-caption text-text-muted">
+                  pi also loads these ancestor files, outermost first, before the project's own
+                  context.
+                  {ancestorsTruncated
+                    ? " Outermost ancestors beyond the depth limit are omitted."
+                    : ""}
                 </p>
-              ) : null}
-              {showAncestors && ancestors.length > 0 ? (
-                <div
-                  data-testid="instructions-ancestors"
-                  className="mb-3 rounded-lg border border-border-subtle px-2.5 py-1.5 text-detail text-text-secondary"
-                >
-                  <div className={cn(sectionHeaderClass, "text-text-muted")}>Inherited context</div>
-                  <p className="pb-1 text-caption text-text-muted">
-                    pi also loads these ancestor files, outermost first, before the project's own
-                    context.
-                    {ancestorsTruncated
-                      ? " Outermost ancestors beyond the depth limit are omitted."
-                      : ""}
-                  </p>
-                  {ancestors.map((item) => (
-                    <div
-                      key={item.path}
-                      className="truncate font-mono text-micro"
-                      title={item.path}
-                    >
-                      {item.path}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {loaded ? (
-                <ControlTextArea
-                  data-testid="instructions-editor"
-                  className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-code text-text-primary outline-none focus:border-accent"
-                  placeholder={
-                    fileKind === "system"
-                      ? "The replacement base prompt. Leave the override removed to keep pi's default."
-                      : fileKind === "append"
-                        ? "Extra instructions appended after the base prompt — house rules, tone, policies."
-                        : scope === "global"
-                          ? "Global context pi reads for every session. Markdown."
-                          : "Project context pi reads on every turn. Markdown."
-                  }
-                  spellCheck={false}
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                />
-              ) : (
-                <AppEmptyState data-testid="instructions-loading" heading="Loading…" />
-              )}
-            </>
-          )}
+                {ancestors.map((item) => (
+                  <div key={item.path} className="truncate font-mono text-micro" title={item.path}>
+                    {item.path}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {loaded ? (
+              <ControlTextArea
+                data-testid="instructions-editor"
+                className="min-h-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface p-4 font-mono text-code text-text-primary outline-none focus:border-accent"
+                placeholder={
+                  fileKind === "system"
+                    ? "The replacement base prompt. Leave the override removed to keep pi's default."
+                    : fileKind === "append"
+                      ? "Extra instructions appended after the base prompt — house rules, tone, policies."
+                      : scope === "global"
+                        ? "Global context pi reads for every session. Markdown."
+                        : "Project context pi reads on every turn. Markdown."
+                }
+                spellCheck={false}
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+              />
+            ) : (
+              <AppEmptyState data-testid="instructions-loading" heading="Loading…" />
+            )}
+          </>
+        )}
       </div>
     </PageShell>
   );

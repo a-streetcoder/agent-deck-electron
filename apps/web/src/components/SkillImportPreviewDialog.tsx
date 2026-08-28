@@ -1,5 +1,6 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
 import { Button } from "@/design-system/components/Button";
+import { IconButton } from "@/design-system/components/IconButton";
+import { ControlInput } from "@/design-system/components/NativeControls";
 import { FolderInput, GitBranch, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -145,15 +146,13 @@ export function SkillImportPreviewDialog({
               {sourceLabel}
             </p>
           </div>
-          <ControlButton
-            type="button"
+          <IconButton
             aria-label="Cancel import"
+            size="md"
             disabled={importing}
             onClick={cancelSafely}
-            className="rounded-md p-1.5 hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40"
-          >
-            <X size={15} aria-hidden />
-          </ControlButton>
+            icon={<X />}
+          />
         </header>
 
         <div className="flex items-center gap-2 border-b border-border px-4 py-2">
@@ -165,14 +164,15 @@ export function SkillImportPreviewDialog({
             onChange={(event) => setQuery(event.target.value)}
             aria-label="Search skills"
           />
-          <ControlButton
+          <Button
             data-testid="skill-import-preview-toggle-all"
-            className="rounded-capsule border border-border-strong px-2.5 py-1 text-detail text-text-secondary hover:text-text-primary disabled:opacity-40"
+            size="sm"
+            variant="ghost"
             disabled={visible.length === 0 || importing}
             onClick={toggleVisible}
           >
             {bulkLabel}
-          </ControlButton>
+          </Button>
         </div>
 
         <p
@@ -250,17 +250,16 @@ export function SkillImportPreviewDialog({
             <Button
               ref={cancelRef}
               data-testid="skill-import-preview-cancel"
-              size="sm"
-              className="rounded-capsule"
+              size="md"
+              variant="secondary"
               disabled={importing}
               onClick={cancelSafely}
             >
               Cancel
             </Button>
             <Button
-              size="sm"
+              size="md"
               variant="primary"
-              className="rounded-capsule"
               data-testid="skill-import-preview-import"
               disabled={selected.size === 0 || importing}
               onClick={() => void doImport()}
