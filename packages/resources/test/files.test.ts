@@ -195,5 +195,7 @@ describe("listProjectFiles", () => {
 
     await pending;
     expect(yielded).toBe(true);
-  });
+    // The assertion is about yielding, not speed: on a loaded Windows CI runner creating 200
+    // directories alone has exceeded vitest's default 5 s budget.
+  }, 30_000);
 });
