@@ -204,7 +204,7 @@ export function AgentEditor({ agent, onClose }: AgentEditorProps) {
         </div>
       ) : null}
       <div className="mt-3 flex justify-end gap-2">
-                <Button
+        <Button
           size="md"
           variant="primary"
           data-testid="editor-save"

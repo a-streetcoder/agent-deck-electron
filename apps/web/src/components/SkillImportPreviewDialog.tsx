@@ -4,6 +4,7 @@ import { ControlInput } from "@/design-system/components/NativeControls";
 import { FolderInput, GitBranch, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { cn } from "@/lib/cn";
 
 /** One discoverable skill from `/resources/skills/inspect-git` (SKL-03). */
 export interface SkillPreviewItem {
@@ -18,6 +19,12 @@ export interface SkillPreviewItem {
   description?: string;
   /** Files beyond SKILL.md itself — shown as a badge when > 0. */
   extraFileCount: number;
+  /** Local-folder scans (engine >=0.1.10): the entry is a symlink and this is where it
+   *  resolves — `~/.claude/skills/<name>` is such a link after fan-out. Shown as a badge. */
+  linkTarget?: string;
+  /** A skill with this name is already in the catalog: rendered greyed out and unselectable,
+   *  so a scan of a folder full of imported skills doesn't collide on every one of them. */
+  alreadyImported?: boolean;
 }
 
 /**
@@ -50,9 +57,23 @@ export function SkillImportPreviewDialog({
   // Native pre-selects every importable skill; deselection is the exception. Multi-source
   // scans pass a name-deduped defaultSelected instead (review, Codex).
   const keyOf = (s: SkillPreviewItem): string => s.id ?? s.name;
-  const [selected, setSelected] = useState<ReadonlySet<string>>(
-    () => new Set(defaultSelected ?? skills.map(keyOf)),
-  );
+  // Already-imported skills are never selectable: importing one can only collide (the engine
+  // refuses to clobber), and one collision fails the whole folder's import.
+  const selectable = (s: SkillPreviewItem): boolean => !s.alreadyImported;
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => {
+    const blocked = new Set(skills.filter((s) => !selectable(s)).map(keyOf));
+    return new Set((defaultSelected ?? skills.map(keyOf)).filter((k) => !blocked.has(k)));
+  });
+  // A preview whose items change under an open dialog (a rescan, a partial import) must not keep
+  // stale keys selected — they'd count in "N selected" while matching nothing on screen.
+  useEffect(() => {
+    const live = new Set(skills.filter(selectable).map(keyOf));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((k) => live.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [skills]);
+  const alreadyImportedCount = skills.filter((s) => !selectable(s)).length;
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,11 +106,13 @@ export function SkillImportPreviewDialog({
     });
   }, [skills, query]);
 
-  const allVisibleSelected = visible.length > 0 && visible.every((s) => selected.has(keyOf(s)));
+  const visibleSelectable = visible.filter(selectable);
+  const allVisibleSelected =
+    visibleSelectable.length > 0 && visibleSelectable.every((s) => selected.has(keyOf(s)));
   const toggleVisible = (): void => {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const s of visible) {
+      for (const s of visibleSelectable) {
         if (allVisibleSelected) next.delete(keyOf(s));
         else next.add(keyOf(s));
       }
@@ -168,7 +191,7 @@ export function SkillImportPreviewDialog({
             data-testid="skill-import-preview-toggle-all"
             size="sm"
             variant="ghost"
-            disabled={visible.length === 0 || importing}
+            disabled={visibleSelectable.length === 0 || importing}
             onClick={toggleVisible}
           >
             {bulkLabel}
@@ -181,6 +204,7 @@ export function SkillImportPreviewDialog({
         >
           Showing {visible.length} of {skills.length} skill{skills.length === 1 ? "" : "s"} •{" "}
           {selected.size} selected
+          {alreadyImportedCount > 0 ? ` • ${alreadyImportedCount} already imported` : ""}
         </p>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
@@ -192,21 +216,35 @@ export function SkillImportPreviewDialog({
             <ul className="flex flex-col">
               {visible.map((skill) => (
                 <li key={keyOf(skill)} className="border-b border-border last:border-b-0">
-                  <label className="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-2.5 hover:bg-hover">
+                  <label
+                    className={cn(
+                      "flex items-start gap-2.5 rounded-lg px-2 py-2.5",
+                      skill.alreadyImported
+                        ? "cursor-default opacity-50"
+                        : "cursor-pointer hover:bg-hover",
+                    )}
+                    data-testid={
+                      skill.alreadyImported
+                        ? `skill-import-preview-imported-${keyOf(skill)}`
+                        : undefined
+                    }
+                  >
                     <ControlInput
                       type="checkbox"
                       data-testid={`skill-import-preview-check-${keyOf(skill)}`}
                       className="mt-0.5 accent-accent"
                       checked={selected.has(keyOf(skill))}
-                      disabled={importing}
-                      onChange={() =>
+                      disabled={importing || skill.alreadyImported === true}
+                      aria-disabled={skill.alreadyImported === true}
+                      onChange={() => {
+                        if (skill.alreadyImported) return; // belt and braces with `disabled`
                         setSelected((prev) => {
                           const next = new Set(prev);
                           if (next.has(keyOf(skill))) next.delete(keyOf(skill));
                           else next.add(keyOf(skill));
                           return next;
-                        })
-                      }
+                        });
+                      }}
                     />
                     <span className="min-w-0">
                       <span className="flex items-baseline gap-2">
@@ -216,6 +254,19 @@ export function SkillImportPreviewDialog({
                         {skill.extraFileCount > 0 ? (
                           <span className="rounded-capsule border border-border px-1.5 text-micro text-text-muted">
                             {skill.extraFileCount} file{skill.extraFileCount === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        {skill.alreadyImported ? (
+                          <span className="rounded-capsule border border-border px-1.5 text-micro text-text-muted">
+                            Already imported
+                          </span>
+                        ) : null}
+                        {skill.linkTarget ? (
+                          <span
+                            className="rounded-capsule border border-border px-1.5 text-micro text-text-muted"
+                            title={`Symlink → ${skill.linkTarget}`}
+                          >
+                            linked
                           </span>
                         ) : null}
                       </span>

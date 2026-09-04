@@ -45,8 +45,10 @@ describe("memory recall transcript card", () => {
     expect(document.activeElement).toBe(button);
     fireEvent.click(button);
 
+    // Since 5ad4152 (no global project picker) navigation does NOT select a global project;
+    // the Memory screen decides what to show for the request's projectId itself.
     expect(useAppStore.getState()).toMatchObject({
-      currentProjectId: "project-a",
+      currentProjectId: null,
       view: "memory",
       memoryNavigationRequest: {
         projectId: "project-a",

@@ -58,6 +58,10 @@ export interface GitSkillPreview {
   name: string;
   fileCount: number;
   skillMd?: string;
+  /** Local-folder previews only (engine >=0.1.10): the canonical directory a top-level
+   * symlinked skill was read from — `~/.claude/skills/<name>` is such a link after fan-out.
+   * Absent for plain directories, repository previews, and older addons. */
+  linkTarget?: string;
 }
 
 export interface GitInspectResult {

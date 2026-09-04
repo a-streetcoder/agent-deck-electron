@@ -274,7 +274,8 @@ test("the desktop shell boots the server and mounts the UI", async () => {
     });
     expect(chrome).toEqual({
       titlebarHeight: "40px",
-      workspaceTopLeftRadius: "14px",
+      // 76e029c: section heroes sit flush against the sidebar — no rounded card inset.
+      workspaceTopLeftRadius: "0px",
       workspaceTopRightRadius: "0px",
       workspaceInset: "0px",
       cornerBackgroundMatchesSidebar: true,
@@ -619,6 +620,8 @@ test("moves a validated skill recovery through Electron OS Trash", async () => {
   const window = await app.firstWindow();
   await window.reload();
   await window.getByTestId("nav-skills").click();
+  // Since 954708e recoveries live under Skills → Manage Sources, not on the catalog view.
+  await window.getByTestId("skill-manage-sources").click();
   await expect(window.getByTestId("skill-recovery-trash-test")).toBeVisible();
   await window.getByTestId("skill-recovery-trash-trash-test").click();
   await expect.poll(() => existsSync(recovery)).toBe(false);
@@ -645,6 +648,7 @@ test("treats OS Trash as successful when backend acknowledgement transport fails
     const window = await app.firstWindow();
     await window.reload();
     await window.getByTestId("nav-skills").click();
+    await window.getByTestId("skill-manage-sources").click();
     await expect(window.getByTestId("skill-recovery-ack-fails")).toBeVisible();
     await window.getByTestId("skill-recovery-trash-ack-fails").click();
     await expect.poll(() => existsSync(recovery)).toBe(false);
@@ -670,7 +674,10 @@ test("adding a project via the native folder picker registers it", async () => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [dir] });
   }, projectDir);
 
+  // 733de84: "Add" opens the Add Projects dialog; the OS picker is its "Choose Project Folder…" action.
   await window.getByTestId("projects-add").click();
+  await window.getByTestId("choose-project-folder").click();
+  await window.keyboard.press("Escape"); // close the dialog so the list behind it is interactable
 
   await expect(window.locator(`[data-project-name="${projectName}"]`)).toBeVisible({
     timeout: 15_000,
@@ -796,6 +803,21 @@ test("adding a project via the native folder picker registers it", async () => {
       ),
     )
     .toContain("loop-");
+
+  // Don't leak the first (reveal) run into later tests: a running Loop owns a parent session
+  // whose announcement lands asynchronously, which made the "New Chat" session count below
+  // read +2 on a slow CI runner. Stop it and wait until it has actually settled.
+  await window.evaluate(async (id) => {
+    await fetch(`/loops/runs/${id}/stop`, { method: "POST" });
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const current = (await (await fetch(`/loops/runs/${id}`)).json()) as {
+        run: { status: string };
+      };
+      if (!["running", "stopping"].includes(current.run.status)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("reveal run did not stop");
+  }, runId);
 });
 
 test("the native File menu exposes New Chat and it creates a session", async () => {
@@ -823,7 +845,15 @@ test("the native File menu exposes New Chat and it creates a session", async () 
       const { sessions } = (await res.json()) as { sessions: unknown[] };
       return sessions.length;
     });
-  const before = await sessionCount();
+  // Earlier tests start Loop runs whose parent sessions announce asynchronously; take the
+  // baseline only once the list has held still, so a late arrival can't masquerade as ours.
+  let before = await sessionCount();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const again = await sessionCount();
+    if (again === before) break;
+    before = again;
+  }
 
   // Trigger the menu item → IPC → renderer newChat() → a new session.
   await app.evaluate(({ Menu }) => {

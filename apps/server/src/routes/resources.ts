@@ -128,8 +128,14 @@ const skillEditBody = z.object({
  * dialect; folder-name fallback on unparseable/absent frontmatter. Shared by the git and
  * local-folder inspect routes so both feed one preview dialog. */
 function toSkillPreviews(
-  skills: { name: string; fileCount: number; skillMd?: string }[],
-): { name: string; displayName: string; description?: string; extraFileCount: number }[] {
+  skills: { name: string; fileCount: number; skillMd?: string; linkTarget?: string }[],
+): {
+  name: string;
+  displayName: string;
+  description?: string;
+  extraFileCount: number;
+  linkTarget?: string;
+}[] {
   return skills.map((s) => {
     let displayName = s.name;
     let description: string | undefined;
@@ -150,6 +156,9 @@ function toSkillPreviews(
       description,
       // extra material beyond SKILL.md itself (native shows a reference-file badge)
       extraFileCount: Math.max(0, s.fileCount - 1),
+      // a followed top-level symlink (engine >=0.1.10): the UI shows it as linked and, when
+      // the target is a catalog entry, as already imported rather than silently dropping it
+      ...(s.linkTarget ? { linkTarget: s.linkTarget } : {}),
     };
   });
 }

@@ -44,7 +44,10 @@ export function PageShell({
       {split ? (
         <div className={cn("flex min-h-0 flex-1 flex-col", canvasClassName)}>{children}</div>
       ) : (
-        <AppScrollView className="flex-1" contentClassName={cn(canvasWidthClass[width], canvasClassName)}>
+        <AppScrollView
+          className="flex-1"
+          contentClassName={cn(canvasWidthClass[width], canvasClassName)}
+        >
           {children}
         </AppScrollView>
       )}

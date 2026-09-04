@@ -1142,6 +1142,10 @@ export function MemoryScreen() {
               }
             />
             <AppScrollView className="flex-1" contentClassName="px-page-x py-page-y">
+              <p className="pb-2 text-caption text-text-muted">
+                Durable project knowledge agents recall across sessions. Active and pinned memories
+                are injected; stale and archived are kept but not injected.
+              </p>
               <AgentMemoryPreference />
               <SemanticMemoryPreference
                 onChanged={semanticPreferenceChanged}

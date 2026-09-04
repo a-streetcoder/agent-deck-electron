@@ -150,11 +150,7 @@ export function KeybindingsEditor() {
       >
         <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           <div>
-            <h2
-              className="text-label font-semibold text-text-primary"
-            >
-              Keybindings
-            </h2>
+            <h2 className="text-label font-semibold text-text-primary">Keybindings</h2>
             <p className="text-caption text-text-muted">
               Click a shortcut, then press the new keys.
             </p>
