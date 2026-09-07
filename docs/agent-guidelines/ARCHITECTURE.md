@@ -17,3 +17,18 @@ Skill storage is a cross-repository contract. Syncr (the sibling checkout is nor
 Treat stable NAPI method names, `RESOURCE_*` error prefixes, and filesystem precedence/dedup behavior as compatibility APIs, not local implementation details. Coordinate intentional changes with Syncr and preserve the `EngineSkillStore` seam rather than calling the addon or legacy resource writers directly.
 
 The public [native macOS Agent Deck](https://github.com/a-streetcoder/agent-deck) is a product and behavior reference, not a dependency. Port behavior deliberately; do not copy Swift or Xcode artifacts into this repository.
+
+## Builtin agent enablement
+
+Agent scanning reads global `~/.pi/agent/settings.json` (the configured resource
+HOME). `subagents.disableBuiltins: true` disables builtin agents without a
+per-agent override. Any `subagents.agentOverrides.<name>` record takes precedence:
+`disabled: false` enables, `disabled: true` disables, and metadata-only or empty
+overrides retain the builtin's authored disabled state. Missing/false global flags
+leave that authored state unchanged. Project settings do not supply this policy;
+custom agents, including user copies shadowing builtins, are unaffected.
+
+The effective catalog feeds both named chat and managed-child resolution, so the
+existing disabled-agent launch gates enforce the same policy Doctor summarizes.
+Scanning never writes settings or bundled files. This does not change the
+intentional `tools: false` or `thinking: false` override semantics.

@@ -13,7 +13,7 @@ import {
   type SubagentExpectedOutcome,
 } from "@agent-deck/domain";
 import { loadSkillsFromDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { applyAgentOverride, readAgentOverrides } from "./overrides.ts";
+import { applyAgentOverride, readBuiltinAgentSettings } from "./overrides.ts";
 import {
   isRealpathContained,
   loadPackageSkillEntries,
@@ -157,7 +157,7 @@ function agentMarkdownFiles(dir: string): string[] {
 }
 
 export function scanAgents(roots: ResourceRoots): AgentInfo[] {
-  const overrides = readAgentOverrides(roots);
+  const { overrides, disableBuiltins } = readBuiltinAgentSettings(roots);
   const raw: Omit<AgentInfo, "shadowed" | "replacesBuiltin">[] = [];
   for (const { dir, scope } of agentCatalogDirs(roots)) {
     for (const filePath of agentMarkdownFiles(dir)) {
@@ -166,6 +166,9 @@ export function scanAgents(roots: ResourceRoots): AgentInfo[] {
         // Builtin edits live as diff-shaped overrides — the file is pristine.
         const override = scope === "builtin" ? overrides[agent.name] : undefined;
         if (override) agent = applyAgentOverride(agent, override);
+        // Native precedence: any per-agent override wins over the global flag,
+        // even when it edits only metadata and does not specify `disabled`.
+        else if (scope === "builtin" && disableBuiltins) agent.disabled = true;
         raw.push(agent);
       } catch {
         // Unreadable/malformed file — skip; a diagnostics channel comes later.

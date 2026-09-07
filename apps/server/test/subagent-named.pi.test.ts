@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import type { SubagentCell } from "@agent-deck/domain";
+import { summarizeSettings } from "../../../packages/pi-host/src/doctor.ts";
 import { graphemeCount } from "@agent-deck/memory";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
@@ -183,7 +184,73 @@ async function startSession(): Promise<string> {
 }
 
 describe("managed_subagent{agent}: named delegation", () => {
+  it("enforces global disableBuiltins in catalog, named launch, and managed delegation", async () => {
+    const settingsFile = path.join(tmpHome, ".pi", "agent", "settings.json");
+    const previous = existsSync(settingsFile) ? readFileSync(settingsFile) : undefined;
+    const id = await startSession();
+    try {
+      const settings = { subagents: { disableBuiltins: true } };
+      writeFileSync(settingsFile, JSON.stringify(settings));
+      expect(summarizeSettings(settings)).toContain("builtin agents disabled");
+      const catalog = (await (
+        await fetch(`http://127.0.0.1:${server.port}/resources/agents`)
+      ).json()) as {
+        agents: Array<{ name: string; scope: string; disabled?: boolean }>;
+      };
+      expect(catalog.agents.find((agent) => agent.name === "coder")).toMatchObject({
+        scope: "builtin",
+        disabled: true,
+      });
+      expect(catalog.agents.find((agent) => agent.name === "reviewer-bot")).toMatchObject({
+        scope: "global",
+        disabled: false,
+      });
+      const launch = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ projectId, agentName: "coder" }),
+      });
+      expect(launch.status).toBe(409);
+      expect(await launch.text()).toContain("agent is disabled: coder");
+      const before = mock.requests.filter(isChildRequest).length;
+      await expect(
+        server.sessions.get(id)!.runChildAgent("Review the diff.", "coder"),
+      ).rejects.toThrow("unknown agent: coder");
+      expect(mock.requests.filter(isChildRequest)).toHaveLength(before);
+
+      // Re-resolution must use current policy, not cache the disabled catalog.
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({
+          subagents: {
+            disableBuiltins: true,
+            agentOverrides: { coder: { disabled: false } },
+          },
+        }),
+      );
+      const enabledLaunch = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          agentName: "coder",
+          provider: MOCK_PROVIDER_ID,
+          model: MOCK_MODEL_ID,
+          extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+          env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
+        }),
+      });
+      expect(enabledLaunch.status).toBe(201);
+      await server.sessions.get(id)!.runChildAgent("Review the diff.", "coder");
+      expect(mock.requests.filter(isChildRequest).length).toBeGreaterThan(before);
+    } finally {
+      if (previous) writeFileSync(settingsFile, previous);
+      else rmSync(settingsFile, { force: true });
+    }
+  });
+
   it("composes the named agent's persona into the child and records the name on the cell", async () => {
+    const before = mock.requests.length;
     const id = await startSession();
     const deltas: Array<{ seq: number; delta: string }> = [];
     const unsubscribe = server.sessions.get(id)!.bus.subscribe((event) => {
@@ -196,7 +263,7 @@ describe("managed_subagent{agent}: named delegation", () => {
 
     // The child ran with the agent's persona COMPOSED IN — its system prompt has
     // both the agent body AND the subagent operating prompt (not replaced).
-    const childRequest = mock.requests.find(isChildRequest);
+    const childRequest = mock.requests.slice(before).find(isChildRequest);
     expect(childRequest).toBeDefined();
     const childSystem = systemText(childRequest!);
     expect(childSystem).toContain(PERSONA_SENTINEL);

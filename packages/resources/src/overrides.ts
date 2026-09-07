@@ -67,7 +67,12 @@ function loadSettings(roots: ResourceRoots): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-export function readAgentOverrides(roots: ResourceRoots): Record<string, AgentOverride> {
+/** Global-only builtin policy, read together so a scan sees one settings snapshot. */
+export function readBuiltinAgentSettings(roots: ResourceRoots): {
+  disableBuiltins: boolean;
+  overrides: Record<string, AgentOverride>;
+} {
+  const empty = { disableBuiltins: false, overrides: {} };
   let settings: Record<string, unknown>;
   try {
     settings = loadSettings(roots);
@@ -75,13 +80,23 @@ export function readAgentOverrides(roots: ResourceRoots): Record<string, AgentOv
     // External/manual settings edits must not take the Agents catalog down.
     // Reads fail closed like native's scanner; writes still use loadSettings
     // directly and refuse to overwrite malformed user configuration.
-    return {};
+    return empty;
   }
   const subagents = settings.subagents;
-  if (typeof subagents !== "object" || subagents === null) return {};
-  const overrides = (subagents as Record<string, unknown>).agentOverrides;
-  if (typeof overrides !== "object" || overrides === null) return {};
-  return overrides as Record<string, AgentOverride>;
+  if (typeof subagents !== "object" || subagents === null || Array.isArray(subagents)) return empty;
+  const policy = subagents as Record<string, unknown>;
+  const overrides = policy.agentOverrides;
+  return {
+    disableBuiltins: policy.disableBuiltins === true,
+    overrides:
+      typeof overrides === "object" && overrides !== null && !Array.isArray(overrides)
+        ? (overrides as Record<string, AgentOverride>)
+        : {},
+  };
+}
+
+export function readAgentOverrides(roots: ResourceRoots): Record<string, AgentOverride> {
+  return readBuiltinAgentSettings(roots).overrides;
 }
 
 /** Write (or with null: remove) one agent's override. Preserves unknown keys. */
