@@ -120,6 +120,7 @@ export function fingerprintLaunchResources(
     for (const path of plan.extensions ?? []) requiredPaths.add(path);
     for (const path of plan.appendSystemPrompts ?? []) requiredPaths.add(path);
   } else if (plan.kind === "agent") {
+    for (const path of plan.appendSystemPrompts ?? []) requiredPaths.add(path);
     for (const path of plan.skills ?? []) requiredPaths.add(path);
     for (const path of plan.extensions ?? []) requiredPaths.add(path);
   }
@@ -285,6 +286,10 @@ export function resolveLaunchResources(
       return false;
     }
   });
+  // This resolver owns user-facing chats, not delegated children. Both agent
+  // prompt modes suppress Pi discovery, so preserve exactly the file fingerprinted
+  // below without enabling the ordinary-parent memory/resource injection path.
+  if (plan.kind === "agent" && append) plan.appendSystemPrompts = [append];
   const instructions = [
     resolveInstructionsFile(nodePath.join(home, ".pi", "agent")),
     ...(effectiveCwd ? [resolveInstructionsFile(effectiveCwd)] : []),

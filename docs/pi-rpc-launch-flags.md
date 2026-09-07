@@ -161,6 +161,22 @@ Privacy/context implications:
 - Catalog-only skills and prompt templates are not injected into parent sessions by Agent Deck.
 - Model/thinking changes are applied by relaunching the process with CLI args, not by relying on Pi model cycling defaults.
 
+### Electron named-agent 1:1 chats
+
+Named agents opened as user-facing chats use `AgentSessionPlan`, but are not
+isolated delegated children. `launchResources.ts` explicitly preserves the active
+`APPEND_SYSTEM.md`: the effective cwd's `.pi/APPEND_SYSTEM.md`, otherwise the
+resource home's `.pi/agent/APPEND_SYSTEM.md`, otherwise none. Both `replace` and
+`append` persona modes need this because any explicit append suppresses Pi's
+file discovery. The selected file is appended once, before the append-mode persona,
+and the same selection and file bytes participate in refresh fingerprinting.
+This applies with memory enabled or paused.
+
+`SessionManager`'s ordinary-parent memory append factory remains parent-only:
+named chats retain their existing tool, extension, skill, and prompt-template
+scoping. Delegated children and helpers do not receive this named-chat append
+field and continue suppressing ambient `APPEND_SYSTEM.md` instructions.
+
 ### 2. Native subagent child session
 
 Sources:

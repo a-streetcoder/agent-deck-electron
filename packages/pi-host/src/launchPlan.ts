@@ -44,6 +44,8 @@ export interface ParentSessionPlan extends ModelSelection {
 export interface AgentSessionPlan extends ModelSelection {
   kind: "agent";
   systemPrompt: { mode: "replace" | "append"; text: string };
+  /** Active APPEND_SYSTEM.md for named user chats only; omitted by isolated children. */
+  appendSystemPrompts?: string[];
   /**
    * Tool policy: undefined → pi defaults; non-empty → --tools allowlist;
    * empty array → --no-tools.
@@ -115,9 +117,10 @@ export function buildLaunchArgs(plan: LaunchPlan): string[] {
       }
       if (plan.sessionDir) args.push("--session-dir", plan.sessionDir);
       if (plan.resumeSessionPath) args.push("--session", plan.resumeSessionPath);
+      args.push(...repeated("--append-system-prompt", plan.appendSystemPrompts));
       if (plan.systemPrompt.mode === "replace") {
         args.push("--system-prompt", plan.systemPrompt.text);
-        // Suppress pi's automatic APPEND_SYSTEM.md discovery for replaced prompts.
+        // Suppress ambient discovery; named chats preserve their selected file above.
         args.push("--append-system-prompt", "");
       } else {
         args.push("--append-system-prompt", plan.systemPrompt.text);

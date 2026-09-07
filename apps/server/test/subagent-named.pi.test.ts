@@ -109,6 +109,11 @@ beforeAll(async () => {
 `,
   );
 
+  // Parent instructions must never leak through the isolated delegated launch.
+  mkdirSync(path.join(project, ".pi"), { recursive: true });
+  writeFileSync(path.join(project, ".pi", "APPEND_SYSTEM.md"), "ISOLATED_PROJECT_APPEND");
+  writeFileSync(path.join(tmpHome, ".pi", "agent", "APPEND_SYSTEM.md"), "ISOLATED_GLOBAL_APPEND");
+
   // A named global agent with a distinctive persona body, a declared model
   // distinct from the session default (proves the child runs on the AGENT's
   // model), an assigned skill, and a thinking level — all of which the child
@@ -195,6 +200,8 @@ describe("managed_subagent{agent}: named delegation", () => {
     expect(childRequest).toBeDefined();
     const childSystem = systemText(childRequest!);
     expect(childSystem).toContain(PERSONA_SENTINEL);
+    expect(childSystem).not.toContain("ISOLATED_PROJECT_APPEND");
+    expect(childSystem).not.toContain("ISOLATED_GLOBAL_APPEND");
     expect(childSystem).toContain("focused subagent launched by Agent Deck");
     expect(childSystem).toContain("Configured default outcome: Direct project writes");
     expect(childSystem).toContain(

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectMemoryDir } from "@agent-deck/memory";
@@ -438,4 +438,53 @@ describe("launch resource fingerprint", () => {
     writeFileSync(instructions, "two");
     expect(fingerprintLaunchResources({ kind: "parent" }, [instructions])).not.toBe(before);
   });
+});
+
+describe("named-chat APPEND_SYSTEM selection", () => {
+  it.each(["replace", "append"] as const)(
+    "keeps %s launch and refresh fingerprints aligned",
+    (mode) => {
+      const root = mkdtempSync(path.join(tmpdir(), "deck-named-append-"));
+      const cwd = path.join(root, "worktree");
+      const globalAppend = path.join(root, ".pi", "agent", "APPEND_SYSTEM.md");
+      const projectAppend = path.join(cwd, ".pi", "APPEND_SYSTEM.md");
+      mkdirSync(path.dirname(globalAppend), { recursive: true });
+      mkdirSync(path.dirname(projectAppend), { recursive: true });
+      const context = {
+        settings: { get: () => ({ defaultThinking: null }) },
+        resolveNamedAgent: () => ({
+          status: "ok",
+          agent: { body: "Persona", systemPromptMode: mode, extensions: [], skillDirs: [] },
+        }),
+        rootsFor: () => ({ home: root, projectPath: path.join(root, "not-the-cwd") }),
+        resourceHome: () => root,
+        agentMemoryEnabled: () => false,
+      } as unknown as Parameters<typeof resolveLaunchResources>[0];
+      const resolve = () => resolveLaunchResources(context, { cwd, agentName: "named" }, {});
+      const appends = (result: ReturnType<typeof resolve>) =>
+        result.plan.kind === "agent" ? result.plan.appendSystemPrompts : undefined;
+      try {
+        const absent = resolve();
+        expect(appends(absent)).toBeUndefined();
+        writeFileSync(globalAppend, "Global");
+        const global = resolve();
+        expect(appends(global)).toEqual([globalAppend]);
+        expect(global.fingerprint).not.toBe(absent.fingerprint);
+        writeFileSync(projectAppend, "Project");
+        const project = resolve();
+        expect(appends(project)).toEqual([projectAppend]);
+        expect(project.fingerprint).not.toBe(global.fingerprint);
+        writeFileSync(globalAppend, "Shadowed change");
+        expect(resolve().fingerprint).toBe(project.fingerprint);
+        writeFileSync(projectAppend, "Project edited");
+        expect(resolve().fingerprint).not.toBe(project.fingerprint);
+        rmSync(projectAppend);
+        expect(appends(resolve())).toEqual([globalAppend]);
+        rmSync(globalAppend);
+        expect(resolve().fingerprint).toBe(absent.fingerprint);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

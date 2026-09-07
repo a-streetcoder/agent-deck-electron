@@ -115,6 +115,24 @@ describe("parent plan", () => {
 });
 
 describe("agent plan", () => {
+  it.each(["replace", "append"] as const)(
+    "preserves named-chat appends before the %s persona",
+    (mode) => {
+      const args = buildLaunchArgs({
+        kind: "agent",
+        systemPrompt: { mode, text: "Persona" },
+        appendSystemPrompts: ["/project/.pi/APPEND_SYSTEM.md"],
+      });
+      const appends = args.flatMap((arg, i) =>
+        arg === "--append-system-prompt" ? [args[i + 1]] : [],
+      );
+      expect(appends).toEqual([
+        "/project/.pi/APPEND_SYSTEM.md",
+        mode === "append" ? "Persona" : "",
+      ]);
+    },
+  );
+
   it("replace mode injects --system-prompt and suppresses APPEND_SYSTEM.md", () => {
     const args = buildLaunchArgs(SAMPLE_PLANS[2]!);
     expect(args).toContain("--system-prompt");
