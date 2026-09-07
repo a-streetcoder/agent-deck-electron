@@ -15,6 +15,8 @@ import {
   Option,
   Scope,
   Stream,
+  TestClock,
+  TestContext,
 } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManagedSession, SessionCreationError, SessionManager } from "../src/SessionManager.ts";
@@ -274,6 +276,63 @@ describe("child transcript reconstruction ownership", () => {
 });
 
 describe("durable generic child lifecycle", () => {
+  it.each(["retry-pause", "retry-exit"])(
+    "fails and reaps a child on %s without claiming success",
+    async (task) => {
+      const { piHost, pids } = makeFakePiHost();
+      const store = new SubagentRunStore(makeTempDir(), () => {});
+      const params = makeParams({
+        childRuns: {
+          create: (record) => store.create(record),
+          update: (id, patch) => store.update(id, patch),
+        },
+      });
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const retryReady = yield* Deferred.make<void>();
+            const observedHost: PiHostShape = {
+              spawn: (options) =>
+                piHost.spawn(options).pipe(
+                  Effect.map((handle) => ({
+                    ...handle,
+                    events: handle.events.pipe(
+                      Stream.tap((item) =>
+                        item._tag === "PiEvent" && item.event.type === "auto_retry_start"
+                          ? Deferred.succeed(retryReady, undefined)
+                          : Effect.void,
+                      ),
+                    ),
+                  })),
+                ),
+            };
+            const rt = yield* makeManagedSessionRuntime(observedHost, buses, params);
+            const child = yield* Effect.fork(rt.runChildAgent(task));
+            yield* Deferred.await(retryReady);
+            if (task === "retry-pause") {
+              expect(store.list(params.meta.id)[0]?.status).toBe("running");
+              // Advance the real collector's overall timeout, not Pi's retry delay.
+              yield* TestClock.adjust("120 seconds");
+            }
+            const exit = yield* Fiber.await(child);
+            expect(Exit.isFailure(exit)).toBe(true);
+            const record = store.list(params.meta.id)[0]!;
+            expect(record.status).toBe("failed");
+            expect(record.error).toContain(
+              task === "retry-pause" ? "subagent timeout" : "exited before finishing",
+            );
+            expect((yield* rt.snapshot).state.cells.find((c) => c.kind === "subagent")).toEqual(
+              expect.objectContaining({ status: "error" }),
+            );
+            expect(processAlive(pids[1]!)).toBe(false);
+            expect(processAlive(pids[0]!)).toBe(true);
+          }),
+        ).pipe(Effect.provide(TestContext.TestContext)),
+      );
+      for (const pid of pids) await expectProcessGone(pid);
+    },
+  );
+
   it.each([false, true])(
     "aborts only its live child (continuation=%s), not independent work",
     async (continuation) => {

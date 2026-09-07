@@ -353,20 +353,20 @@ describe("PiHost scoped subprocess service", () => {
           yield* Fiber.interrupt(ingestion);
           expect(yield* handle.droppedEvents).toBe(0);
 
-          // pi keeps talking after the detach: this prompt emits 4 events
-          // plus 1 malformed line. All 5 must be DROPPED (counted), not
+          // pi keeps talking after the detach: this prompt emits 5 events
+          // (including agent_settled) plus 1 malformed line. All 6 must be DROPPED, not
           // buffered unboundedly — and RPC correlation must be unaffected.
           yield* handle.prompt("hi");
           const dropped = yield* Effect.gen(function* () {
             const deadline = Date.now() + 5_000;
             let count = yield* handle.droppedEvents;
-            while (count < 5 && Date.now() < deadline) {
+            while (count < 6 && Date.now() < deadline) {
               yield* Effect.sleep("25 millis");
               count = yield* handle.droppedEvents;
             }
             return count;
           });
-          expect(dropped).toBe(5);
+          expect(dropped).toBe(6);
           const state = yield* handle.getState;
           expect(state.sessionId).toBe("fake-session");
         }),

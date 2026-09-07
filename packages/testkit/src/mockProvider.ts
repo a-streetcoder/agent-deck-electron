@@ -34,6 +34,10 @@ export interface MockProviderOptions {
   toolCall?: (lastUserMessage: string, body: ChatCompletionRequest) => MockToolCall | null;
   /** Optional deterministic test gate after request capture and before any response bytes. */
   beforeResponse?: (lastUserMessage: string, body: ChatCompletionRequest) => void | Promise<void>;
+  /** Deterministic HTTP failure, or an SSE error after the reply's text deltas. */
+  failure?: (
+    body: ChatCompletionRequest,
+  ) => { status: number; message: string; afterText?: boolean } | undefined;
   /** Delay between streamed chunks (ms). */
   chunkDelayMs?: number;
 }
@@ -114,6 +118,12 @@ export async function startMockProvider(
         res.writeHead(500).end();
         return;
       }
+      const failure = options.failure?.(body);
+      if (failure && !failure.afterText) {
+        res.writeHead(failure.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: failure.message, type: "mock_error" } }));
+        return;
+      }
       const id = `chatcmpl-mock-${requests.length}`;
       const created = 0;
 
@@ -176,6 +186,13 @@ export async function startMockProvider(
           return;
         }
         clearInterval(timer);
+        if (failure) {
+          res.write(
+            `data: ${JSON.stringify({ error: { message: failure.message, type: "mock_error", code: String(failure.status) } })}\n\n`,
+          );
+          res.end();
+          return;
+        }
         res.write(chunk({}, "stop"));
         res.write(
           `data: ${JSON.stringify({
@@ -195,6 +212,7 @@ export async function startMockProvider(
         events.push({ requestIndex, kind: "done" });
         res.end();
       }, chunkDelayMs);
+      res.on("close", () => clearInterval(timer));
     });
   });
 

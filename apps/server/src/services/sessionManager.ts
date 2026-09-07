@@ -61,6 +61,7 @@ import {
 } from "./piHost.ts";
 import type { PlanChangeOperation } from "./planEvents.ts";
 import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
+import { ingestChildRunLifecycle, type ChildRunLifecycle } from "./childRunLifecycle.ts";
 
 /**
  * SessionManager as an Effect service (Slice 5) — the coordinator that makes the
@@ -119,8 +120,8 @@ import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
  * Title generation and native subagents spawn their own pi through the SAME
  * PiHost service under a short-lived `Effect.scoped` block (the child is killed
  * when the block ends). Idle is detected by draining the child's event stream to
- * `agent_end`; token/model metadata and streamed deltas are captured off the
- * same stream. This retires the last legacy `new PiSession()` path — production
+ * `agent_settled` for managed children (`agent_end` for title helpers). Metadata
+ * and deltas use the same stream. This retires the last legacy `new PiSession()` path — production
  * no longer touches the pi-host class directly.
  */
 
@@ -1862,7 +1863,7 @@ export const makeManagedSessionRuntime = (
   });
 
 /**
- * Drain a helper/subagent child's event stream to `agent_end` (idle), enforcing
+ * Drain a title helper's event stream to `agent_end`, enforcing
  * the given timeout. An early `ProcessExit` ends the stream too; the caller's
  * follow-up RPC then fails, which the scoped launch treats as an error.
  */
@@ -2096,7 +2097,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     let childInputTokens = 0;
     let childOutputTokens = 0;
     let sawUsage = false;
-    let sawAgentEnd = false;
+    const lifecycle: ChildRunLifecycle = { settled: false };
     let childSessionFile: string | undefined;
     let childSessionOwned = false;
     let cardOpened = false;
@@ -2506,12 +2507,14 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               sawUsage = true;
             }
           }
-          if (e.type === "agent_end") sawAgentEnd = true;
+          ingestChildRunLifecycle(lifecycle, item.event);
         };
 
         const childOutcome = yield* Effect.gen(function* () {
           const collector = yield* child.events.pipe(
-            Stream.takeUntil((item) => isPiEvent(item) && eventType(item.event) === "agent_end"),
+            Stream.takeUntil(
+              (item) => isPiEvent(item) && eventType(item.event) === "agent_settled",
+            ),
             Stream.runForEach((item) => Effect.sync(() => processChild(item))),
             Effect.timeoutFail({
               duration: Duration.millis(SUBAGENT_TIMEOUT_MS),
@@ -2521,8 +2524,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           );
           yield* child.prompt(buildSubagentTaskPrompt(task, declaredReads, isContinuation));
           yield* Fiber.join(collector);
-          if (!sawAgentEnd)
+          if (!lifecycle.settled)
             return yield* Effect.fail(new Error("subagent exited before finishing"));
+          if (lifecycle.error) return yield* Effect.fail(new Error(lifecycle.error));
           const { text } = yield* child.request({ type: "get_last_assistant_text" });
           return text ?? streamed;
         }).pipe(Effect.either);

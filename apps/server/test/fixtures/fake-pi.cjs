@@ -8,6 +8,9 @@ const rl = readline.createInterface({ input: process.stdin, terminal: false });
 
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (value.type === "agent_end" && value.willRetry !== true) {
+    process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
+  }
 }
 
 let streamTimer = null;
@@ -199,6 +202,27 @@ rl.on("line", (line) => {
             process.exitCode = 9;
           },
         );
+      } else if (cmd.message === "retry-pause" || cmd.message === "retry-exit") {
+        send({
+          type: "agent_end",
+          willRetry: true,
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "500 retry pending",
+              content: [],
+            },
+          ],
+        });
+        send({
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 2000,
+          errorMessage: "500 retry pending",
+        });
+        if (cmd.message === "retry-exit") process.stdout.write("", () => process.exit(9));
       } else if (cmd.message === "passive-status") {
         // pi's context-usage meter: an extension_ui_request nothing can answer,
         // emitted mid-turn. The session must stay ALIVE after idle — that is the

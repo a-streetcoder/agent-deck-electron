@@ -72,3 +72,16 @@ async launch/preflight/history seeding, excluding merge/delete in both direction
 Coalesced resumes share that transaction; history actions may resume within their
 existing claim. Merge also rechecks runtime ownership after child cleanup before
 removing the parent checkout. The claim is released on success and failure.
+
+## Managed child provider settlement
+
+Managed children consume the pinned Pi 0.82.0 stream through `agent_settled`,
+not the first `agent_end`. `agent_end.willRetry` describes Pi's next provider
+retry; `auto_retry_end.success` can arrive before the final low-level run ends
+(and even after an aborted assistant). Neither event alone proves completion.
+The latest assistant stop reason and failed retry result determine success only
+at settlement. Terminal provider errors, including partial-text errors, persist
+failed runs, finalize error cards, and reach the parent bridge as `isError: true`.
+Recovered retries return the real final assistant text. Deltas, retry projections,
+model/usage accounting, and the child continuation file remain live throughout;
+the existing overall timeout and call-owned cancellation still reap the scope.
