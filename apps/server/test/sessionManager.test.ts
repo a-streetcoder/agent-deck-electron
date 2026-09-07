@@ -276,6 +276,86 @@ describe("child transcript reconstruction ownership", () => {
 });
 
 describe("durable generic child lifecycle", () => {
+  it.each(["ordinary", "constrained", "continuation", "signal"] as const)(
+    "terminalizes an opened %s card exactly once before parent scope close returns",
+    async (mode) => {
+      const { piHost, pids } = makeFakePiHost();
+      const dataDir = makeTempDir();
+      const store = new SubagentRunStore(dataDir, () => {});
+      const params = makeParams({
+        childRuns: {
+          create: (record) => store.create(record),
+          update: (id, patch) => store.update(id, patch),
+        },
+      });
+      const events: DomainEvent[] = [];
+      const controller = new AbortController();
+      const rt = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            const prior =
+              mode === "continuation" ? yield* rt.runChildAgent("first turn") : undefined;
+            yield* rt.bus.subscribe(({ event }) => events.push(event));
+            const child = yield* Effect.fork(
+              rt.runChildAgent(
+                "stream-with-metadata-forever",
+                undefined,
+                mode === "constrained" ? "none" : undefined,
+                undefined,
+                {
+                  source: "single",
+                  ...(prior ? { runId: prior.runId, resumeSessionPath: FIXTURE } : {}),
+                  ...(mode === "signal" ? { signal: controller.signal } : {}),
+                },
+              ),
+            );
+            yield* waitUntil(
+              () => events.filter((event) => event.type === "subagent_delta").length >= 2,
+            );
+            const card = (yield* rt.snapshot).state.cells.find((c) => c.kind === "subagent")!;
+            yield* rt.appendSubagentProgress(card.id, "Supervisor evidence retained");
+            if (mode === "signal") {
+              controller.abort();
+              yield* Fiber.await(child);
+              controller.abort();
+            }
+            return rt;
+          }),
+        ),
+      );
+      const cards = Effect.runSync(rt.snapshot).state.cells.filter((c) => c.kind === "subagent");
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toEqual(
+        expect.objectContaining({
+          status: "stopped",
+          text: expect.stringContaining("chunk-"),
+          model: "fake-child-model",
+          inputTokens: 7,
+          outputTokens: 3,
+          durationMs: expect.any(Number),
+          progress: ["Supervisor evidence retained"],
+        }),
+      );
+      const finals = events.filter((event) => event.type === "cell_final");
+      expect(finals).toHaveLength(1);
+      expect(events.at(-1)).toEqual(finals[0]);
+      if (mode === "constrained") {
+        expect(store.list(params.meta.id)).toEqual([]);
+        expect(cards[0]?.artifactRootId).toBeUndefined();
+      } else {
+        expect(new SubagentRunStore(dataDir, () => {}).cells(params.meta.id)[0]).toEqual(
+          expect.objectContaining({
+            status: "stopped",
+            text: cards[0]!.text,
+            model: cards[0]!.model,
+          }),
+        );
+      }
+      for (const pid of pids) await expectProcessGone(pid);
+    },
+  );
+
   it.each(["retry-pause", "retry-exit"])(
     "fails and reaps a child on %s without claiming success",
     async (task) => {
@@ -713,6 +793,75 @@ describe("durable generic child lifecycle", () => {
     );
     expect(recallChildMemory).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "preserves unopened-card semantics on scope interruption (continuation=%s)",
+    async (continuation) => {
+      const { piHost, pids } = makeFakePiHost();
+      const store = new SubagentRunStore(makeTempDir(), () => {});
+      let recalling = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const events: DomainEvent[] = [];
+      const params = makeParams({
+        childRuns: {
+          create: (record) => store.create(record),
+          update: (id, patch) => store.update(id, patch),
+        },
+        recallChildMemory: async ({ task }) => {
+          if (task === "interrupted startup") {
+            recalling = true;
+            await gate;
+          }
+          return undefined;
+        },
+      });
+      try {
+        const rt = await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+              const prior = continuation
+                ? yield* rt.runChildAgent("prior completed turn")
+                : undefined;
+              yield* rt.bus.subscribe(({ event }) => events.push(event));
+              yield* Effect.fork(
+                rt.runChildAgent("interrupted startup", undefined, undefined, undefined, {
+                  source: "single",
+                  ...(prior ? { runId: prior.runId, resumeSessionPath: FIXTURE } : {}),
+                }),
+              );
+              yield* waitUntil(() => recalling);
+              return rt;
+            }),
+          ),
+        );
+        expect(events.filter((event) => event.type === "cell_open")).toEqual([]);
+        expect(events.filter((event) => event.type === "cell_final")).toHaveLength(
+          continuation ? 1 : 0,
+        );
+        const cards = Effect.runSync(rt.snapshot).state.cells.filter((c) => c.kind === "subagent");
+        expect(cards).toEqual(
+          continuation
+            ? [
+                expect.objectContaining({
+                  task: "interrupted startup",
+                  status: "stopped",
+                  text: "",
+                }),
+              ]
+            : [],
+        );
+        expect(store.list(params.meta.id).map((run) => run.status)).toEqual(["stopped"]);
+        expect(pids).toHaveLength(continuation ? 2 : 1);
+        for (const pid of pids) await expectProcessGone(pid);
+      } finally {
+        release();
+      }
+    },
+  );
 
   it("replaces the live continuation card exactly once when startup fails before cell_open", async () => {
     const { piHost } = makeFakePiHost();

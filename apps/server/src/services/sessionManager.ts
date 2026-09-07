@@ -2101,7 +2101,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     let childSessionFile: string | undefined;
     let childSessionOwned = false;
     let cardOpened = false;
-    let startupCardFinalized = false;
+    let cardFinalized = false;
     const claimOwnedSessionIfAvailable = (): boolean => {
       if (
         childSessionOwned ||
@@ -2139,12 +2139,12 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
 
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        // Register durable cleanup before creating any bridge, prompt directory,
-        // or child process. Interruption by parent stop becomes a clear terminal
-        // record; a persistence failure is logged without blocking child cleanup.
+        // Register cleanup before acquisition. Scope close joins this finalizer
+        // before Loop disposes snapshot tracking or parent destroy returns.
+        // Live terminalization also belongs here when there is no durable sink.
         yield* Effect.addFinalizer((exit) => {
           unregisterTranscript();
-          if (!durable || !durableIdentityCreated || terminalPersisted) return Effect.void;
+          if (terminalPersisted) return Effect.void;
           const now = new Date().toISOString();
           const interrupted = Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause);
           const status = interrupted ? "stopped" : "failed";
@@ -2162,13 +2162,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           // but before spawn/get_state allowed the normal cell_open. Replace the
           // existing stable card now so live UI and persistence agree; fresh
           // runs retain their established no-card-on-pre-open-failure behavior.
-          // Only call-signal cancellation terminalizes open cards here (#20);
-          // general session/Loop teardown terminalization is handled separately.
+          // Every interrupted open card needs one terminal event, regardless of
+          // who cancelled it or whether Loop owns persistence. A terminal result
+          // already emitted on the normal path must never be rewritten.
           if (
-            (isContinuation && !cardOpened && !startupCardFinalized) ||
-            (interrupted && runOptions?.signal?.aborted && cardOpened)
+            !cardFinalized &&
+            ((isContinuation && durableIdentityCreated && !cardOpened) ||
+              (interrupted && cardOpened))
           ) {
-            startupCardFinalized = true;
+            cardFinalized = true;
             emit({
               type: "cell_final",
               cell: {
@@ -2178,13 +2180,14 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 status: interrupted ? "stopped" : "error",
                 text: streamed,
                 error,
-                artifactRootId: runId,
+                ...(durable ? { artifactRootId: runId } : {}),
                 progress: [],
                 ...(agentName ? { agentName } : {}),
                 ...metadata(),
               },
             });
           }
+          if (!durable || !durableIdentityCreated) return Effect.void;
           return persistChildRun(() => {
             claimOwnedSessionIfAvailable();
             durable.writeOutput?.(runId, streamed, error);
@@ -2559,6 +2562,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                   `${failure.message} (could not persist failed run: ${persisted.left.message})`,
                 )
               : failure;
+          cardFinalized = true;
           emit({
             type: "cell_final",
             cell: {
@@ -2617,6 +2621,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                   `${failure.message} Failed-run persistence also failed: ${failureWrite.left.message}`,
                 )
               : failure;
+          cardFinalized = true;
           emit({
             type: "cell_final",
             cell: {
@@ -2636,6 +2641,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         }
 
         terminalPersisted = true;
+        cardFinalized = true;
         emit({
           type: "cell_final",
           cell: {

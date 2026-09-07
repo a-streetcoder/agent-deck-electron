@@ -85,3 +85,18 @@ failed runs, finalize error cards, and reach the parent bridge as `isError: true
 Recovered retries return the real final assistant text. Deltas, retry projections,
 model/usage accounting, and the child continuation file remain live throughout;
 the existing overall timeout and call-owned cancellation still reap the scope.
+
+## Stopped child cards and Loop snapshots
+
+Child-scope cleanup terminalizes every interrupted open subagent card exactly
+once, including constrained Loop children without a generic durable run sink.
+The ordered live event retains partial output and collected model/usage metadata;
+transcript reduction retains supervisor progress. Generic runs also persist
+`stopped`. Completed/error cards are not rewritten, and unopened fresh runs do
+not acquire synthetic cards (accepted continuations still replace their stable
+card on startup failure/interruption).
+
+Parent stop/destroy joins child finalizers before returning. Loop cancellation
+uses that teardown before disposing snapshot tracking, so the final snapshot and
+subsequent history restore contain stopped cards, not dead running work. This
+fix does not retroactively reinterpret older snapshots or change crash recovery.
