@@ -244,6 +244,15 @@ async function initServer(
   const supervisor = new SupervisorLog();
   const childSupervisors = new Map<string, { parentSessionId: string; cellId: string }>();
   const childMemoryAuthorizations = new Map<string, { projectId: string; projectPath: string }>();
+  const childMcpAssignments = new Map<
+    string,
+    {
+      parentSessionId: string;
+      agentName: string;
+      projectId: string;
+      serverIds: string[];
+    }
+  >();
   const childAllowedTools = new Map<string, ReadonlySet<string>>();
   // Blocking supervisor requests awaiting an answer: requestId → resolver. The
   // child's contact_supervisor call is suspended on the /bridge request until
@@ -424,7 +433,7 @@ async function initServer(
     // memory tools only when master memory is currently effective and the
     // parent's registered project is authoritative. The token gets an exact
     // dispatch allowlist; dispose removes every route/project/token mapping.
-    (childSessionId, route) => {
+    async (childSessionId, route) => {
       if (!bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
       const parent = sessions.get(route.parentSessionId)?.meta;
@@ -435,41 +444,76 @@ async function initServer(
         agentMemoryEnabled() && project
           ? bridge.specs().filter((spec) => CHILD_MEMORY_TOOL_NAMES.has(spec.name))
           : [];
-      const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs];
-      const toolNames = tools.map((tool) => tool.name);
-      // Generate first; publish authentication/authorization only on success.
-      const extension = writeBridgeExtension({
-        endpoint: bridgeAddress.endpoint,
-        sessionId: childSessionId,
-        token,
-        tools,
-      });
-      const disposeAccess = registerChildBridgeAccess({
-        sessionId: childSessionId,
-        token,
-        toolNames,
-        ...(parent?.projectId && project
-          ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
-          : {}),
-        tokens: bridgeTokens,
-        allowedTools: childAllowedTools,
-        memoryAuthorizations: childMemoryAuthorizations,
-      });
-      childSupervisors.set(childSessionId, route);
-      return {
-        extension,
-        toolNames,
-        dispose: () => {
-          cancelChildSupervisorRequests(childSessionId);
-          disposeAccess();
-          childSupervisors.delete(childSessionId);
-          try {
-            rmSync(nodePath.dirname(extension), { recursive: true, force: true });
-          } catch {
-            // Best-effort: a leftover temp dir is harmless.
-          }
-        },
-      };
+      // Hold the named assignment for this run, not the parent's MCP policy or
+      // the child's cwd (which may be an isolated worktree).
+      const serverIds =
+        project && !project.hidden && route.agentName
+          ? (route.mcpServers ?? []).filter((id) =>
+              mcpAllowlistForSession({ ...parent!, agentName: route.agentName }).includes(id),
+            )
+          : [];
+      const preparation =
+        project && serverIds.length > 0
+          ? await prepareProjectMcpSession(project.id, serverIds)
+          : undefined;
+      try {
+        if (preparation?.result.ok === false) throw new Error(preparation.result.error);
+        // Unlike the always-added supervisor/memory channels, MCP remains
+        // subject to an authored Pi tool allowlist (including explicit empty).
+        const mcpSpecs = project
+          ? scopeMcpBridgeSpecs(mcp.specs(project.id), serverIds).filter(
+              (spec) => route.tools === undefined || route.tools.includes(spec.name),
+            )
+          : [];
+        const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs, ...mcpSpecs];
+        const toolNames = tools.map((tool) => tool.name);
+        // Generate first; publish authentication/authorization only on success.
+        const extension = writeBridgeExtension({
+          endpoint: bridgeAddress.endpoint,
+          sessionId: childSessionId,
+          token,
+          tools,
+        });
+        const disposeAccess = registerChildBridgeAccess({
+          sessionId: childSessionId,
+          token,
+          toolNames,
+          ...(parent?.projectId && project
+            ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
+            : {}),
+          tokens: bridgeTokens,
+          allowedTools: childAllowedTools,
+          memoryAuthorizations: childMemoryAuthorizations,
+        });
+        childSupervisors.set(childSessionId, route);
+        if (route.agentName && project && serverIds.length > 0) {
+          childMcpAssignments.set(childSessionId, {
+            parentSessionId: route.parentSessionId,
+            agentName: route.agentName,
+            projectId: project.id,
+            serverIds,
+          });
+        }
+        return {
+          extension,
+          toolNames,
+          dispose: async () => {
+            cancelChildSupervisorRequests(childSessionId);
+            disposeAccess();
+            childSupervisors.delete(childSessionId);
+            childMcpAssignments.delete(childSessionId);
+            try {
+              rmSync(nodePath.dirname(extension), { recursive: true, force: true });
+            } catch {
+              // Best-effort: a leftover temp dir is harmless.
+            }
+            await preparation?.release();
+          },
+        };
+      } catch (error) {
+        await preparation?.release();
+        throw error;
+      }
     },
     // Resolve a named agent for `managed_subagent{agent}` delegation, scoped to
     // the delegating session's project. Invoked only at subagent-run time, so the
@@ -487,6 +531,7 @@ async function initServer(
         thinking: asThinkingLevel(agent.thinking),
         tools: agent.tools,
         mcpDirectTools: mcpPolicy.enabled() ? agent.mcpDirectTools : [],
+        mcpServers: agent.mcpServers,
         skillDirs: agent.skillDirs,
         defaultReads: agent.defaultReads,
         defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
@@ -840,8 +885,21 @@ async function initServer(
       mcpOAuth.providerFor(oauthKey(scope, id), serverUrl, { projectId: scope, serverId: id }),
     isHttpAuthorizationActive: (scope, id) =>
       mcpOAuth.state(oauthKey(scope, id)).status === "authorizing",
-    scopeForSession: (sessionId) => sessions.get(sessionId)?.meta.projectId,
+    scopeForSession: (sessionId) =>
+      childMcpAssignments.get(sessionId)?.projectId ?? sessions.get(sessionId)?.meta.projectId,
     allowServerForSession: (sessionId, serverId) => {
+      const child = childMcpAssignments.get(sessionId);
+      if (child) {
+        const parent = sessions.get(child.parentSessionId)?.meta;
+        return (
+          !!parent &&
+          parent.projectId === child.projectId &&
+          !!projects.find((project) => project.id === child.projectId && !project.hidden) &&
+          resolveNamedAgent(child.agentName, child.projectId).status === "ok" &&
+          child.serverIds.includes(serverId) &&
+          mcpAllowlistForSession({ ...parent, agentName: child.agentName }).includes(serverId)
+        );
+      }
       const meta = sessions.get(sessionId)?.meta;
       return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
     },
@@ -942,7 +1000,12 @@ async function initServer(
       if (counts.size === 0) pendingMcpSessionStarts.delete(projectId);
       await reconcileProjectMcp(projectId);
     };
-    return { result: await reconcileProjectMcp(projectId), release };
+    try {
+      return { result: await reconcileProjectMcp(projectId), release };
+    } catch (error) {
+      await release();
+      throw error;
+    }
   };
 
   // Missing assignment fields intentionally mean no servers. Defaults, explicit

@@ -131,14 +131,27 @@ import { SessionPushBuses, type SessionPushBusHandle } from "./pushBus.ts";
 /**
  * Builds an ordinary child's purpose-scoped bridge for one run. It always
  * carries contact_supervisor and, while master memory is effective for an
- * authoritative project, the three memory tools. `toolNames` lets restrictive
+ * authoritative project, the three memory tools. Named runs also carry their
+ * assigned app-managed MCP tools, scoped to the parent's project. `toolNames` lets restrictive
  * named-agent allowlists include exactly those generated extension tools.
  * dispose() tears down token, authorization, project mapping, and temp bytes.
  */
 export type ChildBridgeFactory = (
   childSessionId: string,
-  route: { parentSessionId: string; cellId: string },
-) => { extension: string; toolNames: string[]; dispose: () => void } | undefined;
+  route: {
+    parentSessionId: string;
+    cellId: string;
+    agentName?: string;
+    mcpServers?: string[];
+    tools?: string[];
+  },
+) => ChildBridge | undefined | Promise<ChildBridge | undefined>;
+
+type ChildBridge = {
+  extension: string;
+  toolNames: string[];
+  dispose: () => void | Promise<void>;
+};
 
 /** Resolves a named agent (for `managed_subagent{agent}`) to the launch inputs a
  * delegated child adopts — its persona body, model, thinking level, declared
@@ -177,6 +190,8 @@ export type AgentResolver = (
       tools?: string[];
       /** External adapter names supplied only through MCP_DIRECT_TOOLS. */
       mcpDirectTools?: string[];
+      /** Validated app-managed server assignment, separate from direct adapters. */
+      mcpServers?: string[];
       skillDirs?: string[];
       /** Current safe catalog-resolved user extension policy for this named run. */
       extensions?: string[];
@@ -2251,12 +2266,24 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         // even contact_supervisor mutates parent state and is outside policy.
         const childBridge =
           toolPolicy === undefined
-            ? params.childBridgeFactory?.(childSessionId, {
-                parentSessionId: meta.id,
-                cellId,
-              })
+            ? yield* Effect.acquireRelease(
+                Effect.tryPromise({
+                  try: async () =>
+                    params.childBridgeFactory?.(childSessionId, {
+                      parentSessionId: meta.id,
+                      cellId,
+                      agentName,
+                      mcpServers: resolved?.mcpServers,
+                      tools: resolved?.tools,
+                    }),
+                  catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+                }),
+                (bridge) =>
+                  Effect.promise(async () => {
+                    await bridge?.dispose();
+                  }),
+              )
             : undefined;
-        yield* Effect.addFinalizer(() => Effect.sync(() => childBridge?.dispose()));
         const promptDir = mkdtempSync(join(tmpdir(), "agent-deck-subagent-"));
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {

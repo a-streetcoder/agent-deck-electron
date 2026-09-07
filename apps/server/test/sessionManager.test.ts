@@ -273,6 +273,82 @@ describe("child transcript reconstruction ownership", () => {
 });
 
 describe("durable generic child lifecycle", () => {
+  it("releases a bridge acquired while parent cancellation is waiting on MCP preparation", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    const dispose = vi.fn(async () => {});
+    const childBridgeFactory = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { extension: FIXTURE, toolNames: ["mcp__assigned__echo"], dispose };
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({ childBridgeFactory }),
+          );
+          yield* Effect.fork(rt.runChildAgent("never prompted"));
+          yield* waitUntil(() => childBridgeFactory.mock.calls.length === 1);
+          // Exiting the parent scope interrupts the child during asynchronous acquire.
+          expect(dispose).not.toHaveBeenCalled();
+        }),
+      ),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(pids).toHaveLength(1);
+    await expectProcessGone(pids[0]!);
+  });
+
+  it.each(["completed", "interrupted", "startup-failed"] as const)(
+    "owns an asynchronous child MCP bridge through %s cleanup",
+    async (outcome) => {
+      const { piHost, pids } = makeFakePiHost();
+      const dispose = vi.fn(async () => {});
+      const childBridgeFactory = vi.fn(async () => ({
+        extension: FIXTURE,
+        toolNames: ["mcp__assigned__echo"],
+        dispose,
+      }));
+      const spawn = vi.fn(piHost.spawn);
+      if (outcome === "startup-failed") {
+        spawn
+          .mockImplementationOnce(piHost.spawn)
+          .mockImplementationOnce(() => Effect.die(new Error("child spawn rejected")));
+      }
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rt = yield* makeManagedSessionRuntime(
+              { spawn },
+              buses,
+              makeParams({
+                childBridgeFactory,
+                resolveAgent: () => ({ body: "MCP worker", mcpServers: ["assigned"] }),
+              }),
+            );
+            if (outcome === "interrupted") {
+              yield* Effect.fork(rt.runChildAgent("stream-with-metadata-forever", "worker"));
+              yield* waitUntil(() => pids.length === 2);
+            } else {
+              const exit = yield* Effect.exit(rt.runChildAgent("finish normally", "worker"));
+              expect(exit._tag).toBe(outcome === "completed" ? "Success" : "Failure");
+            }
+          }),
+        ),
+      );
+      expect(childBridgeFactory).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          agentName: "worker",
+          mcpServers: ["assigned"],
+        }),
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      for (const pid of pids) await expectProcessGone(pid);
+    },
+  );
+
   it("never spawns child Pi or falls back to parent cwd when worktree preparation rejects", async () => {
     const { piHost } = makeFakePiHost();
     const spawn = vi.fn(piHost.spawn);

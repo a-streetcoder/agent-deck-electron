@@ -228,6 +228,19 @@ over inherited values. Explicit model patterns are resolved by Pi without an
 inherited provider constraint; a model's explicit `:thinking` suffix retains Pi
 launch-plan precedence. Child capability/resource scoping is unchanged.
 
+Electron named delegated children also receive their current `mcpServers` assignment
+through the purpose-scoped child bridge, using the parent's effective project MCP
+catalog even when the child runs in another cwd/worktree. Unnamed children and
+agents without that assignment receive no app-managed MCP tools. An authored `tools`
+allowlist must also include the generated `mcp__<server>__<tool>` name (server/tool
+segments use underscores for non-alphanumeric characters); `tools: []` enables no
+MCP tools. Global MCP pause,
+current agent authorization, and the exact child tool/token allowlist are enforced
+at dispatch; the child never inherits parent supervisor tools. Each run owns its
+bridge token and temporary extension and releases its project MCP connection hold
+on exit. Continuation re-resolves the agent configuration. Direct `mcp:` adapters
+remain a separate `MCP_DIRECT_TOOLS` policy.
+
 Continuation launch shape:
 
 ```text
