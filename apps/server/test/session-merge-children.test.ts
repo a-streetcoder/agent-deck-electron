@@ -22,7 +22,7 @@ import { SubagentRunStore } from "../src/subagentRunStore.ts";
 
 // HTTP routes + actual durable child store + native ownership + real Git. No Pi
 // or user checkout is needed to reproduce the missing parent-cwd failure.
-async function fixture(keep = false) {
+async function fixture(keep = false, childCount = 2) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "deck-merge-children-")));
   const repo = path.join(root, "repo");
   const data = path.join(root, "data");
@@ -55,7 +55,7 @@ async function fixture(keep = false) {
     worktreeSourceBranch: "main",
   } as SessionMeta);
   const children: { id: string; cwd: string }[] = [];
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < childCount; i++) {
     const childId = randomUUID();
     const now = new Date().toISOString();
     store.create({
@@ -85,7 +85,7 @@ async function fixture(keep = false) {
       destroy: vi.fn(async () => {}),
       removeSubagentWorktreesForMerge: (sessionId: string) =>
         store.removeWorktreesForMerge(sessionId),
-      removeSubagentRuns: (sessionId: string) => store.removeParent(sessionId),
+      removeSubagentRuns: (sessionId: string) => store.removeParentForDeletion(sessionId),
       removeLoopSessionSnapshot: vi.fn(),
     },
     index: {
@@ -112,6 +112,7 @@ async function fixture(keep = false) {
     git,
     repo,
     sessions: ctx.sessions,
+    index: ctx.index,
     setLive: () => {
       live = { meta: rows.get(id)! };
     },
@@ -413,6 +414,236 @@ describe("merge cleanup with children rooted at a linked session checkout", () =
       expect(existsSync(f.parent)).toBe(true);
       for (const child of f.children) expect(existsSync(child.cwd)).toBe(true);
     } finally {
+      await f.close();
+    }
+  });
+});
+
+describe("failed deletion allocation-claim recovery", () => {
+  const nextRun = (parentSessionId: string) => ({
+    id: randomUUID(),
+    parentSessionId,
+    task: "delegate after recovery",
+    source: "single" as const,
+    status: "completed" as const,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+  });
+
+  it.each([0, 2])(
+    "rolls back after parent-only cleanup failure with %s children",
+    async (childCount) => {
+      const f = await fixture(false, childCount);
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = SessionWorktreeStore.prototype.deleteWorktree;
+      const spy = vi
+        .spyOn(SessionWorktreeStore.prototype, "deleteWorktree")
+        .mockImplementation(async function (this: SessionWorktreeStore, target, identity) {
+          if (target === f.parent) {
+            enter();
+            await gate;
+            throw new Error("parent fixture lock");
+          }
+          return original.call(this, target, identity);
+        });
+      const deletion = f.delete();
+      try {
+        await entered;
+        expect(f.store().list(f.id)).toEqual([]); // Child cleanup already succeeded.
+        expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+        await expect(f.store().removeParent(f.id)).rejects.toThrow("claimed");
+        expect((await f.resume()).statusCode).toBe(409);
+        release();
+        const failed = await deletion;
+        expect(failed.statusCode).toBe(409);
+        expect(failed.json()).toMatchObject({ code: "session_worktree_cleanup_failed" });
+        expect(f.rows.has(f.id)).toBe(true);
+        spy.mockRestore();
+        expect((await f.resume()).statusCode).toBe(200);
+        const run = nextRun(f.id);
+        f.store().prepareTurn(run, "after parent repair");
+        f.store().create(run);
+        expect(existsSync(await f.store().prepareWorktree(run.id, f.parent))).toBe(true);
+        expect((await f.delete()).statusCode).toBe(200);
+        expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      } finally {
+        release();
+        await deletion;
+        spy.mockRestore();
+        await f.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "finishes from index authority when remove throws (committed=%s)",
+    async (committed) => {
+      const f = await fixture();
+      // A non-isolated parent retains its cwd while only its children are removed.
+      const meta = f.rows.get(f.id)!;
+      delete meta.worktreePath;
+      delete meta.worktreeIdentity;
+      delete meta.worktreeBranch;
+      delete meta.worktreeSourceBranch;
+      const spy = vi.spyOn(f.index, "remove").mockImplementation((id) => {
+        if (committed) f.rows.delete(id);
+        throw new Error("fixture index persistence failure");
+      });
+      try {
+        expect((await f.delete()).statusCode).toBe(500);
+        expect(f.store().list(f.id)).toEqual([]);
+        expect(f.sessions.mutationClaims.owner(f.id)).toBeUndefined();
+        spy.mockRestore();
+        if (committed) {
+          expect((await f.resume()).statusCode).toBe(404);
+          expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+        } else {
+          expect((await f.resume()).statusCode).toBe(200);
+          f.store().create(nextRun(f.id));
+          expect((await f.delete()).statusCode).toBe(200);
+          expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+        }
+      } finally {
+        spy.mockRestore();
+        await f.close();
+      }
+    },
+  );
+
+  it("keeps completion handles scoped, single-use, and unable to undo committed deletion", async () => {
+    const f = await fixture();
+    try {
+      const finish = await f.store().removeParentForDeletion(f.id);
+      expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      finish(false);
+      const next = await f.store().removeParentForDeletion(f.id);
+      finish(false); // Stale rollback cannot release the new cleanup owner.
+      expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      next(true);
+      next(false);
+      const retry = await f.store().removeParentForDeletion(f.id);
+      retry(false); // A prior committed claim is not ours to release.
+      expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("recovers from delete 409 after exact-directory repair, then keeps successful deletion forbidden", async () => {
+    const f = await fixture();
+    try {
+      const child = f.children[1]!;
+      renameSync(child.cwd, `${child.cwd}-held`);
+      writeFileSync(child.cwd, "foreign replacement");
+      const failed = await f.delete();
+      expect(failed.statusCode).toBe(409);
+      expect(failed.json()).toMatchObject({ code: "subagent_worktree_cleanup_failed" });
+      expect(f.rows.has(f.id)).toBe(true);
+      expect(existsSync(f.children[0]!.cwd)).toBe(true);
+      rmSync(child.cwd);
+      renameSync(`${child.cwd}-held`, child.cwd);
+      expect((await f.resume()).statusCode).toBe(200);
+      const run = nextRun(f.id);
+      const allocation = f.store().prepareTurn(run, "fixture");
+      f.store().create({
+        ...run,
+        artifactRootId: allocation.artifactRootId,
+        artifactRootToken: allocation.identityToken,
+        currentTurnId: allocation.turnId,
+      });
+      expect(existsSync(await f.store().prepareWorktree(run.id, f.parent))).toBe(true);
+      expect((await f.delete()).statusCode).toBe(200);
+      expect(f.rows.has(f.id)).toBe(false);
+      expect((await f.resume()).statusCode).toBe(404);
+      await f.store().removeParent(f.id); // Idempotent retry keeps the tombstone.
+      await expect(f.store().removeWorktreesForMerge(f.id)).rejects.toThrow("claimed");
+      expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      expect(() => f.store().prepareTurn(nextRun(f.id), "fixture")).toThrow("deleted");
+      f.restart();
+      expect(f.store().list(f.id)).toEqual([]);
+      expect((await f.resume()).statusCode).toBe(404);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each([false, true])(
+    "preserves partial cleanup evidence and retries safely (restart=%s)",
+    async (restart) => {
+      const f = await fixture();
+      const original = SessionWorktreeStore.prototype.deleteWorktree;
+      const spy = vi
+        .spyOn(SessionWorktreeStore.prototype, "deleteWorktree")
+        .mockImplementation(function (this: SessionWorktreeStore, target, identity) {
+          if (target === f.children[1]!.cwd) throw new Error("fixture lock");
+          return original.call(this, target, identity);
+        });
+      try {
+        expect((await f.delete()).statusCode).toBe(409);
+        expect(f.store().get(f.children[0]!.id)?.worktreeCleanup).toBe("physical_removed");
+        expect(existsSync(f.children[0]!.cwd)).toBe(false);
+        expect(existsSync(f.children[1]!.cwd)).toBe(true);
+        expect(f.store().list(f.id)).toHaveLength(2);
+        f.store().create(nextRun(f.id));
+        // Repeated failure must not erase durable proof or poison allocation again.
+        expect((await f.delete()).statusCode).toBe(409);
+        f.store().create(nextRun(f.id));
+        spy.mockRestore();
+        if (restart) f.restart();
+        expect((await f.delete()).statusCode).toBe(200);
+        expect(f.store().list(f.id)).toEqual([]);
+        expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      } finally {
+        spy.mockRestore();
+        await f.close();
+      }
+    },
+  );
+
+  it("does not release another cleanup's denial before its failure settles", async () => {
+    const f = await fixture();
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi
+      .spyOn(SessionWorktreeStore.prototype, "deleteWorktree")
+      .mockImplementation(async () => {
+        enter();
+        await gate;
+        throw new Error("fixture lock");
+      });
+    const deletion = f.delete();
+    try {
+      await entered;
+      await expect(f.store().removeParent(f.id)).rejects.toThrow("claimed");
+      await expect(f.store().removeWorktreesForMerge(f.id)).rejects.toThrow("claimed");
+      expect((await f.delete()).statusCode).toBe(409);
+      expect((await f.resume()).statusCode).toBe(409);
+      expect(() => f.store().create(nextRun(f.id))).toThrow("deleted");
+      expect(() => f.store().prepareTurn(nextRun(f.id), "fixture")).toThrow("deleted");
+      release();
+      expect((await deletion).statusCode).toBe(409);
+      expect(f.sessions.mutationClaims.owner(f.id)).toBeUndefined();
+      f.store().create(nextRun(f.id));
+      spy.mockRestore();
+      expect((await f.delete()).statusCode).toBe(200);
+    } finally {
+      release();
+      await deletion;
+      spy.mockRestore();
       await f.close();
     }
   });

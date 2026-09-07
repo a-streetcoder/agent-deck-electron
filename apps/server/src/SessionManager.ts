@@ -1485,9 +1485,12 @@ export class SessionManager {
     this.loopSnapshots?.remove(sessionId);
   }
 
-  /** Remove only runs owned by a deleted parent, after destroy() settled children. */
-  async removeSubagentRuns(sessionId: string): Promise<void> {
-    await this.subagentRuns?.removeParent(sessionId);
+  /** Hold child allocation denial through the caller's complete DELETE transaction. */
+  async removeSubagentRuns(sessionId: string): Promise<((deleted: boolean) => void) | undefined> {
+    if (this.mutationClaims.owner(sessionId) !== "delete") {
+      throw new Error("Subagent deletion requires the session delete claim");
+    }
+    return await this.subagentRuns?.removeParentForDeletion(sessionId);
   }
 
   /** Reap only discardable child checkouts; the merged session retains history. */

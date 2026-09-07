@@ -50,8 +50,13 @@ Cleanup failure remains a successful merge with typed `cleanup.status: failed`
 and `worktree_remove_failed`; the parent checkout and metadata stay available.
 Partial physical cleanup has durable retry markers. Review/save child work before
 retrying session deletion, which retains its existing explicit-discard semantics.
-Merge's allocation claim is temporary, so a retained parent stays usable. The
-separate failed-delete claim recovery issue (#19) is not changed by this path.
+Merge's allocation claim is temporary, so a retained parent stays usable. Session
+DELETE holds child allocation denial through child cleanup, parent worktree/branch
+cleanup, and index removal. Its scoped completion handle rolls back only its own
+claim when the resumable index row survives, before releasing the delete mutation
+lock; successful session deletion retains the denial. Repeated/stale completion
+cannot clear an active or previously committed claim. Partial cleanup markers and
+ownership proofs remain available for safe retry, without restoring removed children.
 
 The session manager owns the mutation claims shared with HTTP routes. Resume
 (including parked wake, resource refresh, and rollback) holds a claim throughout

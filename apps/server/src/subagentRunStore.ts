@@ -276,7 +276,7 @@ export class SubagentRunStore {
   private readonly filePath: string;
   private readonly artifacts: SubagentArtifactStore;
   private readonly worktrees: SessionWorktreeStore;
-  private readonly deletedParents = new Set<string>();
+  private readonly deletedParents = new Map<string, "cleaning" | "deleted">();
   private readonly inFlightWorktrees = new Map<string, Set<Promise<unknown>>>();
   private storeQuarantined = false;
   private state: StoreState = { version: 4, runs: [] };
@@ -677,31 +677,62 @@ export class SubagentRunStore {
   /** Merge retains history and continuation handles, unlike deleting a session.
    * Caller must first stop the parent and settle all child scopes. */
   async removeWorktreesForMerge(parentSessionId: string): Promise<void> {
-    if (this.deletedParents.has(parentSessionId)) {
+    const finish = await this.cleanupParent(parentSessionId, true);
+    finish(false);
+  }
+
+  /** Standalone deletion commits when all child records have been removed. */
+  async removeParent(parentSessionId: string): Promise<void> {
+    const finish = await this.removeParentForDeletion(parentSessionId);
+    finish(true);
+  }
+
+  /** The session-delete owner must finish after parent cleanup/index removal.
+   * No release capability escapes until all child cleanup has settled. */
+  removeParentForDeletion(parentSessionId: string): Promise<(deleted: boolean) => void> {
+    return this.cleanupParent(parentSessionId, false);
+  }
+
+  private async cleanupParent(
+    parentSessionId: string,
+    retainHistory: boolean,
+  ): Promise<(deleted: boolean) => void> {
+    const previous = this.deletedParents.get(parentSessionId);
+    if (previous === "cleaning" || (retainHistory && previous === "deleted")) {
       throw new Error("Subagent parent cleanup is already claimed");
     }
+    // Claim synchronously, including for direct store callers. A competing cleanup
+    // must never release this owner's denial while its allocations/removals settle.
+    this.deletedParents.set(parentSessionId, "cleaning");
+    let active = true;
+    const finish = (deleted: boolean) => {
+      if (!active) return;
+      active = false;
+      if (previous === "deleted" || deleted) {
+        this.deletedParents.set(parentSessionId, "deleted");
+      } else {
+        this.deletedParents.delete(parentSessionId);
+      }
+    };
     try {
-      await this.cleanupParent(parentSessionId, true);
-    } finally {
-      // A retained session must remain usable. Do not change removeParent's
-      // deletion-claim lifetime here (its failed-delete recovery is separate).
-      this.deletedParents.delete(parentSessionId);
+      await this.cleanupParentRecords(parentSessionId, retainHistory);
+      return finish;
+    } catch (error) {
+      // Keep every remaining durable proof, but let a retained parent allocate.
+      finish(false);
+      throw error;
     }
   }
 
-  async removeParent(parentSessionId: string): Promise<void> {
-    await this.cleanupParent(parentSessionId, false);
-  }
-
-  private async cleanupParent(parentSessionId: string, retainHistory: boolean): Promise<void> {
+  private async cleanupParentRecords(
+    parentSessionId: string,
+    retainHistory: boolean,
+  ): Promise<void> {
     // Invalidate reads before artifact deletion; child finalizers may race and
     // unregister again, which is deliberately idempotent.
     for (const run of this.state.runs) {
       if (run.parentSessionId === parentSessionId) this.liveTranscripts.delete(run.id);
     }
-    // Synchronous claim serializes against prepareTurn/create. If deletion wins
-    // between allocation and metadata commit, create fails and no Pi is prompted.
-    this.deletedParents.add(parentSessionId);
     // Claim deletion before waiting. Every allocation re-checks the claim before
     // and after Git mutation, rolls back through its durable proof, and settles
     // before this method snapshots records for ownership preflight.

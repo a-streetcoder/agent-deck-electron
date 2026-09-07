@@ -511,6 +511,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         error: "Another session mutation is already in progress. Try again when it finishes.",
       });
     }
+    let finishSubagentDeletion: ((deleted: boolean) => void) | undefined;
     try {
       let meta = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
       if (!meta) return reply.status(404).send({ error: "unknown session" });
@@ -694,7 +695,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // itself can be deleted. Any proof/cleanup failure retains every remaining
       // child record, artifact, and parent session row for a safe retry.
       try {
-        await sessions.removeSubagentRuns?.(id);
+        finishSubagentDeletion = await sessions.removeSubagentRuns?.(id);
       } catch {
         return reply.status(409).send({
           code: "subagent_worktree_cleanup_failed",
@@ -803,7 +804,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       broadcast({ type: "session_removed", sessionId: id });
       return { ok: true };
     } finally {
-      releaseMutation();
+      try {
+        // The index is resume authority, including a remove that throws after
+        // committing. Roll back only this transaction's denial if its row survives.
+        finishSubagentDeletion?.(!index.find((session) => session.id === id));
+      } finally {
+        releaseMutation();
+      }
     }
   });
 
