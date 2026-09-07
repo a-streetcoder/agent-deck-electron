@@ -194,6 +194,15 @@ Fresh launch shape:
 
 For native subagents, agent frontmatter `thinking` applies even when frontmatter `model` is omitted; the child inherits the parent/default model and uses the agent's thinking suffix.
 
+In the Electron backend, fresh and continued children query the running parent's Pi
+`get_state` immediately before launch. Omitted model/provider and thinking inherit
+that current state, including Pi-selected defaults and subsequent picker changes,
+not the parent's original launch arguments or the child's saved selection. Tool
+launch overrides take precedence over agent frontmatter, which takes precedence
+over inherited values. Explicit model patterns are resolved by Pi without an
+inherited provider constraint; a model's explicit `:thinking` suffix retains Pi
+launch-plan precedence. Child capability/resource scoping is unchanged.
+
 Continuation launch shape:
 
 ```text

@@ -1808,6 +1808,7 @@ export const makeManagedSessionRuntime = (
             const fiber = yield* Effect.forkIn(
               runChildAgent({
                 piHost,
+                parent: handle,
                 helperContext,
                 meta,
                 params,
@@ -1956,6 +1957,7 @@ export function buildSubagentTaskPrompt(
 }
 
 interface RunChildArgs {
+  readonly parent: PiHostHandle;
   readonly piHost: Context.Tag.Service<PiHost>;
   readonly helperContext: HelperContext;
   readonly meta: SessionMeta;
@@ -1980,6 +1982,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
   let durableIdentityCreated = false;
   const {
     piHost,
+    parent,
     helperContext,
     meta,
     params,
@@ -2281,6 +2284,13 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             ? [...new Set([...ANONYMOUS_WORKTREE_TOOLS, ...(childBridge?.toolNames ?? [])])]
             : resolveChildTools(resolved?.tools, toolPolicy, childBridge?.toolNames);
 
+        // Read Pi, not the frozen launch plan: picker changes, restored sessions,
+        // and Pi-selected defaults all live here. Keep this inside the child scope
+        // so RPC failure/cancellation follows the normal startup cleanup path.
+        const parentState = yield* parent.getState;
+        const explicitModel = overrides?.model ?? resolved?.model;
+
+        // Keep worktree revalidation last, after the parent RPC round trip.
         if (runOptions?.worktree) {
           if (!durable?.validateWorktreeForSpawn) {
             return yield* Effect.fail(new Error("subagent worktree validation is unavailable"));
@@ -2297,9 +2307,12 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             kind: "agent",
             systemPrompt: { mode: "replace", text: promptFile },
             tools: childTools,
-            provider: overrides?.provider ?? helperContext.provider,
-            model: overrides?.model ?? resolved?.model ?? helperContext.model,
-            thinking: overrides?.thinking ?? resolved?.thinking,
+            // An explicit pattern may name another provider; let Pi resolve it
+            // rather than constraining it to the parent's provider.
+            provider:
+              overrides?.provider ?? (explicitModel ? undefined : parentState.model?.provider),
+            model: explicitModel ?? parentState.model?.id,
+            thinking: overrides?.thinking ?? resolved?.thinking ?? parentState.thinkingLevel,
             skills: resolved?.skillDirs,
             ...(runOptions?.resumeSessionPath
               ? { resumeSessionPath: runOptions.resumeSessionPath }

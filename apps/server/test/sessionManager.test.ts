@@ -23,6 +23,7 @@ import { SubagentRunStore } from "../src/subagentRunStore.ts";
 import {
   PiHost,
   PiHostLive,
+  PiRpcFailure,
   spawnPiProcess,
   type PiHostHandle,
   type PiHostShape,
@@ -654,6 +655,58 @@ describe("durable generic child lifecycle", () => {
     );
     warning.mockRestore();
     await expectProcessGone(pids[1]!);
+  });
+
+  it("fails child startup without stale fallback when the parent state RPC fails", async () => {
+    const { piHost, pids } = makeFakePiHost();
+    let rejectState = false;
+    const statuses: string[] = [];
+    const host: PiHostShape = {
+      spawn: (options) =>
+        piHost.spawn(options).pipe(
+          Effect.map((handle) => ({
+            ...handle,
+            getState: Effect.suspend(() =>
+              rejectState
+                ? Effect.fail(
+                    new PiRpcFailure({
+                      command: "get_state",
+                      reason: "parent state unavailable",
+                      stderr: "",
+                    }),
+                  )
+                : handle.getState,
+            ),
+          })),
+        ),
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            host,
+            buses,
+            makeParams({
+              helperContext: { provider: "stale", model: "stale" },
+              childRuns: {
+                create: () => {},
+                update: (_id, patch) => {
+                  if (patch.status) statuses.push(patch.status);
+                },
+              },
+            }),
+          );
+          rejectState = true;
+          const exit = yield* Effect.exit(rt.runChildAgent("must not launch"));
+          expect(exit._tag).toBe("Failure");
+          if (Exit.isFailure(exit))
+            expect(Cause.pretty(exit.cause)).toContain("parent state unavailable");
+          expect(pids).toHaveLength(1);
+          expect(statuses.at(-1)).toBe("failed");
+        }),
+      ),
+    );
+    await expectProcessGone(pids[0]!);
   });
 
   it("does not spawn a child when the required initial record cannot be persisted", async () => {
