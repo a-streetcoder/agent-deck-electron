@@ -99,6 +99,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           parsed.data.agent,
           parsed.data.continueSubagentID,
           reads,
+          ctx.signal,
         );
         return {
           content: `Deck subagent ID: ${result.runId}\n\n${result.text || "(the subagent returned no output)"}`,
@@ -212,9 +213,11 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           // well as existence. On teardown, reject every unclaimed task without
           // entering runSubagent (where durable child allocation begins).
           const parent = sessions.get(ctx.sessionId);
-          if (!parent?.isRunning) {
+          if (ctx.signal?.aborted || !parent?.isRunning) {
             const reason = new Error(
-              "parent session is no longer running; queued subagent cancelled",
+              ctx.signal?.aborted
+                ? "delegation aborted; queued subagent cancelled"
+                : "parent session is no longer running; queued subagent cancelled",
             );
             while (nextIndex < parsed.data.tasks.length) {
               settled[nextIndex] = { status: "rejected", reason };
@@ -235,6 +238,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
               undefined,
               "parallel",
               parsed.data.worktree ?? false,
+              ctx.signal,
             );
             settled[index] = { status: "fulfilled", value };
           } catch (reason) {
@@ -252,7 +256,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
             : `${label} (failed)\n${String(result.reason)}`;
         })
         .join("\n\n");
-      return { content: rendered, isError: !anyOk };
+      return { content: rendered, isError: ctx.signal?.aborted || !anyOk };
     },
   );
 

@@ -28,7 +28,7 @@ function harness(runSubagent: ReturnType<typeof vi.fn>) {
   } as unknown as SessionManager;
   const bridge = new BridgeRegistry();
   registerDeckBridgeTools(bridge, sessions);
-  const dispatch = (params: Record<string, unknown>) =>
+  const dispatch = (params: Record<string, unknown>, signal?: AbortSignal) =>
     bridge.dispatch(
       {
         tool: "managed_parallel",
@@ -37,7 +37,7 @@ function harness(runSubagent: ReturnType<typeof vi.fn>) {
         toolCallId: "parallel-call",
         token: "test-token",
       },
-      { token: "test-token" },
+      { token: "test-token", signal },
     );
   return { bridge, dispatch, parent, sessions };
 }
@@ -173,8 +173,46 @@ describe("managed_parallel bounded concurrency", () => {
         undefined,
         "parallel",
         true,
+        undefined,
       ]);
     }
+  });
+
+  it("does not allocate any queued task for an already-aborted call", async () => {
+    const runSubagent = vi.fn();
+    const { dispatch } = harness(runSubagent);
+    const controller = new AbortController();
+    controller.abort();
+    const response = await dispatch({ tasks: tasks(3) }, controller.signal);
+    expect(response.isError).toBe(true);
+    expect(runSubagent).not.toHaveBeenCalled();
+  });
+
+  it("forwards call cancellation and stops the queue even after an earlier success", async () => {
+    const controller = new AbortController();
+    const started = deferred<void>();
+    const runSubagent = vi
+      .fn()
+      .mockResolvedValueOnce("first done")
+      .mockImplementation(
+        (...args: unknown[]) =>
+          new Promise((_resolve, reject) => {
+            const signal = args[7] as AbortSignal;
+            expect(signal).toBe(controller.signal);
+            signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true });
+            started.resolve();
+          }),
+      );
+    const { dispatch, parent } = harness(runSubagent);
+    const result = dispatch({ concurrency: 1, tasks: tasks(4) }, controller.signal);
+    await started.promise;
+    controller.abort();
+    const response = await result;
+    expect(parent.isRunning).toBe(true);
+    expect(runSubagent).toHaveBeenCalledTimes(2);
+    expect(response.isError).toBe(true);
+    expect(response.content).toContain("first done");
+    expect(response.content).toContain("delegation aborted; queued subagent cancelled");
   });
 
   it("does not launch queued tasks after parent teardown", async () => {

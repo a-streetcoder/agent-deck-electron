@@ -33,6 +33,14 @@ existing disabled-agent launch gates enforce the same policy Doctor summarizes.
 Scanning never writes settings or bundled files. This does not change the
 intentional `tools: false` or `thinking: false` override semantics.
 
+## Delegation cancellation
+
+Composer Stop propagates each aborted bridge call's signal to its owned managed
+children (including continuations), settles their supervisor waits, and prevents
+queued parallel tasks from allocating; unrelated children and the parent session
+remain alive. Cancellation waits for owned acquisition/process cleanup and retains
+durable run/worktree identity; it is not session destruction or worktree deletion.
+
 ## Session merge cleanup
 
 When merge retention is off, a committed merge stops the parent runtime and waits

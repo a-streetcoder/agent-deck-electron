@@ -1808,6 +1808,9 @@ export const makeManagedSessionRuntime = (
           // incremented, driving activeChildRuns negative and making a later
           // real child look like no child at all to parking and resource
           // refresh (Codex).
+          if (runOptions?.signal?.aborted) {
+            return Effect.fail(new Error("Subagent delegation was aborted."));
+          }
           if (params.subagentsEnabled?.() === false) {
             return Effect.fail(
               new Error(
@@ -1821,19 +1824,22 @@ export const makeManagedSessionRuntime = (
             // deletion, and server shutdown therefore interrupt and finalize every
             // child before the parent's teardown completes.
             const fiber = yield* Effect.forkIn(
-              runChildAgent({
-                piHost,
-                parent: handle,
-                helperContext,
-                meta,
-                params,
-                emit,
-                task,
-                agentName,
-                toolPolicy,
-                overrides,
-                runOptions,
-              }),
+              withDelegationSignal(
+                runChildAgent({
+                  piHost,
+                  parent: handle,
+                  helperContext,
+                  meta,
+                  params,
+                  emit,
+                  task,
+                  agentName,
+                  toolPolicy,
+                  overrides,
+                  runOptions,
+                }),
+                runOptions?.signal,
+              ),
               sessionScope,
             );
             return yield* Fiber.join(fiber);
@@ -1922,6 +1928,8 @@ export interface ChildLaunchOverrides {
 }
 
 export interface ChildRunOptions {
+  /** Cancels only this delegation, not the parent turn/session or other children. */
+  signal?: AbortSignal;
   /** Validated project-relative read-first hints for managed_subagent only. */
   declaredReads?: readonly string[];
   /** Supplied only for an already validated same-parent continuation. */
@@ -1970,6 +1978,25 @@ export function buildSubagentTaskPrompt(
     : "Delegated assignment: the task below is the only active assignment for this fresh child session.";
   return `${boundary}\n\nRead current project files first if relevant; treat these project-relative paths as hints, not injected truth. Agent Deck has not preloaded their contents:\n${declaredReads.join("\n")}\n\nTask:\n${task}`;
 }
+
+/** Race inside the session-owned child fiber, so cancellation waits for its
+ * existing scoped process/bridge finalizers. Never close the parent scope:
+ * unrelated delegations and direct callers still belong to that live session. */
+const withDelegationSignal = <A, E>(
+  effect: Effect.Effect<A, E>,
+  signal: AbortSignal | undefined,
+): Effect.Effect<A, E> => {
+  if (!signal) return effect;
+  const aborted = Effect.async<never>((resume) => {
+    const abort = (): void => resume(Effect.interrupt);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    return Effect.sync(() => signal.removeEventListener("abort", abort));
+  });
+  return Effect.suspend(() =>
+    signal.aborted ? Effect.interrupt : Effect.raceFirst(effect, aborted),
+  );
+};
 
 interface RunChildArgs {
   readonly parent: PiHostHandle;
@@ -2051,80 +2078,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const createdAt = new Date().toISOString();
     let artifactSessionsDirectory: string | undefined;
     let childCwd = meta.cwd;
-    if (durable) {
-      const baseRecord: SubagentRunRecord = {
-        id: runId,
-        parentSessionId: meta.id,
-        task,
-        ...(agentName ? { agent: agentName } : {}),
-        status: "starting",
-        createdAt,
-        updatedAt: createdAt,
-        source: runOptions?.source ?? "single",
-        declaredReads: [...declaredReads],
-      };
-      const allocation = durable.prepareTurn
-        ? yield* persistChildRun(() =>
-            durable.prepareTurn!(
-              baseRecord,
-              authoredSystemPrompt,
-              isContinuation
-                ? {
-                    artifactRootId: runOptions?.artifactRootId,
-                    artifactRootToken: runOptions?.artifactRootToken,
-                  }
-                : undefined,
-            ),
-          )
-        : undefined;
-      artifactSessionsDirectory = allocation?.sessionsDirectory;
-      effectiveSystemPrompt = allocation?.systemPrompt ?? authoredSystemPrompt;
-      yield* persistChildRun(() => {
-        const artifactPatch = allocation
-          ? {
-              artifactRootId: allocation.artifactRootId,
-              artifactRootToken: allocation.identityToken,
-              currentTurnId: allocation.turnId,
-            }
-          : {};
-        if (isContinuation) {
-          durable.update(runId, {
-            task,
-            ...(agentName ? { agent: agentName } : {}),
-            declaredReads: [...declaredReads],
-            status: "starting",
-            updatedAt: createdAt,
-            completedAt: undefined,
-            summary: undefined,
-            error: undefined,
-            model: undefined,
-            inputTokens: undefined,
-            outputTokens: undefined,
-            durationMs: undefined,
-            ...artifactPatch,
-          });
-        } else {
-          durable.create({ ...baseRecord, ...artifactPatch });
-        }
-      });
-      durableIdentityCreated = true;
-      yield* persistChildRun(() => durable.registerTranscript?.(runId));
-      // Artifact evidence receives only authoredSystemPrompt above. Memory is
-      // volatile launch context and is appended afterwards, never persisted.
-      if (params.recallChildMemory) {
-        childMemoryContext = yield* Effect.tryPromise({
-          try: () =>
-            params.recallChildMemory!({
-              projectId: meta.projectId,
-              agentName,
-              agentDescription: resolved?.description,
-              task,
-            }),
-          catch: () => new Error("child memory recall unavailable"),
-        }).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
-      }
-    }
-    let transcriptRegistered = durableIdentityCreated;
+    let transcriptRegistered = false;
     let childTranscript = emptyTranscript();
     const childIngest = createIngestState();
     const unregisterTranscript = (): void => {
@@ -2189,7 +2143,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         // record; a persistence failure is logged without blocking child cleanup.
         yield* Effect.addFinalizer((exit) => {
           unregisterTranscript();
-          if (!durable || terminalPersisted) return Effect.void;
+          if (!durable || !durableIdentityCreated || terminalPersisted) return Effect.void;
           const now = new Date().toISOString();
           const interrupted = Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause);
           const status = interrupted ? "stopped" : "failed";
@@ -2207,7 +2161,12 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           // but before spawn/get_state allowed the normal cell_open. Replace the
           // existing stable card now so live UI and persistence agree; fresh
           // runs retain their established no-card-on-pre-open-failure behavior.
-          if (isContinuation && !cardOpened && !startupCardFinalized) {
+          // Only call-signal cancellation terminalizes open cards here (#20);
+          // general session/Loop teardown terminalization is handled separately.
+          if (
+            (isContinuation && !cardOpened && !startupCardFinalized) ||
+            (interrupted && runOptions?.signal?.aborted && cardOpened)
+          ) {
             startupCardFinalized = true;
             emit({
               type: "cell_final",
@@ -2249,6 +2208,85 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             Effect.orDie,
           );
         });
+        if (durable) {
+          // Artifact allocation and durable acceptance are one synchronous claim.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const baseRecord: SubagentRunRecord = {
+                id: runId,
+                parentSessionId: meta.id,
+                task,
+                ...(agentName ? { agent: agentName } : {}),
+                status: "starting",
+                createdAt,
+                updatedAt: createdAt,
+                source: runOptions?.source ?? "single",
+                declaredReads: [...declaredReads],
+              };
+              const allocation = durable.prepareTurn
+                ? yield* persistChildRun(() =>
+                    durable.prepareTurn!(
+                      baseRecord,
+                      authoredSystemPrompt,
+                      isContinuation
+                        ? {
+                            artifactRootId: runOptions?.artifactRootId,
+                            artifactRootToken: runOptions?.artifactRootToken,
+                          }
+                        : undefined,
+                    ),
+                  )
+                : undefined;
+              artifactSessionsDirectory = allocation?.sessionsDirectory;
+              effectiveSystemPrompt = allocation?.systemPrompt ?? authoredSystemPrompt;
+              yield* persistChildRun(() => {
+                const artifactPatch = allocation
+                  ? {
+                      artifactRootId: allocation.artifactRootId,
+                      artifactRootToken: allocation.identityToken,
+                      currentTurnId: allocation.turnId,
+                    }
+                  : {};
+                if (isContinuation) {
+                  durable.update(runId, {
+                    task,
+                    ...(agentName ? { agent: agentName } : {}),
+                    declaredReads: [...declaredReads],
+                    status: "starting",
+                    updatedAt: createdAt,
+                    completedAt: undefined,
+                    summary: undefined,
+                    error: undefined,
+                    model: undefined,
+                    inputTokens: undefined,
+                    outputTokens: undefined,
+                    durationMs: undefined,
+                    ...artifactPatch,
+                  });
+                } else {
+                  durable.create({ ...baseRecord, ...artifactPatch });
+                }
+                durableIdentityCreated = true;
+                transcriptRegistered = true;
+              });
+              yield* persistChildRun(() => durable.registerTranscript?.(runId));
+            }),
+          );
+        }
+        // Artifact evidence receives only authoredSystemPrompt above. Memory is
+        // volatile launch context and is appended afterwards, never persisted.
+        if (durable && params.recallChildMemory) {
+          childMemoryContext = yield* Effect.tryPromise({
+            try: () =>
+              params.recallChildMemory!({
+                projectId: meta.projectId,
+                agentName,
+                agentDescription: resolved?.description,
+                task,
+              }),
+            catch: () => new Error("child memory recall unavailable"),
+          }).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+        }
         if (runOptions?.worktree) {
           if (isContinuation) {
             return yield* Effect.fail(new Error("continued subagents cannot allocate worktrees"));
@@ -2256,10 +2294,12 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           if (!durable?.prepareWorktree) {
             return yield* Effect.fail(new Error("subagent worktree persistence is unavailable"));
           }
+          // Git allocation cannot be abandoned: let it publish its ownership
+          // before interruption terminalizes the retained run; never spawn afterwards.
           childCwd = yield* Effect.tryPromise({
             try: () => durable.prepareWorktree!(runId, meta.cwd),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
-          });
+          }).pipe(Effect.uninterruptible);
         }
 
         // Constrained report-only children never receive a bridge extension:

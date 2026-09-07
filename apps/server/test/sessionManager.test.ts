@@ -9,6 +9,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   Layer,
   ManagedRuntime,
   Option,
@@ -273,6 +274,142 @@ describe("child transcript reconstruction ownership", () => {
 });
 
 describe("durable generic child lifecycle", () => {
+  it.each([false, true])(
+    "aborts only its live child (continuation=%s), not independent work",
+    async (continuation) => {
+      const { piHost, pids } = makeFakePiHost();
+      const store = new SubagentRunStore(makeTempDir(), () => {});
+      const params = makeParams({
+        childRuns: {
+          create: (record) => store.create(record),
+          update: (id, patch) => store.update(id, patch),
+        },
+      });
+      const controller = new AbortController();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            const prior = continuation ? yield* rt.runChildAgent("first turn") : undefined;
+            const baseline = pids.length;
+            const owned = yield* Effect.fork(
+              rt.runChildAgent("stream-with-metadata-forever", undefined, undefined, undefined, {
+                source: "single",
+                signal: controller.signal,
+                ...(prior ? { runId: prior.runId, resumeSessionPath: FIXTURE } : {}),
+              }),
+            );
+            yield* waitUntil(() => pids.length === baseline + 1);
+            const independent = yield* Effect.fork(
+              rt.runChildAgent("stream-with-metadata-forever"),
+            );
+            yield* waitUntil(
+              () => store.list(params.meta.id).filter((r) => r.status === "running").length === 2,
+            );
+            controller.abort();
+            const exit = yield* Fiber.await(owned);
+            expect(Exit.isFailure(exit)).toBe(true);
+            expect(processAlive(pids[baseline]!)).toBe(false);
+            expect(processAlive(pids[baseline + 1]!)).toBe(true);
+            expect(processAlive(pids[0]!)).toBe(true);
+            const records = store.list(params.meta.id);
+            expect(records.filter((r) => r.status === "stopped")).toHaveLength(1);
+            if (prior) expect(records.find((r) => r.status === "stopped")?.id).toBe(prior.runId);
+            const cards = (yield* rt.snapshot).state.cells.filter((c) => c.kind === "subagent");
+            expect(cards.map((c) => c.status).sort()).toEqual(["running", "stopped"]);
+            yield* Fiber.interrupt(independent);
+          }),
+        ),
+      );
+      for (const pid of pids) await expectProcessGone(pid);
+    },
+  );
+
+  it.each(["already", "memory", "worktree", "bridge"] as const)(
+    "aborts during %s without a late spawn",
+    async (stage) => {
+      const { piHost, pids } = makeFakePiHost();
+      const store = new SubagentRunStore(makeTempDir(), () => {});
+      const controller = new AbortController();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered = false;
+      const wait = async () => {
+        entered = true;
+        await gate;
+      };
+      const dispose = vi.fn(async () => {});
+      const commitUsage = vi.fn();
+      const unregisterTranscript = vi.fn();
+      const params = makeParams({
+        childRuns: {
+          create: (record) => store.create(record),
+          update: (id, patch) => store.update(id, patch),
+          unregisterTranscript,
+          ...(stage === "worktree"
+            ? {
+                prepareWorktree: async (id) => {
+                  await wait();
+                  expect(store.get(id)?.status).toBe("starting");
+                  return process.cwd();
+                },
+              }
+            : {}),
+        },
+        ...(stage === "memory"
+          ? {
+              recallChildMemory: async () => {
+                await wait();
+                return { prompt: "memory", isStillValid: () => true, commitUsage };
+              },
+            }
+          : {}),
+        ...(stage === "bridge"
+          ? {
+              childBridgeFactory: async () => {
+                await wait();
+                return { extension: FIXTURE, toolNames: [], dispose };
+              },
+            }
+          : {}),
+      });
+      if (stage === "already") controller.abort();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            const fiber = yield* Effect.fork(
+              rt.runChildAgent("must not spawn", undefined, undefined, undefined, {
+                source: "single",
+                signal: controller.signal,
+                worktree: stage === "worktree",
+              }),
+            );
+            if (stage !== "already") {
+              yield* waitUntil(() => entered);
+              controller.abort();
+              // Let interruption reach the acquisition before releasing it.
+              yield* Effect.yieldNow();
+            }
+            release();
+            const exit = yield* Fiber.await(fiber);
+            expect(Exit.isFailure(exit)).toBe(true);
+            expect(pids).toHaveLength(1);
+            expect(processAlive(pids[0]!)).toBe(true);
+            expect(store.list(params.meta.id).map((r) => r.status)).toEqual(
+              stage === "already" ? [] : ["stopped"],
+            );
+            expect(commitUsage).not.toHaveBeenCalled();
+            if (stage === "bridge") expect(dispose).toHaveBeenCalledOnce();
+            if (stage !== "already") expect(unregisterTranscript).toHaveBeenCalledOnce();
+          }),
+        ),
+      );
+    },
+  );
+
   it("releases a bridge acquired while parent cancellation is waiting on MCP preparation", async () => {
     const { piHost, pids } = makeFakePiHost();
     const dispose = vi.fn(async () => {});

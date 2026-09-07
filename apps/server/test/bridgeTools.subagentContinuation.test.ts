@@ -10,7 +10,12 @@ import {
 import type { SessionManager } from "../src/SessionManager.ts";
 import { ChildRunError } from "../src/services/sessionManager.ts";
 
-const dispatch = async (bridge: BridgeRegistry, tool: string, params: Record<string, unknown>) =>
+const dispatch = async (
+  bridge: BridgeRegistry,
+  tool: string,
+  params: Record<string, unknown>,
+  signal?: AbortSignal,
+) =>
   await bridge.dispatch(
     {
       tool,
@@ -19,7 +24,7 @@ const dispatch = async (bridge: BridgeRegistry, tool: string, params: Record<str
       toolCallId: "tool-call",
       token: "test-token",
     },
-    { token: "test-token" },
+    { token: "test-token", signal },
   );
 
 describe("managed_subagent continuation bridge contract", () => {
@@ -50,8 +55,33 @@ describe("managed_subagent continuation bridge contract", () => {
       undefined,
       runId,
       ["docs/guide.md", "src/main.ts"],
+      undefined,
     );
     expect(response).toEqual({ content: `Deck subagent ID: ${runId}\n\nlatest result` });
+  });
+
+  it("forwards the single call's abort signal and returns cancellation as an error", async () => {
+    const controller = new AbortController();
+    const runManagedSubagent = vi.fn(async (...args: unknown[]) => {
+      const signal = args[5] as AbortSignal;
+      expect(signal).toBe(controller.signal);
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("delegation stopped")), {
+          once: true,
+        });
+        controller.abort();
+      });
+    });
+    const bridge = new BridgeRegistry();
+    registerDeckBridgeTools(bridge, { runManagedSubagent } as unknown as SessionManager);
+    const response = await dispatch(
+      bridge,
+      "managed_subagent",
+      { task: "wait" },
+      controller.signal,
+    );
+    expect(response.isError).toBe(true);
+    expect(response.content).toContain("delegation stopped");
   });
 
   it("rejects every unsafe read list instead of dropping individual entries", async () => {
@@ -194,6 +224,7 @@ describe("managed_subagent continuation bridge contract", () => {
       undefined,
       "parallel",
       false,
+      undefined,
     );
     await dispatch(bridge, "managed_parallel", {
       tasks: [{ task: "isolated" }],
@@ -207,6 +238,7 @@ describe("managed_subagent continuation bridge contract", () => {
       undefined,
       "parallel",
       true,
+      undefined,
     );
   });
 });

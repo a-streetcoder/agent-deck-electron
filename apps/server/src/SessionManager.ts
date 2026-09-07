@@ -408,7 +408,9 @@ export class ManagedSession {
     overrides?: ChildLaunchOverrides,
     runOptions?: ChildRunOptions,
   ): Promise<ChildRunResult> {
+    runOptions?.signal?.throwIfAborted();
     const session = await this.piSession();
+    runOptions?.signal?.throwIfAborted();
     return await runPromiseUnwrapped(
       session.runtime,
       session.rt.runChildAgent(task, agentName, toolPolicy, overrides, runOptions),
@@ -1620,13 +1622,16 @@ export class SessionManager {
     overrides?: ChildLaunchOverrides,
     source: "single" | "parallel" = "single",
     worktree = false,
+    signal?: AbortSignal,
   ): Promise<string> {
+    signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
     return (
       await parent.runChildAgent(task, agentName, toolPolicy, overrides, {
         source,
         ...(worktree ? { worktree: true } : {}),
+        ...(signal ? { signal } : {}),
       })
     ).text;
   }
@@ -1639,7 +1644,9 @@ export class SessionManager {
     agentName?: string,
     continueSubagentId?: string,
     declaredReads?: readonly string[],
+    signal?: AbortSignal,
   ): Promise<ChildRunResult> {
+    signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
     if (!this.subagentRuns) throw new Error("subagent run persistence is unavailable");
@@ -1648,6 +1655,7 @@ export class SessionManager {
       return await parent.runChildAgent(task, agentName, undefined, undefined, {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
+        ...(signal ? { signal } : {}),
       });
     }
 
@@ -1699,6 +1707,7 @@ export class SessionManager {
       return await parent.runChildAgent(task, effectiveAgentName, undefined, undefined, {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
+        ...(signal ? { signal } : {}),
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,
