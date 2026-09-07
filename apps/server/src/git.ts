@@ -996,8 +996,17 @@ export async function gitLocalBranchRef(cwd: string, branch: string): Promise<st
   return gitFullyQualifiedBranchRef(cwd, branch);
 }
 
-export async function gitWorkingTreeClean(cwd: string): Promise<boolean> {
-  return (await runGit(cwd, ["status", "--porcelain=v1", "-z"])).length === 0;
+export async function gitWorkingTreeClean(cwd: string, includeIgnored = false): Promise<boolean> {
+  return (
+    (
+      await runGit(cwd, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        ...(includeIgnored ? ["--ignored"] : []),
+      ])
+    ).length === 0
+  );
 }
 
 export interface LoopWorktreePatch {

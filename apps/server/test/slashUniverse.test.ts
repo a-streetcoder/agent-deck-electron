@@ -1,3 +1,4 @@
+import { SessionMutationClaims } from "../src/sessionMutationClaims.ts";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InjectedCommandRecord, SlashUniverseItem } from "@agent-deck/contracts";
@@ -243,6 +244,7 @@ describe("GET /sessions/:id/slash-universe", () => {
     const ctx = {
       fastify,
       sessions: {
+        mutationClaims: new SessionMutationClaims(),
         get: (id: string) => (session && session.meta.id === id ? session : undefined),
       },
       index: { list: () => [], find: () => undefined, upsert: () => {}, remove: () => false },

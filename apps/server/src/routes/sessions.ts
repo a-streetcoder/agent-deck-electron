@@ -36,7 +36,6 @@ import { SessionCreationError, SubagentTranscriptEvidenceError } from "../Sessio
 import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
-import { SessionMutationClaims } from "../sessionMutationClaims.ts";
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 
 const mergeLocks = new Set<string>();
@@ -86,7 +85,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     prepareProjectMcpSession,
   } = ctx;
 
-  const sessionMutations = new SessionMutationClaims();
+  const sessionMutations = sessions.mutationClaims;
   const historyActions = new HistoryActionCoordinator(
     sessions,
     index,
@@ -360,6 +359,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // canonical history (never from our own logs).
   fastify.post("/sessions/:id/resume", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const mutation = sessionMutations.owner(id);
+    if (mutation && mutation !== "resume") {
+      return reply.status(409).send({
+        code: "session_mutation_busy",
+        error: "Another session mutation is already in progress. Try again when it finishes.",
+      });
+    }
+    // No await before manager.resume claims the whole launch transaction.
     const live = sessions.get(id);
     if (live?.isRunning) return { session: live.meta };
     const meta = live?.meta ?? index.find((s) => s.id === id);
@@ -1280,6 +1287,36 @@ export function registerSessionRoutes(ctx: ServerContext): void {
               code: "runtime_shutdown_failed" as const,
               error:
                 "The merge succeeded, but the session runtime still owns its worktree. Wait for or stop Pi, then delete the session to retry worktree removal.",
+            },
+          };
+        }
+
+        try {
+          await sessions.removeSubagentWorktreesForMerge(id);
+        } catch {
+          return {
+            ...retainedSuccess(),
+            cleanup: {
+              status: "failed" as const,
+              runtimeStopped,
+              code: "worktree_remove_failed" as const,
+              error:
+                "The merge succeeded, but child worktrees could not be safely removed. The parent checkout, branch, and child history were retained. Review child changes or repair ownership before retrying session deletion; deletion discards owned child work.",
+            },
+          };
+        }
+
+        // Defense in depth for internal owners: the shared resume claim should
+        // make this impossible, but never delete a cwd a runtime now owns.
+        if (sessions.get(id)) {
+          return {
+            ...retainedSuccess(),
+            cleanup: {
+              status: "failed" as const,
+              runtimeStopped,
+              code: "runtime_shutdown_failed" as const,
+              error:
+                "The merge succeeded, but a session runtime owns the retained worktree after child cleanup. Stop it before retrying deletion.",
             },
           };
         }

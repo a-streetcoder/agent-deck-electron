@@ -27,6 +27,7 @@ import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
+import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
@@ -590,6 +591,8 @@ export class ManagedSession {
 }
 
 export class SessionManager {
+  /** Shared by HTTP mutations and every resume path (including parked wake). */
+  readonly mutationClaims = new SessionMutationClaims();
   private readonly sessions = new Map<string, ManagedSession>();
   private idleParkingTimeoutMs: number | null = null;
   private onParkingMetaChange: (meta: SessionMeta) => void = () => {};
@@ -989,18 +992,35 @@ export class SessionManager {
   ): Promise<ManagedSession> {
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
+    // History owns a larger transaction that intentionally resumes its source.
+    // Every other caller must exclude merge/delete for the entire launch,
+    // including async resource preflight, parking transitions and history seed.
+    const historyOwned = this.mutationClaims.owner(meta.id) === "history";
+    const release = historyOwned ? undefined : this.mutationClaims.tryClaim(meta.id, "resume");
+    if (!historyOwned && !release) throw new Error("Another session mutation is in progress");
+    const task = Promise.resolve().then(() =>
+      this.resumeClaimed(meta, fallbackPlan, env, preserveActivity, preparedCandidate),
+    );
+    this.resuming.set(meta.id, task);
+    try {
+      return await task;
+    } finally {
+      this.resuming.delete(meta.id);
+      release?.();
+    }
+  }
+
+  private async resumeClaimed(
+    meta: SessionMeta,
+    fallbackPlan: LaunchPlan,
+    env?: Record<string, string | undefined>,
+    preserveActivity = false,
+    preparedCandidate?: ResolvedLaunchResources,
+  ): Promise<ManagedSession> {
     const transitioning = this.sessions.get(meta.id)?.currentParkingTransition;
     if (transitioning) {
-      const waiting = transitioning.then(async () => {
-        if (this.resuming.get(meta.id) === waiting) this.resuming.delete(meta.id);
-        return await this.resume(meta, fallbackPlan, env, preserveActivity, preparedCandidate);
-      });
-      this.resuming.set(meta.id, waiting);
-      try {
-        return await waiting;
-      } finally {
-        if (this.resuming.get(meta.id) === waiting) this.resuming.delete(meta.id);
-      }
+      await transitioning;
+      return await this.resumeClaimed(meta, fallbackPlan, env, preserveActivity, preparedCandidate);
     }
     // Already live and running → hand it back. launch() would otherwise
     // overwrite the map entry and orphan the old session's still-running pi
@@ -1145,11 +1165,9 @@ export class SessionManager {
       this.onParkingRebind(revived.id);
       return session;
     });
-    this.resuming.set(meta.id, task);
     try {
       return await task;
     } finally {
-      this.resuming.delete(meta.id);
       await releaseResumePreflight?.().catch(() => {});
     }
   }
@@ -1470,6 +1488,11 @@ export class SessionManager {
   /** Remove only runs owned by a deleted parent, after destroy() settled children. */
   async removeSubagentRuns(sessionId: string): Promise<void> {
     await this.subagentRuns?.removeParent(sessionId);
+  }
+
+  /** Reap only discardable child checkouts; the merged session retains history. */
+  async removeSubagentWorktreesForMerge(sessionId: string): Promise<void> {
+    await this.subagentRuns?.removeWorktreesForMerge(sessionId);
   }
 
   async subagentTranscript(

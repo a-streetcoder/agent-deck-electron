@@ -32,12 +32,14 @@ import {
   renderSubagentArtifactInput,
 } from "./declaredReads.ts";
 import {
+  gitCommitsAhead,
   gitDetachedWorktreeAdd,
   gitDetachedWorktreeRegistrationMatches,
   gitRepositoryIdentity,
   gitWorktreePrune,
   gitWorktreeRegistrationAtPath,
   gitWorktreeSource,
+  gitWorkingTreeClean,
 } from "./git.ts";
 import { syncDirectoryStrict } from "./sessionImages.ts";
 
@@ -672,7 +674,26 @@ export class SubagentRunStore {
     this.commit({ version: 4, runs });
   }
 
+  /** Merge retains history and continuation handles, unlike deleting a session.
+   * Caller must first stop the parent and settle all child scopes. */
+  async removeWorktreesForMerge(parentSessionId: string): Promise<void> {
+    if (this.deletedParents.has(parentSessionId)) {
+      throw new Error("Subagent parent cleanup is already claimed");
+    }
+    try {
+      await this.cleanupParent(parentSessionId, true);
+    } finally {
+      // A retained session must remain usable. Do not change removeParent's
+      // deletion-claim lifetime here (its failed-delete recovery is separate).
+      this.deletedParents.delete(parentSessionId);
+    }
+  }
+
   async removeParent(parentSessionId: string): Promise<void> {
+    await this.cleanupParent(parentSessionId, false);
+  }
+
+  private async cleanupParent(parentSessionId: string, retainHistory: boolean): Promise<void> {
     // Invalidate reads before artifact deletion; child finalizers may race and
     // unregister again, which is deliberately idempotent.
     for (const run of this.state.runs) {
@@ -737,9 +758,36 @@ export class SubagentRunStore {
       promoted.add(run.id);
     }
 
+    const assertInactive = (id: string) => {
+      if (!retainHistory) return;
+      const current = this.get(id);
+      if (!current || active(current.status)) {
+        throw new Error("Subagent worktree still has an active or unknown owner");
+      }
+    };
+    const assertDiscardable = async (run: (typeof worktreeRuns)[number]) => {
+      assertInactive(run.id);
+      if (!retainHistory || run.worktreeCleanup === "physical_removed") return;
+      const registration = await gitWorktreeRegistrationAtPath(
+        run.worktreeParentRepository,
+        run.worktreePath,
+      );
+      if (!registration) return; // Empty pre-add reservation, checked below.
+      if (
+        !registration.commit ||
+        !(await gitWorkingTreeClean(run.worktreePath, true)) ||
+        (await gitCommitsAhead(run.worktreeParentRepository, registration.commit, "HEAD")) !== 0
+      ) {
+        throw new Error(
+          "Child worktree contains unmerged commits or local files; retain it for review",
+        );
+      }
+    };
+
     // Phase 1 is read-only across EVERY child after non-destructive recovery. A
     // later unsafe child cannot remove an earlier sibling's worktree.
     for (const run of worktreeRuns) {
+      await assertDiscardable(run);
       if (
         (await gitRepositoryIdentity(run.worktreeParentRepository)) !==
         run.worktreeRepositoryIdentity
@@ -780,6 +828,7 @@ export class SubagentRunStore {
     // Phase 2 removes only worktrees whose complete sibling set preflighted.
     // Re-check immediately before each mutation to bound ambient-parent TOCTOU.
     for (const run of worktreeRuns) {
+      await assertDiscardable(run);
       const registration = await gitWorktreeRegistrationAtPath(
         run.worktreeParentRepository,
         run.worktreePath,
@@ -810,10 +859,33 @@ export class SubagentRunStore {
         // deleteWorktree is idempotent for a missing leaf. That covers a crash
         // after physical removal but before the marker write while the exact
         // stale registration still proves which checkout this record owned.
+        assertInactive(run.id);
         await this.worktrees.deleteWorktree(run.worktreePath, run.worktreeIdentity);
         this.update(run.id, { worktreeCleanup: "physical_removed" });
       }
       await gitWorktreePrune(run.worktreeParentRepository);
+    }
+
+    if (retainHistory) {
+      // Commit once, before the caller removes the repository proof anchor.
+      // On failure, physical_removed markers retain retry evidence across restart.
+      const ids = new Set(worktreeRuns.map((run) => run.id));
+      this.commit({
+        version: 4,
+        runs: this.state.runs.map((run) => {
+          if (!ids.has(run.id)) return run;
+          const retained = { ...run };
+          delete retained.worktreePath;
+          delete retained.worktreeIdentity;
+          delete retained.worktreeParentRepository;
+          delete retained.worktreeRepositoryIdentity;
+          delete retained.worktreeBaseCommit;
+          delete retained.worktreeState;
+          delete retained.worktreeCleanup;
+          return retained;
+        }),
+      });
+      return;
     }
 
     // Only after every worktree is physically safe do artifacts/records enter

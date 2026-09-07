@@ -1,6 +1,6 @@
-export type SessionMutationKind = "history" | "delete" | "merge" | "attention";
+export type SessionMutationKind = "history" | "delete" | "merge" | "attention" | "resume";
 
-/** Synchronous per-session transaction claim shared by destructive routes. */
+/** Synchronous per-session transaction claim shared by routes and runtime resume. */
 export class SessionMutationClaims {
   private readonly claims = new Map<string, SessionMutationKind>();
 

@@ -2379,7 +2379,9 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
    * which does `getMessages.pipe(Effect.orDie)`), with a spy on `ensureExitHandled`
    * so the test can assert the facade tore the half-built session down.
    */
-  function makeFakeRuntime(): { runtime: ServerRuntime; exitHandledCalls: () => number } {
+  function makeFakeRuntime(
+    seed: Effect.Effect<void> = Effect.die(new Error("seed failed: pi exited")),
+  ): { runtime: ServerRuntime; exitHandledCalls: () => number } {
     let calls = 0;
     const fakeBus: SessionPushBusHandle = {
       lastSeq: Effect.succeed(0),
@@ -2396,7 +2398,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         meta: params.meta,
         bus: fakeBus,
         ingest: Effect.void,
-        seedFromHistory: Effect.die(new Error("seed failed: pi exited")),
+        seedFromHistory: seed,
         ensureExitHandled: Effect.sync(() => {
           calls += 1;
         }),
@@ -2472,6 +2474,92 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       expect(ordering).toEqual(["receipt", "meta"]);
       expect(sm.list()).toEqual([]);
     } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it.each(["merge", "delete"] as const)(
+    "refuses every manager resume entrypoint while %s owns cleanup",
+    async (kind) => {
+      const { runtime, exitHandledCalls } = makeFakeRuntime();
+      const manager = new SessionManager(runtime, new ReceiptBus(false));
+      const meta: SessionMeta = {
+        id: randomUUID(),
+        cwd: process.cwd(),
+        createdAt: new Date().toISOString(),
+      };
+      const release = manager.mutationClaims.tryClaim(meta.id, kind)!;
+      try {
+        await expect(manager.resume(meta, { kind: "parent" })).rejects.toThrow("mutation");
+        expect(manager.get(meta.id)).toBeUndefined();
+        expect(exitHandledCalls()).toBe(0); // no half-built runtime was even spawned
+        expect(manager.mutationClaims.owner(meta.id)).toBe(kind);
+        release();
+        await expect(manager.resume(meta, { kind: "parent" })).rejects.toThrow("seed failed");
+        expect(exitHandledCalls()).toBe(1);
+        expect(manager.mutationClaims.owner(meta.id)).toBeUndefined();
+      } finally {
+        release();
+        await runtime.dispose();
+      }
+    },
+  );
+
+  it("holds the resume claim across history seeding, coalesces callers, and releases on failure", async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { runtime, exitHandledCalls } = makeFakeRuntime(
+      Effect.promise(async () => {
+        enter();
+        await gate;
+        throw new Error("seed gate failure");
+      }),
+    );
+    const manager = new SessionManager(runtime, new ReceiptBus(false));
+    const meta: SessionMeta = {
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+    };
+    const first = manager.resume(meta, { kind: "parent" });
+    const second = manager.resume(meta, { kind: "parent" });
+    const results = Promise.allSettled([first, second]);
+    try {
+      await entered;
+      expect(manager.mutationClaims.owner(meta.id)).toBe("resume");
+      expect(manager.mutationClaims.tryClaim(meta.id, "merge")).toBeNull();
+      expect(manager.mutationClaims.tryClaim(meta.id, "delete")).toBeNull();
+      release();
+      expect((await results).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(exitHandledCalls()).toBe(1);
+      expect(manager.mutationClaims.owner(meta.id)).toBeUndefined();
+    } finally {
+      release();
+      await results;
+      await runtime.dispose();
+    }
+  });
+
+  it("resumes inside the history transaction without releasing its caller's claim", async () => {
+    const { runtime } = makeFakeRuntime();
+    const manager = new SessionManager(runtime, new ReceiptBus(false));
+    const meta: SessionMeta = {
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+    };
+    const release = manager.mutationClaims.tryClaim(meta.id, "history")!;
+    try {
+      await expect(manager.resume(meta, { kind: "parent" })).rejects.toThrow("seed failed");
+      expect(manager.mutationClaims.owner(meta.id)).toBe("history");
+    } finally {
+      release();
       await runtime.dispose();
     }
   });

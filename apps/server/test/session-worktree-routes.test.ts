@@ -1,3 +1,4 @@
+import { SessionMutationClaims } from "../src/sessionMutationClaims.ts";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -110,6 +111,7 @@ function makeRoute(
   const state = makeState();
   const project = { id: "project-1", name: "project", path: PROJECT_PATH };
   const sessions = {
+    mutationClaims: new SessionMutationClaims(),
     list: vi.fn(() => [...state.live.values()]),
     get: vi.fn((id: string) => {
       const meta = state.live.get(id);
@@ -149,6 +151,7 @@ function makeRoute(
       state.live.delete(id);
     }),
     removeLoopSessionSnapshot: vi.fn(),
+    removeSubagentWorktreesForMerge: vi.fn(async () => {}),
     subagentArtifactDirectoryForReveal: vi.fn(overrides.artifactReveal ?? (() => undefined)),
   };
   const index = {
@@ -1509,6 +1512,13 @@ describe("POST /sessions worktree transaction", () => {
       cleanup: { status: "removed", runtimeStopped: true },
     });
     expect(sessions.destroy).toHaveBeenCalledWith(meta.id);
+    expect(sessions.removeSubagentWorktreesForMerge).toHaveBeenCalledWith(meta.id);
+    expect(sessions.destroy.mock.invocationCallOrder[0]).toBeLessThan(
+      sessions.removeSubagentWorktreesForMerge.mock.invocationCallOrder[0]!,
+    );
+    expect(sessions.removeSubagentWorktreesForMerge.mock.invocationCallOrder[0]).toBeLessThan(
+      state.deleteWorktree.mock.invocationCallOrder[0]!,
+    );
     await fastify.close();
   });
 

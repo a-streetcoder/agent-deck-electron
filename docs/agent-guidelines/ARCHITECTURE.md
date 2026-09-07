@@ -32,3 +32,30 @@ The effective catalog feeds both named chat and managed-child resolution, so the
 existing disabled-agent launch gates enforce the same policy Doctor summarizes.
 Scanning never writes settings or bundled files. This does not change the
 intentional `tools: false` or `thinking: false` override semantics.
+
+## Session merge cleanup
+
+When merge retention is off, a committed merge stops the parent runtime and waits
+for its children, then reaps owned child worktrees **before** removing the session
+checkout used as their Git ownership anchor. Merge cleanup retains child history,
+artifacts, and single-child continuation handles; it is not session deletion.
+All children preflight before any physical removal. Starting/running children
+fail closed, with current status checked again immediately before removal.
+Replaced/unowned checkouts,
+local files (including ignored files), or child commits not reachable from the
+session HEAD prevent automatic merge cleanup. Keep-worktree retains both parent
+and child checkouts for review without running this cleanup.
+
+Cleanup failure remains a successful merge with typed `cleanup.status: failed`
+and `worktree_remove_failed`; the parent checkout and metadata stay available.
+Partial physical cleanup has durable retry markers. Review/save child work before
+retrying session deletion, which retains its existing explicit-discard semantics.
+Merge's allocation claim is temporary, so a retained parent stays usable. The
+separate failed-delete claim recovery issue (#19) is not changed by this path.
+
+The session manager owns the mutation claims shared with HTTP routes. Resume
+(including parked wake, resource refresh, and rollback) holds a claim throughout
+async launch/preflight/history seeding, excluding merge/delete in both directions.
+Coalesced resumes share that transaction; history actions may resume within their
+existing claim. Merge also rechecks runtime ownership after child cleanup before
+removing the parent checkout. The claim is released on success and failure.
