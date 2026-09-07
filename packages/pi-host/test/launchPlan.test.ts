@@ -214,3 +214,26 @@ describe("helper plan", () => {
     expect(args[args.indexOf("--model") + 1]).toBe("m:low");
   });
 });
+
+describe("named-chat prompt templates", () => {
+  it.each(["replace", "append"] as const)("re-enables explicit paths in %s mode only", (mode) => {
+    const plan = { kind: "agent" as const, systemPrompt: { mode, text: "Persona" } };
+    const args = buildLaunchArgs({
+      ...plan,
+      promptTemplates: ["/prompts/default.md", "/project with spaces/prompt.md"],
+      appendSystemPrompts: ["/project/APPEND_SYSTEM.md"],
+    });
+    expect(args).toContain("--no-prompt-templates");
+    expect(args.filter((_, i) => args[i - 1] === "--prompt-template")).toEqual([
+      "/prompts/default.md",
+      "/project with spaces/prompt.md",
+    ]);
+    expect(args.filter((_, i) => args[i - 1] === "--append-system-prompt")).toEqual([
+      "/project/APPEND_SYSTEM.md",
+      mode === "replace" ? "" : "Persona",
+    ]);
+    for (const session of [{ sessionDir: "/fresh" }, { resumeSessionPath: "/continued.jsonl" }]) {
+      expect(buildLaunchArgs({ ...plan, ...session })).not.toContain("--prompt-template");
+    }
+  });
+});

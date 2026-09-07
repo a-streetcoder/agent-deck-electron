@@ -451,7 +451,7 @@ describe("named-chat APPEND_SYSTEM selection", () => {
       mkdirSync(path.dirname(globalAppend), { recursive: true });
       mkdirSync(path.dirname(projectAppend), { recursive: true });
       const context = {
-        settings: { get: () => ({ defaultThinking: null }) },
+        settings: { get: () => ({ defaultThinking: null, defaultPromptTemplates: [] }) },
         resolveNamedAgent: () => ({
           status: "ok",
           agent: { body: "Persona", systemPromptMode: mode, extensions: [], skillDirs: [] },
@@ -487,4 +487,83 @@ describe("named-chat APPEND_SYSTEM selection", () => {
       }
     },
   );
+});
+
+describe("named-chat prompt assignments", () => {
+  it("shares parent precedence, selection and live refresh inputs without adopting parent skills", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-named-prompts-"));
+    const projectPath = path.join(root, "project");
+    const globalDir = path.join(root, ".pi", "agent", "prompts");
+    const projectDir = path.join(projectPath, ".pi", "prompts");
+    mkdirSync(globalDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const selected = path.join(globalDir, "shared.md");
+    const shadowed = path.join(projectDir, "shared.md");
+    const external = path.join(root, "external.md");
+    const copy = path.join(globalDir, "plan-a-feature.md");
+    for (const file of [shadowed, selected, external, copy]) writeFileSync(file, "initial");
+    const project = { id: "project", path: projectPath, assignedPrompts: ["shared", "external"] };
+    const settings = {
+      defaultSkills: [],
+      disabledSkills: [],
+      defaultPromptTemplates: ["shared", "plan-a-feature", "review-my-changes", "missing"],
+      externalPromptPaths: [external],
+      disabledBuiltinPromptNames: ["plan-a-feature", "review-my-changes"],
+    };
+    const context = {
+      projects: {
+        find: (predicate: (candidate: typeof project) => boolean) =>
+          predicate(project) ? project : undefined,
+      },
+      settings: { get: () => settings },
+      resolveNamedAgent: () => ({
+        status: "ok",
+        agent: { body: "Persona", systemPromptMode: "replace", extensions: [], skillDirs: [] },
+      }),
+      rootsFor: (id?: string) => ({ home: root, projectPath: id ? projectPath : undefined }),
+      resourceHome: () => root,
+      agentMemoryEnabled: () => false,
+      enabledExtensionPaths: () => [],
+      scanSkillCandidatesFor: () => [],
+      mcpAssignments: { defaultServerNames: () => [], projectServerNames: () => [] },
+    } as unknown as Parameters<typeof resolveLaunchResources>[0];
+    const request = { agentName: "named", projectId: project.id, cwd: path.join(root, "worktree") };
+    const resolve = () => resolveLaunchResources(context, request, {});
+    try {
+      const initial = resolve();
+      if (initial.plan.kind !== "agent") throw new Error("expected agent");
+      expect(initial.plan.promptTemplates).toEqual([selected, copy, external]);
+      expect(initial.plan.skills).toEqual([]);
+      const parent = resolveLaunchResources(context, { projectId: project.id }, {}).plan;
+      if (parent.kind !== "parent") throw new Error("expected parent");
+      expect(parent.promptTemplates).toEqual(initial.plan.promptTemplates);
+      const fallback = resolveLaunchResources(
+        context,
+        { agentName: "named", cwd: projectPath },
+        {},
+      ).plan;
+      if (fallback.kind !== "agent") throw new Error("expected agent");
+      expect(fallback.promptTemplates).toEqual([selected, copy]);
+      expect(() =>
+        resolveLaunchResources(context, { ...request, projectId: "deleted" }, {}),
+      ).toThrow("project no longer exists");
+      writeFileSync(shadowed, "shadowed edit");
+      expect(resolve().fingerprint).toBe(initial.fingerprint);
+      writeFileSync(selected, "edited");
+      expect(resolve().fingerprint).not.toBe(initial.fingerprint);
+      writeFileSync(selected, "initial");
+      expect(resolve().fingerprint).toBe(initial.fingerprint);
+      project.assignedPrompts = ["shared"];
+      const refreshed = resolveLaunchResources(context, request, {}, initial.config);
+      expect(refreshed.fingerprint).not.toBe(initial.fingerprint);
+      if (refreshed.plan.kind !== "agent") throw new Error("expected agent");
+      expect(refreshed.plan.promptTemplates).toEqual([selected, copy]);
+      rmSync(selected);
+      const removed = resolve().plan;
+      if (removed.kind !== "agent") throw new Error("expected agent");
+      expect(removed.promptTemplates).toEqual([shadowed, copy]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -53,6 +53,8 @@ export interface AgentSessionPlan extends ModelSelection {
   tools?: string[];
   extensions?: string[];
   skills?: string[];
+  /** Default + project templates for named user chats only; omitted by delegated children. */
+  promptTemplates?: string[];
   /** Fresh child runs store session files under this directory. */
   sessionDir?: string;
   /** Continue a prior child session. */
@@ -131,6 +133,7 @@ export function buildLaunchArgs(plan: LaunchPlan): string[] {
       }
       args.push(...repeated("--extension", plan.extensions));
       args.push(...repeated("--skill", plan.skills));
+      args.push(...repeated("--prompt-template", plan.promptTemplates));
       if (plan.provider) args.push("--provider", plan.provider);
       if (plan.model) {
         const model =

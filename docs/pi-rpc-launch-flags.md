@@ -173,9 +173,18 @@ and the same selection and file bytes participate in refresh fingerprinting.
 This applies with memory enabled or paused.
 
 `SessionManager`'s ordinary-parent memory append factory remains parent-only:
-named chats retain their existing tool, extension, skill, and prompt-template
-scoping. Delegated children and helpers do not receive this named-chat append
-field and continue suppressing ambient `APPEND_SYSTEM.md` instructions.
+named chats retain their existing tool, extension, and agent-assigned skill
+scoping. Like ordinary chats, named user chats receive Default + selected Project
+prompt-template assignments as explicit `--prompt-template` paths while keeping
+`--no-prompt-templates`. Both use the same catalog resolver (including external
+references, disabled-builtin filtering, and existing global-first name precedence).
+Assignments follow the selected project ID, not an alternate cwd/worktree; without
+a project ID only defaults apply. Selected paths and bytes participate in refresh
+fingerprinting, so assignment and template edits use the existing idle rebind flow.
+
+Delegated children and helpers receive neither these template paths nor the named-chat
+append field and continue suppressing ambient templates and `APPEND_SYSTEM.md`
+instructions.
 
 ### 2. Native subagent child session
 
