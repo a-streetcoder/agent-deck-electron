@@ -33,7 +33,7 @@ test.beforeAll(async () => {
     path.join(agentsDir, "toaster.md"),
     "---\nname: toaster\ndescription: Toast things\n---\n\nYou are toaster.\n",
   );
-  const skillDir = path.join(project, ".pi", "skills", "crumbs");
+  const skillDir = path.join(harness.piHome, ".agents", "skills", "crumbs");
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
     path.join(skillDir, "SKILL.md"),
@@ -58,13 +58,16 @@ test("disabling a builtin agent leaves the bundled file untouched", async ({ pag
   await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-disable").click();
 
+  await page.getByTestId("agent-detail-back").click();
   await expect(
     page.locator('[data-agent-name="coder"]').getByTestId("disabled-badge"),
   ).toBeVisible();
   expect(readFileSync(BUILTIN_CODER).equals(before)).toBe(true);
 
   // Re-enable to leave state clean for other tests.
+  await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-disable").click();
+  await page.getByTestId("agent-detail-back").click();
   await expect(page.locator('[data-agent-name="coder"]').getByTestId("disabled-badge")).toHaveCount(
     0,
   );
@@ -81,6 +84,7 @@ test("a disabled agent disappears from the composer picker", async ({ page }) =>
   await page.getByTestId("nav-agents").click();
   await page.locator('[data-agent-name="toaster"]').click();
   await page.getByTestId("agent-disable").click();
+  await page.getByTestId("agent-detail-back").click();
   await expect(
     page.locator('[data-agent-name="toaster"]').getByTestId("disabled-badge"),
   ).toBeVisible();
@@ -107,43 +111,57 @@ test("deleting a global agent removes its file", async ({ page }) => {
 });
 
 test("disabling a skill excludes it from injection; delete removes its dir", async ({ page }) => {
-  const skillDir = path.join(project, ".pi", "skills", "crumbs");
+  const skillDir = path.join(harness.piHome, ".agents", "skills", "crumbs");
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await page.getByTestId("nav-skills").click();
 
-  // Assign crumbs, then disable it — a new session must NOT load /skill:crumbs.
+  // First prove assignment loads the enabled skill into a real Pi session.
   await page.locator('[data-skill-name="crumbs"]').click();
-  await page.getByTestId(`assign-skill-crumbs-${path.basename(project)}`).check();
-  await page.getByTestId("skill-disable").click();
-  await expect(
-    page.locator('[data-skill-name="crumbs"]').getByTestId("skill-disabled-badge"),
-  ).toBeVisible();
-
+  await page.getByTestId("assign-skill-all-crumbs").check();
   const { projects } = (await (await fetch(`${harness.baseUrl}/projects`)).json()) as {
     projects: Array<{ id: string; path: string }>;
   };
   const projectId = projects.find((p) => p.path === project)!.id;
-  const created = await fetch(`${harness.baseUrl}/sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectId }),
-  });
-  const { session } = (await created.json()) as { session: { id: string } };
+  const createSession = async () => {
+    const created = await fetch(`${harness.baseUrl}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId }),
+    });
+    expect(created.status).toBe(201);
+    const { session } = (await created.json()) as { session: { id: string } };
+    return session.id;
+  };
+  const commandsFor = async (sessionId: string): Promise<string[] | null> => {
+    const response = await fetch(`${harness.baseUrl}/sessions/${sessionId}/commands`);
+    if (!response.ok) return null;
+    const { commands } = (await response.json()) as {
+      commands: Array<{ name: string; source: string }>;
+    };
+    return commands.filter((c) => c.source === "skill").map((c) => c.name);
+  };
+  const enabledSessionId = await createSession();
+  await expect.poll(() => commandsFor(enabledSessionId)).toContain("skill:crumbs");
+
+  // Now disable: a fresh session must return commands successfully without it.
+  await page.getByTestId("skill-disable").click();
+  await page.getByTestId("skill-detail-back").click();
+  await expect(
+    page.locator('[data-skill-name="crumbs"]').getByTestId("skill-disabled-badge"),
+  ).toBeVisible();
+  const disabledSessionId = await createSession();
   await expect
     .poll(async () => {
-      const response = await fetch(`${harness.baseUrl}/sessions/${session.id}/commands`);
-      if (!response.ok) return ["pending"];
-      const { commands } = (await response.json()) as {
-        commands: Array<{ name: string; source: string }>;
-      };
-      return commands.filter((c) => c.source === "skill").map((c) => c.name);
+      const commands = await commandsFor(disabledSessionId);
+      return commands !== null && !commands.includes("skill:crumbs");
     })
-    .not.toContain("skill:crumbs");
+    .toBe(true);
 
   // Delete removes the dir.
   expect(existsSync(skillDir)).toBe(true);
   page.on("dialog", (dialog) => void dialog.accept());
+  await page.locator('[data-skill-name="crumbs"]').click();
   await page.getByTestId("skill-delete").click();
   await expect(page.locator('[data-skill-name="crumbs"]')).toHaveCount(0);
   expect(existsSync(skillDir)).toBe(false);

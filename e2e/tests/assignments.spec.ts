@@ -8,7 +8,8 @@ import { startHarness, type E2eHarness } from "../helpers/env.ts";
 /**
  * Slice-10 gate: a skill assigned to a project reaches pi as a --skill flag —
  * verified from pi's own get_commands (`/skill:<name>` appears) — and a
- * project's default agent is auto-selected when switching to it.
+ * project's default agent name persists and supports an explicit named launch.
+ * This does not prove automatic default application by a UI launcher.
  */
 
 let harness: E2eHarness;
@@ -53,72 +54,84 @@ async function projectId(): Promise<string> {
   return projects.find((p) => p.path === project)!.id;
 }
 
-test("project MCP assignment is explicit, accessible, persisted, and removable", async ({
+test("project MCP assignments persist independently of accessible All Projects toggles", async ({
   page,
+  request,
 }) => {
-  await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-mcp").click();
-
-  await expect(page.getByTestId("mcp-trust-copy")).toContainText("repository-controlled commands");
-  await expect(page.getByText("project config · read only")).toBeVisible();
-  const assignment = page.getByRole("checkbox", {
-    name: `Assign repository-tools-with-a-long-name to ${path.basename(project)}`,
-  });
-  await expect(assignment).not.toBeChecked();
-  await assignment.focus();
-  await assignment.press("Space");
-  await expect(assignment).toBeChecked();
-
   const id = await projectId();
-  await expect
-    .poll(async () => {
-      const { projects } = (await (await fetch(`${harness.baseUrl}/projects`)).json()) as {
-        projects: Array<{ id: string; assignedMcpServers?: string[] }>;
-      };
-      return projects.find((item) => item.id === id)?.assignedMcpServers ?? [];
-    })
-    .toContain("repository-tools-with-a-long-name");
-  // The PATCH broadcasts resources_changed; the mounted checkbox must survive
-  // that catalog refresh without losing keyboard focus.
-  await expect(assignment).toBeFocused();
-
-  const allProjects = page.getByRole("checkbox", {
-    name: "All Projects MCP assignment for repository-tools-with-a-long-name",
-  });
-  await allProjects.check();
-  await expect(allProjects).toBeChecked();
-  const inheritedAssignment = page.getByRole("checkbox", {
-    name: /inherited from All Projects.*explicit project assignment is retained/i,
-  });
-  await expect(inheritedAssignment).toBeChecked();
-  await expect(inheritedAssignment).toBeDisabled();
-  await expect(inheritedAssignment).toHaveAccessibleDescription(
-    /explicit project assignment is preserved/i,
+  const name = "repository-tools-with-a-long-name";
+  // Global management cannot see project-only definitions. Use a global entry
+  // for its toggle and inspect the project definition through the scoped API.
+  mkdirSync(path.join(harness.piHome, ".pi", "agent"), { recursive: true });
+  writeFileSync(
+    path.join(harness.piHome, ".pi", "agent", "mcp.json"),
+    JSON.stringify({ mcpServers: { [name]: { command: "/definitely/missing/mcp" } } }),
   );
+  const scoped = async () => {
+    const response = await request.get(`${harness.baseUrl}/mcp`, { params: { projectId: id } });
+    expect(response.ok()).toBe(true);
+    return response.json();
+  };
+  expect(await scoped()).toMatchObject({
+    assignedServerIds: [],
+    defaultAssignedServerIds: [],
+    servers: [expect.objectContaining({ id: name, source: "project", editable: false })],
+  });
+  const assign = async (names: string[]) => {
+    const response = await request.patch(`${harness.baseUrl}/projects/${id}`, {
+      data: { assignedMcpServers: names },
+    });
+    expect(response.ok()).toBe(true);
+  };
+  await assign([name]);
+  expect(await scoped()).toMatchObject({ assignedServerIds: [name] });
 
-  await allProjects.uncheck();
-  await expect(assignment).toBeEnabled();
-  await expect(assignment).toBeChecked();
-  await assignment.press("Space");
-  await expect(assignment).not.toBeChecked();
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await expect(page.getByTestId("mcp-trust-copy")).toContainText(
+    "no-project chats receive no MCP servers",
+  );
+  const allProjects = page.getByRole("checkbox", {
+    name: `All Projects MCP assignment for ${name}`,
+  });
+  await expect(allProjects).not.toBeChecked();
+  await allProjects.focus();
+  await allProjects.press("Space");
+  await expect(allProjects).toBeChecked();
+  await expect.poll(scoped).toMatchObject({
+    assignedServerIds: [name],
+    defaultAssignedServerIds: [name],
+  });
+  await expect(allProjects).toBeEnabled();
+  await expect(allProjects).toBeFocused();
+  await allProjects.press("Space");
+  await expect(allProjects).not.toBeChecked();
+  await expect.poll(scoped).toMatchObject({
+    assignedServerIds: [name],
+    defaultAssignedServerIds: [],
+  });
+  await assign([]);
+  expect(await scoped()).toMatchObject({ assignedServerIds: [], defaultAssignedServerIds: [] });
+  const projectsResponse = await request.get(`${harness.baseUrl}/projects`);
+  const { projects } = await projectsResponse.json();
+  expect(projects.find((item: { id: string }) => item.id === id).assignedMcpServers).toEqual([]);
 });
 
-test("assigning a skill in the UI injects /skill:<name> into new sessions", async ({ page }) => {
+test("assigning a project skill injects /skill:<name> into new real sessions", async ({ page }) => {
+  const id = await projectId();
+  const patched = await fetch(`${harness.baseUrl}/projects/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ assignedSkills: ["tidy-commits"] }),
+  });
+  expect(patched.status).toBe(200);
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-
-  // Assign via the detail pane's per-project checkbox row.
+  // Management remains global even while the project session is active.
   await page.getByTestId("nav-skills").click();
-  await page.locator('[data-skill-name="tidy-commits"]').click();
-  const checkbox = page.getByTestId(`assign-skill-tidy-commits-${path.basename(project)}`);
-  await checkbox.check();
-  await expect(checkbox).toBeChecked();
+  await expect(page.locator('[data-skill-name="tidy-commits"]')).toHaveCount(0);
 
-  // Assignments apply at session creation: create a fresh parent session for
-  // the project via REST and ask pi itself what commands it loaded.
-  const id = await projectId();
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -126,7 +139,6 @@ test("assigning a skill in the UI injects /skill:<name> into new sessions", asyn
   });
   expect(created.status).toBe(201);
   const { session } = (await created.json()) as { session: SessionMeta };
-
   await expect
     .poll(
       async () => {
@@ -331,22 +343,46 @@ test("a per-project assigned prompt template reaches only that project's session
     .toContain("handoff");
 });
 
-test("the project default agent is auto-selected on switch", async ({ page }) => {
+test("project default-agent persistence and explicit named launch retain the project prompt", async ({
+  page,
+  request,
+}) => {
   const id = await projectId();
-  const patched = await fetch(`${harness.baseUrl}/projects/${id}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ defaultAgentName: "syrup-bot" }),
+  const patched = await request.patch(`${harness.baseUrl}/projects/${id}`, {
+    data: { defaultAgentName: "syrup-bot" },
   });
-  expect(patched.status).toBe(200);
-
+  expect(patched.status()).toBe(200);
+  const response = await request.get(`${harness.baseUrl}/projects`);
+  const { projects } = await response.json();
+  const saved = projects.find((item: { id: string }) => item.id === id);
+  expect(saved.defaultAgentName).toBe("syrup-bot");
+  // No global project switch/default-star UI remains. Resolve the persisted
+  // default explicitly through the supported named-session creation contract.
+  // Normal New chat inherits the active session's agent; it does not apply the
+  // project's saved default. Automatic default application is not covered here.
+  const created = await request.post(`${harness.baseUrl}/sessions`, {
+    data: { projectId: id, agentName: saved.defaultAgentName },
+  });
+  expect(created.status()).toBe(201);
+  const { session } = await created.json();
   await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(project));
+  await page.getByTestId("chat-list").getByTestId(`chat-${session.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await expect(page.getByTestId("agent-picker")).toHaveValue("syrup-bot");
-
-  // And the Agents screen shows the star on the default (in the detail pane).
+  expect(session.agentName).toBe("syrup-bot");
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  const start = harness.mock.requests.length;
+  await page.getByTestId("composer-input").fill("project default proof");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("assistant-text")).toContainText("project default proof");
+  const captured = harness.mock.requests
+    .slice(start)
+    .find((item) => JSON.stringify(item.messages).includes("project default proof"));
+  expect(captured).toBeDefined();
+  expect(
+    JSON.stringify(
+      captured!.messages.filter((item) => item.role === "system" || item.role === "developer"),
+    ),
+  ).toContain("You are syrup-bot.");
   await page.getByTestId("nav-agents").click();
-  await page.locator('[data-agent-name="syrup-bot"]').click();
-  await expect(page.getByTestId("default-agent-syrup-bot")).toContainText("active-session default");
+  await expect(page.locator('[data-agent-name="syrup-bot"]')).toHaveCount(0);
 });

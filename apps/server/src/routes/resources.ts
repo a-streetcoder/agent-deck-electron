@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { ProjectMeta } from "@agent-deck/contracts";
@@ -567,8 +567,27 @@ ${content}
     if (scope === "project" && !roots.projectPath) {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
+    let filePath: string;
     try {
-      skillStore.renameSkill(scope, name, newName, projectId);
+      filePath = skillStore.renameSkill(scope, name, newName, projectId);
+      // Fan-out may expose the same file under a higher-precedence Pi alias.
+      // Return the scanner's identity only when it resolves to the file the
+      // native store actually renamed; never select an unrelated same-name skill.
+      try {
+        const renamedPath = realpathSync(filePath);
+        const scanned = skillStore.listSkills(projectId).find((skill) => {
+          if (skill.scope !== scope || skill.name !== newName) return false;
+          try {
+            return realpathSync(skill.filePath) === renamedPath;
+          } catch {
+            return false;
+          }
+        });
+        filePath = scanned?.filePath ?? filePath;
+      } catch {
+        // A concurrent catalog removal must not turn a completed rename into
+        // a failed mutation or prevent assignment/default reconciliation.
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "skill_exists") {
@@ -608,7 +627,7 @@ ${content}
       });
     }
     broadcast({ type: "resources_changed" });
-    return { ok: true };
+    return { ok: true, filePath };
   });
 
   // Import a local .md file as a skill (native SkillImportSheet Local tab).

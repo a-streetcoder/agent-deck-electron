@@ -71,7 +71,7 @@ test.afterAll(async () => {
 
 test("review a worktree session's diff and merge it back from the diff panel", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await selectProject(page, path.basename(repo));
+  const sessionId = await selectProject(page, path.basename(repo));
 
   // The session runs in its own worktree (cwd != the project root). That cwd is
   // the worktree path — the target pi writes into this turn.
@@ -121,16 +121,34 @@ test("review a worktree session's diff and merge it back from the diff panel", a
       .trim(),
   ).not.toBe("");
 
-  // The persistent Git surface exposes the policy to existing users. Isolation
-  // is on, so Keep is enabled, keyboard-operable, and defaults to retained.
-  await page.getByTestId("nav-git").click();
-  await expect(page.getByTestId("git-worktree-preferences")).toBeVisible();
-  const isolationPreference = page.getByTestId("git-pref-worktree-isolation");
-  const keepPreference = page.getByTestId("git-pref-keep-worktree");
+  // Git management has no global project selection. Replay the supported
+  // onboarding preferences to exercise the same persisted policy by keyboard.
+  // This covers onboarding controls, not the unavailable GitScreen preferences.
+  // Doctor setup is unrelated to merge behavior; mark its setup gate ready.
+  await page.route("**/runtime/doctor", async (route) => {
+    await route.fulfill({
+      json: {
+        report: {
+          checks: ["pi-binary", "pi-version", "node", "bash", "auth"].map((id) => ({
+            id,
+            label: id,
+            status: "ok",
+            detail: "ready",
+          })),
+        },
+      },
+    });
+  });
+  await page.goto(`${harness.baseUrl}/?onboarding`);
+  await expect(page.getByTestId("onboarding-get-started")).toHaveText("Get Started");
+  await page.getByTestId("onboarding-get-started").click();
+  await expect(page.getByTestId("onboarding-preferences")).toBeVisible();
+  const isolationPreference = page.getByTestId("pref-worktree");
+  const keepPreference = page.getByTestId("pref-keep-worktree");
   await expect(isolationPreference).toHaveAttribute("aria-checked", "true");
   await expect(keepPreference).toBeEnabled();
   await expect(keepPreference).toHaveAttribute("aria-checked", "true");
-  await expect(keepPreference).toHaveAccessibleDescription(/Applies only when isolation is on/);
+  await expect(keepPreference).toHaveAccessibleDescription(/Applies only with worktree isolation/);
 
   // Its disabled dependency is live and persisted too.
   await isolationPreference.focus();
@@ -166,13 +184,18 @@ test("review a worktree session's diff and merge it back from the diff panel", a
   expect(persistedPolicy.settings.keepWorktreeAfterMerge).toBe(false);
 
   // Return to the same retained session and make a second iteration.
+  await page.goto(harness.baseUrl);
   await page.getByTestId("sessions-expand").click();
   const expandedSessions = page.getByTestId("sessions-expanded");
   await expect(expandedSessions).toBeVisible();
-  await expandedSessions.locator('[role="button"][data-testid^="chat-"]').first().click();
+  await expect(expandedSessions).toHaveAttribute("aria-hidden", "false");
+  const originalSession = expandedSessions.getByTestId(`chat-${sessionId}`);
+  await expect(originalSession).toBeVisible();
+  await originalSession.click();
   await expandedSessions.getByTestId("sessions-collapse").click();
   await expect(expandedSessions).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTestId("composer-input")).toBeVisible();
+  await expect(cwdLocator).toHaveText(worktreePath);
   worktreeFileContent = "a second iteration after the retained merge\n";
   await page.getByTestId("composer-input").fill("please write the worktree file again");
   await page.getByTestId("send-button").click();

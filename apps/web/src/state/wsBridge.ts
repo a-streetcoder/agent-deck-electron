@@ -1279,9 +1279,13 @@ export async function deleteSkill(scope: string, name: string): Promise<void> {
   });
 }
 
-/** Rename a global/project skill; returns true on success (the caller closes
- *  the inline editor), false after surfacing the server error (409/404/…). */
-export async function renameSkill(scope: string, name: string, newName: string): Promise<boolean> {
+/** Rename a skill and return its resulting catalog file identity,
+ * or null after surfacing the server error (409/404/…). */
+export async function renameSkill(
+  scope: string,
+  name: string,
+  newName: string,
+): Promise<string | null> {
   const projectId = useAppStore.getState().currentProjectId ?? undefined;
   try {
     const response = await fetch("/resources/skills/rename", {
@@ -1293,10 +1297,22 @@ export async function renameSkill(scope: string, name: string, newName: string):
       const { error } = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(error ?? "Couldn't rename the skill.");
     }
-    return true;
+    const result: unknown = await response.json();
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !("filePath" in result) ||
+      typeof result.filePath !== "string" ||
+      !result.filePath.trim()
+    ) {
+      throw new Error(
+        "The skill was renamed, but the server did not return its file path. Refresh the skill catalog before trying again.",
+      );
+    }
+    return result.filePath;
   } catch (error) {
     useAppStore.getState().setError(String(error));
-    return false;
+    return null;
   }
 }
 

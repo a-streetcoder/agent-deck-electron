@@ -1,4 +1,4 @@
-import { test as base, type Page } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 
 /**
  * Shared e2e test with the first-run onboarding pre-dismissed. The onboarding is
@@ -25,9 +25,10 @@ export type { Page } from "@playwright/test";
 
 /**
  * Start a chat in the named project without selecting a global project.
- * Creates a session via HTTP, then activates it from the collapsed sessions list.
+ * Creates a session via HTTP, then activates it from the complete sessions list.
+ * Resource management remains global: session activation does not scope catalogs.
  */
-export async function selectProject(page: Page, name: string): Promise<void> {
+export async function selectProject(page: Page, name: string): Promise<string> {
   const sessionId = await page.evaluate(async (projectName) => {
     const projectsResponse = await fetch("/projects");
     if (!projectsResponse.ok) throw new Error(await projectsResponse.text());
@@ -45,6 +46,22 @@ export async function selectProject(page: Page, name: string): Promise<void> {
     const { session } = (await createResponse.json()) as { session: { id: string } };
     return session.id;
   }, name);
-  const row = page.getByTestId("chat-list").getByTestId(`chat-${sessionId}`);
+  // The collapsed list contains only five rows, ordered by pin/activity.
+  // Background Loop updates can push even this new session out of it.
+  await page.getByTestId("sessions-expand").click();
+  const overlay = page.getByTestId("sessions-expanded");
+  await expect(overlay).toHaveAttribute("aria-hidden", "false");
+  await expect(overlay).toHaveCSS("pointer-events", "auto");
+  const search = overlay.getByTestId("sessions-search");
+  await expect(search).toBeVisible();
+  await expect(search).toBeEditable();
+  if ((await search.inputValue()) !== "") await search.fill("");
+  // session_meta arrives asynchronously after the HTTP creation response.
+  const row = overlay.getByTestId(`chat-${sessionId}`);
+  await expect(row).toBeVisible();
   await row.click();
+  await page.getByTestId("sessions-collapse").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  return sessionId;
 }

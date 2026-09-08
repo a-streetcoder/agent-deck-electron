@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -85,6 +93,13 @@ describe("POST /resources/skills/rename", () => {
       newName: "formatter",
     });
     expect(res.status).toBe(200);
+    const { filePath } = (await res.json()) as { filePath: string };
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath, "utf8")).toContain("Skill linter");
+    const { skills } = (await (await api("GET", "/resources/skills")).json()) as {
+      skills: Array<{ name: string; filePath: string }>;
+    };
+    expect(skills.find((skill) => skill.name === "formatter")?.filePath).toBe(filePath);
 
     expect(await assignedOf()).toEqual(["formatter"]);
     expect(await defaultSkills()).toContain("formatter");
@@ -206,4 +221,29 @@ describe("POST /resources/skills/rename", () => {
       ).status,
     ).toBe(404);
   });
+});
+
+it("returns the scanner identity after native fan-out of an externally authored skill", async () => {
+  const source = path.join(resourceHome, ".agents", "skills", "external-rename");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(
+    path.join(source, "SKILL.md"),
+    "---\nname: external-rename\ndescription: External\n---\nRetain this body.\n",
+  );
+  const response = await api("POST", "/resources/skills/rename", {
+    scope: "global",
+    name: "external-rename",
+    newName: "external-renamed",
+  });
+  expect(response.status).toBe(200);
+  const { filePath } = (await response.json()) as { filePath: string };
+  const { skills } = (await (await api("GET", "/resources/skills")).json()) as {
+    skills: Array<{ name: string; scope: string; filePath: string }>;
+  };
+  const renamed = skills.find(
+    (skill) => skill.name === "external-renamed" && skill.scope === "global",
+  );
+  expect(renamed?.filePath).toBe(filePath);
+  expect(readFileSync(filePath, "utf8")).toContain("Retain this body.");
+  expect(existsSync(source)).toBe(false);
 });

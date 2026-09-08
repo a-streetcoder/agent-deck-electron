@@ -10,11 +10,10 @@ import { useAppStore } from "../state/store.ts";
  */
 export function SessionStartupCard() {
   const currentAgentName = useAppStore((state) => state.currentAgentName);
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
   const projects = useAppStore((state) => state.projects);
   const session = useAppStore((state) => state.session);
 
-  const project = projects.find((p) => p.id === currentProjectId) ?? null;
+  const project = projects.find((p) => p.id === session?.projectId) ?? null;
   const agentName = currentAgentName ?? session?.agentName ?? "Pi Agent";
   const projectName = project?.name ?? "All Projects";
   const skills = project?.assignedSkills ?? [];

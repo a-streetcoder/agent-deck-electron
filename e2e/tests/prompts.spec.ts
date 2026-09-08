@@ -99,7 +99,7 @@ test("surfaces the /invocation and argument-hint for a prompt on disk (native 8.
 }) => {
   // Seed a prompt whose FILE basename differs from its frontmatter name (which
   // pi ignores), and that declares an argument-hint.
-  const dir = path.join(project, ".pi", "prompts");
+  const dir = path.join(harness.piHome, ".pi", "agent", "prompts");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     path.join(dir, "deploy-svc.md"),

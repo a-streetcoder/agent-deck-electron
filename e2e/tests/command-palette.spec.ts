@@ -173,6 +173,10 @@ test("enable/disable command reuses the selected agent toggle workflow", async (
   await page.keyboard.press("ControlOrMeta+k");
   await page.getByTestId("command-palette-input").fill("Enable/Disable Selected Agent");
   await page.keyboard.press("Enter");
+  await expect(
+    page.getByTestId("agent-detail").getByRole("button", { name: "Enable", exact: true }),
+  ).toBeVisible();
+  await page.getByTestId("agent-detail-back").click();
   await expect(row.getByTestId("disabled-badge")).toBeVisible();
 });
 

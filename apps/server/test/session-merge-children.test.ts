@@ -38,7 +38,9 @@ async function fixture(keep = false, childCount = 2) {
   git(repo, "add", ".");
   git(repo, "commit", "-m", "base");
   const worktrees = new SessionWorktreeStore(data);
-  const parent = path.join(data, "session-worktrees", "a1b2c3d4");
+  // Use the held root's canonical spelling (Windows temp ancestors can have
+  // short-name aliases). The native boundary intentionally rejects other paths.
+  const parent = path.join(worktrees.rootPath, "a1b2c3d4");
   const identity = worktrees.reserveWorktree(parent);
   const branch = "agent-deck/session-a1b2c3d4";
   git(repo, "worktree", "add", "-b", branch, parent);

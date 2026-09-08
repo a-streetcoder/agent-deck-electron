@@ -67,13 +67,13 @@ test("a picked file survives live delivery, reload, resume, fork, and a missing 
   await streamingBehavior.selectOption("followUp");
 
   await page.getByTestId("attach-file-button").click();
-  const draftChip = page.getByTestId("file-attachments").getByTitle(FILE_PATH);
+  const draftChip = page.getByTestId("attachments").getByTitle(FILE_PATH);
   await expect(draftChip).toContainText(FILE_NAME);
 
   // File-only follow-ups are valid while Pi is running. The source path
   // deliberately never exists: neither selection nor replay may stat/read it.
   await page.getByTestId("send-button").click();
-  await expect(page.getByTestId("file-attachments")).toHaveCount(0);
+  await expect(page.getByTestId("attachments")).toHaveCount(0);
   await expect(sentFileChip(page)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Attached a file.")).toBeVisible();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {

@@ -13,9 +13,10 @@ export interface AgentsCatalogState {
  * Management surfaces may request unassigned rows so they can edit curation;
  * picker consumers receive the server-curated catalog by default. */
 export function useAgentsCatalog(
-  options: { includeUnassigned?: boolean } = {},
+  options: { includeUnassigned?: boolean; projectId?: string | null } = {},
 ): AgentsCatalogState {
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const globalProjectId = useAppStore((state) => state.currentProjectId);
+  const currentProjectId = options.projectId === undefined ? globalProjectId : options.projectId;
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const [catalog, setCatalog] = useState<AgentsCatalogState>({
     agents: [],
@@ -42,7 +43,9 @@ export function useAgentsCatalog(
     };
   }, [currentProjectId, options.includeUnassigned, resourcesVersion]);
 
-  return catalog;
+  return catalog.projectId === currentProjectId
+    ? catalog
+    : { agents: [], loaded: false, projectId: currentProjectId };
 }
 
 /** Backwards-compatible catalog-only view for consumers without command ownership. */

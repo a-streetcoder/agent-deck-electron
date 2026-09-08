@@ -29,7 +29,7 @@ test("deleting the only draft leaves a usable no-active-session state", async ({
 
   const id = (await activeRow.getAttribute("data-testid"))!.replace("chat-", "");
   await activeRow.hover();
-  await page.getByTestId(`chat-delete-${id}`).click();
+  await activeRow.getByTestId(`chat-delete-${id}`).click();
 
   await expect
     .poll(async () => {

@@ -66,13 +66,13 @@ test("a picked folder survives live delivery, reload, resume, fork, and a missin
   await streamingBehavior.selectOption("followUp");
 
   await page.getByTestId("attach-folder-button").click();
-  const draftChip = page.getByTestId("folder-attachments").getByTitle(FOLDER_PATH);
+  const draftChip = page.getByTestId("attachments").getByTitle(FOLDER_PATH);
   await expect(draftChip).toContainText(FOLDER_NAME);
 
   // Folder-only follow-ups are valid while Pi is running. The source path
   // deliberately never exists: selection and replay must not enumerate it.
   await page.getByTestId("send-button").click();
-  await expect(page.getByTestId("folder-attachments")).toHaveCount(0);
+  await expect(page.getByTestId("attachments")).toHaveCount(0);
   await expect(sentFolderChip(page)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Attached a folder.")).toBeVisible();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
@@ -138,7 +138,7 @@ test("an unrepresentable selected folder stays out of the draft with actionable 
   await page.goto(harness.baseUrl);
   await page.getByTestId("attach-folder-button").click();
 
-  await expect(page.getByTestId("folder-attachments")).toHaveCount(0);
+  await expect(page.getByTestId("attachments")).toHaveCount(0);
   await expect(page.getByTestId("composer-submit-status")).toContainText(
     "Choose an absolute path that does not contain a backtick",
   );

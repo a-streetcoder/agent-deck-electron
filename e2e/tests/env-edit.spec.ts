@@ -84,19 +84,33 @@ test("delete a var removes it from the file", async ({ page }) => {
   expect(readFileSync(globalEnvPath(), "utf8")).not.toContain("NEW_TOKEN");
 });
 
-test("a project-scoped var writes to the project .env", async ({ page }) => {
+test("project env writes use the scoped API and stay out of global management", async ({
+  page,
+  request,
+}) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
   await page.getByTestId("nav-environment").click();
 
   await page.getByTestId("env-add").click();
-  await page.getByTestId("env-new-key").fill("PROJECT_ONLY");
-  await page.getByTestId("env-new-value").fill("pv");
-  await page.getByTestId("env-new-scope").selectOption("project");
-  await page.getByTestId("env-new-save").click();
-
-  await expect(page.locator('[data-env-key="PROJECT_ONLY"]')).toBeVisible();
+  await expect(page.getByTestId("env-new-scope").locator('option[value="project"]')).toHaveCount(0);
+  const projectsResponse = await request.get(`${harness.baseUrl}/projects`);
+  expect(projectsResponse.ok()).toBe(true);
+  const { projects } = await projectsResponse.json();
+  const projectId = projects.find((item: { path: string }) => item.path === project).id;
+  const written = await request.put(`${harness.baseUrl}/runtime/env`, {
+    data: { projectId, scope: "project", key: "PROJECT_ONLY", value: "project-secret-9876" },
+  });
+  expect(written.ok()).toBe(true);
+  const scoped = await request.get(`${harness.baseUrl}/runtime/env`, { params: { projectId } });
+  expect(scoped.ok()).toBe(true);
+  const masked = await scoped.text();
+  expect(masked).toContain("PROJECT_ONLY");
+  expect(masked).not.toContain("project-secret-9876");
+  await page.reload();
+  await page.getByTestId("nav-environment").click();
+  await expect(page.locator('[data-env-key="PROJECT_ONLY"]')).toHaveCount(0);
   expect(existsSync(projectEnvPath())).toBe(true);
-  expect(readFileSync(projectEnvPath(), "utf8")).toContain("PROJECT_ONLY=pv");
+  expect(readFileSync(projectEnvPath(), "utf8")).toContain("PROJECT_ONLY=project-secret-9876");
 });

@@ -188,7 +188,7 @@ test("Doctor preserves results across a retryable refresh failure", async ({ pag
   });
 
   await page.getByTestId("nav-doctor").click();
-  await expect(page.getByTestId("doctor-screen").locator("[aria-busy=true]")).toBeVisible();
+  await expect(page.getByTestId("doctor-screen").locator("[aria-busy=true]")).toHaveCount(1);
   await expect(page.getByTestId("doctor-status")).toHaveText("Checking diagnostics…");
   const refresh = page.getByTestId("doctor-refresh");
   await expect(refresh).toBeDisabled();
@@ -204,7 +204,7 @@ test("Doctor preserves results across a retryable refresh failure", async ({ pag
   await refresh.focus();
   await refresh.press("Enter");
   const error = page.getByTestId("doctor-error");
-  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error.getByRole("alert")).toBeVisible();
   await expect(error).toContainText("HTTP 503");
   await expect(error).not.toContainText("private server detail");
   // A failed refresh does not replace the last successful rows.

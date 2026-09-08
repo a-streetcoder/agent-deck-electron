@@ -89,13 +89,13 @@ test("keyboard shortcut toggles the drawer", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
-  await page.keyboard.press("Control+`");
+  await page.keyboard.press("ControlOrMeta+`");
   await expect(page.getByTestId("terminal-drawer")).toBeVisible();
   await expect(page.locator(".xterm-rows")).toContainText("agent-deck>", { timeout: 15_000 });
 
   // The shortcut also closes it from INSIDE the terminal (xterm declines the
   // combo so it bubbles to the app shortcut handler).
   await page.locator(".xterm").click();
-  await page.keyboard.press("Control+`");
+  await page.keyboard.press("ControlOrMeta+`");
   await expect(page.getByTestId("terminal-drawer")).toHaveCount(0);
 });

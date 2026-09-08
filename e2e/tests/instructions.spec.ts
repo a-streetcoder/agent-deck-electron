@@ -45,7 +45,7 @@ test("editing Global AGENTS.md writes ~/.pi/agent/AGENTS.md", async ({ page }) =
   await expect(editor).toBeVisible();
   await editor.fill("# Global rules\n\nPrefer small PRs.");
   await page.getByTestId("instructions-save").click();
-  await expect(page.getByTestId("instructions-save")).toHaveText("Saved");
+  await expect(page.getByTestId("instructions-saved")).toHaveText("Saved");
 
   const globalFile = path.join(harness.piHome, ".pi", "agent", "AGENTS.md");
   await expect.poll(() => existsSync(globalFile)).toBe(true);

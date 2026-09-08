@@ -54,6 +54,7 @@ test("editing a builtin writes an override and never mutates the builtin file", 
   await page.getByTestId("editor-save").click();
   await expect(page.getByTestId("agent-editor")).toHaveCount(0);
 
+  await page.getByTestId("agent-detail-back").click();
   const coderRow = page.locator('[data-agent-name="coder"]');
   await expect(coderRow).toContainText("My customized coder");
   await expect(coderRow.getByTestId("overridden-badge")).toBeVisible();
@@ -153,7 +154,8 @@ test("editing a skill updates its SKILL.md without losing the body", async ({ pa
   await page.getByTestId("nav-skills").click();
   await page.getByTestId("new-skill").click();
   await page.getByTestId("skill-editor-name").fill("changelog");
-  await page.getByTestId("skill-editor-scope").selectOption("project");
+  // Management is global; selecting a project chat does not scope resource writes.
+  await page.getByTestId("skill-editor-scope").selectOption("global");
   await page.getByTestId("skill-editor-description").fill("Write changelogs");
   await page.getByTestId("skill-editor-body").fill("How to write a changelog.");
   await page.getByTestId("skill-editor-save").click();
@@ -172,9 +174,48 @@ test("editing a skill updates its SKILL.md without losing the body", async ({ pa
   await expect(page.getByTestId("skill-editor")).toHaveCount(0);
 
   const content = readFileSync(
-    path.join(project, ".agents", "skills", "changelog", "SKILL.md"),
+    path.join(harness.piHome, ".agents", "skills", "changelog", "SKILL.md"),
     "utf8",
   );
   expect(content).toContain("Write excellent changelogs");
   expect(content).toContain("How to write a changelog.");
+});
+
+// Project-scoped resource management is still supported by HTTP, not by a
+// globally selected project in the shell. Keep its real-engine write coverage.
+test("project skill HTTP edits preserve the body and remain isolated from the global catalog", async ({
+  request,
+}) => {
+  const projectsResponse = await request.get(`${harness.baseUrl}/projects`);
+  expect(projectsResponse.ok()).toBe(true);
+  const { projects } = await projectsResponse.json();
+  const projectId = projects.find((item: { path: string }) => item.path === project).id;
+  const url = `${harness.baseUrl}/resources/skills`;
+  for (const edit of [
+    { description: "Write changelogs", body: "Project changelog instructions." },
+    { description: "Write excellent changelogs" },
+  ]) {
+    const response = await request.put(url, {
+      data: { projectId, scope: "project", name: "project-changelog", edit },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  }
+  const content = readFileSync(
+    path.join(project, ".agents", "skills", "project-changelog", "SKILL.md"),
+    "utf8",
+  );
+  expect(content).toContain("Write excellent changelogs");
+  expect(content).toContain("Project changelog instructions.");
+  const scoped = await request.get(url, { params: { projectId } });
+  expect(scoped.ok()).toBe(true);
+  expect((await scoped.json()).skills).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: "project-changelog", scope: "project" }),
+    ]),
+  );
+  const global = await request.get(url);
+  expect(global.ok()).toBe(true);
+  expect((await global.json()).skills).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ name: "project-changelog" })]),
+  );
 });

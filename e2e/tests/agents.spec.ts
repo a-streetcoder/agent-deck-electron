@@ -48,7 +48,9 @@ test.beforeAll(async () => {
       writeFileSync(settingsFile, seededSettingsBytes);
     },
   });
-  const agentsDir = path.join(project, ".pi", "agents");
+  // The management screens and composer now curate the global catalog, even
+  // while a project session is active. Seed their agents in the resource HOME.
+  const agentsDir = path.join(harness.piHome, ".pi", "agent", "agents");
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(
     path.join(agentsDir, "pancake-bot.md"),
@@ -60,6 +62,15 @@ test.beforeAll(async () => {
     path.join(agentsDir, "append-bot.md"),
     `---\nname: append-bot\ndescription: Adds to pi's base prompt\nsystemPromptMode: append\nskills: project-private-missing\nextensions:\n  - note-taker\n  - web-search\n---\n\nExtra instructions appended on top of pi's base prompt.\n`,
   );
+  // Keep project catalog/runtime coverage through the supported scoped HTTP API.
+  const projectAgents = path.join(project, ".pi", "agents");
+  mkdirSync(projectAgents, { recursive: true });
+  for (const name of ["pancake-bot", "append-bot"]) {
+    writeFileSync(
+      path.join(projectAgents, `${name}.md`),
+      `${readFileSync(path.join(agentsDir, `${name}.md`), "utf8")}\nPROJECT_AGENT_SCOPE_PROOF\n`,
+    );
+  }
   const response = await fetch(`${harness.baseUrl}/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -72,7 +83,7 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("agent warnings and skill visibility are actionable for the current project", async ({
+test("agent warnings and skill visibility are actionable in the global catalog", async ({
   page,
 }) => {
   await page.goto(harness.baseUrl);
@@ -86,7 +97,7 @@ test("agent warnings and skill visibility are actionable for the current project
   await row.click();
   const panel = page.getByTestId("agent-warning-panel");
   await expect(panel.getByRole("heading", { name: "Configuration warnings" })).toBeVisible();
-  await expect(panel).toContainText(path.basename(project));
+  await expect(panel).toContainText("global catalog (no project selected)");
   await expect(panel).toContainText("project-private-missing");
   await expect(panel).toContainText("no explicit ordinary or direct tools");
 
@@ -96,6 +107,7 @@ test("agent warnings and skill visibility are actionable for the current project
   await expect(page.getByText(/stale name is preserved/i)).toBeVisible();
   await expect(page.getByText(/project skill from another project is not visible/i)).toBeVisible();
   await page.getByTestId("agent-editor").getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("agent-detail-back").click();
   await page.locator('[data-agent-name="pancake-bot"]').click();
 });
 
@@ -104,7 +116,7 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
-  // Pick the project agent in the composer.
+  // Pick a global agent in the composer; project session context is not a catalog filter.
   await page.getByTestId("agent-picker").selectOption("pancake-bot");
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
@@ -245,8 +257,9 @@ test("creates a replacement from an effective overridden builtin", async ({ page
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await page.getByTestId("nav-agents").click();
-  await page.locator('[data-agent-name="coder"]').first().click();
-  await expect(page.getByTestId("overridden-badge")).toBeVisible();
+  const coder = page.locator('[data-agent-name="coder"]').first();
+  await expect(coder.getByTestId("overridden-badge")).toBeVisible();
+  await coder.click();
   await expect(page.getByTestId("agent-create-replacement")).toBeVisible();
   await page.getByTestId("agent-create-replacement").click();
   await expect(page.getByTestId("editor-description")).toHaveValue("Effective overridden coder");
@@ -301,6 +314,7 @@ test("the agent detail surfaces the system-prompt mode and extensions (native pa
   await expect(page.getByTestId("agent-extensions")).toContainText("Default catalog policy");
 
   // append-bot declares systemPromptMode: append and an extension allowlist.
+  await page.getByTestId("agent-detail-back").click();
   await page.locator('[data-agent-name="append-bot"]').click();
   await expect(page.getByTestId("agent-prompt-mode")).toHaveText("append");
   const extensions = page.getByTestId("agent-extensions");
@@ -325,4 +339,49 @@ test("an agent-bound session shows the agent name in the expanded panel (native 
   const panel = page.getByTestId("sessions-expanded");
   await expect(panel).toHaveAttribute("aria-hidden", "false");
   await expect(panel.getByTestId("chat-agent-name").first()).toHaveText("pancake-bot");
+});
+
+// The global shell no longer selects a project catalog. Exercise project agent
+// resolution through HTTP, then consume the real session in the ordinary chat UI.
+test("project agent diagnostics and named launch retain project context", async ({
+  page,
+  request,
+}) => {
+  const projectsResponse = await request.get(`${harness.baseUrl}/projects`);
+  expect(projectsResponse.ok()).toBe(true);
+  const { projects } = await projectsResponse.json();
+  const projectId = projects.find((item: { path: string }) => item.path === project).id;
+  const catalogResponse = await request.get(`${harness.baseUrl}/resources/agents`, {
+    params: { projectId, includeUnassigned: "true" },
+  });
+  expect(catalogResponse.ok()).toBe(true);
+  const { agents } = await catalogResponse.json();
+  const agent = agents.find(
+    (item: { name: string; scope: string }) =>
+      item.name === "append-bot" && item.scope === "project",
+  );
+  expect(agent.warnings).toHaveLength(2);
+  expect(JSON.stringify(agent.warnings)).toContain("project-private-missing");
+  const created = await request.post(`${harness.baseUrl}/sessions`, {
+    data: { projectId, agentName: "pancake-bot" },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { session } = await created.json();
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("chat-list").getByTestId(`chat-${session.id}`).click();
+  await expect(page.getByTestId("session-cwd")).toHaveText(project);
+  await expect(page.getByTestId("agent-picker")).toHaveValue("pancake-bot");
+  const start = harness.mock.requests.length;
+  await page.getByTestId("composer-input").fill("project breakfast proof");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("assistant-text")).toContainText("project breakfast proof");
+  const captured = harness.mock.requests
+    .slice(start)
+    .find((item) => JSON.stringify(item.messages).includes("project breakfast proof"));
+  expect(captured).toBeDefined();
+  expect(
+    JSON.stringify(
+      captured!.messages.filter((item) => item.role === "system" || item.role === "developer"),
+    ),
+  ).toContain("PROJECT_AGENT_SCOPE_PROOF");
 });

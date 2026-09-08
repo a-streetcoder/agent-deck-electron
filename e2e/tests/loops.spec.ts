@@ -47,8 +47,26 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   // Create. The responsive modal is named, traps focus, closes on Escape,
   // and restores focus to its trigger.
   const newLoop = page.getByTestId("new-loop");
-  await page.setViewportSize({ width: 320, height: 600 });
+  // The desktop shell has a 940px minimum width and a persistent sidebar.
+  // Exercise the hero at that supported minimum, not in the 40px left over
+  // after squeezing the entire shell to 320px. The modal is tested separately.
+  await page.setViewportSize({ width: 940, height: 600 });
   await expect(newLoop).toBeVisible();
+  const workspaceBox = await page.getByTestId("workspace-shell").boundingBox();
+  expect(workspaceBox).not.toBeNull();
+  const picker = page.getByRole("combobox", { name: "Run in project" });
+  await expect(picker).toBeVisible();
+  await expect(picker).toHaveAttribute("id", "loop-project");
+  const pickerBox = await picker.boundingBox();
+  const titleBox = await page.getByTestId("app-view-title").boundingBox();
+  expect(pickerBox).not.toBeNull();
+  expect(titleBox).not.toBeNull();
+  // Canvas and hero use the same page padding, and the full-width field stays
+  // inside the workspace rather than clipping behind its overflow boundary.
+  expect(pickerBox!.x).toBeCloseTo(titleBox!.x, 0);
+  expect(pickerBox!.x).toBeGreaterThan(workspaceBox!.x);
+  expect(pickerBox!.x + pickerBox!.width).toBeLessThan(workspaceBox!.x + workspaceBox!.width);
+  await expect(page.getByText("Select a project to run one.", { exact: false })).toBeVisible();
   const heroCtaGeometry = await newLoop.evaluate((button) => {
     const label = button.querySelector("span:not([aria-hidden])");
     const buttonRect = button.getBoundingClientRect();
@@ -65,8 +83,8 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
     };
   });
   expect(heroCtaGeometry.whiteSpace).toBe("nowrap");
-  expect(heroCtaGeometry.buttonLeft).toBeGreaterThanOrEqual(0);
-  expect(heroCtaGeometry.buttonRight).toBeLessThanOrEqual(320);
+  expect(heroCtaGeometry.buttonLeft).toBeGreaterThanOrEqual(workspaceBox!.x);
+  expect(heroCtaGeometry.buttonRight).toBeLessThanOrEqual(workspaceBox!.x + workspaceBox!.width);
   expect(heroCtaGeometry.labelLeft).toBeGreaterThanOrEqual(heroCtaGeometry.buttonLeft);
   expect(heroCtaGeometry.labelRight).toBeLessThanOrEqual(heroCtaGeometry.buttonRight);
   expect(heroCtaGeometry.labelHeight).toBeLessThanOrEqual(heroCtaGeometry.lineHeight + 1);
@@ -74,6 +92,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   const editor = page.getByTestId("loop-editor");
   await expect(editor).toHaveAccessibleName("New Loop");
   await expect(page.getByTestId("loop-name")).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 600 });
   const editorBox = await editor.boundingBox();
   expect(editorBox).not.toBeNull();
   expect(editorBox!.x).toBeGreaterThanOrEqual(0);
@@ -84,6 +103,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
   await expect(page.getByTestId("loop-cancel")).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(page.getByTestId("loop-name")).toBeFocused();
+  await page.setViewportSize({ width: 940, height: 600 });
   await page.keyboard.press("Escape");
   await expect(editor).toHaveCount(0);
   await expect(newLoop).toBeFocused();

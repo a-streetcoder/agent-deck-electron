@@ -156,14 +156,23 @@ describe("named user chat assigned templates with pinned Pi", () => {
           ["plan-a-feature", "USER_COPY_EXPANDED"],
         ]) {
           const start = mock.requests.length;
-          await server.sessions.get(id)!.prompt(`/${name} argument-${mode}`);
-          await vi.waitFor(() => expect(mock.requests.length).toBeGreaterThan(start), {
-            timeout: 15_000,
+          const session = server.sessions.get(id)!;
+          let idle = false;
+          // A provider request can arrive before ingestion publishes agent_start.
+          // The snapshot may still say idle from the previous turn at that point.
+          // Observe this turn's boundary instead of accepting that stale snapshot.
+          const unsubscribe = session.bus.subscribe(({ event }) => {
+            if (event.type === "agent_status" && event.status === "idle") idle = true;
           });
-          await vi.waitFor(
-            () => expect(server.sessions.get(id)!.snapshot().state.agentStatus).toBe("idle"),
-            { timeout: 15_000 },
-          );
+          try {
+            await session.prompt(`/${name} argument-${mode}`);
+            await vi.waitFor(() => expect(mock.requests.length).toBeGreaterThan(start), {
+              timeout: 15_000,
+            });
+            await vi.waitFor(() => expect(idle).toBe(true), { timeout: 15_000 });
+          } finally {
+            unsubscribe();
+          }
           const request = mock.requests.slice(start).at(-1)!;
           const users = JSON.stringify(request.messages.filter((m) => m.role === "user"));
           expect(users).toContain(`${marker} argument-${mode}`);

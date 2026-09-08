@@ -29,6 +29,13 @@ test.beforeAll(async () => {
     body: JSON.stringify({ path: project }),
   });
   if (!response.ok) throw new Error(await response.text());
+  const { project: added } = (await response.json()) as { project: { id: string } };
+  const assigned = await fetch(`${harness.baseUrl}/projects/${added.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ assignedSkills: ["deployer"] }),
+  });
+  expect(assigned.status).toBe(200);
 });
 
 test.afterAll(async () => {
@@ -39,12 +46,6 @@ async function openProject(page: Page): Promise<void> {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  // Assign the skill so /skill:deployer is loaded, then a fresh chat picks it up.
-  await page.getByTestId("nav-skills").click();
-  await page.locator('[data-skill-name="deployer"]').click();
-  await page.getByTestId(`assign-skill-deployer-${path.basename(project)}`).check();
-  await page.getByTestId("new-chat").click();
-  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 }
 
 test("slash panel lists catalog skills and leaves args in the composer", async ({ page }) => {

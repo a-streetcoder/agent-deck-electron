@@ -43,7 +43,7 @@ test("browses and curates the full catalog before a session, with retry and no a
 
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-models").click();
-  await expect(page.getByTestId("models-error")).toHaveAttribute("role", "alert");
+  await expect(page.getByTestId("models-error").getByRole("alert")).toBeVisible();
   const retry = page.getByTestId("models-retry");
   await retry.focus();
   await retry.press("Enter");
@@ -77,7 +77,8 @@ test("browses and curates the full catalog before a session, with retry and no a
     await route.continue();
   });
   const toggle = page.getByTestId("model-toggle-mock-model");
-  await expect(toggle).toContainText("Shown in pickers");
+  await expect(toggle).toHaveRole("switch");
+  await expect(toggle).toBeChecked();
   await toggle.evaluate((button) => {
     button.click();
     button.click();
@@ -88,7 +89,7 @@ test("browses and curates the full catalog before a session, with retry and no a
   releaseCuration();
   await expect(model).toHaveAttribute("data-disabled", "true");
   await expect(toggle).toHaveAccessibleName("Enable model");
-  await expect(toggle).toContainText("Hidden from pickers");
+  await expect(toggle).not.toBeChecked();
   await toggle.click();
   await expect(model).toHaveAttribute("data-disabled", "false");
 

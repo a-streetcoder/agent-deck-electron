@@ -80,7 +80,8 @@ test("the startup card previews the project's assigned skills", async ({ page })
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("new-chat").click();
+  // selectProject already creates an empty project session. Global New chat
+  // intentionally starts a no-project session, not another project session.
 
   await expect(page.getByTestId("session-startup")).toBeVisible();
   await expect(page.getByTestId("startup-skills")).toContainText("tidy-commits");

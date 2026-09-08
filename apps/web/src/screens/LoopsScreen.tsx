@@ -41,7 +41,7 @@ import {
 } from "@agent-deck/domain";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
-import { useAgents } from "../state/useAgents.ts";
+import { useAgentsCatalog } from "../state/useAgents.ts";
 import { revealLoopArtifacts, revealLoopWorktree } from "../lib/native.ts";
 import { switchToSession } from "../state/wsBridge.ts";
 
@@ -211,15 +211,20 @@ function draftFrom(loop: LoopDefinition | null): LoopDraft {
 export function LoopsScreen() {
   const setError = useAppStore((state) => state.setError);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
+  // Loop execution needs an explicit target; selecting it must not scope the
+  // global resource screens or switch the active chat.
+  const [projectId, setProjectId] = useState<string | null>(null);
   const currentSessionId = useAppStore((state) => state.session?.id);
   const sessions = useAppStore((state) => state.sessions);
   const setView = useAppStore((state) => state.setView);
   const loopCommandRequest = useAppStore((state) => state.loopCommandRequest);
   const projects = useAppStore((state) => state.projects);
-  const currentProject = projects.find((project) => project.id === currentProjectId);
+  const currentProject = projects.find(
+    (project) => project.id === projectId && project.enabled !== false,
+  );
+  const currentProjectId = currentProject?.id ?? null;
   const pushToast = useAppStore((state) => state.pushToast);
-  const allAgents = useAgents();
+  const { agents: allAgents } = useAgentsCatalog({ projectId: currentProjectId });
   const agents = allAgents.filter((agent) => !agent.shadowed && !agent.disabled);
   const availableAgentNames = new Set(agents.map((agent) => agent.name));
   const [loops, setLoops] = useState<LoopDefinition[]>([]);
@@ -853,6 +858,8 @@ export function LoopsScreen() {
 
   const openRetry = (): void => {
     if (!activeRun?.definitionSnapshot || !activeRun.catalogId || runPending) return;
+    // Retry is pinned to the original run, never to another picker selection.
+    setProjectId(activeRun.projectId ?? null);
     launchReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const loop: LoopDefinition = {
@@ -1046,7 +1053,7 @@ export function LoopsScreen() {
               Saved loops repeat an agent run until the validation command passes.
               {currentProjectId
                 ? " Run one in the current project."
-                : " Open a project to run one."}
+                : " Select a project to run one."}
             </>
           }
           actions={
@@ -1061,6 +1068,31 @@ export function LoopsScreen() {
         />
       }
     >
+      <div className="mb-3 min-w-0">
+        <label
+          htmlFor="loop-project"
+          className="mb-1 block text-caption font-medium text-text-muted"
+        >
+          Run in project
+        </label>
+        <ControlSelect
+          id="loop-project"
+          className="min-w-0"
+          data-testid="loop-project"
+          value={currentProjectId ?? ""}
+          disabled={Boolean(draft || launchDraft || runPending)}
+          onChange={(event) => setProjectId(event.target.value || null)}
+        >
+          <option value="">Select a project</option>
+          {projects
+            .filter((project) => project.enabled !== false)
+            .map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+        </ControlSelect>
+      </div>
       {activeRun ? (
         <div
           className="mb-3 min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated px-3.5 py-3"
@@ -1637,7 +1669,7 @@ export function LoopsScreen() {
                         ? "Loop is not assigned to this project"
                         : currentProjectId
                           ? "Configure and run loop"
-                          : "Open a project to run"
+                          : "Select a project to run"
                   }
                   aria-describedby={
                     !runnable || (currentProject && !available) ? unavailableId : undefined
@@ -2839,6 +2871,7 @@ export function LoopsScreen() {
                 variant="primary"
                 data-testid="loop-launch-confirm"
                 disabled={
+                  !currentProjectId ||
                   runPending ||
                   launchAgentIssues.length > 0 ||
                   launchEvaluatorModelInvalid ||

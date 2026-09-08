@@ -36,9 +36,21 @@ async function openProjectMcp(page: Parameters<typeof selectProject>[0]) {
 }
 
 async function assignServer(page: Parameters<typeof selectProject>[0], id: string) {
-  const assignment = page.getByTestId(`mcp-assign-${id}`);
+  const assignment = page.getByTestId(`mcp-assign-all-${id}`);
   await assignment.check();
   await expect(assignment).toBeChecked();
+}
+
+async function scopedMcp() {
+  const projectsResponse = await fetch(`${harness.baseUrl}/projects`);
+  expect(projectsResponse.ok).toBe(true);
+  const { projects } = (await projectsResponse.json()) as {
+    projects: Array<{ id: string; path: string }>;
+  };
+  const id = projects.find((item: { path: string }) => item.path === project)!.id;
+  const response = await fetch(`${harness.baseUrl}/mcp?projectId=${encodeURIComponent(id)}`);
+  expect(response.ok).toBe(true);
+  return response.json() as Promise<{ servers: Array<Record<string, unknown>> }>;
 }
 
 test("the empty state shows when no servers are configured", async ({ page }) => {
@@ -140,18 +152,29 @@ test("shows the winning project definition's exact read-only path", async ({ pag
 
   await openProjectMcp(page);
   await page.getByTestId("mcp-reload").click();
-  const origin = page.getByTestId("mcp-provenance-project-origin");
-  await expect(origin).toHaveAccessibleName(`project config · read only: ${projectConfig}`);
-  await expect(origin.locator("[title]")).toHaveAttribute("title", projectConfig);
-  await expect(page.getByTestId("mcp-edit-project-origin")).toHaveCount(0);
-  await expect(page.getByTestId("mcp-remove-project-origin")).toHaveCount(0);
+  // Global management intentionally hides project-only definitions. Their
+  // exact read-only provenance remains available through the scoped API.
+  await expect(page.getByTestId("mcp-project-origin")).toHaveCount(0);
+  const { servers } = await scopedMcp();
+  expect(servers).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: "project-origin",
+        source: "project",
+        editable: false,
+        provenance: { source: "project", path: projectConfig },
+      }),
+    ]),
+  );
 
   writeFileSync(projectConfig, JSON.stringify({ mcpServers: {} }));
   await page.getByTestId("mcp-reload").click();
   await expect(page.getByTestId("mcp-project-origin")).toHaveCount(0);
 });
 
-test("lists a configured MCP server as connected and removes it", async ({ page }) => {
+test("connects an assigned MCP server without disclosing project tools globally, then removes it", async ({
+  page,
+}) => {
   // Add a stdio MCP server over REST (the mock echo server subprocess).
   const launch = mockMcpServerLaunch("mock");
   const response = await fetch(`${harness.baseUrl}/mcp`, {
@@ -166,18 +189,22 @@ test("lists a configured MCP server as connected and removes it", async ({ page 
 
   const row = page.getByTestId("mcp-mock");
   await expect(row).toBeVisible();
-  await expect(row).toHaveAttribute("data-connected", "true");
-  await expect(page.getByTestId("mcp-status-mock")).toHaveText("connected");
-  // The echo tool the mock server exposes is listed — under its OWN name, in
-  // the Tools disclosure, as native's Tools card shows it (MCP-19). The row
-  // itself now carries the count, not a line of prefixed bridge names.
-  await expect(row).toContainText("Tools (1)");
-  await page.getByTestId("mcp-tools-toggle-mock").click();
-  await expect(page.getByTestId("mcp-tools-mock")).toContainText("echo");
+  await expect(row).toHaveAttribute("data-connected", "false");
+  await expect(page.getByTestId("mcp-status-mock")).toHaveText("disconnected");
+  await expect(row).not.toContainText("echo");
+  await expect.poll(scopedMcp).toMatchObject({
+    servers: [
+      expect.objectContaining({
+        id: "mock",
+        connected: true,
+        tools: [expect.objectContaining({ name: "echo" })],
+      }),
+    ],
+  });
 
   // Revoke project trust, then remove the global definition (confirm-gated,
   // native parity) → the row disappears + empty state.
-  await page.getByTestId("mcp-assign-mock").uncheck();
+  await page.getByTestId("mcp-assign-all-mock").uncheck();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId("mcp-remove-mock").click();
   await expect(page.getByTestId("mcp-mock")).toHaveCount(0);
@@ -203,24 +230,37 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
 
   const row = page.getByTestId("mcp-external");
   await expect(row).toBeVisible();
-  await expect(row).toHaveAttribute("data-connected", "true");
-  await expect(row).toContainText("Tools (1)");
-  await page.getByTestId("mcp-tools-toggle-external").click();
-  await expect(page.getByTestId("mcp-tools-external")).toContainText("echo");
+  await expect(row).toHaveAttribute("data-connected", "false");
+  const expectExternalConnected = async () => {
+    await expect.poll(scopedMcp).toMatchObject({
+      servers: [
+        expect.objectContaining({
+          id: "external",
+          connected: true,
+          tools: [expect.objectContaining({ name: "echo" })],
+        }),
+      ],
+    });
+  };
+  await expectExternalConnected();
 
   // A partial/broken external save fails closed: the useful connection remains
   // active and the user gets an actionable error instead of losing all tools.
   writeFileSync(configPath, "{ not valid JSON");
   await page.getByTestId("mcp-reload").click();
-  await expect(row).toHaveAttribute("data-connected", "true");
+  // The malformed disk catalog cannot enumerate servers, but reload must
+  // retain the existing live bridge registration rather than tearing it down.
   await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp__external__echo");
 
   // Valid JSON with the wrong catalog shape is equally unsafe and must not be
   // mistaken for an authoritative empty snapshot.
   writeFileSync(configPath, JSON.stringify({ mcpServers: [] }));
   await page.getByTestId("mcp-reload").click();
-  await expect(row).toHaveAttribute("data-connected", "true");
+  // The malformed disk catalog cannot enumerate servers, but reload must
+  // retain the existing live bridge registration rather than tearing it down.
   await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp__external__echo");
 
   // An external deletion is authoritative too: reload tears down the live
   // client and removes its registered tools without a server restart. The
@@ -228,7 +268,10 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
   await page.getByTestId("mcp-reload").click();
   await expect(row).toHaveCount(0);
-  const missing = page.getByTestId("mcp-missing-external");
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).not.toContain(
+    "mcp__external__echo",
+  );
+  const missing = page.getByTestId("mcp-missing-default-external");
   await expect(missing).toBeVisible();
   await expect(missing).not.toContainText("mcp__external__echo");
   await missing.getByRole("checkbox").click();
@@ -250,22 +293,21 @@ test("signs in to an OAuth http server: open link, paste code, becomes authorize
   // Script the MCP endpoints so the OAuth flow (needs-auth → login URL → callback
   // → authorized) is exercised hermetically, without a real MCP provider.
   let authorized = false;
-  let assignedServerIds: string[] = [];
+  let defaultAssignedServerIds: string[] = [];
   let callbackBody: { code?: string; state?: string } | undefined;
 
-  await page.route(/\/projects\/[^/?]+$/, async (route) => {
-    if (route.request().method() !== "PATCH") return route.fallback();
-    const patch = route.request().postDataJSON() as { assignedMcpServers?: string[] };
-    const assignmentResponse = await route.fetch();
-    if (assignmentResponse.ok()) assignedServerIds = patch.assignedMcpServers ?? [];
-    await route.fulfill({ response: assignmentResponse });
+  await page.route("**/mcp/authsrv/default-assignment", async (route) => {
+    const patch = route.request().postDataJSON() as { enabled: boolean };
+    defaultAssignedServerIds = patch.enabled ? ["authsrv"] : [];
+    await route.fulfill({ json: { defaultAssignedServerIds } });
   });
   await page.route(/\/mcp(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({
       status: 200,
       json: {
-        assignedServerIds,
+        defaultAssignedServerIds,
+        assignedServerIds: [],
         missingAssignedServerIds: [],
         servers: [
           {

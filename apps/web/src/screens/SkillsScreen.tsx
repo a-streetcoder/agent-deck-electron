@@ -527,8 +527,7 @@ export function SkillsScreen() {
   const importSummaryRef = useRef<HTMLElement>(null);
   // After a rename the skill's filePath changes (its directory moves), so a
   // filePath-keyed selection would fall back to visible[0] and show the wrong
-  // skill. Remember the renamed skill by its EXACT new filePath (deterministic:
-  // renameSkillDir moves the dir to <catalog>/<newName>) and re-select it once
+  // skill. Remember the server's returned catalog filePath and re-select it once
   // the refetch lands. Keying on the precise path — not (name, scope) — avoids
   // re-pointing to an unrelated same-name skill.
   const [pendingSelectPath, setPendingSelectPath] = useState<string | null>(null);
@@ -1701,15 +1700,12 @@ export function SkillsScreen() {
       setRenameValue(null);
       return;
     }
-    if (await renameSkill(skill.scope, skill.name, newName)) {
+    const filePath = await renameSkill(skill.scope, skill.name, newName);
+    if (filePath) {
       setRenameValue(null);
-      // Keep the detail on the renamed skill once the refetch replaces its path.
-      // renameSkillDir moves the dir to <catalog>/<newName>, keeping the file's
-      // basename, so the new path is the old baseDir's parent + newName + file.
-      const sep = skill.baseDir.includes("\\") ? "\\" : "/";
-      const parent = skill.baseDir.slice(0, skill.baseDir.lastIndexOf(sep));
-      const fileName = skill.filePath.slice(skill.filePath.lastIndexOf(sep) + 1);
-      setPendingSelectPath(`${parent}${sep}${newName}${sep}${fileName}`);
+      // Rename/fan-out can change the catalog path spelling. Follow the
+      // returned identity instead of guessing from the previous directory.
+      setPendingSelectPath(filePath);
     }
   };
 

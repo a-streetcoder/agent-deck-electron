@@ -94,9 +94,9 @@ test("imports, enables, and deletes one app-owned slash command", async ({ page 
     hasText: "/e2e-command",
   });
   await expect(row).toBeVisible();
-  await expect(row.getByRole("button", { name: "Enable /e2e-command" })).toBeVisible();
-  await row.getByRole("button", { name: "Enable /e2e-command" }).click();
-  await expect(row.getByRole("button", { name: "Disable /e2e-command" })).toBeVisible();
+  await expect(row.getByRole("switch", { name: "Enable /e2e-command" })).toBeVisible();
+  await row.getByRole("switch", { name: "Enable /e2e-command" }).click();
+  await expect(row.getByRole("switch", { name: "Disable /e2e-command" })).toBeVisible();
   await row.getByRole("button", { name: /Delete \/e2e-command/ }).click();
   await expect(row).toHaveCount(0);
 });
@@ -340,7 +340,7 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
   const toggleA = page.getByTestId("extension-toggle-overlap-a.ts");
   await toggleA.click();
   await expect(toggleA).toBeDisabled();
-  await expect(toggleA).toHaveAccessibleName("Disabling…");
+  await expect(toggleA).toHaveAccessibleName("Disable overlap-a.ts");
   await expect(page.getByTestId("extension-remove-overlap-a.ts")).toBeDisabled();
   await expect(page.getByTestId("extension-disable-all")).toBeDisabled();
   await toggleA.evaluate((button: { click(): void }) => button.click());
@@ -355,8 +355,8 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
   await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toBeDisabled();
   releaseBulk!();
   await expect(page.getByTestId("error-banner")).toHaveText("Error: One extension stayed enabled.");
-  await expect(page.getByTestId("extension-toggle-overlap-a.ts")).toHaveText("Enable");
-  await expect(page.getByTestId("extension-toggle-overlap-b.ts")).toHaveText("Disable");
+  await expect(page.getByTestId("extension-toggle-overlap-a.ts")).not.toBeChecked();
+  await expect(page.getByTestId("extension-toggle-overlap-b.ts")).toBeChecked();
 });
 
 test("loading-mode picker + bulk enable/disable (native PiAgentExtensionLoadingMode)", async ({
@@ -372,9 +372,9 @@ test("loading-mode picker + bulk enable/disable (native PiAgentExtensionLoadingM
   // Bulk enable flips the extension (left disabled by the first test) to enabled;
   // bulk disable flips it back.
   await page.getByTestId("extension-enable-all").click();
-  await expect(page.getByTestId(`extension-toggle-${extName}`)).toContainText("Disable");
+  await expect(page.getByTestId(`extension-toggle-${extName}`)).toBeChecked();
   await page.getByTestId("extension-disable-all").click();
-  await expect(page.getByTestId(`extension-toggle-${extName}`)).toContainText("Enable");
+  await expect(page.getByTestId(`extension-toggle-${extName}`)).not.toBeChecked();
 
   // Managed mode hides the bulk actions (user extensions stay off); restore the
   // default so the setting is left as "use my extensions".
