@@ -1,4 +1,6 @@
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, rm, stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { CHECKPOINT_LABEL_MAX_CHARS, CHECKPOINT_MAX_RETAINED } from "@agent-deck/contracts";
 import type { CheckpointInfo } from "@agent-deck/contracts";
@@ -234,7 +236,13 @@ export const makeCheckpointService = (
     const sessionSnapshotPath = path.join(sessionDir, `${turnIndex}.session`);
     try {
       await mkdir(sessionDir, { recursive: true });
-      await copyFile(input.sessionFile!, sessionSnapshotPath);
+      // fs.copyFile uses CopyFileW on Windows, which can deny Pi's concurrent
+      // append/truncate opens. Idle capture is background work: the next turn
+      // or compaction must remain able to write its owned JSONL. Ordinary Node
+      // read handles share write/delete access. Pipeline keeps the opaque copy
+      // bounded and closes both handles on success or error without blocking
+      // the event loop or holding the entire conversation in memory.
+      await pipeline(createReadStream(input.sessionFile!), createWriteStream(sessionSnapshotPath));
     } catch {
       return null; // couldn't snapshot the conversation — no half-checkpoint
     }

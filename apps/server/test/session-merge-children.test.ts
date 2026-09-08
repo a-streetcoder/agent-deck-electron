@@ -20,6 +20,12 @@ import type { ServerContext } from "../src/context.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
 
+// These real Git/native integration cases include repository creation, several
+// linked worktrees, durable fsync and teardown in the test body. CI34276187155
+// rotated 5s expirations across Windows/macOS while neighbors took 3–4.7s.
+// Match checkpoints.test.ts's integration budget, not a runtime latency limit.
+vi.setConfig({ testTimeout: 20_000 });
+
 // HTTP routes + actual durable child store + native ownership + real Git. No Pi
 // or user checkout is needed to reproduce the missing parent-cwd failure.
 async function fixture(keep = false, childCount = 2) {

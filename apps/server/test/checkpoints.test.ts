@@ -1,9 +1,16 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeCheckpointService, type CheckpointServiceShape } from "../src/services/checkpoints.ts";
+
+// Keep genuine OS streams, but make the factory observable so the regression
+// can request write access while capture's read descriptor is definitely open.
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof fs>()),
+}));
 
 /**
  * Checkpoint capture service tests (Slice 18a) against REAL scratch git repos —
@@ -78,6 +85,44 @@ function makeService(overrides?: { maxPerSession?: number }): {
 }
 
 describe("makeCheckpointService.capture", () => {
+  it("keeps the live Pi file writable while a bounded snapshot read handle is open", async () => {
+    const session = makeSessionFile();
+    const bytes = "opaque-jsonl-bytes\n".repeat(100_000);
+    session.write(bytes);
+    const { service } = makeService();
+    const originalRead = fs.createReadStream;
+    let openedForWrite = false;
+    const reads = vi.spyOn(fs, "createReadStream").mockImplementation((file, options) => {
+      const source = originalRead(file, options);
+      source.once("open", () => {
+        // Exercise the OS sharing contract with the snapshot source still open.
+        // r+ requests write access without changing bytes, unlike a test that
+        // only waits for capture to finish before starting the next Pi turn.
+        const writer = fs.openSync(session.path, "r+");
+        try {
+          openedForWrite = true;
+        } finally {
+          fs.closeSync(writer);
+        }
+      });
+      return source;
+    });
+    try {
+      const record = await service.capture({
+        sessionId: "live-writer",
+        cwd: path.dirname(session.path),
+        sessionFile: session.path,
+        label: "snapshot alongside live Pi",
+      });
+      expect(reads).toHaveBeenCalledOnce();
+      expect(openedForWrite).toBe(true);
+      expect(record).not.toBeNull();
+      expect(readFileSync(record!.sessionSnapshotPath, "utf8")).toBe(bytes);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("captures a checkpoint per turn: hidden git ref whose tree matches the worktree + a session snapshot", async () => {
     const repo = makeRepo();
     const session = makeSessionFile();

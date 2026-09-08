@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createLoopWorktree,
   createSessionWorktree,
@@ -29,6 +29,11 @@ import {
   parseStatus,
   SessionWorktreeBranchCollisionError,
 } from "../src/git.ts";
+
+// Real repositories/remotes and Git subprocesses are part of these integration
+// tests, including setup. Windows CI34276187155 exhausted the default 5s on
+// remote-tag rollback; use the existing multi-repository 20s budget consistently.
+vi.setConfig({ testTimeout: 20_000 });
 
 function makeRepo(): string {
   const repo = mkdtempSync(path.join(tmpdir(), "agent-deck-git-test-"));
