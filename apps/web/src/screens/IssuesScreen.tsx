@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   CircleDot,
   CircleSlash,
+  Columns2,
+  List,
   MessageSquare,
   PenLine,
   RefreshCw,
@@ -96,13 +98,73 @@ function formatRelative(iso: string | null): string {
   return rtf.format(Math.round(sec / 31536000), "year");
 }
 
+function IssueBoardCard({ issue, onSelect }: { issue: Issue; onSelect: () => void }) {
+  const reference = issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`;
+  const state = issue.state.toLowerCase();
+  return (
+    <li>
+      <ControlButton
+        data-testid={`issue-${issue.number}`}
+        aria-label={`${reference}: ${issue.title}, ${state}`}
+        className="group flex w-full min-w-0 scroll-m-1 flex-col gap-2 rounded-xl border border-border-subtle bg-surface p-3 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        onFocus={(event) =>
+          event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
+        }
+        onClick={onSelect}
+      >
+        <span className="font-mono text-code-sm text-text-muted">{reference}</span>
+        <span className="line-clamp-2 w-full break-words text-label font-medium leading-snug text-text-primary">
+          {issue.title}
+        </span>
+        {(issue.author || issue.updatedAt) && (
+          <span className="flex w-full min-w-0 items-center gap-2 text-detail text-text-muted">
+            {issue.author ? (
+              <span className="flex min-w-0 items-center gap-1">
+                <User size={11} className="shrink-0" aria-hidden />
+                <span className="truncate">{issue.author}</span>
+              </span>
+            ) : null}
+            {issue.updatedAt ? (
+              <span className="ml-auto shrink-0" title={formatDate(issue.updatedAt)}>
+                {formatRelative(issue.updatedAt)}
+              </span>
+            ) : null}
+          </span>
+        )}
+        {issue.labels.length > 0 ? (
+          <span
+            className="flex w-full flex-wrap gap-1"
+            aria-label={`${issue.labels.length} labels`}
+          >
+            {issue.labels.slice(0, 3).map((label) => (
+              <span
+                key={label}
+                className="max-w-[12rem] truncate rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted"
+              >
+                {label}
+              </span>
+            ))}
+            {issue.labels.length > 3 ? (
+              <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
+                +{issue.labels.length - 3}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </ControlButton>
+    </li>
+  );
+}
+
 export function IssuesScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const projects = useAppStore((state) => state.projects);
   const setView = useAppStore((state) => state.setView);
   const setGlobalError = useAppStore((state) => state.setError);
   const setPendingComposerText = useAppStore((state) => state.setPendingComposerText);
-  const project = projects.find((p) => p.id === currentProjectId) ?? null;
+  // Aggregate collection loading needs a registered-project readiness anchor,
+  // but that fallback must never become ownership for an issue detail/mutation.
+  const collectionProjectId = currentProjectId ?? projects[0]?.id ?? null;
 
   const [issues, setIssues] = useState<Issue[]>([]);
   const [error, setLocalError] = useState<string | null>(null);
@@ -110,8 +172,12 @@ export function IssuesScreen() {
   const [incompleteResults, setIncompleteResults] = useState(false);
   // Native Issues screen's Open / Closed / All segmented filter.
   const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
+  const [presentation, setPresentation] = useState<"list" | "board">("list");
   // ISS-10 (native aggregate board): search across every registered project's repo.
   const [allProjects, setAllProjects] = useState(false);
+  // Global navigation has no selected project, so aggregate scope is derived
+  // synchronously. This prevents a stale one-project request during transition.
+  const effectiveAllProjects = currentProjectId === null || allProjects;
   // ISS-11: the aggregate board's scope — issues or pull requests.
   const [searchKind, setSearchKind] = useState<"issues" | "prs">("issues");
   // The project whose routes serve the OPEN detail (a cross-project row's owner).
@@ -174,7 +240,7 @@ export function IssuesScreen() {
   // effect for a changed project/state starts. This closes the window where the
   // previous request could otherwise settle after the new query commits but
   // before reqRef bumps, without mutating refs during render.
-  const renderedQueryKey = `${currentProjectId ?? ""}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}\u0000${searchKind}`;
+  const renderedQueryKey = `${collectionProjectId ?? ""}\u0000${stateFilter}\u0000${effectiveAllProjects ? "all" : "one"}\u0000${searchKind}`;
   const queryEpochRef = useRef({ key: renderedQueryKey, epoch: 0 });
   useLayoutEffect(() => {
     if (queryEpochRef.current.key !== renderedQueryKey) {
@@ -193,7 +259,7 @@ export function IssuesScreen() {
   const load = useCallback(
     async (projectId: string): Promise<void> => {
       const req = ++reqRef.current;
-      const requestQueryKey = `${projectId}\u0000${stateFilter}\u0000${allProjects ? "all" : "one"}\u0000${searchKind}`;
+      const requestQueryKey = `${projectId}\u0000${stateFilter}\u0000${effectiveAllProjects ? "all" : "one"}\u0000${searchKind}`;
       const requestQueryEpoch = queryEpochRef.current.epoch;
       const ownsCurrentQuery = (): boolean =>
         reqRef.current === req &&
@@ -206,7 +272,7 @@ export function IssuesScreen() {
       setIncompleteResults(false);
       try {
         const response = await fetch(
-          allProjects
+          effectiveAllProjects
             ? `/issues/search?state=${stateFilter}&kind=${searchKind}`
             : `/projects/${encodeURIComponent(projectId)}/issues?state=${stateFilter}`,
         );
@@ -229,12 +295,12 @@ export function IssuesScreen() {
         if (ownsCurrentQuery()) setLoading(false);
       }
     },
-    [stateFilter, allProjects, searchKind],
+    [stateFilter, effectiveAllProjects, searchKind],
   );
 
   useEffect(() => {
-    if (currentProjectId) void load(currentProjectId);
-  }, [currentProjectId, load]);
+    if (collectionProjectId) void load(collectionProjectId);
+  }, [collectionProjectId, load]);
 
   // Switching projects: everything on screen (list rows AND any open detail)
   // belonged to the old repo. Reset in a LAYOUT effect so it lands before the
@@ -258,9 +324,11 @@ export function IssuesScreen() {
     setSearchQuery("");
   }, [currentProjectId]);
 
+  const detailOwnerProjectId = detailProjectId ?? currentProjectId;
+
   const start = async (issue: IssueDetail): Promise<void> => {
-    const ownerProject =
-      projects.find((p) => p.id === (detailProjectId ?? currentProjectId)) ?? project;
+    const ownerProject = projects.find((p) => p.id === detailOwnerProjectId) ?? null;
+    if (!ownerProject) return;
     setView("chat");
     // Wait for the new session to become active before seeding its composer,
     // so the prompt can't land in the previous session's draft.
@@ -344,7 +412,7 @@ export function IssuesScreen() {
   const issueStateOpInFlight = useRef(false);
   // Close the open issue (native 10.9 split-button: completed / not planned).
   const closeIssue = async (reason: "completed" | "not_planned"): Promise<void> => {
-    if (!currentProjectId || !detail || issueStateOpInFlight.current) return;
+    if (!detailOwnerProjectId || !detail || issueStateOpInFlight.current) return;
     issueStateOpInFlight.current = true;
     try {
       await closeIssueInner(reason);
@@ -353,13 +421,13 @@ export function IssuesScreen() {
     }
   };
   const closeIssueInner = async (reason: "completed" | "not_planned"): Promise<void> => {
-    if (!currentProjectId || !detail) return;
+    if (!detailOwnerProjectId || !detail) return;
     // Token identifies the current selection (bumped on project switch AND on
     // opening any issue), so a delayed response can't touch a newer selection —
     // e.g. the SAME issue number in a different project after a switch.
     const req = detailReq.current;
     const res = await fetch(
-      `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/close`,
+      `/projects/${encodeURIComponent(detailOwnerProjectId)}/issues/${detail.number}/close`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -381,7 +449,7 @@ export function IssuesScreen() {
 
   // Reopen a closed issue (ISS-02, native Issues reopen).
   const reopenIssue = async (): Promise<void> => {
-    if (!currentProjectId || !detail || issueStateOpInFlight.current) return;
+    if (!detailOwnerProjectId || !detail || issueStateOpInFlight.current) return;
     issueStateOpInFlight.current = true;
     try {
       await reopenIssueInner();
@@ -390,10 +458,10 @@ export function IssuesScreen() {
     }
   };
   const reopenIssueInner = async (): Promise<void> => {
-    if (!currentProjectId || !detail) return;
+    if (!detailOwnerProjectId || !detail) return;
     const req = detailReq.current;
     const res = await fetch(
-      `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/reopen`,
+      `/projects/${encodeURIComponent(detailOwnerProjectId)}/issues/${detail.number}/reopen`,
       { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
     );
     if (detailReq.current !== req) return; // selection changed — ignore this response
@@ -415,13 +483,13 @@ export function IssuesScreen() {
   const replyInFlight = useRef(false);
   const postComment = async (): Promise<void> => {
     const body = replyDraft.trim();
-    if (!currentProjectId || !detail || !body || replyInFlight.current) return;
+    if (!detailOwnerProjectId || !detail || !body || replyInFlight.current) return;
     replyInFlight.current = true;
     const req = detailReq.current;
     setReplyBusy(true);
     try {
       const res = await fetch(
-        `/projects/${encodeURIComponent(detailProjectId ?? currentProjectId)}/issues/${detail.number}/comment`,
+        `/projects/${encodeURIComponent(detailOwnerProjectId)}/issues/${detail.number}/comment`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -544,7 +612,7 @@ export function IssuesScreen() {
     setReasonFilter((prev) => (prev && !availableReasons.includes(prev) ? null : prev));
   }, [availableLabels, availableAssignees, availableAuthors, availableTypes, availableReasons]);
 
-  if (!project) {
+  if (!collectionProjectId) {
     return (
       <PageShell
         width="page"
@@ -862,6 +930,7 @@ export function IssuesScreen() {
       }
       toolbar={
         <PageToolbar
+          className="[&>div>div:last-child]:max-w-full"
           leading={
             <>
               <AppSegmentedPicker
@@ -923,8 +992,28 @@ export function IssuesScreen() {
               </span>
               <AppSegmentedPicker
                 size="sm"
+                aria-label="Issue presentation"
+                value={presentation}
+                onChange={setPresentation}
+                options={[
+                  {
+                    id: "list",
+                    label: "List",
+                    icon: <List aria-hidden />,
+                    "data-testid": "issues-presentation-list",
+                  },
+                  {
+                    id: "board",
+                    label: "Board",
+                    icon: <Columns2 aria-hidden />,
+                    "data-testid": "issues-presentation-board",
+                  },
+                ]}
+              />
+              <AppSegmentedPicker
+                size="sm"
                 aria-label="Issue search scope"
-                value={allProjects ? "all" : "current"}
+                value={effectiveAllProjects ? "all" : "current"}
                 onChange={(next) => {
                   setIncompleteResults(false);
                   const nextAll = next === "all";
@@ -932,7 +1021,7 @@ export function IssuesScreen() {
                   if (!nextAll) setSearchKind("issues");
                 }}
                 options={[
-                  { id: "current", label: "This project" },
+                  { id: "current", label: "This project", disabled: currentProjectId === null },
                   {
                     id: "all",
                     label: "All projects",
@@ -940,7 +1029,7 @@ export function IssuesScreen() {
                   },
                 ]}
               />
-              {allProjects ? (
+              {effectiveAllProjects ? (
                 <AppSegmentedPicker
                   size="sm"
                   aria-label="Search kind"
@@ -969,7 +1058,7 @@ export function IssuesScreen() {
                   <RefreshCw size={11} className={loading ? "animate-spin" : undefined} />
                 }
                 disabled={loading}
-                onClick={() => currentProjectId && void load(currentProjectId)}
+                onClick={() => collectionProjectId && void load(collectionProjectId)}
               >
                 Refresh
               </Button>
@@ -1128,21 +1217,106 @@ export function IssuesScreen() {
         <div data-testid="issues-error">
           <AppInlineNotice tone="danger">{error}</AppInlineNotice>
         </div>
+      ) : visibleIssues.length === 0 && !loading ? (
+        <AppEmptyState
+          data-testid="issues-empty"
+          heading={
+            search
+              ? `No issues match “${searchQuery.trim()}”.`
+              : filtersActive
+                ? "Try clearing the filters or changing the state."
+                : stateFilter === "all"
+                  ? "No issues."
+                  : `No ${stateFilter} issues.`
+          }
+        />
+      ) : presentation === "board" ? (
+        <section
+          data-testid="issues-board"
+          aria-label="Issues board"
+          className="w-full min-w-0 overflow-x-auto pb-3 pe-4"
+        >
+          <div className="flex min-w-max items-start gap-4">
+            {(stateFilter === "all" ? (["open", "closed"] as const) : [stateFilter]).map(
+              (columnState) => {
+                const columnIssues = visibleIssues.filter(
+                  (issue) => issue.state.toLowerCase() === columnState,
+                );
+                const headingId = `issues-column-${columnState}`;
+                return (
+                  <section
+                    key={columnState}
+                    data-testid={headingId}
+                    aria-labelledby={`${headingId}-heading`}
+                    className="w-[min(21rem,calc(100vw-3rem))] shrink-0 rounded-xl bg-surface-elevated p-2.5 sm:w-[20rem]"
+                  >
+                    <header className="flex items-center gap-2 px-1 pb-2.5">
+                      {columnState === "open" ? (
+                        <CircleDot size={13} className="text-success" aria-hidden />
+                      ) : (
+                        <CheckCircle2 size={13} className="text-text-muted" aria-hidden />
+                      )}
+                      <h2
+                        id={`${headingId}-heading`}
+                        className="text-label font-semibold capitalize text-text-primary"
+                      >
+                        {columnState}
+                      </h2>
+                      <span
+                        data-testid={`${headingId}-count`}
+                        className="ml-auto rounded-capsule border border-border-subtle px-1.5 text-detail tabular-nums text-text-muted"
+                      >
+                        {columnIssues.length}
+                      </span>
+                    </header>
+                    <ul className="space-y-2" aria-label={`${columnState} issues`}>
+                      {columnIssues.map((issue) => (
+                        <IssueBoardCard
+                          key={`${issue.repository ?? ""}#${issue.number}`}
+                          issue={issue}
+                          onSelect={() => {
+                            if (
+                              /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)
+                            ) {
+                              window.open(issue.url, "_blank", "noreferrer");
+                              return;
+                            }
+                            const ownerProjectId = effectiveAllProjects
+                              ? issue.projectId
+                              : (issue.projectId ?? currentProjectId);
+                            if (ownerProjectId) void openDetail(issue.number, ownerProjectId);
+                          }}
+                        />
+                      ))}
+                    </ul>
+                    {columnIssues.length === 0 ? (
+                      <p className="px-1 py-5 text-center text-detail text-text-muted">
+                        No {columnState} issues
+                      </p>
+                    ) : null}
+                  </section>
+                );
+              },
+            )}
+          </div>
+        </section>
       ) : (
         <div className="space-y-1.5" data-testid="issues-list">
           {visibleIssues.map((issue) => (
             <ControlButton
               key={`${issue.repository ?? ""}#${issue.number}`}
               data-testid={`issue-${issue.number}`}
-              className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover"
+              aria-label={`${issue.repository ? `${issue.repository}#${issue.number}` : `#${issue.number}`}: ${issue.title}, ${issue.state.toLowerCase()}`}
+              className="flex w-full items-center gap-3 rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-left hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               onClick={() => {
-                // a PR row has no issue detail — open it on GitHub (the
-                // main-window policy routes _blank/window.open externally)
                 if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(issue.url)) {
                   window.open(issue.url, "_blank", "noreferrer");
                   return;
                 }
-                void openDetail(issue.number, issue.projectId ?? undefined);
+                const ownerProjectId = effectiveAllProjects
+                  ? issue.projectId
+                  : (issue.projectId ?? currentProjectId);
+                if (ownerProjectId) void openDetail(issue.number, ownerProjectId);
               }}
             >
               <span className="font-mono text-code text-text-muted">
@@ -1151,8 +1325,6 @@ export function IssuesScreen() {
               <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
                 {issue.title}
               </span>
-              {/* Native list-row meta leads with the author (GitHubIssuesViews
-                        .swift:143-145): who filed the issue. */}
               {issue.author ? (
                 <span
                   data-testid="issue-author"
@@ -1162,7 +1334,6 @@ export function IssuesScreen() {
                   <span className="max-w-[16ch] truncate">{issue.author}</span>
                 </span>
               ) : null}
-              {/* Relative last-updated time (native meta row, after author). */}
               {issue.updatedAt ? (
                 <span
                   data-testid="issue-updated"
@@ -1182,20 +1353,6 @@ export function IssuesScreen() {
               ))}
             </ControlButton>
           ))}
-          {visibleIssues.length === 0 && !loading ? (
-            <AppEmptyState
-              data-testid="issues-empty"
-              heading={
-                search
-                  ? `No issues match “${searchQuery.trim()}”.`
-                  : filtersActive
-                    ? "Try clearing the filters or changing the state."
-                    : stateFilter === "all"
-                      ? "No issues."
-                      : `No ${stateFilter} issues.`
-              }
-            />
-          ) : null}
         </div>
       )}
     </PageShell>

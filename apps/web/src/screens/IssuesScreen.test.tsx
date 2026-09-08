@@ -101,7 +101,10 @@ describe("aggregate PR search (ISS-11)", () => {
     await screen.findByText("A pull request");
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("kind=prs"))).toBe(true);
 
-    // a PR row opens on GitHub instead of the issue detail pane
+    // PR behavior is presentation-independent: board cards also open GitHub.
+    const callsBeforePresentationChange = boardCalls(fetchMock);
+    fireEvent.click(screen.getByTestId("issues-presentation-board"));
+    expect(boardCalls(fetchMock)).toBe(callsBeforePresentationChange);
     fireEvent.click(screen.getByText("A pull request"));
     expect(openSpy).toHaveBeenCalledWith(
       "https://github.com/acme/one/pull/77",
@@ -643,5 +646,151 @@ describe("issues incomplete-results notice", () => {
     expect(document.activeElement).toBe(search);
     expect(screen.getByTestId("issues-incomplete-results")).toBeTruthy();
     expect(screen.getByTestId("issues-empty").textContent).toContain("No issues match");
+  });
+});
+
+describe("issue board presentation (ISS-08)", () => {
+  it("defaults to list, toggles without refetching, groups filtered rows, and retains the board after detail", async () => {
+    const rows = [
+      { ...issue(1), title: "Open item", state: "OPEN", labels: ["bug", "ui", "p1", "desktop"] },
+      { ...issue(2), title: "Closed item", state: "CLOSED", author: "ale" },
+    ];
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const connection = connectionBranch(url);
+      if (connection) return Promise.resolve(connection);
+      if (url.includes("/issues/1")) {
+        return Promise.resolve(jsonResponse({ issue: { ...rows[0], body: "Body", comments: [] } }));
+      }
+      return Promise.resolve(jsonResponse({ issues: rows, incompleteResults: false }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    await screen.findByText("Open item");
+    expect(screen.getByTestId("issues-list")).toBeTruthy();
+    expect(screen.queryByTestId("issues-board")).toBeNull();
+    const callsBeforeToggle = boardCalls(fetchMock);
+
+    fireEvent.click(screen.getByTestId("issues-presentation-board"));
+    expect(screen.getByTestId("issues-board")).toBeTruthy();
+    expect(boardCalls(fetchMock)).toBe(callsBeforeToggle);
+    expect(screen.getByTestId("issues-column-open-count").textContent).toBe("1");
+    expect(screen.queryByTestId("issues-column-closed")).toBeNull();
+    expect(screen.getByText("+1")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("issues-state-all"));
+    await screen.findByTestId("issues-column-closed");
+    expect(screen.getByTestId("issues-column-open-count").textContent).toBe("1");
+    expect(screen.getByTestId("issues-column-closed-count").textContent).toBe("1");
+
+    fireEvent.change(screen.getByTestId("issues-search"), { target: { value: "Closed" } });
+    expect(screen.getByTestId("issues-column-open-count").textContent).toBe("0");
+    expect(screen.getByTestId("issues-column-closed-count").textContent).toBe("1");
+
+    fireEvent.change(screen.getByTestId("issues-search"), { target: { value: "" } });
+    fireEvent.click(screen.getByText("Open item"));
+    await screen.findByText("Body");
+    fireEvent.click(screen.getByTestId("issue-detail-back"));
+    expect(screen.getByTestId("issues-board")).toBeTruthy();
+  });
+
+  it("uses aggregate scope when global navigation has no current project", async () => {
+    useAppStore.setState({ currentProjectId: null, projects: [project], error: null });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const connection = connectionBranch(String(input));
+      return Promise.resolve(
+        connection ??
+          jsonResponse({
+            issues: [{ ...issue(4), repository: "acme/app", projectId: project.id }],
+          }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    await screen.findByText("acme/app#4");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith("/issues/search"))).toBe(
+      true,
+    );
+    expect(screen.queryByTestId("issues-no-project")).toBeNull();
+  });
+
+  it("switches synchronously to aggregate loading and rejects the stale project response", async () => {
+    let resolveProject!: (response: Response) => void;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const connection = connectionBranch(url);
+      if (connection) return Promise.resolve(connection);
+      if (url.startsWith(`/projects/${project.id}/issues`)) {
+        return new Promise<Response>((resolve) => {
+          resolveProject = resolve;
+        });
+      }
+      if (url.startsWith("/issues/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [{ ...issue(8), title: "Aggregate result", projectId: project.id }],
+          }),
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+    await waitFor(() => expect(boardCalls(fetchMock)).toBe(1));
+
+    useAppStore.setState({ currentProjectId: null });
+    await screen.findByText("Aggregate result");
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/issues/search")),
+    ).toHaveLength(1);
+
+    resolveProject(jsonResponse({ issues: [{ ...issue(1), title: "Stale project result" }] }));
+    await waitFor(() => expect(screen.queryByText("Stale project result")).toBeNull());
+  });
+
+  it("never falls back to the first project for an unmapped aggregate row", async () => {
+    const projectB = { ...project, id: "project-b", name: "B", path: "/tmp/b" };
+    useAppStore.setState({ currentProjectId: null, projects: [project, projectB], error: null });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const connection = connectionBranch(url);
+      if (connection) return Promise.resolve(connection);
+      if (url.startsWith("/issues/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            issues: [
+              { ...issue(9), title: "Owned by B", projectId: projectB.id },
+              { ...issue(10), title: "Unmapped", projectId: null },
+            ],
+          }),
+        );
+      }
+      if (url.includes("/projects/project-b/issues/9")) {
+        return Promise.resolve(
+          jsonResponse({
+            issue: { ...issue(9), title: "Owned by B", body: "B body", comments: [] },
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 500));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssuesScreen />);
+
+    fireEvent.click(await screen.findByText("Unmapped"));
+    expect(screen.queryByTestId("issue-detail")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes(`/projects/${project.id}/issues/10`),
+      ),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByText("Owned by B"));
+    await screen.findByText("B body");
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/projects/project-b/issues/9")),
+    ).toBe(true);
   });
 });
