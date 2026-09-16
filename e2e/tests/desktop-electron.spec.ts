@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  readFileSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1210,7 +1211,7 @@ test("durable attention observes hidden sessions and badges distinct pending cha
       const response = await fetch("/sessions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ startImmediately: true }),
       });
       if (!response.ok) throw new Error(await response.text());
       return ((await response.json()) as { session: { id: string } }).session.id;
@@ -1405,4 +1406,47 @@ test("the app presents itself as Agent Deck", async () => {
   }));
   expect(identity.name).toBe("Agent Deck");
   if (identity.platform === "darwin") expect(identity.firstMenuLabel).toBe("Agent Deck");
+});
+
+test("quitting waits for the last unsent draft to reach durable storage", async () => {
+  const window = await app.firstWindow();
+  await window.getByTestId("new-chat").click();
+  const composer = window.getByTestId("composer-input");
+  await expect(composer).toBeVisible();
+  let releaseSave!: () => void;
+  let observedSave!: () => void;
+  const saving = new Promise<void>((resolve) => {
+    observedSave = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  let draftUrl = "";
+  await window.route("**/composer-draft", async (route) => {
+    if (route.request().method() !== "PUT") {
+      await route.continue();
+      return;
+    }
+    draftUrl = route.request().url();
+    observedSave();
+    await release;
+    await route.continue();
+  });
+  await composer.fill("Keep the final keystroke when quitting");
+  await saving;
+  await app.evaluate(({ app: electronApp }) => {
+    electronApp.quit();
+  });
+  // The close handshake cannot destroy the renderer/backend while this PUT is pending.
+  await expect(composer).toHaveValue("Keep the final keystroke when quitting");
+  const dataDir = await app.evaluate(() => process.env.AGENT_DECK_DATA_DIR);
+  const closed = app.waitForEvent("close");
+  releaseSave();
+  await closed;
+  const id = new URL(draftUrl).pathname.split("/")[2]!;
+  expect(dataDir).toBeTruthy();
+  const persisted = JSON.parse(
+    readFileSync(path.join(dataDir!, "composer-drafts", `${id}.json`), "utf8"),
+  );
+  expect(persisted.text).toBe("Keep the final keystroke when quitting");
 });

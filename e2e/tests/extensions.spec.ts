@@ -60,6 +60,12 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   const id1 = await newSessionId(before1);
+  // Extensions are loaded when the draft receives its first message.
+  await page.getByTestId("composer-input").fill("load this session's extensions");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("assistant-text").last()).toContainText("load this session", {
+    timeout: 30_000,
+  });
   await expect.poll(() => commandNames(id1), { timeout: 20_000 }).toContain("ask-test");
 
   // Disable it → the next session excludes it.
@@ -69,6 +75,12 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   const id2 = await newSessionId(before2);
+  // Extensions are loaded when the draft receives its first message.
+  await page.getByTestId("composer-input").fill("load this session's extensions");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("assistant-text").last()).toContainText("load this session", {
+    timeout: 30_000,
+  });
   await expect.poll(() => commandNames(id2), { timeout: 20_000 }).not.toContain("ask-test");
 });
 

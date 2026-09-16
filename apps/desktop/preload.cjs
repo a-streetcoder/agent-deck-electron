@@ -55,6 +55,21 @@ contextBridge.exposeInMainWorld("agentDeck", {
   revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
+  /** Flush device-local drafts before main closes the renderer/backend. */
+  onFlushDrafts: (handler) => {
+    ipcRenderer.removeAllListeners("drafts:flush");
+    const listener = async (_event, payload) => {
+      if (!payload || typeof payload.token !== "string" || payload.token.length > 256) return;
+      try {
+        await handler();
+        ipcRenderer.send("drafts:flushed", { token: payload.token, ok: true });
+      } catch {
+        ipcRenderer.send("drafts:flushed", { token: payload.token, ok: false });
+      }
+    };
+    ipcRenderer.on("drafts:flush", listener);
+    return () => ipcRenderer.removeListener("drafts:flush", listener);
+  },
   /** Ask main to re-read the durable backend attention set. */
   syncAttention: () => ipcRenderer.send("attention:sync"),
   /** Hint one durable false→true transition; main revalidates backend truth. */

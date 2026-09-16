@@ -40,7 +40,7 @@ export async function selectProject(page: Page, name: string): Promise<string> {
     const createResponse = await fetch("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: project.id }),
+      body: JSON.stringify({ startImmediately: true, projectId: project.id }),
     });
     if (!createResponse.ok) throw new Error(await createResponse.text());
     const { session } = (await createResponse.json()) as { session: { id: string } };
@@ -64,4 +64,12 @@ export async function selectProject(page: Page, name: string): Promise<string> {
   await expect(page.getByTestId("composer-input")).toBeVisible();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   return sessionId;
+}
+
+/** Enter runtime-owned workspace actions through the real first-send lifecycle. */
+export async function startDraftWithMessage(page: Page): Promise<void> {
+  await page.getByTestId("composer-input").fill("Prepare the workspace");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("assistant-text").last()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 }

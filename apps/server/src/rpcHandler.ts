@@ -5,6 +5,8 @@ import {
   type ServerMessage,
 } from "@agent-deck/contracts";
 import { Either, Schema } from "effect";
+import { emptyTranscript } from "@agent-deck/domain";
+import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
 import { sessionDiffBase, type DiffGateway } from "./diffGateway.ts";
@@ -70,6 +72,7 @@ export interface RpcConnection {
 
 export function createRpcConnection(deps: {
   sessions: SessionManager;
+  drafts?: SessionDraftGateway;
   terminals: TerminalGateway;
   diffs: DiffGateway;
   editors: EditorLauncher;
@@ -351,6 +354,62 @@ export function createRpcConnection(deps: {
       return;
     }
 
+    // A draft is durable metadata, not a fake running Pi session. Only a first
+    // prompt may allocate its runtime and checkout; inspecting or configuring
+    // one must remain process-free, including after a server restart.
+    if ("sessionId" in request && deps.drafts?.find(request.sessionId)) {
+      try {
+        switch (request.type) {
+          case "subscribe_session":
+            cleanups.get(request.sessionId)?.();
+            cleanups.delete(request.sessionId);
+            push({
+              type: "snapshot",
+              sessionId: request.sessionId,
+              seq: 0,
+              state: emptyTranscript(),
+            });
+            replyOk();
+            return;
+          case "set_model":
+            await deps.drafts.setModel(request.sessionId, request.provider, request.modelId);
+            replyOk();
+            return;
+          case "set_thinking":
+            await deps.drafts.setThinking(request.sessionId, request.level);
+            replyOk();
+            return;
+          case "prompt": {
+            const activated = await deps.drafts.start(request.sessionId);
+            // Attach before prompt: the first real streamed delta must never
+            // race a later renderer reconnect or be replaced by a final buffer.
+            if (!connectionClosed) subscribe(activated);
+            break;
+          }
+          case "diff_files":
+          case "diff_file":
+          case "file_list":
+          case "file_read":
+          case "file_write":
+          case "editor_open":
+          case "scripts_list":
+          case "checkpoints_list":
+            // File actions use the draft's selected source directory; process
+            // and runtime actions still wait for first-send activation.
+            break;
+          case "abort":
+            replyOk();
+            return;
+          default:
+            replyError("Send the first message to start this draft before using this action.");
+            return;
+        }
+      } catch (error) {
+        replyError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
+
     // TER-01: hand this session's conversation to the user's OWN terminal app.
     // Everything data-bearing (cwd, pi session file) is server-side meta; the
     // launcher composes argv per platform and never shell-interpolates it.
@@ -473,15 +532,15 @@ export function createRpcConnection(deps: {
     // Diff ops (Slice 9) — session-ownership validated like the terminal ops
     // (the cwd is resolved server-side from the session's meta, never the wire).
     if (request.type === "diff_files" || request.type === "diff_file") {
-      const session = sessions.get(request.sessionId);
-      if (!session) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (!meta) {
         replyError("unknown session");
         return;
       }
       try {
-        const base = await sessionDiffBase(session.meta);
+        const base = await sessionDiffBase(meta);
         if (request.type === "diff_files") {
-          const set = await diffs.listFiles(session.meta.id, session.meta.cwd, base);
+          const set = await diffs.listFiles(meta.id, meta.cwd, base);
           send({
             kind: "diff_files_ok",
             id,
@@ -490,13 +549,7 @@ export function createRpcConnection(deps: {
             truncated: set.truncated,
           });
         } else {
-          const result = await diffs.fileDiff(
-            session.meta.id,
-            session.meta.cwd,
-            request.path,
-            base,
-            request.scope,
-          );
+          const result = await diffs.fileDiff(meta.id, meta.cwd, request.path, base, request.scope);
           send({
             kind: "diff_file_ok",
             id,
@@ -524,14 +577,14 @@ export function createRpcConnection(deps: {
       return;
     }
     if (request.type === "editor_open") {
-      const session = sessions.get(request.sessionId);
-      if (!session) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (!meta) {
         replyError("unknown session");
         return;
       }
       try {
         await editors.open({
-          cwd: session.meta.cwd,
+          cwd: meta.cwd,
           path: request.path,
           ...(request.line !== undefined ? { line: request.line } : {}),
           editor: request.editor,
@@ -551,14 +604,14 @@ export function createRpcConnection(deps: {
       request.type === "file_read" ||
       request.type === "file_write"
     ) {
-      const session = sessions.get(request.sessionId);
-      if (!session) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (!meta) {
         replyError("unknown session");
         return;
       }
       try {
         if (request.type === "file_list") {
-          const result = await files.listDirectory(session.meta.cwd, request.path);
+          const result = await files.listDirectory(meta.cwd, request.path);
           send({
             kind: "file_list_ok",
             id,
@@ -567,7 +620,7 @@ export function createRpcConnection(deps: {
             truncated: result.truncated,
           });
         } else if (request.type === "file_read") {
-          const result = await files.readFile(session.meta.cwd, request.path);
+          const result = await files.readFile(meta.cwd, request.path);
           send({
             kind: "file_read_ok",
             id,
@@ -583,7 +636,7 @@ export function createRpcConnection(deps: {
           // the on-disk version conflict guard. cwd is server-side meta; the
           // path stays within it (same containment gate as read).
           const result = await files.writeFile(
-            session.meta.cwd,
+            meta.cwd,
             request.path,
             request.content,
             request.baseVersion,
@@ -606,13 +659,13 @@ export function createRpcConnection(deps: {
     // resolved from the project's package.json, never client-supplied);
     // script_attach + script_stop address a runId this connection owns.
     if (request.type === "scripts_list") {
-      const session = sessions.get(request.sessionId);
-      if (!session) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (!meta) {
         replyError("unknown session");
         return;
       }
       try {
-        const candidates = await scripts.listScripts(session.meta.cwd);
+        const candidates = await scripts.listScripts(meta.cwd);
         send({ kind: "scripts_list_ok", id, candidates });
       } catch (error) {
         replyError(error instanceof Error ? error.message : String(error));
@@ -699,13 +752,13 @@ export function createRpcConnection(deps: {
     // boundary); the cwd is never taken from the wire — checkpoint records carry
     // their own captured cwd.
     if (request.type === "checkpoints_list") {
-      const session = sessions.get(request.sessionId);
-      if (!session) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (!meta) {
         replyError("unknown session");
         return;
       }
       try {
-        const list = await checkpoints.list(session.meta.id);
+        const list = await checkpoints.list(meta.id);
         send({ kind: "checkpoints_list_ok", id, checkpoints: list });
       } catch (error) {
         replyError(error instanceof Error ? error.message : String(error));
@@ -875,6 +928,7 @@ export interface RpcEndpoint {
 
 export function setupRpcEndpoint(deps: {
   sessions: SessionManager;
+  drafts?: SessionDraftGateway;
   terminals: TerminalGateway;
   diffs: DiffGateway;
   editors: EditorLauncher;
@@ -921,6 +975,7 @@ export function setupRpcEndpoint(deps: {
     }
     clients.add(socket);
     const connection = createRpcConnection({
+      drafts: deps.drafts,
       externalTerminal: deps.externalTerminal,
       sessions,
       terminals,

@@ -1,3 +1,8 @@
+import {
+  restoreComposerDraft,
+  flushComposerDraft,
+  forgetComposerDraft,
+} from "./remoteComposerDrafts.ts";
 import type {
   ClientMessage,
   EditorId,
@@ -821,6 +826,7 @@ async function resumeSession(id: string): Promise<SessionMeta> {
     `/sessions/${encodeURIComponent(id)}/resume`,
     { method: "POST" },
   );
+  await restoreComposerDraft(session.id);
   return session;
 }
 
@@ -881,6 +887,7 @@ async function findOrCreateSession(
       ...(agentName ? { agentName } : {}),
     }),
   });
+  await restoreComposerDraft(session.id);
   return session;
 }
 
@@ -1039,6 +1046,7 @@ export async function newChat(): Promise<SessionMeta | null> {
         ...(agentName ? { agentName } : {}),
       }),
     });
+    await restoreComposerDraft(session.id);
     if (token !== activationToken) return null;
     useAppStore.getState().setSession(session);
     connect(session.id);
@@ -1118,6 +1126,7 @@ export async function setSessionPinned(sessionId: string, pinned: boolean): Prom
 }
 
 function removeSessionLocally(sessionId: string): void {
+  forgetComposerDraft(sessionId);
   removedSessionIds.add(sessionId);
   const store = useAppStore.getState();
   store.removeSession(sessionId);
@@ -1181,6 +1190,9 @@ export async function runHistoryAction(
     await refreshSessions().catch(() => {});
     if (activationToken !== activationAtStart || currentSessionId !== sessionId) return result;
     if (result.outcome === "forked") {
+      // Restore persistence before seeding so activation cannot overwrite the fork draft.
+      await restoreComposerDraft(result.session.id);
+      if (activationToken !== activationAtStart || currentSessionId !== sessionId) return result;
       // Replace, never merge with a pre-existing target/source draft.
       const store = useAppStore.getState();
       store.updateComposerDraft(result.session.id, () => result.draft);
@@ -1430,7 +1442,40 @@ export async function updateProject(
   }
 }
 
+export async function updateSessionDraft(patch: {
+  projectId?: string | null;
+  agentName?: string | null;
+  worktreeIsolation?: boolean;
+}): Promise<boolean> {
+  const target = useAppStore.getState().session;
+  if (target?.lifecycle !== "draft") return false;
+  try {
+    const { session } = await fetchJson<{ session: SessionMeta }>(
+      `/sessions/${encodeURIComponent(target.id)}/draft`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      },
+    );
+    const store = useAppStore.getState();
+    if (removedSessionIds.has(target.id)) return false;
+    store.upsertSessionMeta(session);
+    if (store.session?.id === target.id) {
+      store.setCurrentAgent(session.agentName ?? null);
+    }
+    return true;
+  } catch (error) {
+    useAppStore.getState().setError(String(error));
+    return false;
+  }
+}
+
 export async function switchToAgent(agentName: string | null): Promise<void> {
+  if (useAppStore.getState().session?.lifecycle === "draft") {
+    await updateSessionDraft({ agentName });
+    return;
+  }
   await activateSession(useAppStore.getState().currentProjectId, agentName);
 }
 
@@ -1464,7 +1509,7 @@ export interface ImageAttachment {
   name?: string;
 }
 
-export function sendPrompt(
+export async function sendPrompt(
   sessionId: string,
   message: string,
   images?: ImageAttachment[],
@@ -1478,6 +1523,8 @@ export function sendPrompt(
   // The caller captures the originating session. Never retarget an in-flight
   // composer submission merely because the user switched sessions.
   if (sessionId !== currentSessionId) return Promise.reject(new Error("active session changed"));
+  await flushComposerDraft(sessionId);
+  if (sessionId !== currentSessionId) throw new Error("active session changed");
   return send({
     type: "prompt",
     sessionId,

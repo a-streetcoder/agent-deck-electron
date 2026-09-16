@@ -155,7 +155,7 @@ async function createSession(baseUrl: string): Promise<string> {
   const response = await fetch(`${baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ startImmediately: true }),
   });
   const { session } = (await response.json()) as { session: { id: string } };
   return session.id;

@@ -17,7 +17,9 @@ test("background attention row stays visible and clears only after actual review
 }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("chat-list").locator('[data-active="true"]')).toHaveCount(1);
-  const createdResponse = await page.request.post(`${harness.baseUrl}/sessions`, { data: {} });
+  const createdResponse = await page.request.post(`${harness.baseUrl}/sessions`, {
+    data: { startImmediately: true },
+  });
   const background = ((await createdResponse.json()) as { session: SessionMeta }).session;
 
   await page.evaluate(
@@ -75,7 +77,9 @@ test("background attention row stays visible and clears only after actual review
 
   // Put a newer non-pending chat in front, then restart the backend+renderer.
   // Hydration must preserve the old row without replaying a historical announcement.
-  const reviewerResponse = await page.request.post(`${harness.baseUrl}/sessions`, { data: {} });
+  const reviewerResponse = await page.request.post(`${harness.baseUrl}/sessions`, {
+    data: { startImmediately: true },
+  });
   const reviewer = ((await reviewerResponse.json()) as { session: SessionMeta }).session;
   await harness.restart();
   await page.goto(harness.baseUrl);

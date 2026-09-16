@@ -19,6 +19,7 @@ import type { StampedEvent } from "../src/services/pushBus.ts";
 import type { ScriptEvent } from "../src/services/scriptRunner.ts";
 import type { TerminalEvent } from "../src/services/terminal.ts";
 import type { OpenedTerminal, TerminalGateway } from "../src/terminalGateway.ts";
+import type { SessionDraftGateway } from "../src/sessionDrafts.ts";
 import type { SessionPasteStore } from "../src/sessionPastes.ts";
 
 /**
@@ -393,10 +394,12 @@ function harness(
   checkpoints?: CheckpointServiceShape,
   rollback?: CheckpointRollbackGateway,
   sessionPastes?: SessionPasteStore,
+  drafts?: SessionDraftGateway,
 ) {
   const frames: Frame[] = [];
   const conn = createRpcConnection({
     sessions: manager,
+    drafts,
     terminals: terminals ?? makeTerminalGateway().gateway,
     diffs: diffs ?? makeDiffGateway().gateway,
     editors: editors ?? makeEditorLauncher().launcher,
@@ -1717,5 +1720,97 @@ describe("createRpcConnection external terminal (TER-01)", () => {
         error: "No supported terminal application was found on this machine.",
       },
     ]);
+  });
+});
+
+describe("draft RPC lifecycle", () => {
+  function setup(fail = false) {
+    const live = makeSession("draft");
+    const running: Record<string, ManagedSession> = {};
+    const draft = {
+      id: "draft",
+      cwd: "/tmp",
+      createdAt: "2026-01-01",
+      lifecycle: "draft" as const,
+    };
+    const drafts: SessionDraftGateway = {
+      find: (id) => (id === draft.id && !running[id] ? draft : undefined),
+      start: vi.fn(async () => {
+        if (fail) throw new Error("startup failed; draft retained");
+        running.draft = live.session;
+        return live.session;
+      }),
+      setModel: vi.fn(async () => {}),
+      setThinking: vi.fn(async () => {}),
+    };
+    const result = harness(
+      makeManager(running),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      drafts,
+    );
+    return { ...result, drafts, live };
+  }
+  it("subscribes and changes draft settings without starting Pi", async () => {
+    const { conn, frames, drafts } = setup();
+    await conn.handleMessage(frame(1, { type: "subscribe_session", sessionId: "draft" }));
+    await conn.handleMessage(
+      frame(2, { type: "set_model", sessionId: "draft", provider: "p", modelId: "m" }),
+    );
+    await conn.handleMessage(frame(3, { type: "set_thinking", sessionId: "draft", level: "high" }));
+    expect(drafts.start).not.toHaveBeenCalled();
+    expect(drafts.setModel).toHaveBeenCalledWith("draft", "p", "m");
+    expect(drafts.setThinking).toHaveBeenCalledWith("draft", "high");
+    expect(frames[0]).toMatchObject({
+      kind: "push",
+      message: { type: "snapshot", state: { cells: [], agentStatus: "idle" } },
+    });
+  });
+  it("reads workspace state for a draft without starting Pi", async () => {
+    const { conn, frames, drafts } = setup();
+    await conn.handleMessage(frame(1, { type: "checkpoints_list", sessionId: "draft" }));
+    await conn.handleMessage(frame(2, { type: "file_list", sessionId: "draft", path: "." }));
+    expect(drafts.start).not.toHaveBeenCalled();
+    expect(frames).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "checkpoints_list_ok", id: 1 }),
+        expect.objectContaining({ kind: "file_list_ok", id: 2 }),
+      ]),
+    );
+    conn.close();
+  });
+
+  it("subscribes to the real runtime before its first prompt", async () => {
+    const { conn, frames, drafts, live } = setup();
+    live.ops.prompt.mockImplementation(async () => {
+      expect(frames.some((item) => item.kind === "push" && item.message.type === "snapshot")).toBe(
+        true,
+      );
+    });
+    await conn.handleMessage(frame(1, { type: "prompt", sessionId: "draft", message: "hello" }));
+    expect(drafts.start).toHaveBeenCalledTimes(1);
+    expect(live.ops.prompt).toHaveBeenCalledTimes(1);
+    expect(frames.at(-1)).toEqual({ kind: "reply", id: 1, ok: true });
+    conn.close();
+  });
+  it("reports startup failure without sending or losing the draft", async () => {
+    const { conn, frames, drafts, live } = setup(true);
+    await conn.handleMessage(
+      frame(1, { type: "prompt", sessionId: "draft", message: "keep this" }),
+    );
+    expect(live.ops.prompt).not.toHaveBeenCalled();
+    expect(drafts.find("draft")).toBeDefined();
+    expect(frames.at(-1)).toMatchObject({
+      kind: "reply",
+      ok: false,
+      error: "startup failed; draft retained",
+    });
   });
 });

@@ -1,3 +1,8 @@
+vi.mock("./remoteComposerDrafts.ts", () => ({
+  forgetComposerDraft: vi.fn(),
+  restoreComposerDraft: vi.fn(async () => {}),
+  flushComposerDraft: vi.fn(async () => {}),
+}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renameSkill } from "./wsBridge.ts";
 import { useAppStore } from "./store.ts";

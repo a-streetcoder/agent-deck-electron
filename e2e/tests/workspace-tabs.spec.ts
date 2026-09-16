@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, selectProject, startDraftWithMessage, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -67,6 +67,7 @@ test("two tools share one tabbed pane, switching is keep-alive, and + opens a ta
   await expect(page.getByTestId("session-cwd")).toHaveText(PROJECT);
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await startDraftWithMessage(page);
 
   // Open Preview and run the dev server; the discovered port embeds an iframe.
   await page.getByTestId("preview-toggle").click();

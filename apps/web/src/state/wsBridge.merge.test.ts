@@ -1,3 +1,8 @@
+vi.mock("./remoteComposerDrafts.ts", () => ({
+  forgetComposerDraft: vi.fn(),
+  restoreComposerDraft: vi.fn(async () => {}),
+  flushComposerDraft: vi.fn(async () => {}),
+}));
 import type { SessionMeta } from "@agent-deck/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

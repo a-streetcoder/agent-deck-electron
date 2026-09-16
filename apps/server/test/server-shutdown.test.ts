@@ -75,7 +75,7 @@ describe("server shutdown admission", () => {
     const rejected = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd }),
+      body: JSON.stringify({ startImmediately: true, cwd }),
     });
     expect(rejected.status).toBe(503);
     await expect(rejected.json()).resolves.toEqual({

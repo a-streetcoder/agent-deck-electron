@@ -23,7 +23,7 @@ describe("session attention acknowledgement route", () => {
     const createdResponse = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ startImmediately: true }),
     });
     const created = (await createdResponse.json()) as { session: SessionMeta };
     const live = server.sessions.get(created.session.id)!;
@@ -73,7 +73,7 @@ describe("session attention acknowledgement route", () => {
     const createdResponse = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ startImmediately: true }),
     });
     const created = (await createdResponse.json()) as { session: SessionMeta };
     server.sessions.get(created.session.id)!.meta.needsAttention = true;

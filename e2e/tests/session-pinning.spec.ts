@@ -35,7 +35,7 @@ async function createNamedSession(title: string): Promise<string> {
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ startImmediately: true }),
   });
   expect(created.status).toBe(201);
   const id = ((await created.json()) as { session: SessionMeta }).session.id;

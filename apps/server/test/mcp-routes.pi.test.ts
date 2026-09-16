@@ -99,6 +99,7 @@ describe("mcp config routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         projectId,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,

@@ -87,6 +87,7 @@ describe("contact_supervisor blocking: a child suspends on need_decision until a
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,

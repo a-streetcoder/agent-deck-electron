@@ -16,7 +16,10 @@ async function draft() {
   const response = await fetch(`http://127.0.0.1:${server!.port}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd: mkdtempSync(path.join(tmpdir(), "audit-race-cwd-")) }),
+    body: JSON.stringify({
+      startImmediately: true,
+      cwd: mkdtempSync(path.join(tmpdir(), "audit-race-cwd-")),
+    }),
   });
   expect(response.status).toBe(201);
   return (await response.json()) as { session: { id: string; updatedAt?: string } };

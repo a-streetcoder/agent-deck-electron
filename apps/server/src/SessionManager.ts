@@ -87,6 +87,8 @@ export class SessionCreationError extends Error {
 }
 
 export interface CreateSessionOptions {
+  /** Server-owned durable draft identity retained through first-send activation. */
+  draftMeta?: SessionMeta;
   cwd: string;
   plan: LaunchPlan;
   launchResourceConfig?: LaunchResourceConfigV1;
@@ -927,9 +929,11 @@ export class SessionManager {
   create(options: CreateSessionOptions): ManagedSession {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
-      id: randomUUID(),
+      ...options.draftMeta,
+      id: options.draftMeta?.id ?? randomUUID(),
       cwd: options.cwd,
-      createdAt: now,
+      createdAt: options.draftMeta?.createdAt ?? now,
+      ...(options.draftMeta ? { lifecycle: "started" as const } : {}),
       updatedAt: now,
       projectId: options.projectId,
       agentName: options.agentName,
@@ -992,6 +996,9 @@ export class SessionManager {
     preserveActivity = false,
     preparedCandidate?: ResolvedLaunchResources,
   ): Promise<ManagedSession> {
+    if (meta.lifecycle === "draft") {
+      throw new Error("Send the first message to start this draft.");
+    }
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
     // History owns a larger transaction that intentionally resumes its source.

@@ -36,6 +36,7 @@ async function patchSettings(body: unknown): Promise<Response> {
 
 async function createSession(opts: { withProvider?: boolean } = {}): Promise<string> {
   const body: Record<string, unknown> = {
+    startImmediately: true,
     cwd,
     // No model/thinking in the request — they must come from the settings.
     extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],

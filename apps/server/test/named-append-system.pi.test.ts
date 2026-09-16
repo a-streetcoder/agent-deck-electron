@@ -90,6 +90,7 @@ describe("named 1:1 APPEND_SYSTEM prompt inspection with pinned Pi", () => {
         method: "POST",
         url: "/sessions",
         payload: {
+          startImmediately: true,
           projectId,
           agentName: `${mode}-bot`,
           provider: MOCK_PROVIDER_ID,

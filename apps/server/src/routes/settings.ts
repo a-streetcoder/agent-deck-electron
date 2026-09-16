@@ -554,6 +554,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         extensions,
         signal: controller.signal,
       });
+      ctx.discoveredModels = models;
       const disabled = new Set(settings.get().disabledModels);
       const fast = new Set(settings.get().openAIFastModels);
       return {

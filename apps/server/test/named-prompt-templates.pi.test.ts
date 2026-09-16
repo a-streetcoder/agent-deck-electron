@@ -134,6 +134,7 @@ describe("named user chat assigned templates with pinned Pi", () => {
         method: "POST",
         url: "/sessions",
         payload: {
+          startImmediately: true,
           projectId,
           agentName: `${mode}-bot`,
           provider: MOCK_PROVIDER_ID,

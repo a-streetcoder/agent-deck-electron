@@ -76,6 +76,7 @@ describe("contact_supervisor: a child reports non-blocking progress to its paren
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,

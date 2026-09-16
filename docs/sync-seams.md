@@ -105,3 +105,27 @@ stays mechanical):
 Consume the seam, never the storage behind it. For domains still `inline`, a change that grows
 the write surface should first pull those writes behind a seam interface — the seam is the
 smallest diff that keeps the lift cheap, not extra architecture.
+
+### Durable chat drafts (SES-35)
+
+Unstarted session rows carry `lifecycle: draft`, their project/agent/model choices,
+and an explicit worktree-isolation preference. Opening or resuming them does not
+allocate Pi or a checkout. `SessionDraftGateway` is the activation/update boundary;
+`SessionIndex` remains the atomic metadata write path. Missing lifecycle fields
+retain legacy resume behavior. There is no draft age limit or startup pruning.
+
+Unsent composer content uses the injectable `ComposerDraftStore` interface and
+`FileComposerDraftStore` in `apps/server/src/composerDrafts.ts`. It retains text,
+image bytes, paste content, and file/folder references separately from public
+session metadata, in device-local app data. The HTTP read/write boundary validates
+bounded payloads; writes replace atomically and sync before acknowledgment. The
+renderer serializes saves, flushes before send and desktop quit, and retains input
+on failure. Explicit session deletion removes the saved composer. Electron's ephemeral loopback origin is not used as durable storage.
+
+Status: **seamed, host-side**. No existing skill-engine export owns session drafts.
+Future engine support must preserve stable draft IDs, explicit deletion, and
+versioned conflict handling; image/paste payload sync needs a separate consent and
+storage decision. Runtime process/worktree ownership and launch-environment secrets
+remain device-local and outside the seam.
+
+The future lift is described in [the draft-storage request](skill-engine-session-drafts-request.md).

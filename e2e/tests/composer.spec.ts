@@ -12,6 +12,13 @@ let harness: E2eHarness;
 
 test.beforeAll(async () => {
   harness = await startHarness({ chunkDelayMs: 20 });
+  // This suite exercises an already-running session's runtime controls.
+  const created = await fetch(`${harness.baseUrl}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ startImmediately: true }),
+  });
+  expect(created.status).toBe(201);
 });
 
 test.afterAll(async () => {

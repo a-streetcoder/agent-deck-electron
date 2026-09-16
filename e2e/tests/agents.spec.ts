@@ -138,11 +138,15 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
     "You are pancake-bot. Answer every question with breakfast metaphors.",
   );
 
+  const agentChat = await page
+    .getByTestId("chat-list")
+    .locator('[data-active="true"]')
+    .getAttribute("data-testid");
   // Switching back to the default agent restores a separate session.
   await page.getByTestId("agent-picker").selectOption("");
   await expect(page.getByTestId("user-cell")).toHaveCount(0);
-  // And back again: the agent chat's transcript is still there.
-  await page.getByTestId("agent-picker").selectOption("pancake-bot");
+  // Return through history: choosing an agent in an unsent draft now edits that draft.
+  await page.getByTestId("chat-list").getByTestId(agentChat!).click();
   await expect(page.getByTestId("user-cell")).toContainText("what is a monad?");
 });
 
@@ -363,7 +367,7 @@ test("project agent diagnostics and named launch retain project context", async 
   expect(agent.warnings).toHaveLength(2);
   expect(JSON.stringify(agent.warnings)).toContain("project-private-missing");
   const created = await request.post(`${harness.baseUrl}/sessions`, {
-    data: { projectId, agentName: "pancake-bot" },
+    data: { startImmediately: true, projectId, agentName: "pancake-bot" },
   });
   expect(created.status(), await created.text()).toBe(201);
   const { session } = await created.json();

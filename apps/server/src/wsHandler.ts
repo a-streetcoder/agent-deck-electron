@@ -1,3 +1,4 @@
+import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import type { IncomingMessage } from "node:http";
 import { RPC_WS_PATH } from "@agent-deck/contracts";
 import type { DiffPush, ServerMessage } from "@agent-deck/contracts";
@@ -36,6 +37,7 @@ export interface WebSocketLayer {
 export function setupWebSocket(deps: {
   fastify: FastifyInstance;
   sessions: SessionManager;
+  drafts?: SessionDraftGateway;
   terminals: TerminalGateway;
   diffs: DiffGateway;
   editors: EditorLauncher;
@@ -53,6 +55,7 @@ export function setupWebSocket(deps: {
   // subscribe/replay, and broadcast — all sharing the SessionManager facade.
   const rpc = setupRpcEndpoint({
     sessions,
+    drafts: deps.drafts,
     terminals,
     diffs,
     editors,

@@ -98,6 +98,7 @@ it.each(["child", "parent"] as const)(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           cwd,
           projectId,
           provider: MOCK_PROVIDER_ID,

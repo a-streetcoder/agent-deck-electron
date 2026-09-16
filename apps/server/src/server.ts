@@ -1,3 +1,8 @@
+import {
+  FileComposerDraftStore,
+  registerComposerDraftRoutes,
+  type ComposerDraftStore,
+} from "./composerDrafts.ts";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -183,6 +188,7 @@ export interface StartServerOptions {
   mcpAssignmentStore?: McpAssignmentStore;
   /** Narrow authoritative global MCP policy seam. */
   mcpPolicyStore?: McpPolicyStore;
+  composerDraftStore?: ComposerDraftStore;
   /** Device-local OAuth persistence seam for credential lifecycle tests. */
   mcpOAuthStore?: McpOAuthStore;
 }
@@ -221,6 +227,7 @@ async function initServer(
   const dataDir = resolveTrustedDataDir(requestedDataDir);
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
   const settings = new SettingsStore(dataDir);
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
   const sessionImages = new SessionImageStore(dataDir);
@@ -1206,6 +1213,12 @@ async function initServer(
   } = setupWebSocket({
     fastify,
     sessions,
+    drafts: {
+      find: (id) => ctx.sessionDrafts?.find(id),
+      start: (id) => ctx.sessionDrafts!.start(id),
+      setModel: (id, provider, modelId) => ctx.sessionDrafts!.setModel(id, provider, modelId),
+      setThinking: (id, level) => ctx.sessionDrafts!.setThinking(id, level),
+    },
     terminals,
     diffs,
     editors,
@@ -1253,6 +1266,7 @@ async function initServer(
   // object, assembled once, so every moved handler body reads exactly as it
   // did in the monolith.
   const ctx: ServerContext = {
+    composerDrafts,
     fastify,
     sessions,
     planEvents,
@@ -1360,6 +1374,7 @@ async function initServer(
   registerLoopRoutes(ctx);
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
+  registerComposerDraftRoutes(ctx, composerDrafts);
   const bridgeRouteHandles = registerBridgeRoutes(ctx);
   ({ cancelChildSupervisorRequests } = bridgeRouteHandles);
   // This parent-only tool delegates to the route coordinator's exactly-once

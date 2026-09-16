@@ -1,3 +1,6 @@
+import type { CatalogModel } from "@agent-deck/pi-host";
+import type { ComposerDraftStore } from "./composerDrafts.ts";
+import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import nodePath from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
 import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
@@ -111,12 +114,16 @@ export interface NamedAgentLaunch {
  * did in the monolith.
  */
 export interface ServerContext {
+  /** Last explicit model discovery; draft reads never spawn Pi to fill it. */
+  discoveredModels?: CatalogModel[];
   fastify: FastifyInstance;
   /** DOC-01/02 test seam: run a doctor fix command / the pi self-update in the
    * user's terminal. Omitted in production — the settings routes construct the
    * real launcher. */
   fixTerminal?: { run(command: string): Promise<void>; runPiUpdate(): Promise<void> };
   sessions: SessionManager;
+  sessionDrafts?: SessionDraftGateway;
+  composerDrafts?: ComposerDraftStore;
   /** SUB-14: durable per-session plan history (read side + delete cleanup). */
   planEvents: PlanEventServiceShape;
   sessionImages: SessionImageStore;

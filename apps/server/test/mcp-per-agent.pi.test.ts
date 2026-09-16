@@ -61,6 +61,7 @@ async function runSession(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      startImmediately: true,
       projectId: options.projectId ?? projectId,
       agentName,
       provider: MOCK_PROVIDER_ID,
@@ -170,6 +171,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,
         extensions: [mockExt],
@@ -223,6 +225,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           ...options,
           provider: MOCK_PROVIDER_ID,
           model: MOCK_MODEL_ID,
@@ -378,6 +381,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           ...options,
           provider: MOCK_PROVIDER_ID,
           model: MOCK_MODEL_ID,

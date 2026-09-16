@@ -40,7 +40,7 @@ import {
   type ComposerDraftPaste,
   useAppStore,
 } from "../state/store.ts";
-import { useAgents } from "../state/useAgents.ts";
+import { useAgentsCatalog } from "../state/useAgents.ts";
 import {
   sendAbort,
   sendCompact,
@@ -228,7 +228,7 @@ export function Composer() {
       : EMPTY_ELEMENT_CONTEXTS,
   );
   const removeElementContext = useAppStore((state) => state.removeElementContext);
-  const agents = useAgents();
+  const { agents } = useAgentsCatalog({ projectId: session?.projectId ?? null });
   const running = agentStatus === "running";
   const pickableAgents = agents.filter((agent) => !agent.shadowed && !agent.disabled);
 
@@ -380,6 +380,19 @@ export function Composer() {
       if (sessionId) pruneEmptyComposerDraft(sessionId);
     };
   }, [sessionId, refreshPiState, pruneEmptyComposerDraft]);
+
+  // Draft settings mutate the same session identity, so refresh the launch
+  // preview without resetting the composer or its submission ownership.
+  useEffect(() => {
+    if (session?.lifecycle === "draft") void refreshPiState();
+  }, [
+    session?.lifecycle,
+    session?.agentName,
+    session?.projectId,
+    session?.launchPlan,
+    session?.draftThinkingLevel,
+    refreshPiState,
+  ]);
 
   // Re-read the context fill ONLY on the two events that change it: a completed
   // TURN (a genuine running→idle transition) and a COMPACTION (contextRevision

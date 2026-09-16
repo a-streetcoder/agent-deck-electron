@@ -135,7 +135,7 @@ test("assigning a project skill injects /skill:<name> into new real sessions", a
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectId: id }),
+    body: JSON.stringify({ projectId: id, startImmediately: true }),
   });
   expect(created.status).toBe(201);
   const { session } = (await created.json()) as { session: SessionMeta };
@@ -177,7 +177,7 @@ test("an All-Projects (default) skill reaches sessions of every project", async 
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectId: id }),
+    body: JSON.stringify({ projectId: id, startImmediately: true }),
   });
   expect(created.status).toBe(201);
   const { session } = (await created.json()) as { session: SessionMeta };
@@ -276,7 +276,7 @@ test("an All-Projects (default) prompt template reaches sessions as a /<name> co
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectId: id }),
+    body: JSON.stringify({ projectId: id, startImmediately: true }),
   });
   expect(created.status).toBe(201);
   const { session } = (await created.json()) as { session: SessionMeta };
@@ -324,7 +324,7 @@ test("a per-project assigned prompt template reaches only that project's session
   const created = await fetch(`${harness.baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectId: id }),
+    body: JSON.stringify({ projectId: id, startImmediately: true }),
   });
   expect(created.status).toBe(201);
   const { session } = (await created.json()) as { session: SessionMeta };
@@ -361,7 +361,7 @@ test("project default-agent persistence and explicit named launch retain the pro
   // Normal New chat inherits the active session's agent; it does not apply the
   // project's saved default. Automatic default application is not covered here.
   const created = await request.post(`${harness.baseUrl}/sessions`, {
-    data: { projectId: id, agentName: saved.defaultAgentName },
+    data: { startImmediately: true, projectId: id, agentName: saved.defaultAgentName },
   });
   expect(created.status()).toBe(201);
   const { session } = await created.json();

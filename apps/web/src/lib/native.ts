@@ -46,6 +46,8 @@ export interface DroppedPathItem {
 
 export interface AgentDeckBridge {
   isElectron?: boolean;
+  /** Flush pending draft persistence before desktop shutdown. */
+  onFlushDrafts?(handler: () => Promise<void>): () => void;
   platform?: string;
   chooseDirectory?(options?: {
     title?: string;

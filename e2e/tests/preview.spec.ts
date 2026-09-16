@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, selectProject, startDraftWithMessage, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -98,6 +98,7 @@ test("scripts control runs a dev server, the discovered port embeds, stop reaps 
   await expect(page.getByTestId("session-cwd")).toHaveText(PROJECT);
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await startDraftWithMessage(page);
 
   // Open the preview panel; the server lists the project's package.json scripts.
   await page.getByTestId("preview-toggle").click();

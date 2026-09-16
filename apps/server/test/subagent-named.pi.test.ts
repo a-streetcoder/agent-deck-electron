@@ -170,6 +170,7 @@ async function startSession(): Promise<string> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      startImmediately: true,
       cwd: project,
       projectId,
       provider: MOCK_PROVIDER_ID,
@@ -208,7 +209,7 @@ describe("managed_subagent{agent}: named delegation", () => {
       const launch = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId, agentName: "coder" }),
+        body: JSON.stringify({ startImmediately: true, projectId, agentName: "coder" }),
       });
       expect(launch.status).toBe(409);
       expect(await launch.text()).toContain("agent is disabled: coder");
@@ -232,6 +233,7 @@ describe("managed_subagent{agent}: named delegation", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           projectId,
           agentName: "coder",
           provider: MOCK_PROVIDER_ID,
@@ -531,6 +533,7 @@ describe("managed_subagent{agent}: named delegation", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           projectId,
           agentName,
           provider: MOCK_PROVIDER_ID,
@@ -573,7 +576,7 @@ describe("managed_subagent{agent}: named delegation", () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId, agentName }),
+      body: JSON.stringify({ startImmediately: true, projectId, agentName }),
     });
     expect(response.status).toBe(409);
     expect(await response.text()).toContain(expected);
@@ -592,7 +595,7 @@ describe("managed_subagent{agent}: named delegation", () => {
       const parent = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId, agentName: "reviewer-bot" }),
+        body: JSON.stringify({ startImmediately: true, projectId, agentName: "reviewer-bot" }),
       });
       expect(parent.status).toBe(409);
       expect(await parent.text()).toContain("review-checklist");
@@ -664,7 +667,7 @@ describe("managed_subagent{agent}: named delegation", () => {
     const launch = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId, agentName: "reviewer-bot" }),
+      body: JSON.stringify({ startImmediately: true, projectId, agentName: "reviewer-bot" }),
     });
     expect(launch.status).toBe(404);
     expect(await launch.text()).toContain("unknown agent: reviewer-bot");

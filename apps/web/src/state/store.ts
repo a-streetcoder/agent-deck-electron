@@ -282,9 +282,8 @@ export interface AppState {
   /** A one-shot prompt seed bound to the session that requested it. */
   pendingComposerText: PendingComposerText | null;
   /**
-   * Unsent composer content keyed by session id. Drafts intentionally live only
-   * for this renderer/store lifetime, matching native; switching sessions keeps
-   * text and pending images separate, while a reload starts clean.
+   * Unsent composer content keyed by session id, persisted on this device across
+   * renderer and app restarts. Explicit session deletion removes its draft.
    */
   composerDrafts: Record<string, ComposerDraft>;
   /**

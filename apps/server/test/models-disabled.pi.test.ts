@@ -64,6 +64,7 @@ beforeAll(async () => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      startImmediately: true,
       cwd,
       provider: MOCK_PROVIDER_ID,
       model: MOCK_MODEL_ID,

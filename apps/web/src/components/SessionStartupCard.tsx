@@ -1,3 +1,6 @@
+import { ControlInput, ControlSelect } from "../design-system/components/NativeControls.tsx";
+import { useState } from "react";
+import { updateSessionDraft } from "../state/wsBridge.ts";
 import { Folder, WandSparkles } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 
@@ -9,10 +12,19 @@ import { useAppStore } from "../state/store.ts";
  * below.
  */
 export function SessionStartupCard() {
+  const [saving, setSaving] = useState(false);
   const currentAgentName = useAppStore((state) => state.currentAgentName);
   const projects = useAppStore((state) => state.projects);
   const session = useAppStore((state) => state.session);
 
+  const update = async (patch: Parameters<typeof updateSessionDraft>[0]) => {
+    setSaving(true);
+    try {
+      await updateSessionDraft(patch);
+    } finally {
+      setSaving(false);
+    }
+  };
   const project = projects.find((p) => p.id === session?.projectId) ?? null;
   const agentName = currentAgentName ?? session?.agentName ?? "Pi Agent";
   const projectName = project?.name ?? "All Projects";
@@ -31,6 +43,49 @@ export function SessionStartupCard() {
         <p className="mt-1 text-body text-text-muted">
           Send a message below to launch. It will run with:
         </p>
+
+        {session?.lifecycle === "draft" ? (
+          <div className="mt-4 space-y-3 text-label">
+            <label className="block text-text-muted">
+              Project
+              <ControlSelect
+                aria-label="Draft project"
+                disabled={saving}
+                value={session.projectId ?? ""}
+                className="mt-1 block w-full rounded border border-border-subtle bg-surface p-2 text-text-primary"
+                onChange={(event) =>
+                  void update({
+                    projectId: event.target.value || null,
+                    agentName:
+                      projects.find((item) => item.id === event.target.value)?.defaultAgentName ??
+                      null,
+                  })
+                }
+              >
+                <option value="">No project</option>
+                {projects.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </ControlSelect>
+            </label>
+            <label className="flex items-center gap-2 text-text-secondary">
+              <ControlInput
+                type="checkbox"
+                aria-label="Isolate draft in a worktree"
+                disabled={saving || !session.projectId}
+                checked={session.draftWorktreeIsolation ?? false}
+                onChange={(event) => void update({ worktreeIsolation: event.target.checked })}
+              />
+              Use a separate Git worktree
+            </label>
+            <p className="text-detail text-text-muted">
+              Drafts are saved automatically on this device. Pi and the worktree start when you send
+              your first message.
+            </p>
+          </div>
+        ) : null}
 
         <dl className="mt-4 space-y-3 text-label">
           <div className="flex items-start justify-between gap-3">

@@ -75,6 +75,20 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           ? {}
           : { needsAttention: session.needsAttention === true }),
       };
+      if (normalized.lifecycle !== "draft" && normalized.lifecycle !== "started") {
+        delete normalized.lifecycle;
+      }
+      if (typeof normalized.draftWorktreeIsolation !== "boolean") {
+        delete normalized.draftWorktreeIsolation;
+      }
+      if (
+        normalized.draftThinkingLevel !== undefined &&
+        !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+          normalized.draftThinkingLevel,
+        )
+      ) {
+        delete normalized.draftThinkingLevel;
+      }
       if (!validAudit) delete normalized.finalSystemPromptAudit;
       const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })
         .launchResourceConfig;

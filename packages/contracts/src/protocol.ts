@@ -421,6 +421,11 @@ export const SessionMeta = Schema.mutable(
     id: Schema.String,
     cwd: Schema.String,
     createdAt: Schema.String,
+    /** Absent on legacy sessions, which retain their existing resume semantics. */
+    lifecycle: Schema.optional(Schema.Literal("draft", "started")),
+    /** Draft launch choices; no checkout or process exists until the first send. */
+    draftWorktreeIsolation: Schema.optional(Schema.Boolean),
+    draftThinkingLevel: Schema.optional(ThinkingLevel),
     /** Last-touched time (created / resumed / prompted / titled). Drives the
      * session list's most-recently-active-first ordering. Optional: sessions
      * persisted before this field fall back to createdAt. */

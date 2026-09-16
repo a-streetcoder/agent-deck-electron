@@ -35,6 +35,7 @@ async function createSession(agentName?: string, includeProject = true) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      startImmediately: true,
       cwd: project,
       ...(includeProject ? { projectId } : {}),
       agentName,

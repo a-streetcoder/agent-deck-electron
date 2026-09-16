@@ -62,6 +62,16 @@ The development command runs the complete hot-reload stack:
 Use `pnpm --filter @agent-deck/desktop dev:build` when you want the previous
 production-style flow that builds the renderer once before launching Electron.
 
+## Chat drafts
+
+New chats are saved drafts. Choose the project, agent, model, thinking level, and
+worktree isolation before sending. Pi and any isolated worktree start on the first
+message. Opening a draft or restarting the app does not start Pi or discard it.
+
+Unsent text and attachments are saved in local app data. A failed startup keeps
+the message available for retry; deleting the chat explicitly removes its draft.
+The desktop app waits for pending draft saves before quitting.
+
 ## macOS packaging
 
 Create an unsigned Apple Silicon `.app` for local production-layout testing:

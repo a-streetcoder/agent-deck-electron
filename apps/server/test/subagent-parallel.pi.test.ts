@@ -177,6 +177,7 @@ describe("managed_parallel: fan out subagents and combine results", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd: project,
         projectId,
         provider: MOCK_PROVIDER_ID,

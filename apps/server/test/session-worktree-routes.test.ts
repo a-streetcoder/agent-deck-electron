@@ -430,7 +430,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(409);
@@ -464,7 +464,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(409);
@@ -488,7 +488,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(409);
@@ -518,7 +518,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(409);
@@ -546,7 +546,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(409);
@@ -564,7 +564,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1", agentName: "blocked" },
+      payload: { startImmediately: true, projectId: "project-1", agentName: "blocked" },
     });
     expect(response.statusCode).toBe(409);
     expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
@@ -594,7 +594,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1", agentName: "named" },
+      payload: { startImmediately: true, projectId: "project-1", agentName: "named" },
     });
     expect(response.statusCode).toBe(201);
     expect(scanSkillCandidatesFor).not.toHaveBeenCalled();
@@ -612,7 +612,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(201);
@@ -658,7 +658,11 @@ describe("POST /sessions worktree transaction", () => {
     const previousDefaultCwd = process.env.AGENT_DECK_DEFAULT_CWD;
     process.env.AGENT_DECK_DEFAULT_CWD = PROJECT_PATH;
 
-    const response = await fastify.inject({ method: "POST", url: "/sessions", payload: {} });
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { startImmediately: true },
+    });
 
     if (previousDefaultCwd === undefined) delete process.env.AGENT_DECK_DEFAULT_CWD;
     else process.env.AGENT_DECK_DEFAULT_CWD = previousDefaultCwd;
@@ -704,7 +708,7 @@ describe("POST /sessions worktree transaction", () => {
     const responsePromise = fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
     await Promise.resolve();
     expect(state.deleteWorktree).not.toHaveBeenCalled();
@@ -747,7 +751,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
 
     expect(response.statusCode).toBe(500);
@@ -781,7 +785,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { projectId: "project-1" },
+      payload: { startImmediately: true, projectId: "project-1" },
     });
     expect(response.statusCode).toBe(201);
     expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
@@ -795,7 +799,7 @@ describe("POST /sessions worktree transaction", () => {
     const response = await fastify.inject({
       method: "POST",
       url: "/sessions",
-      payload: { cwd: standalone },
+      payload: { startImmediately: true, cwd: standalone },
     });
     expect(response.statusCode).toBe(201);
     expect(gitMocks.createSessionWorktreeWithBranchRetries).not.toHaveBeenCalled();
@@ -811,6 +815,7 @@ describe("POST /sessions worktree transaction", () => {
       method: "POST",
       url: "/sessions",
       payload: {
+        startImmediately: true,
         cwd: path.join(tmpdir(), "secret-session"),
         env: { API_TOKEN: "deck-secret-value" },
       },

@@ -69,6 +69,7 @@ it.each(["recover", "exhaust", "nonretryable", "partial", "abort"] as const)(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          startImmediately: true,
           cwd: root,
           provider: MOCK_PROVIDER_ID,
           model: MOCK_MODEL_ID,

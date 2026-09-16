@@ -71,6 +71,7 @@ async function addAssignedProject(root: string, name: string): Promise<string> {
 
 async function createSession(projectId: string): Promise<string> {
   const response = await api("POST", "/sessions", {
+    startImmediately: true,
     projectId,
     provider: MOCK_PROVIDER_ID,
     model: MOCK_MODEL_ID,

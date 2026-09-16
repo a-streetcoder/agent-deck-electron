@@ -72,6 +72,45 @@ const windowColors = () =>
 let serverProcess = null;
 let serverPort = null;
 let mainWindow = null;
+let draftsFlushedForQuit = false;
+let draftFlushRequest = null;
+
+// Keep the backend alive until unsent composer writes have reached durable
+// storage. Closing the window and Cmd/Ctrl-Q use the same handshake.
+function flushDraftsBeforeQuit() {
+  if (draftFlushRequest || !mainWindow || mainWindow.isDestroyed()) return;
+  const token = randomUUID();
+  const fail = () => {
+    if (draftFlushRequest?.token !== token) return;
+    clearTimeout(draftFlushRequest.timer);
+    draftFlushRequest = null;
+    dialog.showErrorBox(
+      "Your draft could not be saved",
+      "Agent Deck is still open so your message is safe. Check the connection and try quitting again.",
+    );
+  };
+  draftFlushRequest = { token, timer: setTimeout(fail, 15_000), fail };
+  mainWindow.webContents.send("drafts:flush", { token });
+}
+
+ipcMain.on("drafts:flushed", (event, payload) => {
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame ||
+    !draftFlushRequest ||
+    payload?.token !== draftFlushRequest.token
+  )
+    return;
+  if (payload.ok !== true) {
+    draftFlushRequest.fail();
+    return;
+  }
+  clearTimeout(draftFlushRequest.timer);
+  draftFlushRequest = null;
+  draftsFlushedForQuit = true;
+  app.quit();
+});
 // This app's own control-plane origin (the agent-deck server): its REST routes
 // have no CSRF/Origin guard, so no guest webContents may ever reach it. Reads
 // `serverPort` at CALL time — the server may start after handlers are wired.
@@ -259,7 +298,7 @@ function stopServer() {
   if (!child || child.killed || child.pid == null) return;
   if (process.platform === "win32") {
     // SYNCHRONOUS so the whole tree (pnpm → tsx → node) is actually reaped before
-    // this returns and `before-quit` lets Electron exit. A fire-and-forget spawn
+    // this returns and `will-quit` lets Electron exit. A fire-and-forget spawn
     // let Electron quit while taskkill was still running, orphaning the server —
     // its lingering handles then blocked the Playwright worker teardown on Windows
     // ("Worker teardown timeout of 90000ms exceeded"). Capped so a stuck taskkill
@@ -361,6 +400,11 @@ function createWindow(port) {
   // after it is both visible and focused. Main never globally clears attention.
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+  mainWindow.on("close", (event) => {
+    if (draftsFlushedForQuit || mainWindow.webContents.isCrashed()) return;
+    event.preventDefault();
+    flushDraftsBeforeQuit();
   });
 }
 
@@ -1123,7 +1167,20 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isCrashed() &&
+    !draftsFlushedForQuit
+  ) {
+    event.preventDefault();
+    flushDraftsBeforeQuit();
+    return;
+  }
   app.isQuiting = true;
+});
+
+app.on("will-quit", () => {
   stopServer();
 });

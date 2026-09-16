@@ -1,3 +1,8 @@
+vi.mock("./remoteComposerDrafts.ts", () => ({
+  forgetComposerDraft: vi.fn(),
+  restoreComposerDraft: vi.fn(async () => {}),
+  flushComposerDraft: vi.fn(async () => {}),
+}));
 import type { SessionMeta } from "@agent-deck/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,7 +14,7 @@ vi.mock("./clientTransport.ts", () => ({
   },
 }));
 
-import { newChat } from "./wsBridge.ts";
+import { newChat, switchToAgent, updateSessionDraft } from "./wsBridge.ts";
 import { useAppStore } from "./store.ts";
 
 const session = (id: string): SessionMeta => ({
@@ -131,5 +136,34 @@ describe("new chat identity", () => {
     await expect(newChat()).resolves.toBeNull();
     expect(useAppStore.getState().session).toBeNull();
     expect(useAppStore.getState().error).toContain("creation failed");
+  });
+});
+
+describe("draft launch settings", () => {
+  it("changes the agent on the same durable draft without creating a chat or discarding its text", async () => {
+    const original = { ...session("draft"), lifecycle: "draft" as const };
+    const updated = { ...original, agentName: "reviewer" };
+    useAppStore.setState({ session: original, sessions: [original] });
+    useAppStore
+      .getState()
+      .updateComposerDraft(original.id, (draft) => ({ ...draft, text: "Unsent" }));
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ session: updated }));
+    await switchToAgent("reviewer");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/sessions/draft/draft",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ agentName: "reviewer" }) }),
+    );
+    expect(useAppStore.getState().session).toEqual(updated);
+    expect(useAppStore.getState().composerDrafts.draft?.text).toBe("Unsent");
+  });
+
+  it("retains launch settings and content when a draft edit fails", async () => {
+    const original = { ...session("draft"), lifecycle: "draft" as const };
+    useAppStore.setState({ session: original });
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ error: "Invalid project" }, 400));
+    await expect(updateSessionDraft({ projectId: "missing" })).resolves.toBe(false);
+    expect(useAppStore.getState().session).toEqual(original);
+    expect(useAppStore.getState().error).toContain("Invalid project");
   });
 });

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, selectProject, startDraftWithMessage, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -54,7 +54,7 @@ test("a mandatory-isolation failure does not activate a phantom session", async 
     const response = await fetch("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ startImmediately: true, projectId }),
     });
     return { ok: response.ok, text: await response.text() };
   }, project.id);
@@ -119,7 +119,10 @@ test("an isolated session runs in a worktree", async ({ page }) => {
   await page.getByTestId("new-chat").click();
   await expect.poll(() => sessionPosts).toBe(2);
   await expect.poll(async () => (await projectSessions()).length).toBe(2);
+  await expect(page.getByTestId("session-cwd")).toHaveText(repo);
+  await startDraftWithMessage(page);
   await expect.poll(() => page.getByTestId("session-cwd").textContent()).not.toBe(firstWorktree);
+  await expect(page.getByTestId("session-cwd")).not.toHaveText(repo);
   const secondWorktree = (await page.getByTestId("session-cwd").textContent())!;
   const isolated = (await projectSessions()).find(
     (session) => (session as { cwd?: string }).cwd === secondWorktree,

@@ -70,6 +70,7 @@ it.each([false, true])(
         headers: { "content-type": "application/json" },
         // Exercise both a frozen explicit launch and Pi-selected defaults.
         body: JSON.stringify({
+          startImmediately: true,
           cwd,
           extensions: [extension, secondExtension],
           env,

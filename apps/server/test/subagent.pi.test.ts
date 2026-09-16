@@ -71,6 +71,7 @@ describe("managed_subagent: a parent spawns a child and gets its result", () => 
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,

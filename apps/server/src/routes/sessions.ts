@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
-import type { ProjectMeta, SessionModelInfo } from "@agent-deck/contracts";
+import type { ProjectMeta, SessionModelInfo, SessionMeta } from "@agent-deck/contracts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { listProjectFiles } from "@agent-deck/resources";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { LaunchPlan } from "@agent-deck/pi-host";
+import { createSessionDraftGateway } from "../sessionDrafts.ts";
+import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
 import { z } from "zod";
 import {
   canonicalWorktreePath,
@@ -41,6 +44,7 @@ import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 const mergeLocks = new Set<string>();
 
 const createSessionBody = z.object({
+  startImmediately: z.boolean().optional(),
   cwd: z.string().optional(),
   projectId: z.string().optional(),
   /** Launch an agent-backed session: inject this agent's system prompt/tools/skills. */
@@ -181,6 +185,30 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // available-model catalog — the composer's picker data.
   fastify.get("/sessions/:id/state", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const draft = ctx.sessionDrafts?.find(id);
+    if (draft) {
+      const plan = draft.launchPlan as LaunchPlan;
+      const models = await draftModels();
+      return {
+        state: {
+          model:
+            models.find((model) => model.provider === plan.provider && model.id === plan.model) ??
+            null,
+          thinkingLevel:
+            draft.draftThinkingLevel ?? ("thinking" in plan ? plan.thinking : undefined) ?? "off",
+          isStreaming: false,
+          isCompacting: false,
+          steeringMode: "all",
+          followUpMode: "all",
+          sessionFile: undefined,
+          sessionId: id,
+          sessionName: draft.title,
+          autoCompactionEnabled: true,
+          messageCount: 0,
+          pendingMessageCount: 0,
+        },
+      };
+    }
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -195,6 +223,19 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // context-usage percent is null until the first LLM response.
   fastify.get("/sessions/:id/stats", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (ctx.sessionDrafts?.find(id))
+      return {
+        stats: {
+          sessionId: id,
+          userMessages: 0,
+          assistantMessages: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 0,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0,
+        },
+      };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -204,8 +245,32 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
+  async function draftModels() {
+    const runtime = await ModelRuntime.create({
+      authPath: nodePath.join(piAgentHome(ctx.rootsFor()), "auth.json"),
+      modelsPath: nodePath.join(piAgentHome(ctx.rootsFor()), "models.json"),
+      allowModelNetwork: false,
+    });
+    const disabled = new Set(settings.get().disabledModels);
+    const models: SessionModelInfo[] = (await runtime.getAvailable()).map((model) => ({
+      ...model,
+      supportedThinkingLevels: getSupportedThinkingLevels(model),
+      disabled: disabled.has(`${model.provider}:${model.id}`),
+    }));
+    // Extension-defined providers can be selected after an explicit Models
+    // refresh. Reuse that catalog without launching any process for this draft.
+    for (const model of ctx.discoveredModels ?? []) {
+      if (!models.some((entry) => entry.provider === model.provider && entry.id === model.id)) {
+        models.push({ ...model, disabled: disabled.has(`${model.provider}:${model.id}`) });
+      }
+    }
+    return models;
+  }
+
   fastify.get("/sessions/:id/models", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const draft = ctx.sessionDrafts?.find(id);
+    if (draft) return { models: await draftModels() };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -233,6 +298,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // tests verify that assigned --skill flags landed inside pi.
   fastify.get("/sessions/:id/commands", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (ctx.sessionDrafts?.find(id)) return { commands: [] };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -245,6 +311,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // Composer `/` catalog browser. Distinct from Pi get_commands above.
   fastify.get("/sessions/:id/slash-universe", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const draft = ctx.sessionDrafts?.find(id);
+    if (draft) return assembleSlashUniverseForSession(ctx, { meta: draft });
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -260,8 +328,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   fastify.get("/sessions/:id/files", async (request, reply) => {
     const { id } = request.params as { id: string };
     const { q } = request.query as { q?: string };
-    const session = sessions.get(id);
-    if (!session) return reply.status(404).send({ error: "unknown session" });
+    const meta = sessions.get(id)?.meta ?? ctx.sessionDrafts?.find(id);
+    if (!meta) return reply.status(404).send({ error: "unknown session" });
     const query = typeof q === "string" ? q.trim() : "";
     if (!query) return { files: [] as string[] };
 
@@ -280,9 +348,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     reply.raw.once("close", onReplyClose);
     if (request.raw.aborted) controller.abort();
 
-    const rootKey = await realpath(session.meta.cwd).catch(() =>
-      nodePath.resolve(session.meta.cwd),
-    );
+    const rootKey = await realpath(meta.cwd).catch(() => nodePath.resolve(meta.cwd));
     const activeSearch = activeFileSearches.get(rootKey);
     if (activeSearch && activeSearch.sequence > sequence) {
       controller.abort();
@@ -293,7 +359,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
 
     try {
       return {
-        files: await listProjectFiles(session.meta.cwd, query, {
+        files: await listProjectFiles(meta.cwd, query, {
           limit: 50,
           signal: controller.signal,
         }),
@@ -371,6 +437,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (live?.isRunning) return { session: live.meta };
     const meta = live?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
+    if (meta.lifecycle === "draft") return { session: meta };
     // A session with no pi session file never ran a turn (a draft, or an old
     // entry from before session files existed). It has nothing to restore, but
     // opening it should still work — sessions.resume launches a FRESH parent pi
@@ -775,6 +842,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       sessions.removeLoopSessionSnapshot(id);
       index.remove(id);
+      try {
+        ctx.composerDrafts?.delete(id);
+      } catch {
+        // Deletion is already authoritative. Retain inaccessible draft bytes
+        // if cleanup fails; a failed index removal must never lose unsent input.
+      }
+      draftEnvironment.delete(id);
       bridgeTokens.delete(id);
       // Image ownership is removed only after every authoritative session deletion
       // step above succeeded; failed worktree cleanup intentionally retains it.
@@ -1459,12 +1533,20 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
-  fastify.post("/sessions", async (request, reply) => {
-    const parsed = createSessionBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: parsed.error.message });
-    }
-    const body = parsed.data;
+  async function launchSession(body: z.infer<typeof createSessionBody>, draft?: SessionMeta) {
+    const reply = {
+      statusCode: 200,
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      send(value: { error: string; code?: string }) {
+        throw Object.assign(new Error(value.error), {
+          statusCode: this.statusCode,
+          code: value.code,
+        });
+      },
+    };
     const defaults = envDefaults();
     let cwd = body.cwd ?? defaults.cwd ?? process.cwd();
     let project: ProjectMeta | undefined;
@@ -1510,7 +1592,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
     let plan = resolvedLaunch.plan;
 
-    if (settings.get().worktreeIsolation && project) {
+    if ((draft?.draftWorktreeIsolation ?? settings.get().worktreeIsolation) && project) {
       const suffix = randomUUID().slice(0, 8);
       const target = nodePath.join(worktreesRoot, suffix);
       let reservationIdentity: string | undefined;
@@ -1608,29 +1690,31 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
 
+    if (draft?.draftThinkingLevel && plan.kind !== "helper")
+      plan = { ...plan, thinking: draft.draftThinkingLevel };
     const namedMcpIds = resolvedLaunch.mcpServerIds;
-    const mcpPreparation = project
-      ? await prepareProjectMcpSession(project.id, namedMcpIds)
-      : undefined;
-    const mcpPreparationResult = mcpPreparation?.result;
-    if (mcpPreparationResult && !mcpPreparationResult.ok) {
-      await mcpPreparation.release();
-      return reply.status(422).send({ error: mcpPreparationResult.error });
-    }
-    const missingNamed = mcpPreparationResult?.ok
-      ? namedMcpIds.filter((id) => mcpPreparationResult.missing.includes(id))
-      : [];
-    if (missingNamed.length > 0) {
-      await mcpPreparation!.release();
-      return reply.status(409).send({
-        error: `Assigned MCP server definition missing: ${missingNamed.join(", ")}. Add it to global or project .pi/mcp.json, or remove it from the agent.`,
-      });
-    }
-
+    let mcpPreparation: Awaited<ReturnType<typeof prepareProjectMcpSession>> | undefined;
     let createdSession: ReturnType<typeof sessions.create> | undefined;
     let announcementAttempted = false;
     try {
+      mcpPreparation = project
+        ? await prepareProjectMcpSession(project.id, namedMcpIds)
+        : undefined;
+      const mcpPreparationResult = mcpPreparation?.result;
+      if (mcpPreparationResult && !mcpPreparationResult.ok) {
+        return reply.status(422).send({ error: mcpPreparationResult.error });
+      }
+      const missingNamed = mcpPreparationResult?.ok
+        ? namedMcpIds.filter((id) => mcpPreparationResult.missing.includes(id))
+        : [];
+      if (missingNamed.length > 0) {
+        return reply.status(409).send({
+          error: `Assigned MCP server definition missing: ${missingNamed.join(", ")}. Add it to global or project .pi/mcp.json, or remove it from the agent.`,
+        });
+      }
+
       const session = sessions.create({
+        ...(draft ? { draftMeta: draft } : {}),
         cwd,
         projectId: body.projectId,
         agentName: body.agentName,
@@ -1647,10 +1731,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         ...(worktree ? { worktree } : {}),
       });
       createdSession = session;
+      if (draft) {
+        await session.getState();
+        if (draft.draftThinkingLevel) await session.setThinkingLevel(draft.draftThinkingLevel);
+      }
       announcementAttempted = true;
       sessions.announceCreated(session);
       await mcpPreparation?.release();
-      return reply.status(201).send({ session: session.meta });
+      if (draft) draftEnvironment.delete(draft.id);
+      return session;
     } catch (error) {
       const partialId =
         createdSession?.meta.id ??
@@ -1675,7 +1764,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           indexed.cwd === owned.cwd &&
           indexed.projectId === owned.projectId
         ) {
-          index.remove(owned.id);
+          if (draft) index.upsert(draft);
+          else index.remove(owned.id);
         }
       }
 
@@ -1703,10 +1793,126 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           });
         }
       }
+      if (error instanceof Error && "statusCode" in error && typeof error.statusCode === "number") {
+        return reply.status(error.statusCode).send({ error: error.message });
+      }
       return reply.status(500).send({
         code: "session_creation_failed",
         error: `The session couldn't be started or activated. Fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
       });
+    }
+  }
+
+  const draftEnvironment = new Map<string, Record<string, string>>();
+  const gateway = createSessionDraftGateway({
+    index,
+    sessions,
+    broadcast,
+    validateModel: async (provider, modelId) => {
+      const models = await draftModels();
+      if (!models.some((model) => model.provider === provider && model.id === modelId))
+        throw new Error(`unknown model: ${provider}/${modelId}`);
+    },
+    launch: (draft) => {
+      const config = draft.launchResourceConfig;
+      return launchSession(
+        {
+          cwd: draft.cwd,
+          projectId: draft.projectId,
+          agentName: draft.agentName,
+          provider: config?.providerOverride,
+          model: config?.modelOverride,
+          extensions: config?.extensionsOverride,
+          skills: config?.skillsOverride,
+          env: draftEnvironment.get(draft.id),
+        },
+        draft,
+      );
+    },
+  });
+  ctx.sessionDrafts = gateway;
+
+  fastify.patch("/sessions/:id/draft", async (request, reply) => {
+    const parsed = z
+      .object({
+        projectId: z.string().nullable().optional(),
+        agentName: z.string().nullable().optional(),
+        worktreeIsolation: z.boolean().optional(),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const { id } = request.params as { id: string };
+    const draft = gateway.find(id);
+    if (!draft)
+      return reply.status(409).send({ error: "Only an unstarted draft can be configured." });
+    if (sessionMutations.owner(id))
+      return reply.status(409).send({ error: "Session is starting. Try again after startup." });
+    const body = parsed.data;
+    const projectId =
+      body.projectId === undefined ? draft.projectId : (body.projectId ?? undefined);
+    const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
+    if (projectId && !project) return reply.status(404).send({ error: "unknown project" });
+    const next = {
+      ...draft,
+      projectId,
+      cwd:
+        body.projectId === undefined
+          ? draft.cwd
+          : (project?.path ?? envDefaults().cwd ?? process.cwd()),
+      agentName: body.agentName === undefined ? draft.agentName : (body.agentName ?? undefined),
+      draftWorktreeIsolation: body.worktreeIsolation ?? draft.draftWorktreeIsolation,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      const resolved = resolveLaunchResources(ctx, next, envDefaults(), next.launchResourceConfig);
+      next.launchPlan = resolved.plan;
+      next.launchResourceFingerprint = resolved.fingerprint;
+      index.upsert(next);
+      broadcast({ type: "session_meta", session: next });
+      return { session: next };
+    } catch (error) {
+      return reply.status(409).send({ error: String(error) });
+    }
+  });
+
+  fastify.post("/sessions", async (request, reply) => {
+    const parsed = createSessionBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const body = parsed.data;
+    try {
+      if (body.startImmediately)
+        return reply.status(201).send({ session: (await launchSession(body)).meta });
+      const defaults = envDefaults();
+      const project = body.projectId
+        ? projects.find((item) => item.id === body.projectId)
+        : undefined;
+      if (body.projectId && !project) return reply.status(404).send({ error: "unknown project" });
+      const cwd = project?.path ?? body.cwd ?? defaults.cwd ?? process.cwd();
+      const resolved = resolveLaunchResources(ctx, { ...body, cwd }, defaults);
+      const now = new Date().toISOString();
+      const draft: SessionMeta = {
+        id: randomUUID(),
+        cwd,
+        createdAt: now,
+        updatedAt: now,
+        lifecycle: "draft",
+        projectId: body.projectId,
+        agentName: body.agentName,
+        draftWorktreeIsolation: settings.get().worktreeIsolation,
+        launchPlan: resolved.plan,
+        launchResourceConfig: resolved.config,
+        launchResourceFingerprint: resolved.fingerprint,
+      };
+      index.upsert(draft);
+      if (body.env) draftEnvironment.set(draft.id, body.env);
+      broadcast({ type: "session_meta", session: draft });
+      return reply.status(201).send({ session: draft });
+    } catch (error) {
+      const failure = error as Error & { statusCode?: number; code?: string };
+      return reply
+        .status(failure.statusCode ?? 409)
+        .send({ error: failure.message, ...(failure.code ? { code: failure.code } : {}) });
     }
   });
 }

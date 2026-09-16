@@ -30,6 +30,13 @@ test.beforeAll(async () => {
   process.env.PROMPT = "agent-deck$G";
   process.env.PS1 = "agent-deck> ";
   harness = await startHarness({ reply: () => "ok" });
+  // This suite exercises an already-running session's runtime controls.
+  const created = await fetch(`${harness.baseUrl}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ startImmediately: true }),
+  });
+  expect(created.status).toBe(201);
 });
 
 test.afterAll(async () => {

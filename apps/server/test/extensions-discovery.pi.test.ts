@@ -53,6 +53,7 @@ async function promptAndReadSystem(agentName?: string): Promise<string> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      startImmediately: true,
       cwd: project,
       projectId,
       agentName,
@@ -199,6 +200,7 @@ describe("extension discovery", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd: project,
         projectId,
         provider: MOCK_PROVIDER_ID,
@@ -272,6 +274,7 @@ describe("extension discovery", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        startImmediately: true,
         cwd: project,
         projectId,
         provider: MOCK_PROVIDER_ID,

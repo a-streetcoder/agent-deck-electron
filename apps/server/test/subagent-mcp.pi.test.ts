@@ -76,6 +76,7 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
       // An ordinary parent's assignment must not bleed into a plain child.
       await api(`/projects/${project.id}`, { assignedMcpServers: ["unlisted"] }, "PATCH");
       const { session } = await api("/sessions", {
+        startImmediately: true,
         projectId: project.id,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,

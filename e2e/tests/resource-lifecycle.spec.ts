@@ -127,7 +127,7 @@ test("disabling a skill excludes it from injection; delete removes its dir", asy
     const created = await fetch(`${harness.baseUrl}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ startImmediately: true, projectId }),
     });
     expect(created.status).toBe(201);
     const { session } = (await created.json()) as { session: { id: string } };
