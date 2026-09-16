@@ -349,8 +349,31 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   }));
 
   fastify.patch("/settings", async (request, reply) => {
+    const themeColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+    const customTheme = z
+      .object({
+        id: z.string().min(1).max(100),
+        name: z.string().trim().min(1).max(80),
+        isBuiltIn: z.literal(false),
+        accent: themeColor,
+        assistant: themeColor,
+        thinking: themeColor,
+        tool: themeColor,
+        error: themeColor,
+        stderr: themeColor,
+        diffAdded: themeColor,
+        sourceBuiltin: themeColor,
+        sourceLibrary: themeColor,
+        sourceProject: themeColor,
+        background: themeColor,
+        surface: themeColor,
+        stroke: themeColor,
+      })
+      .strict();
     const parsed = z
       .object({
+        selectedThemeID: z.string().min(1).max(100).optional(),
+        customThemes: z.array(customTheme).max(100).optional(),
         defaultSkills: z.array(RESOURCE_NAME).optional(),
         defaultPromptTemplates: z.array(RESOURCE_NAME).optional(),
         /** Atomic membership ops — preferred over whole-array replacement. */
@@ -442,6 +465,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // arrays like defaultSkills through the object spread in settings.update).
     const d = parsed.data;
     const patch: Partial<AppSettings> = {};
+    if (d.selectedThemeID !== undefined) patch.selectedThemeID = d.selectedThemeID;
+    if (d.customThemes !== undefined) patch.customThemes = d.customThemes;
     if (d.defaultSkills !== undefined) patch.defaultSkills = d.defaultSkills;
     if (d.defaultPromptTemplates !== undefined)
       patch.defaultPromptTemplates = d.defaultPromptTemplates;

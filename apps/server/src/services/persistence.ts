@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import envPaths from "env-paths";
 import type {
+  AppColorTheme,
   KeybindingBinding,
   ProjectMeta,
   SessionMeta,
@@ -92,6 +93,9 @@ export type SessionIndexHandle = JsonArrayStoreHandle<SessionMeta>;
 export type ProjectIndexHandle = JsonArrayStoreHandle<ProjectMeta>;
 
 export interface AppSettings {
+  /** Native color-theme selection and user-created editable themes. */
+  selectedThemeID: string;
+  customThemes: AppColorTheme[];
   /** Skills injected into EVERY project's parent sessions ("All Projects"). */
   defaultSkills: string[];
   /** MCP servers granted to ordinary sessions in every real project. */
@@ -232,6 +236,41 @@ function coerceCodexPluginRefs(value: unknown): CodexPluginSkillRef[] {
       typeof (item as CodexPluginSkillRef).plugin === "string" &&
       typeof (item as CodexPluginSkillRef).relPath === "string",
   );
+}
+
+const THEME_COLOR = /^#[0-9a-fA-F]{6}$/;
+const THEME_KEYS: ReadonlyArray<keyof Omit<AppColorTheme, "id" | "name" | "isBuiltIn">> = [
+  "accent",
+  "assistant",
+  "thinking",
+  "tool",
+  "error",
+  "stderr",
+  "diffAdded",
+  "sourceBuiltin",
+  "sourceLibrary",
+  "sourceProject",
+  "background",
+  "surface",
+  "stroke",
+];
+
+function coerceCustomThemes(value: unknown): AppColorTheme[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+      return (
+        typeof item.id === "string" &&
+        item.id.length <= 100 &&
+        typeof item.name === "string" &&
+        item.name.trim().length > 0 &&
+        item.name.length <= 80 &&
+        THEME_KEYS.every((key) => typeof item[key] === "string" && THEME_COLOR.test(item[key]))
+      );
+    })
+    .slice(0, 100)
+    .map((item) => ({ ...(item as unknown as AppColorTheme), isBuiltIn: false }));
 }
 
 /** Windows filesystems are case-insensitive: one file, one reference. */
@@ -442,6 +481,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
     // left untouched and fail closed.
     let persistLegacySemanticSeed = legacySemanticSeedRequested && !settingsFileExists;
     let settings: AppSettings = {
+      selectedThemeID: "11111111-1111-1111-1111-111111111111",
+      customThemes: [],
       defaultSkills: [],
       defaultMcpServers: [],
       mcpEnabled: true,
@@ -489,6 +530,11 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
         persistLegacySemanticSeed =
           !semanticMemoryPreferenceWasPersisted && legacySemanticSeedRequested;
         settings = {
+          selectedThemeID:
+            typeof record.selectedThemeID === "string"
+              ? record.selectedThemeID
+              : "11111111-1111-1111-1111-111111111111",
+          customThemes: coerceCustomThemes(record.customThemes),
           defaultSkills: Array.isArray(record.defaultSkills)
             ? record.defaultSkills.map(String)
             : [],
@@ -616,6 +662,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // Fields newer than the oldest settings files stay absent when empty, keeping
       // untouched files byte-stable across load/save cycles.
       const persisted: Partial<AppSettings> = { ...value };
+      if (value.selectedThemeID === "11111111-1111-1111-1111-111111111111")
+        delete persisted.selectedThemeID;
+      if (value.customThemes.length === 0) delete persisted.customThemes;
       if (value.defaultMcpServers.length === 0) delete persisted.defaultMcpServers;
       // Preserve untouched legacy bytes: absence is the enabled default.
       if (value.mcpEnabled === true) delete persisted.mcpEnabled;

@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Repeat,
   Plug,
+  Palette,
   Send,
   Server,
   ShieldCheck,
@@ -52,6 +53,7 @@ const WORKSPACE_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = 
 ];
 
 const RUNTIME_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = [
+  { id: "themes", label: "Themes", icon: Palette },
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "models", label: "Models", icon: Cpu },
   { id: "providers", label: "Providers", icon: ShieldCheck },

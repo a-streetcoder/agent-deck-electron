@@ -143,6 +143,7 @@ export type AppView =
   | "memory"
   | "mcp"
   | "performance"
+  | "themes"
   | "doctor";
 
 export type ToastKind = "success" | "error" | "info";

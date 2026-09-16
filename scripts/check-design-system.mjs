@@ -5,6 +5,8 @@ import process from "node:process";
 const sourceRoot = path.resolve("apps/web/src");
 const tokenFile = path.join(sourceRoot, "design-system/tokens.css");
 const approvedRawColorFiles = new Set([
+  // Curated runtime theme definitions are token inputs, not component colors.
+  path.join(sourceRoot, "design-system/themes.ts"),
   path.join(sourceRoot, "components/browser/picker.ts"),
   path.join(sourceRoot, "components/diff/EditorIcons.tsx"),
   path.join(sourceRoot, "components/diff/JetBrainsIcons.tsx"),

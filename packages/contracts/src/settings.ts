@@ -21,6 +21,28 @@ export const DEFAULT_TRANSCRIPT_VISIBILITY: Readonly<TranscriptVisibilitySetting
   showMCPCards: true,
 };
 
+/** Persisted color theme shared by the settings API and renderer. */
+export interface AppColorTheme {
+  id: string;
+  name: string;
+  isBuiltIn: boolean;
+  accent: string;
+  assistant: string;
+  thinking: string;
+  tool: string;
+  error: string;
+  stderr: string;
+  diffAdded: string;
+  sourceBuiltin: string;
+  sourceLibrary: string;
+  sourceProject: string;
+  background: string;
+  surface: string;
+  stroke: string;
+}
+
+export const DEFAULT_THEME_ID = "11111111-1111-1111-1111-111111111111";
+
 /** Load a possibly old or partially corrupt persisted value field by field. */
 export function coerceTranscriptVisibility(value: unknown): TranscriptVisibilitySettings {
   const record =
