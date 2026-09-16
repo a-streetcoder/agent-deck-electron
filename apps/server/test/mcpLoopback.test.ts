@@ -11,6 +11,12 @@ import { McpLoopbackServer } from "../src/mcpLoopback.ts";
 
 let server: McpLoopbackServer | undefined;
 
+// Each test tears down and immediately rebinds the same callback origin. Do
+// not leave that synthetic browser connection in Node fetch's global pool: it
+// can otherwise be selected after its owning server has closed and reset it.
+const browserFetch = (url: string, init?: { method?: string }): Promise<Response> =>
+  fetch(url, { ...init, headers: { connection: "close" } });
+
 afterEach(async () => {
   await server?.close();
   server = undefined;
@@ -24,7 +30,9 @@ describe("McpLoopbackServer", () => {
     server.setExpectedState("the-state");
 
     const waiting = server.waitForCallback(5000);
-    const res = await fetch(`http://127.0.0.1:${port}/callback?code=the-code&state=the-state`);
+    const res = await browserFetch(
+      `http://127.0.0.1:${port}/callback?code=the-code&state=the-state`,
+    );
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Authorization received");
@@ -37,7 +45,7 @@ describe("McpLoopbackServer", () => {
     server = new McpLoopbackServer("http://127.0.0.1:38976/callback");
     const port = await server.start();
     server.setExpectedState("s");
-    await fetch(`http://127.0.0.1:${port}/callback?code=early&state=s`);
+    await browserFetch(`http://127.0.0.1:${port}/callback?code=early&state=s`);
     // Wait is called only now — the earlier result is still delivered.
     expect(await server.waitForCallback(5000)).toEqual({
       code: "early",
@@ -51,7 +59,7 @@ describe("McpLoopbackServer", () => {
     const port = await server.start();
     server.setExpectedState("s");
     const waiting = server.waitForCallback(5000);
-    await fetch(`http://127.0.0.1:${port}/callback?error=access_denied&state=s`);
+    await browserFetch(`http://127.0.0.1:${port}/callback?error=access_denied&state=s`);
     const result = await waiting;
     expect(result.error).toBe("access_denied");
     expect(result.code).toBeUndefined();
@@ -62,12 +70,12 @@ describe("McpLoopbackServer", () => {
     const port = await server.start();
     server.setExpectedState("s1");
     const waiting = server.waitForCallback(5000);
-    await fetch(`http://127.0.0.1:${port}/callback?code=first&state=s1`);
+    await browserFetch(`http://127.0.0.1:${port}/callback?code=first&state=s1`);
     expect(await waiting).toMatchObject({ code: "first" });
 
     // A stray second redirect with foreign state is rejected and cannot buffer
     // a result that a later wait could pick up.
-    const res = await fetch(`http://127.0.0.1:${port}/callback?code=second&state=s2`);
+    const res = await browserFetch(`http://127.0.0.1:${port}/callback?code=second&state=s2`);
     expect(res.status).toBe(400);
     expect(await server.waitForCallback(150)).toEqual({
       error: "timed out waiting for the authorization redirect",
@@ -79,14 +87,15 @@ describe("McpLoopbackServer", () => {
     const port = await server.start();
     server.setExpectedState("s");
     const waiting = server.waitForCallback(5000);
-    expect((await fetch(`http://127.0.0.1:${port}/wrong?code=secret`)).status).toBe(404);
+    expect((await browserFetch(`http://127.0.0.1:${port}/wrong?code=secret`)).status).toBe(404);
     expect(
-      (await fetch(`http://127.0.0.1:${port}/callback?code=secret`, { method: "POST" })).status,
+      (await browserFetch(`http://127.0.0.1:${port}/callback?code=secret`, { method: "POST" }))
+        .status,
     ).toBe(405);
-    expect((await fetch(`http://127.0.0.1:${port}/callback?code=foreign&state=other`)).status).toBe(
-      400,
-    );
-    await fetch(`http://127.0.0.1:${port}/callback?code=right&state=s`);
+    expect(
+      (await browserFetch(`http://127.0.0.1:${port}/callback?code=foreign&state=other`)).status,
+    ).toBe(400);
+    await browserFetch(`http://127.0.0.1:${port}/callback?code=right&state=s`);
     expect(await waiting).toMatchObject({ code: "right", state: "s" });
   });
 
@@ -129,13 +138,13 @@ describe("McpLoopbackServer", () => {
     await server.close();
     expect(await waiting).toEqual({ error: "authorization cancelled" });
     server = undefined;
-    await expect(fetch(`http://127.0.0.1:${port}/callback?code=late`)).rejects.toThrow();
+    await expect(browserFetch(`http://127.0.0.1:${port}/callback?code=late`)).rejects.toThrow();
   });
 
   it("ignores stray requests with no code/error (404, no resolve)", async () => {
     server = new McpLoopbackServer("http://127.0.0.1:38976/callback");
     const port = await server.start();
-    const res = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    const res = await browserFetch(`http://127.0.0.1:${port}/favicon.ico`);
     expect(res.status).toBe(404);
     // The wait still times out rather than resolving on the stray request.
     expect(await server.waitForCallback(150)).toEqual({

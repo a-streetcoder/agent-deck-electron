@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "../helpers/fixtures.ts";
@@ -12,8 +12,24 @@ import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 let harness: E2eHarness;
 const project = mkdtempSync(path.join(tmpdir(), "proj-runtime-"));
+const previousPiPath = process.env.AGENT_DECK_PI_PATH;
+
+function createDoctorPiStub(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "doctor-pi-"));
+  const isWindows = process.platform === "win32";
+  const stub = path.join(dir, isWindows ? "pi.cmd" : "pi");
+  writeFileSync(
+    stub,
+    isWindows ? "@echo off\r\necho 9.8.7-doctor-test\r\n" : "#!/bin/sh\necho 9.8.7-doctor-test\n",
+  );
+  if (!isWindows) chmodSync(stub, 0o755);
+  return stub;
+}
+
+const doctorPi = createDoctorPiStub();
 
 test.beforeAll(async () => {
+  process.env.AGENT_DECK_PI_PATH = doctorPi;
   harness = await startHarness({ chunkDelayMs: 20 });
   mkdirSync(path.join(harness.piHome, ".pi", "agent"), { recursive: true });
   writeFileSync(
@@ -44,6 +60,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await harness.close();
+  if (previousPiPath === undefined) delete process.env.AGENT_DECK_PI_PATH;
+  else process.env.AGENT_DECK_PI_PATH = previousPiPath;
 });
 
 test("environment inspector masks values and flags overrides", async ({ page }) => {
@@ -71,10 +89,11 @@ test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   const binCheck = page.locator('[data-check-id="pi-binary"]');
   await expect(binCheck).toBeVisible();
   await expect(binCheck).toHaveAttribute("data-check-status", "ok");
+  await expect(binCheck).toContainText(doctorPi);
 
   const versionCheck = page.locator('[data-check-id="pi-version"]');
   await expect(versionCheck).toHaveAttribute("data-check-status", "ok");
-  await expect(versionCheck).toContainText("0.82.0");
+  await expect(versionCheck).toContainText("9.8.7-doctor-test");
 
   // Node.js runtime check: pi is a Node CLI, so it's a first-class preflight.
   // The e2e runner is on Node ≥ pi's minimum, so it reports ok.
