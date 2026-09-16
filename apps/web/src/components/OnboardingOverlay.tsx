@@ -1,4 +1,5 @@
 import { AppSpinner } from "@/design-system/components/AppSpinner";
+import { AppRowCard } from "@/design-system/components/AppRowCard";
 import { Button } from "@/design-system/components/Button";
 import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { ControlButton, ControlSelect } from "@/design-system/components/NativeControls";
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { PI_THINKING_LEVELS } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { sectionHeaderClass } from "@/design-system/styles";
 import { ProviderLogo } from "./ProviderLogo.tsx";
 import { ProvidersScreen } from "../screens/ProvidersScreen.tsx";
 import { useAppStore, type AppView } from "../state/store.ts";
@@ -390,24 +392,24 @@ function PrefModelPicker({
               <div className="relative z-10 flex max-h-[min(70vh,40rem)] w-full min-w-0 max-w-lg shrink-0 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-elevated shadow-elevated">
                 {providerId === null ? (
                   <div className="min-h-0 overflow-y-auto px-5 py-3">
-                    <ControlButton
-                      type="button"
+                    <div className={cn(sectionHeaderClass, "px-2 pb-1 text-text-muted")}>
+                      Current choice
+                    </div>
+                    <AppRowCard
                       data-testid="pref-model-option-default"
-                      className={cn(
-                        "flex w-full items-center gap-2 truncate rounded-md px-2 py-2 text-left text-label",
-                        !value
-                          ? "bg-selection text-text-primary"
-                          : "text-text-secondary hover:bg-hover",
-                      )}
+                      title={!value ? inheritLabel : "Use Pi default"}
+                      subtitle={!value ? "Pi default" : `Pi currently uses ${inheritLabel}`}
+                      leading={
+                        <ProviderLogo providerId="pi" size={18} className="text-text-secondary" />
+                      }
+                      trailing={
+                        !value ? (
+                          <CheckCircle2 size={16} className="text-accent" aria-hidden />
+                        ) : null
+                      }
+                      selected={!value}
                       onClick={() => select(null)}
-                    >
-                      <ProviderLogo
-                        providerId="pi"
-                        size={18}
-                        className="shrink-0 text-text-secondary"
-                      />
-                      <span className="min-w-0 truncate">{inheritLabel}</span>
-                    </ControlButton>
+                    />
                     {savedMissing && value ? (
                       <ControlButton
                         type="button"
@@ -418,6 +420,9 @@ function PrefModelPicker({
                         {value} (saved)
                       </ControlButton>
                     ) : null}
+                    <div className={cn(sectionHeaderClass, "px-2 pb-1 pt-4 text-text-muted")}>
+                      Choose a provider
+                    </div>
                     {[...byProvider.keys()].map((provider) => (
                       <ControlButton
                         key={provider}
@@ -431,7 +436,7 @@ function PrefModelPicker({
                           size={18}
                           className="text-text-secondary"
                         />
-                        <span className="text-micro font-medium">{provider}</span>
+                        <span className="text-label">{provider}</span>
                       </ControlButton>
                     ))}
                   </div>
