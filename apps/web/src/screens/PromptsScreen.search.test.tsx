@@ -79,6 +79,17 @@ async function renderCatalog(): Promise<HTMLInputElement> {
   }) as HTMLInputElement;
 }
 
+async function openSelectedPromptEditor(label: string, occurrence = 0): Promise<void> {
+  const matches = await screen.findAllByText(label);
+  fireEvent.click(matches[occurrence]!);
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: /^(Edit|Customize)$/,
+    }),
+  );
+  await screen.findByTestId("prompt-editor");
+}
+
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -117,14 +128,17 @@ afterEach(() => {
 describe("builtin prompt source (PRM-02)", () => {
   it("builtin prompts are read-only; opening one drafts a GLOBAL copy to customize", async () => {
     await renderCatalog();
-    // no rename/delete affordances on the builtin row — it is not the user's file
+    // Selecting an ordinary prompt exposes management in the detail pane.
+    fireEvent.click(screen.getByText("/name-command"));
+    expect(await screen.findByTestId("prompt-rename-NameNeedle")).toBeTruthy();
+
+    // Builtins expose Customize, with no rename/delete for the bundled file.
+    fireEvent.click(screen.getByText("/third"));
     expect(screen.queryByTestId("prompt-rename-third")).toBeNull();
     expect(screen.queryByTestId("prompt-delete-third")).toBeNull();
-    // ordinary rows keep them
-    expect(screen.getByTestId("prompt-rename-NameNeedle")).toBeTruthy();
 
-    // opening a builtin drafts a copy that SAVES into the user's global prompts
-    fireEvent.click(screen.getByText("/third"));
+    // Customizing a builtin drafts a copy that SAVES into the user's global prompts.
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     await screen.findByTestId("prompt-editor");
     fireEvent.click(screen.getByTestId("prompt-save"));
     await waitFor(() => {
@@ -167,9 +181,7 @@ describe("builtin prompt source (PRM-02)", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
     render(<PromptsScreen />);
-    const rows = await screen.findAllByText("/third");
-    fireEvent.click(rows[1]!); // the BUILTIN row
-    await screen.findByTestId("prompt-editor");
+    await openSelectedPromptEditor("/third", 1); // the BUILTIN row
     // the draft targets the user's existing copy (its file), not a blind overwrite
     expect(screen.getByTestId("prompt-file-path").textContent).toContain("third-global.md");
   });
@@ -210,8 +222,9 @@ describe("builtin prompt disable (PRM-06)", () => {
     render(<PromptsScreen />);
     await screen.findByText("/active-builtin");
 
-    // the silenced builtin is visibly disabled and offers Enable
+    // The silenced builtin is visibly disabled and offers Enable in detail.
     expect(screen.getByTestId("prompt-disabled-badge-silenced")).toBeTruthy();
+    fireEvent.click(screen.getByText("/silenced"));
     fireEvent.click(screen.getByTestId("prompt-builtin-toggle-silenced"));
     await waitFor(() => {
       const patch = vi
@@ -227,7 +240,8 @@ describe("builtin prompt disable (PRM-06)", () => {
       });
     });
 
-    // the active builtin offers Disable
+    // The active builtin offers Disable when selected.
+    fireEvent.click(await screen.findByText("/active-builtin"));
     fireEvent.click(screen.getByTestId("prompt-builtin-toggle-active-builtin"));
     await waitFor(() => {
       const calls = vi
@@ -280,9 +294,8 @@ describe("package prompt source (PRM-03)", () => {
     // a configured-but-broken package is surfaced, not silent
     expect(screen.getByTestId("prompt-package-warnings").textContent).toContain("ghost-pack");
 
-    // opening a package prompt drafts a GLOBAL copy (copy-to-customize)
-    fireEvent.click(screen.getByText("/from-pack"));
-    await screen.findByTestId("prompt-editor");
+    // Customizing a package prompt drafts a GLOBAL copy.
+    await openSelectedPromptEditor("/from-pack");
     fireEvent.click(screen.getByTestId("prompt-save"));
     await waitFor(() => {
       const put = vi
@@ -327,16 +340,17 @@ describe("external prompt references (PRM-05)", () => {
     render(<PromptsScreen />);
     await screen.findByText("/kept-outside");
 
-    // the reference is visibly external and offers no rename/delete of the file
+    // The reference is visibly external; selecting it exposes reference actions in detail.
     expect(screen.getByTestId("prompt-external-kept-outside")).toBeTruthy();
+    fireEvent.click(screen.getByText("/kept-outside"));
     expect(screen.queryByTestId("prompt-rename-kept-outside")).toBeNull();
     expect(screen.queryByTestId("prompt-delete-kept-outside")).toBeNull();
     // an external prompt IS launchable, so its All Projects default toggle shows
     expect(screen.getByTestId("prompt-default-kept-outside")).toBeTruthy();
 
-    // opening an external drafts a GLOBAL copy — never a library overwrite, even
+    // Customizing an external drafts a GLOBAL copy — never a library overwrite, even
     // though the reference itself carries library scope (review, Codex)
-    fireEvent.click(screen.getByText("/kept-outside"));
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     await screen.findByTestId("prompt-editor");
     fireEvent.click(screen.getByTestId("prompt-save"));
     await waitFor(() => {
@@ -503,9 +517,7 @@ describe("prompt catalog search", () => {
     const search = await renderCatalog();
     fireEvent.change(search, { target: { value: "BodyNeedle" } });
 
-    fireEvent.click(screen.getByText("/sixth"));
-
-    await waitFor(() => expect(screen.getByTestId("prompt-editor")).toBeTruthy());
+    await openSelectedPromptEditor("/sixth");
     expect((screen.getByTestId("prompt-name") as HTMLInputElement).value).toBe(bodyMatch.name);
     expect((screen.getByTestId("prompt-body") as HTMLTextAreaElement).value).toBe(bodyMatch.body);
     expect(screen.getByTestId("prompt-file-path").textContent).toContain(bodyMatch.filePath);
