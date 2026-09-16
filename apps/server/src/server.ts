@@ -68,10 +68,11 @@ import { createFileService } from "./services/files.ts";
 import { LoopEngine } from "./loopEngine.ts";
 import {
   McpManager,
+  MCP_PROXY_TOOL_NAME,
+  isLegacyMcpToolPolicy,
   mcpEntryToConfig,
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
-  scopeMcpBridgeSpecs,
 } from "./mcpTools.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
@@ -258,6 +259,8 @@ async function initServer(
       agentName: string;
       projectId: string;
       serverIds: string[];
+      /** Undefined grants every tool on assigned servers; otherwise legacy exact-tool names. */
+      toolAllowlist?: string[];
     }
   >();
   const childAllowedTools = new Map<string, ReadonlySet<string>>();
@@ -396,12 +399,11 @@ async function initServer(
           : meta.subagentsEnabled === true;
       const nonMcpTools = bridge
         .specs()
-        .filter((spec) => !spec.name.startsWith("mcp__"))
+        .filter((spec) => spec.name !== MCP_PROXY_TOOL_NAME)
         .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"))
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
-      let tools = scope ? [...nonMcpTools, ...mcp.specs(scope)] : nonMcpTools;
       const allow = mcpAllowlistForSession(meta);
-      tools = scopeMcpBridgeSpecs(tools, allow);
+      const tools = scope ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
@@ -467,11 +469,17 @@ async function initServer(
         if (preparation?.result.ok === false) throw new Error(preparation.result.error);
         // Unlike the always-added supervisor/memory channels, MCP remains
         // subject to an authored Pi tool allowlist (including explicit empty).
-        const mcpSpecs = project
-          ? scopeMcpBridgeSpecs(mcp.specs(project.id), serverIds).filter(
-              (spec) => route.tools === undefined || route.tools.includes(spec.name),
-            )
-          : [];
+        // Native uses one `mcp` proxy. Preserve exact restrictions from older
+        // mcp__server__tool allowlists instead of widening them to the whole server.
+        const legacyPrefixes = serverIds.map((id) => `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`);
+        const exactLegacyTools =
+          route.tools?.filter((tool) => legacyPrefixes.some((prefix) => tool.startsWith(prefix))) ??
+          [];
+        const proxyAllowed =
+          route.tools === undefined ||
+          route.tools.includes(MCP_PROXY_TOOL_NAME) ||
+          exactLegacyTools.length > 0;
+        const mcpSpecs = project && proxyAllowed ? mcp.specs(project.id, serverIds) : [];
         const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs, ...mcpSpecs];
         const toolNames = tools.map((tool) => tool.name);
         // Generate first; publish authentication/authorization only on success.
@@ -499,6 +507,9 @@ async function initServer(
             agentName: route.agentName,
             projectId: project.id,
             serverIds,
+            ...(route.tools !== undefined && !route.tools.includes(MCP_PROXY_TOOL_NAME)
+              ? { toolAllowlist: exactLegacyTools }
+              : {}),
           });
         }
         return {
@@ -910,6 +921,25 @@ async function initServer(
       const meta = sessions.get(sessionId)?.meta;
       return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
     },
+    toolPolicyForSession: (sessionId) => {
+      const child = childMcpAssignments.get(sessionId);
+      const meta = sessions.get(sessionId)?.meta;
+      const parentResolution =
+        !child && meta?.agentName ? resolveNamedAgent(meta.agentName, meta.projectId) : undefined;
+      if (meta?.agentName && !child && parentResolution?.status !== "ok") {
+        return { restricted: true, allows: () => false };
+      }
+      const parentAgent = parentResolution?.status === "ok" ? parentResolution.agent : undefined;
+      const authored = child?.toolAllowlist ?? parentAgent?.tools;
+      return {
+        restricted: isLegacyMcpToolPolicy(authored),
+        allows: (serverId: string, toolName: string) => {
+          if (!authored || authored.includes(MCP_PROXY_TOOL_NAME)) return true;
+          const legacy = `mcp__${serverId.replace(/[^A-Za-z0-9_]/g, "_")}__${toolName.replace(/[^A-Za-z0-9_]/g, "_")}`;
+          return authored.includes(legacy);
+        },
+      };
+    },
     isEnabled: () => mcpPolicy.enabled(),
   });
 
@@ -1153,10 +1183,9 @@ async function initServer(
     if (!snapshot.valid) return [];
     const configured = new Set(snapshot.configs.map((config) => config.id));
     if (meta.agentName) {
-      const agent = scanAgents(rootsFor(meta.projectId)).find(
-        (candidate) => candidate.name === meta.agentName && !candidate.shadowed,
-      );
-      return [...new Set(agent?.mcpServers ?? [])].filter((id) => configured.has(id));
+      const resolved = resolveNamedAgent(meta.agentName, meta.projectId);
+      if (resolved.status !== "ok") return [];
+      return [...new Set(resolved.agent.mcpServers)].filter((id) => configured.has(id));
     }
     return [
       ...new Set([

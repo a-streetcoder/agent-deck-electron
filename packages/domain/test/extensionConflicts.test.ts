@@ -67,6 +67,10 @@ describe("extensionBridgeConflict", () => {
     );
   });
 
+  it("flags the single mcp proxy tool literal", () => {
+    expect(extensionBridgeConflict('pi.registerTool({ name: "mcp" })')).toBe("mcp");
+  });
+
   it("returns null for an extension that touches no bridge tool", () => {
     expect(extensionBridgeConflict(`pi.on("before_agent_start", () => ({}))`)).toBeNull();
     // A substring that isn't a quoted literal doesn't false-positive.

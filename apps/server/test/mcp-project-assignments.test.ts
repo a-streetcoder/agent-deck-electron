@@ -433,6 +433,6 @@ describe("project MCP assignment persistence", () => {
     expect(
       projects.projects.find((project) => project.id === projectId)?.assignedMcpServers,
     ).toEqual(["repository-server"]);
-    expect(server.bridge.specs().some((spec) => spec.name.startsWith("mcp__"))).toBe(false);
+    expect(server.bridge.specs().some((spec) => spec.name === "mcp")).toBe(false);
   });
 });

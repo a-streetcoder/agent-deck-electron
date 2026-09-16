@@ -29,7 +29,10 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     toolCall: (_lastUser, body) => {
       const lastUser = body.messages.findLastIndex((message) => message.role === "user");
       if (body.messages.slice(lastUser + 1).some((message) => message.role === "tool")) return null;
-      return { name: "mcp__scoped_server__echo", arguments: { message: "child-sentinel" } };
+      return {
+        name: "mcp",
+        arguments: { tool: "scoped-server/echo", args: { message: "child-sentinel" } },
+      };
     },
     reply: () => "Child answer arrives in several streamed deltas.",
   });
@@ -92,7 +95,7 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     let probedAccess = false;
     let revokeBeforeDispatch: (() => Promise<void>) | undefined;
     dispatch.mockImplementation(async (call, auth) => {
-      if (!probedAccess && call.tool === "mcp__scoped_server__echo") {
+      if (!probedAccess && call.tool === "mcp" && call.params.tool === "scoped-server/echo") {
         probedAccess = true;
         for (const tool of [
           "mcp__unlisted__echo",
@@ -109,7 +112,7 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
         }
       }
       const revoke = revokeBeforeDispatch;
-      if (revoke && call.tool === "mcp__scoped_server__echo") {
+      if (revoke && call.tool === "mcp" && call.params.tool === "scoped-server/echo") {
         revokeBeforeDispatch = undefined;
         await revoke();
         const denied = await originalDispatch(call, auth);
@@ -158,10 +161,12 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     expect(finalized).toBe(true);
     expect(deltas.length).toBeGreaterThan(1);
     expect(deltas.every((seq, index) => index === 0 || seq > deltas[index - 1]!)).toBe(true);
-    expect(first.tools).toContain("mcp__scoped_server__echo");
+    expect(first.tools).toContain("mcp");
     expect(JSON.stringify(first.requests)).toContain("PROJECT_A: child-sentinel");
     expect(JSON.stringify(first.requests)).not.toContain("PROJECT_B: child-sentinel");
-    const call = dispatch.mock.calls.find(([call]) => call.tool === "mcp__scoped_server__echo")!;
+    const call = dispatch.mock.calls.find(
+      ([call]) => call.tool === "mcp" && call.params.tool === "scoped-server/echo",
+    )!;
     expect(call).toBeDefined();
     // The Pi-owned run has exited: its token cannot be reused, even for a tool
     // that remains registered for another project/session.
@@ -173,34 +178,30 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     expect(stale.status).toBe(403);
     const continued = await run(parents[0]!, undefined, first.result.runId);
     expect(continued.result.runId).toBe(first.result.runId);
-    expect(continued.tools).toContain("mcp__scoped_server__echo");
+    expect(continued.tools).toContain("mcp");
     expect(
-      dispatch.mock.calls.filter(([call]) => call.tool === "mcp__scoped_server__echo"),
+      dispatch.mock.calls.filter(
+        ([call]) => call.tool === "mcp" && call.params.tool === "scoped-server/echo",
+      ),
     ).toHaveLength(2);
     const other = await run(parents[1]!, "worker");
     expect(JSON.stringify(other.requests)).toContain("PROJECT_B: child-sentinel");
     expect(JSON.stringify(other.requests)).not.toContain("PROJECT_A: child-sentinel");
     for (const agent of [undefined, "plain"]) {
-      expect((await run(parents[0]!, agent)).tools.some((name) => name.startsWith("mcp__"))).toBe(
-        false,
-      );
+      expect((await run(parents[0]!, agent)).tools).not.toContain("mcp");
     }
     for (const tools of ["tools: []", "tools: read"]) {
       writeAgent("mcpServers: scoped-server", tools);
-      expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain(
-        "mcp__scoped_server__echo",
-      );
+      expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain("mcp");
     }
     writeAgent(
       "mcpServers: scoped-server",
       "tools: read, mcp__scoped_server__echo, managed_subagent, ask_user",
     );
-    expect((await run(parents[0]!, "worker")).tools).toContain("mcp__scoped_server__echo");
+    expect((await run(parents[0]!, "worker")).tools).toContain("mcp");
     // Continuation resolves the current file, not the saved child assignment.
     writeAgent("");
-    expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain(
-      "mcp__scoped_server__echo",
-    );
+    expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain("mcp");
     writeAgent("mcpServers: scoped-server\ndisabled: true");
     await expect(
       server.sessions.runManagedSubagent(
@@ -212,9 +213,9 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     ).rejects.toThrow("unknown agent");
     writeAgent("mcpServers: scoped-server");
     await api("/mcp/policy", { enabled: false }, "PATCH");
-    expect((await run(parents[0]!, "worker")).tools).not.toContain("mcp__scoped_server__echo");
+    expect((await run(parents[0]!, "worker")).tools).not.toContain("mcp");
     await api("/mcp/policy", { enabled: true }, "PATCH");
-    expect((await run(parents[0]!, "worker")).tools).toContain("mcp__scoped_server__echo");
+    expect((await run(parents[0]!, "worker")).tools).toContain("mcp");
     // Revoke after Pi has received its catalog, immediately before dispatch.
     // A stale generated extension must not bypass current app authorization.
     for (const revoke of [
@@ -229,7 +230,7 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     ]) {
       revokeBeforeDispatch = revoke;
       const denied = await run(parents[0]!, "worker");
-      expect(denied.tools).toContain("mcp__scoped_server__echo");
+      expect(denied.tools).toContain("mcp");
       expect(revokeBeforeDispatch).toBeUndefined();
       expect(JSON.stringify(denied.requests)).not.toContain("PROJECT_A: child-sentinel");
       writeAgent("mcpServers: scoped-server");

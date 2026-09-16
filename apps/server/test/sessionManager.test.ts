@@ -554,7 +554,7 @@ describe("durable generic child lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const childBridgeFactory = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      return { extension: FIXTURE, toolNames: ["mcp__assigned__echo"], dispose };
+      return { extension: FIXTURE, toolNames: ["mcp"], dispose };
     });
     await Effect.runPromise(
       Effect.scoped(
@@ -583,7 +583,7 @@ describe("durable generic child lifecycle", () => {
       const dispose = vi.fn(async () => {});
       const childBridgeFactory = vi.fn(async () => ({
         extension: FIXTURE,
-        toolNames: ["mcp__assigned__echo"],
+        toolNames: ["mcp"],
         dispose,
       }));
       const spawn = vi.fn(piHost.spawn);

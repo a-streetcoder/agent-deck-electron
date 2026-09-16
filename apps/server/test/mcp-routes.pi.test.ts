@@ -44,7 +44,7 @@ beforeAll(async () => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
       return hasToolResult
         ? null
-        : { name: "mcp__mock__echo", arguments: { message: "via routes" } };
+        : { name: "mcp", arguments: { tool: "mock/echo", args: { message: "via routes" } } };
     },
     reply: () => "answered.",
   });
@@ -83,7 +83,7 @@ describe("mcp config routes", () => {
     };
     const mockServer = list.servers.find((s) => s.id === "mock");
     expect(mockServer?.connected).toBe(true);
-    expect(mockServer?.toolNames).toContain("mcp__mock__echo");
+    expect(mockServer?.toolNames).toContain("mock/echo");
 
     const globalList = (await (await api("GET", "/mcp")).json()) as {
       servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
@@ -122,7 +122,7 @@ describe("mcp config routes", () => {
       await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)
     ).json()) as { servers: Array<{ id: string }> };
     expect(list.servers.some((s) => s.id === "mock")).toBe(false);
-    expect(server.bridge.specs().some((s) => s.name === "mcp__mock__echo")).toBe(false);
+    expect(server.bridge.specs().some((s) => s.name === "mcp")).toBe(false);
     // Deleting an unknown server 404s.
     expect((await api("DELETE", "/mcp/mock")).status).toBe(404);
   });

@@ -1562,9 +1562,9 @@ ${content}
     {
       id: "mcp",
       displayName: "MCP",
-      summary: "Proxies your configured MCP servers' tools into sessions as mcp__<server>__<tool>.",
+      summary: "Lets sessions discover and call assigned MCP servers through one proxy tool.",
       condition: "When at least one MCP server is connected",
-      match: (name: string): boolean => name.startsWith("mcp__"),
+      match: (name: string): boolean => name === "mcp",
     },
   ];
   fastify.get("/runtime/bridges", async () => {

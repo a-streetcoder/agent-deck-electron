@@ -29,6 +29,22 @@ export interface ResolvedLaunchResources {
   mcpServerIds: string[];
 }
 
+/**
+ * Named parent sessions pass the authored tools directly to Pi. Add the single
+ * proxy name when an old exact MCP bridge name refers to one of this agent's
+ * assigned servers; dispatch retains the exact legacy restriction.
+ */
+export function normalizeAgentMcpProxyTools(
+  tools: readonly string[] | undefined,
+  serverIds: readonly string[],
+): string[] | undefined {
+  if (tools === undefined || tools.includes("mcp")) return tools ? [...tools] : undefined;
+  const prefixes = serverIds.map((id) => `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`);
+  return tools.some((tool) => prefixes.some((prefix) => tool.startsWith(prefix)))
+    ? [...tools, "mcp"]
+    : [...tools];
+}
+
 export class LaunchResourceResolutionError extends Error {
   constructor(
     message: string,
@@ -239,7 +255,7 @@ export function resolveLaunchResources(
     plan = {
       kind: "agent",
       systemPrompt: { mode: agent.systemPromptMode, text: agent.body },
-      tools: agent.tools,
+      tools: normalizeAgentMcpProxyTools(agent.tools, agent.mcpServers ?? []),
       extensions: finalizeExtensions([...base, ...agent.extensions]),
       skills: agent.skillDirs,
       promptTemplates: promptTemplates.length ? promptTemplates : undefined,

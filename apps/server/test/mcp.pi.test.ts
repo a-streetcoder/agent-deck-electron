@@ -14,8 +14,8 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * MCP through the bridge, end-to-end against real pi (permanent CI guard): a
- * configured stdio MCP server's `echo` tool is registered on the bridge as
- * mcp__mock__echo; a real pi session calls it, the call reaches our /bridge
+ * configured stdio MCP server's `echo` tool is reached through the single
+ * `mcp` proxy; a real pi session calls it, the call reaches our /bridge
  * route, the server forwards it to the MCP client → the MCP server subprocess,
  * and the result flows back to the model. Exercises the full production path.
  */
@@ -35,7 +35,9 @@ beforeAll(async () => {
   mock = await startMockProvider({
     toolCall: (_lastUser, body) => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
-      return hasToolResult ? null : { name: "mcp__mock__echo", arguments: { message: "over mcp" } };
+      return hasToolResult
+        ? null
+        : { name: "mcp", arguments: { tool: "mock/echo", args: { message: "over mcp" } } };
     },
     reply: () => "The MCP tool answered.",
   });
@@ -67,8 +69,7 @@ describe("mcp: a configured server's tool is callable through the bridge", () =>
       await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectId}`)
     ).json()) as { servers: Array<{ id: string; source: string }> };
     expect(catalog.servers.find((entry) => entry.id === "mock")?.source).toBe("environment");
-    // The MCP tool is advertised on the bridge with the mcp__<server>__<tool> name.
-    expect(server.bridge.specs().some((s) => s.name === "mcp__mock__echo")).toBe(true);
+    expect(server.bridge.specs().filter((s) => s.name === "mcp")).toHaveLength(1);
 
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",

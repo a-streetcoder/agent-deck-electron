@@ -96,7 +96,7 @@ beforeAll(async () => {
     toolCall: (_lastUser, body) =>
       body.messages.some((message) => message.role === "tool")
         ? null
-        : { name: "mcp__shared__echo", arguments: { message: "isolated" } },
+        : { name: "mcp", arguments: { tool: "shared/echo", args: { message: "isolated" } } },
     reply: () => "streamed parent answer has several deltas",
   });
   providerExtension = writeMockProviderExtension(provider.baseUrl);

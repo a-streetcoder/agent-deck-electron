@@ -231,10 +231,11 @@ launch-plan precedence. Child capability/resource scoping is unchanged.
 Electron named delegated children also receive their current `mcpServers` assignment
 through the purpose-scoped child bridge, using the parent's effective project MCP
 catalog even when the child runs in another cwd/worktree. Unnamed children and
-agents without that assignment receive no app-managed MCP tools. An authored `tools`
-allowlist must also include the generated `mcp__<server>__<tool>` name (server/tool
-segments use underscores for non-alphanumeric characters); `tools: []` enables no
-MCP tools. Global MCP pause,
+agents without that assignment receive no app-managed MCP tools. The bridge exposes
+one `mcp` proxy with list, search, describe, and call operations; discovery and calls
+recheck the session's assigned servers. An authored `tools` allowlist must include
+`mcp`; legacy exact `mcp__<server>__<tool>` entries remain narrowly compatible and
+do not grant other tools on that server. `tools: []` enables no MCP tools. Global MCP pause,
 current agent authorization, and the exact child tool/token allowlist are enforced
 at dispatch; the child never inherits parent supervisor tools. Each run owns its
 bridge token and temporary extension and releases its project MCP connection hold

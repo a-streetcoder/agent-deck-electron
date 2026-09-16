@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BridgeRegistry } from "../src/bridge.ts";
 import {
   McpManager,
+  isLegacyMcpToolPolicy,
   mergeMcpServerConfigs,
   mcpServerConfigsEqual,
   mcpServerConfigsFromEnv,
-  scopeMcpBridgeSpecs,
   mcpEntryToConfig,
 } from "../src/mcpTools.ts";
 
@@ -30,38 +30,11 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("scopeMcpBridgeSpecs", () => {
-  const specs = [
-    { name: "agent_deck_memory_write" },
-    { name: "managed_subagent" },
-    { name: "mcp__github__create_issue" },
-    { name: "mcp__linear__list" },
-  ];
-
-  it("keeps non-MCP tools and only the allowed servers' MCP tools", () => {
-    const scoped = scopeMcpBridgeSpecs(specs, ["github"]).map((s) => s.name);
-    expect(scoped).toEqual([
-      "agent_deck_memory_write",
-      "managed_subagent",
-      "mcp__github__create_issue",
-    ]);
-  });
-
-  it("drops ALL MCP tools for an empty allowlist (agent declares none)", () => {
-    expect(scopeMcpBridgeSpecs(specs, []).map((s) => s.name)).toEqual([
-      "agent_deck_memory_write",
-      "managed_subagent",
-    ]);
-  });
-
-  it("matches a server id by its sanitized bridge prefix, not a substring", () => {
-    // "git" must NOT match the "github" server (prefix is mcp__git__, not a substring).
-    expect(scopeMcpBridgeSpecs(specs, ["git"]).some((s) => s.name.startsWith("mcp__"))).toBe(false);
-    // A server id with an unsafe char is sanitized the same way the tool name is.
-    const withDot = [{ name: "mcp__my_server__x" }];
-    expect(scopeMcpBridgeSpecs(withDot, ["my.server"]).map((s) => s.name)).toEqual([
-      "mcp__my_server__x",
-    ]);
+describe("isLegacyMcpToolPolicy", () => {
+  it("restricts legacy exact lists but not an explicit mcp proxy grant", () => {
+    expect(isLegacyMcpToolPolicy(undefined)).toBe(false);
+    expect(isLegacyMcpToolPolicy(["read", "mcp"])).toBe(false);
+    expect(isLegacyMcpToolPolicy(["read", "mcp__foo_bar__a_b"])).toBe(true);
   });
 });
 
@@ -221,7 +194,7 @@ describe("McpManager reconciliation", () => {
     expect(manager.status()).toMatchObject([
       {
         id: "github",
-        toolNames: ["mcp__github__create_issue", "mcp__github__list_repos"],
+        toolNames: ["github/create_issue", "github/list_repos"],
         tools: [
           { name: "create_issue", description: "Open a GitHub issue." },
           { name: "list_repos" },
@@ -257,14 +230,15 @@ describe("McpManager reconciliation", () => {
 
     await manager.connect({ id: "shared", command: "command-a" }, "project-a");
     await manager.connect({ id: "shared", command: "command-b" }, "project-b");
-    expect(manager.specs("project-a").map((spec) => spec.name)).toEqual(["mcp__shared__echo"]);
+    expect(manager.specs("project-a", ["shared"]).map((spec) => spec.name)).toEqual(["mcp"]);
+    expect(manager.specs("project-a", [])).toEqual([]);
     const call = (sessionId: string) =>
       bridge.dispatch(
         {
           sessionId,
           toolCallId: "call",
-          tool: "mcp__shared__echo",
-          params: {},
+          tool: "mcp",
+          params: { tool: "shared/echo", args: {} },
           token: "authenticated",
         },
         { token: "authenticated" },
@@ -272,7 +246,7 @@ describe("McpManager reconciliation", () => {
     await expect(call("session-a")).resolves.toMatchObject({ content: "from-a" });
     await expect(call("session-b")).resolves.toMatchObject({ content: "from-b" });
     await expect(call("unassigned-a")).resolves.toMatchObject({
-      content: expect.stringContaining("not assigned"),
+      content: expect.stringContaining("assigned"),
       isError: true,
     });
 
@@ -283,6 +257,323 @@ describe("McpManager reconciliation", () => {
     await manager.close();
     expect(second.close).toHaveBeenCalledTimes(1);
   });
+
+  it("uses one scoped proxy and refreshes an empty catalog for list/search/describe/call", async () => {
+    const client = fakeClient();
+    client.listTools.mockResolvedValueOnce([]).mockResolvedValue([
+      {
+        name: "echo",
+        description: "Echo a message",
+        inputSchema: {
+          type: "object",
+          properties: { message: { type: "string" } },
+          required: ["message"],
+        },
+      },
+    ]);
+    client.callTool.mockResolvedValue({ content: "echoed", isError: false });
+    vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: (_sessionId, serverId) => serverId === "fresh",
+    });
+    await manager.connect({ id: "fresh", command: "node" }, "project");
+    expect(client.listTools).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 15_000 }),
+    );
+
+    expect(manager.specs("project", ["fresh"]).map((spec) => spec.name)).toEqual(["mcp"]);
+    expect(bridge.specs().filter((spec) => spec.name === "mcp")).toHaveLength(1);
+    const dispatch = (params: Record<string, unknown>) =>
+      bridge.dispatch(
+        { sessionId: "session", toolCallId: "call", tool: "mcp", params, token: "token" },
+        { token: "token" },
+      );
+    await expect(dispatch({})).resolves.toMatchObject({
+      content: "- fresh/echo: Echo a message",
+    });
+    await expect(dispatch({ search: "echo" })).resolves.toMatchObject({
+      content: "- fresh/echo: Echo a message",
+    });
+    const described = await dispatch({ tool: "other/wrong", describe: "fresh/echo" });
+    expect(described.content).toContain("Input schema:");
+    expect(described.content).toContain('"message"');
+    await expect(
+      dispatch({ tool: "fresh/echo", args: JSON.stringify({ message: "hi" }) }),
+    ).resolves.toMatchObject({ content: "echoed", isError: false });
+    expect(client.callTool).toHaveBeenCalledWith(
+      "echo",
+      { message: "hi" },
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    await manager.close();
+  });
+
+  it("revalidates every server after concurrent discovery before returning metadata", async () => {
+    const first = fakeClient();
+    const second = fakeClient();
+    first.listTools.mockResolvedValueOnce([]);
+    second.listTools.mockResolvedValueOnce([]);
+    vi.mocked(McpClient.connectStdio)
+      .mockResolvedValueOnce(first as unknown as McpClient)
+      .mockResolvedValueOnce(second as unknown as McpClient);
+    const allowed = new Set(["first", "second"]);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: (_sessionId, serverId) => allowed.has(serverId),
+    });
+    await manager.connect({ id: "first", command: "one" }, "project");
+    await manager.connect({ id: "second", command: "two" }, "project");
+    let resolveFirst!: (tools: unknown[]) => void;
+    let resolveSecond!: (tools: unknown[]) => void;
+    first.listTools.mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)));
+    second.listTools.mockReturnValueOnce(new Promise((resolve) => (resolveSecond = resolve)));
+    const pending = bridge.dispatch(
+      {
+        sessionId: "session",
+        toolCallId: "search",
+        tool: "mcp",
+        params: { search: "secret" },
+        token: "token",
+      },
+      { token: "token" },
+    );
+    resolveFirst([
+      { name: "secret", description: "must stay hidden", inputSchema: { type: "object" } },
+    ]);
+    allowed.delete("first");
+    resolveSecond([]);
+    await expect(pending).resolves.toMatchObject({
+      isError: true,
+      content: expect.not.stringContaining("must stay hidden"),
+    });
+    await manager.close();
+  });
+
+  it("fails closed when a legacy exact-tool alias is ambiguous", async () => {
+    const client = fakeClient();
+    client.listTools.mockResolvedValue([
+      { name: "a-b", description: "one", inputSchema: { type: "object" } },
+      { name: "a_b", description: "two", inputSchema: { type: "object" } },
+    ]);
+    vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: () => true,
+      allowToolForSession: () => true,
+      isToolPolicyRestrictedForSession: () => true,
+    });
+    await manager.connect({ id: "server", command: "node" }, "project");
+    const result = await bridge.dispatch(
+      {
+        sessionId: "child",
+        toolCallId: "call",
+        tool: "mcp",
+        params: { tool: "server/a-b", args: {} },
+        token: "token",
+      },
+      { token: "token" },
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(client.callTool).not.toHaveBeenCalled();
+    await manager.close();
+  });
+
+  it("fails closed when assigned server IDs share one legacy alias", async () => {
+    const first = fakeClient();
+    const second = fakeClient();
+    const echo = { name: "echo", description: "echo", inputSchema: { type: "object" } };
+    first.listTools.mockResolvedValue([echo]);
+    second.listTools.mockResolvedValue([echo]);
+    vi.mocked(McpClient.connectStdio)
+      .mockResolvedValueOnce(first as unknown as McpClient)
+      .mockResolvedValueOnce(second as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: () => true,
+      allowToolForSession: () => true,
+      isToolPolicyRestrictedForSession: () => true,
+    });
+    await manager.connect({ id: "foo-bar", command: "node" }, "project");
+    await manager.connect({ id: "foo_bar", command: "node" }, "project");
+    for (const server of ["foo-bar", "foo_bar"]) {
+      const result = await bridge.dispatch(
+        {
+          sessionId: "child",
+          toolCallId: "call",
+          tool: "mcp",
+          params: { tool: `${server}/echo`, args: {} },
+          token: "token",
+        },
+        { token: "token" },
+      );
+      expect(result).toMatchObject({ isError: true });
+    }
+    expect(first.callTool).not.toHaveBeenCalled();
+    expect(second.callTool).not.toHaveBeenCalled();
+    await manager.close();
+  });
+
+  it("keeps explicit proxy grants usable when raw server and tool names share legacy aliases", async () => {
+    const first = fakeClient();
+    const second = fakeClient();
+    const aliases = [
+      { name: "a-b", description: "dash", inputSchema: { type: "object" } },
+      { name: "a_b", description: "underscore", inputSchema: { type: "object" } },
+    ];
+    first.listTools.mockResolvedValue(aliases);
+    second.listTools.mockResolvedValue(aliases);
+    first.callTool.mockResolvedValue({ content: "explicit proxy result", isError: false });
+    vi.mocked(McpClient.connectStdio)
+      .mockResolvedValueOnce(first as unknown as McpClient)
+      .mockResolvedValueOnce(second as unknown as McpClient);
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: () => true,
+      allowToolForSession: () => true,
+      isToolPolicyRestrictedForSession: () => isLegacyMcpToolPolicy(["read", "mcp"]),
+    });
+    await manager.connect({ id: "foo-bar", command: "node" }, "project");
+    await manager.connect({ id: "foo_bar", command: "node" }, "project");
+    const result = await bridge.dispatch(
+      {
+        sessionId: "parent",
+        toolCallId: "call",
+        tool: "mcp",
+        params: { tool: "foo-bar/a-b", args: {} },
+        token: "token",
+      },
+      { token: "token" },
+    );
+    expect(result).toMatchObject({ content: "explicit proxy result", isError: false });
+    expect(first.callTool).toHaveBeenCalledWith("a-b", {}, expect.any(Object));
+    await manager.close();
+  });
+
+  it("resolves one tool-policy snapshot for a large discovery response", async () => {
+    const client = fakeClient();
+    const tools = Array.from({ length: 2_000 }, (_, index) => ({
+      name: `tool_${index}`,
+      description: `tool ${index}`,
+      inputSchema: { type: "object" },
+    }));
+    client.listTools.mockResolvedValue(tools);
+    vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+    const toolPolicyForSession = vi.fn(() => ({
+      restricted: false,
+      allows: () => true,
+    }));
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      allowServerForSession: () => true,
+      toolPolicyForSession,
+    });
+    await manager.connect({ id: "large", command: "node" }, "project");
+    const result = await bridge.dispatch(
+      {
+        sessionId: "parent",
+        toolCallId: "list",
+        tool: "mcp",
+        params: {},
+        token: "token",
+      },
+      { token: "token" },
+    );
+    expect(result.isError).not.toBe(true);
+    expect(toolPolicyForSession).toHaveBeenCalledTimes(1);
+    await manager.close();
+  });
+
+  it("rechecks server authorization after call discovery before invoking the side effect", async () => {
+    const client = fakeClient();
+    client.listTools.mockResolvedValue([
+      { name: "mutate", description: "mutate", inputSchema: { type: "object" } },
+    ]);
+    vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+    let checks = 0;
+    const bridge = new BridgeRegistry();
+    const manager = new McpManager(bridge, {
+      scopeForSession: () => "project",
+      // Admission and discoverState's post-await check pass; the immediate
+      // pre-call snapshot observes revocation.
+      allowServerForSession: () => ++checks < 3,
+    });
+    await manager.connect({ id: "server", command: "node" }, "project");
+    const result = await bridge.dispatch(
+      {
+        sessionId: "parent",
+        toolCallId: "call",
+        tool: "mcp",
+        params: { tool: "server/mutate", args: {} },
+        token: "token",
+      },
+      { token: "token" },
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(client.callTool).not.toHaveBeenCalled();
+    await manager.close();
+  });
+
+  it.each(["discovery", "call"] as const)(
+    "propagates proxy %s cancellation and never publishes a late result",
+    async (operation) => {
+      const client = fakeClient();
+      client.listTools.mockResolvedValueOnce([
+        { name: "echo", description: "echo", inputSchema: { type: "object" } },
+      ]);
+      vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+      const bridge = new BridgeRegistry();
+      const manager = new McpManager(bridge, {
+        scopeForSession: () => "project",
+        allowServerForSession: () => true,
+      });
+      await manager.connect({ id: "server", command: "node" }, "project");
+      const controller = new AbortController();
+      const cancellable = (signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), {
+            once: true,
+          });
+        });
+      if (operation === "discovery") {
+        client.listTools.mockImplementationOnce((options?: { signal?: AbortSignal }) =>
+          cancellable(options?.signal),
+        );
+      } else {
+        client.listTools.mockResolvedValueOnce([
+          { name: "echo", description: "echo", inputSchema: { type: "object" } },
+        ]);
+        client.callTool.mockImplementationOnce(
+          (_name: string, _args: unknown, options?: { signal?: AbortSignal }) =>
+            cancellable(options?.signal),
+        );
+      }
+      const pending = bridge.dispatch(
+        {
+          sessionId: "session",
+          toolCallId: "cancel",
+          tool: "mcp",
+          params: operation === "discovery" ? {} : { tool: "server/echo", args: {} },
+          token: "token",
+        },
+        { token: "token", signal: controller.signal },
+      );
+      if (operation === "call") await vi.waitFor(() => expect(client.callTool).toHaveBeenCalled());
+      controller.abort(new Error("cancelled"));
+      await expect(pending).resolves.toMatchObject({
+        content: expect.stringContaining("cancelled"),
+        isError: true,
+      });
+      await manager.close();
+    },
+  );
 
   it("tears down tools, denies dispatch immediately, fences a late connection, and is reusable", async () => {
     let enabled = true;
@@ -321,15 +612,15 @@ describe("McpManager reconciliation", () => {
 
     enabled = true;
     await manager.connect({ id: "slow", command: "node" }, "project");
-    expect(manager.specs("project").map((spec) => spec.name)).toEqual(["mcp__slow__echo"]);
+    expect(manager.specs("project", ["slow"]).map((spec) => spec.name)).toEqual(["mcp"]);
     enabled = false;
     await expect(
       bridge.dispatch(
         {
           sessionId: "session",
           toolCallId: "call",
-          tool: "mcp__slow__echo",
-          params: {},
+          tool: "mcp",
+          params: { tool: "slow/echo", args: {} },
           token: "t",
         },
         { token: "t" },
@@ -361,7 +652,7 @@ describe("McpManager reconciliation", () => {
     expect(failing.close).toHaveBeenCalledOnce();
     expect(healthy.close).toHaveBeenCalledOnce();
     expect(manager.status("project")).toEqual([]);
-    expect(bridge.specs().filter((spec) => spec.name.startsWith("mcp__"))).toEqual([]);
+    expect(bridge.specs().filter((spec) => spec.name === "mcp")).toEqual([]);
     // Shutdown remains best-effort and does not replay or surface the pause failure.
     await expect(manager.close()).resolves.toBeUndefined();
   });

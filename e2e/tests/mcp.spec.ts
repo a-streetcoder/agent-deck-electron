@@ -251,7 +251,7 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   // The malformed disk catalog cannot enumerate servers, but reload must
   // retain the existing live bridge registration rather than tearing it down.
   await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
-  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp__external__echo");
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp");
 
   // Valid JSON with the wrong catalog shape is equally unsafe and must not be
   // mistaken for an authoritative empty snapshot.
@@ -260,7 +260,7 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   // The malformed disk catalog cannot enumerate servers, but reload must
   // retain the existing live bridge registration rather than tearing it down.
   await expect(page.getByTestId("error-banner")).toContainText("live connections were preserved");
-  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp__external__echo");
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).toContain("mcp");
 
   // An external deletion is authoritative too: reload tears down the live
   // client and removes its registered tools without a server restart. The
@@ -268,12 +268,10 @@ test("reloads externally edited mcp.json without restarting", async ({ page }) =
   writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
   await page.getByTestId("mcp-reload").click();
   await expect(row).toHaveCount(0);
-  expect(harness.server.bridge.specs().map((tool) => tool.name)).not.toContain(
-    "mcp__external__echo",
-  );
+  expect(harness.server.bridge.specs().map((tool) => tool.name)).not.toContain("mcp");
   const missing = page.getByTestId("mcp-missing-default-external");
   await expect(missing).toBeVisible();
-  await expect(missing).not.toContainText("mcp__external__echo");
+  await expect(missing).not.toContainText("external/echo");
   await missing.getByRole("checkbox").click();
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });

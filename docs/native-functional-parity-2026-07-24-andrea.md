@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 2 active P1/P2/P3 rows retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea owns the 1 active P3 row retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -602,6 +602,12 @@ The owner selected lazy Pi/worktree allocation with explicit retention rather th
 
 Accepted local evidence includes 81 focused server tests, the complete renderer suite, four new pinned real-Pi draft tests, and 51 focused browser/Electron checks covering restart, failed startup/retry, quit durability, extensions, file/editor actions, preview, and worktree creation/deletion. The full real-Pi run's fixture failures were corrected and all affected files passed on rerun. The broad UI run recorded 244 passed, 14 skipped, and 11 failures; ten passed after fixes or isolated rerun, leaving only the unrelated Doctor expectation of pinned 0.82.0 against globally installed 0.84.4. Full unit validation retains one unrelated MCP loopback failure reproduced against unchanged baseline `dd83dc5`. Typecheck, lint/design-system, format, native build/smoke, web build, and backend build passed. The [acceptance record](session-drafts-acceptance.md) documents review, storage boundaries, and platform coverage; Windows/Linux runtime and packaged execution were not run locally, and cross-platform CI remains pending after push.
 
+### MCP-20 — one model-facing MCP proxy
+
+The owner selected native's single `mcp` entry point. List/search discover assigned tools without loading every input schema into Pi; describe exposes one schema, and call forwards the selected tool and arguments. Discovery follows pagination with page/tool/time bounds and reports unavailable servers. Current session/project/agent authorization is rechecked around asynchronous discovery and calls; invalid or disabled named agents fail closed. Existing exact `mcp__server__tool` declarations remain restricted to their unambiguous legacy grants, while explicit `mcp` declarations use assigned-server access. Direct `mcp:<tool>` adapters and existing text-only MCP results are unchanged.
+
+The full local unit run passed, including the formerly failing MCP callback suite. The full pinned real-Pi run passed 143 tests. Final authorization and compatibility changes additionally passed focused manager, assignment, launch, named-parent, and child checks. The full UI run recorded 254 passed, 14 skipped, and one unrelated Loop keyboard-approval failure; that scenario passed on isolated rerun. Doctor now tests a controlled executable/version instead of assuming the globally installed Pi matches the pinned runtime, with separate real pinned-runtime evidence retained. Typecheck, lint/design-system, formatting, native addon build/smoke, web build, and backend build passed. Implementation and independent review used Sol with medium thinking, with orchestration and final review by the primary agent. The [acceptance record](mcp-proxy-acceptance.md) records behavior, test boundaries, and platform coverage; Windows/Linux execution and packaged validation were not run locally.
+
 # Comprehensive functional difference register
 
 Each row is one distinct user behavior or safety difference. “Plain English” deliberately restates the technical finding for a non-expert.
@@ -655,7 +661,6 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 | ID     | Priority | Status    | Difference                  | Plain English                                                                                       | Why it matters                                               | Evidence                                                                               |
 | ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
 | MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
-| MCP-20 | **P2**   | Decision  | Tool exposure policy        | Native exposes ONE `mcp` proxy tool; Electron registers one tool per discovered MCP tool.            | The model sees a different tool surface for the same servers. | **E:** `mcpTools.ts` `scopeMcpBridgeSpecs`/`specs`, `server.ts` launch filtering. **N:** `PiNativeSubagentBridgeExtensions.swift`, `MCPBridgeAndConflictTests.swift`. Workstream 21. |
 
 ## GitHub issues
 
@@ -728,29 +733,11 @@ This is shared historical sequencing and dependency guidance, not a cross-owner 
     duplicate name outright. Confirm the asymmetry is wanted, or rule that paste should skip,
     rename, or require confirmation for an existing name.
 
-21. **Owner — one `mcp` proxy tool, or one tool per MCP tool (MCP-20).** This is an architectural
-    choice, verified on both sides rather than assumed, and it cannot be settled inside a slice.
-    NATIVE registers a single bridge tool named `mcp` with four actions — list / search / describe /
-    call — through which the model reaches every assigned server's tools
-    (`PiNativeSubagentBridgeExtensions.swift:19`, `MCPBridgeAndConflictTests.swift`). ELECTRON
-    registers one bridge spec per discovered tool, named `mcp__<server>__<tool>`, scoped per session
-    by `scopeMcpBridgeSpecs` against the agent's allowlist. Facts the ruling should weigh: (a)
-    CONTEXT — N tool schemas versus one, and a busy assignment is easily 100+ schemas; (b) TURNS —
-    the proxy costs an extra list/describe round trip before the first call, while per-tool specs
-    hand the model complete argument schemas up front; (c) ECOSYSTEM — `mcp__server__tool` is the
-    naming other MCP clients use, so a model prompted for it works in Electron and not in native;
-    (d) FRESHNESS — Electron fixes the tool list when the bridge extension is written at launch, so
-    a server that gains a tool mid-session needs the RES-12 session replacement, whereas the proxy
-    would see it on the next `list`. Two things are NOT gaps and should not be re-litigated: the
-    port already scopes per assigned server exactly as native does, and `resolveChildTools` already
-    unions bridge tool names into a restrictive `tools:` allowlist, which is the general form of
-    native's `includeMCPTool` flag — so no agent is blocked from its MCP tools on either side. Note
-    also that `mcp:<tool>` entries in an agent's `tools:` are the SEPARATE direct-adapter concept
-    already delivered by SUB-15/AGT-08; they are not this row. Three options: port native's proxy
-    (largest change, exact parity, biggest context win); keep per-tool registration (status quo,
-    ecosystem-conventional, documents a deliberate divergence); or register both and let the agent's
-    declaration choose (most code, and two ways to ask the same question, which this repo's own
-    convention warns against).
+21. **MCP tool exposure (MCP-20), closed 2026-09-16.** The owner selected native's single
+    `mcp` proxy. Electron now exposes list/search/describe/call through that one schema,
+    with live assigned-server authorization, bounded paginated discovery, cancellation,
+    and narrow legacy exact-tool compatibility for named parents and children. Direct
+    `mcp:<tool>` adapters remain separate. See [acceptance evidence](mcp-proxy-acceptance.md).
 
 22. **Owner — may an editable server's env and header VALUES reach the renderer (MCP-18)?** Native's
     manual editor shows them, because it reads `mcp.json` itself. Our renderer only knows what

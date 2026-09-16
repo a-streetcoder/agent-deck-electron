@@ -15,7 +15,7 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * HTTP (Streamable HTTP) MCP through the bridge, end-to-end against real pi: a
- * configured http MCP server's `echo` tool is registered as mcp__mockhttp__echo;
+ * configured http MCP server's `echo` tool is called through the `mcp` proxy;
  * a real pi session calls it, the call reaches /bridge, the server forwards it
  * over the Streamable HTTP MCP client to the remote server, and the result flows
  * back to the model. Mirrors the stdio MCP test with the http transport.
@@ -38,7 +38,10 @@ beforeAll(async () => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
       return hasToolResult
         ? null
-        : { name: "mcp__mockhttp__echo", arguments: { message: "over http" } };
+        : {
+            name: "mcp",
+            arguments: { tool: "mockhttp/echo", args: { message: "over http" } },
+          };
     },
     reply: () => "The MCP tool answered.",
   });
@@ -69,7 +72,7 @@ afterAll(async () => {
 
 describe("mcp http: a configured Streamable HTTP server's tool is callable through the bridge", () => {
   it("registers the http MCP tool and forwards a real pi call to the remote server", async () => {
-    expect(server.bridge.specs().some((s) => s.name === "mcp__mockhttp__echo")).toBe(true);
+    expect(server.bridge.specs().filter((s) => s.name === "mcp")).toHaveLength(1);
     // GET /mcp reports the http transport, connected, with the echo tool.
     const mcpList = (await (
       await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectId}`)
@@ -79,7 +82,7 @@ describe("mcp http: a configured Streamable HTTP server's tool is callable throu
     const entry = mcpList.servers.find((s) => s.id === "mockhttp");
     expect(entry?.transport).toBe("http");
     expect(entry?.connected).toBe(true);
-    expect(entry?.toolNames).toContain("mcp__mockhttp__echo");
+    expect(entry?.toolNames).toContain("mockhttp/echo");
 
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",

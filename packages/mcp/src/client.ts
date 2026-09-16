@@ -30,6 +30,17 @@ export interface McpCallResult {
   isError: boolean;
 }
 
+export interface McpRequestOptions {
+  /** Cancels the in-flight MCP request and propagates cancellation to the SDK. */
+  signal?: AbortSignal;
+  /** Bounds one discovery or tool call. */
+  timeoutMs?: number;
+}
+
+/** A broken or hostile server must not make catalog discovery unbounded. */
+const MAX_TOOL_PAGES = 100;
+const MAX_DISCOVERED_TOOLS = 2_000;
+
 /** A stdio MCP server the app spawns and talks to over its stdin/stdout. */
 export interface StdioServerConfig {
   command: string;
@@ -143,8 +154,39 @@ export class McpClient {
   }
 
   /** List the server's tools as plain JSON-Schema-carrying descriptors. */
-  async listTools(): Promise<McpToolInfo[]> {
-    const { tools } = await this.client.listTools();
+  async listTools(options: McpRequestOptions = {}): Promise<McpToolInfo[]> {
+    const startedAt = Date.now();
+    const tools: Awaited<ReturnType<Client["listTools"]>>["tools"] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      if (pages >= MAX_TOOL_PAGES) throw new Error("MCP listTools exceeded its page limit");
+      pages += 1;
+      const remaining = options.timeoutMs
+        ? Math.max(1, options.timeoutMs - (Date.now() - startedAt))
+        : undefined;
+      if (
+        options.timeoutMs !== undefined &&
+        remaining !== undefined &&
+        remaining <= 1 &&
+        Date.now() - startedAt >= options.timeoutMs
+      ) {
+        throw new Error(`MCP listTools timed out after ${options.timeoutMs}ms`);
+      }
+      const page = await this.client.listTools(cursor ? { cursor } : undefined, {
+        signal: options.signal,
+        timeout: remaining,
+        maxTotalTimeout: remaining,
+      });
+      if (tools.length + page.tools.length > MAX_DISCOVERED_TOOLS) {
+        throw new Error("MCP listTools exceeded its tool limit");
+      }
+      tools.push(...page.tools);
+      cursor = page.nextCursor;
+      if (cursor && seenCursors.has(cursor)) throw new Error("MCP listTools repeated its cursor");
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
     return tools.map((tool) => ({
       name: tool.name,
       description: tool.description ?? tool.name,
@@ -156,8 +198,16 @@ export class McpClient {
   }
 
   /** Forward a tool call to the MCP server and flatten its result. */
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
-    const result = await this.client.callTool({ name, arguments: args });
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    options: McpRequestOptions = {},
+  ): Promise<McpCallResult> {
+    const result = await this.client.callTool({ name, arguments: args }, undefined, {
+      signal: options.signal,
+      timeout: options.timeoutMs,
+      maxTotalTimeout: options.timeoutMs,
+    });
     return {
       content: flattenContent(result.content),
       isError: result.isError === true,

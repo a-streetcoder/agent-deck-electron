@@ -33,6 +33,49 @@ async function connectToMockServer(): Promise<McpClient> {
 }
 
 describe("McpClient", () => {
+  it("collects every tools page and rejects a repeated cursor", async () => {
+    const listTools = vi
+      .fn()
+      .mockResolvedValueOnce({
+        tools: [{ name: "first", description: "first", inputSchema: { type: "object" } }],
+        nextCursor: "page-2",
+      })
+      .mockResolvedValueOnce({
+        tools: [{ name: "second", description: "second", inputSchema: { type: "object" } }],
+      });
+    const paged = Object.create(McpClient.prototype) as McpClient;
+    (paged as unknown as { client: { listTools: typeof listTools } }).client = { listTools };
+    await expect(paged.listTools({ timeoutMs: 1_000 })).resolves.toMatchObject([
+      { name: "first" },
+      { name: "second" },
+    ]);
+    expect(listTools.mock.calls[1]![0]).toEqual({ cursor: "page-2" });
+
+    listTools.mockReset().mockResolvedValue({ tools: [], nextCursor: "same" });
+    await expect(paged.listTools()).rejects.toThrow("repeated its cursor");
+  });
+
+  it("rejects an oversized tool page and endless distinct cursors", async () => {
+    const listTools = vi.fn().mockResolvedValue({
+      tools: Array.from({ length: 2_001 }, (_, index) => ({
+        name: `tool_${index}`,
+        inputSchema: { type: "object" },
+      })),
+    });
+    const paged = Object.create(McpClient.prototype) as McpClient;
+    (paged as unknown as { client: { listTools: typeof listTools } }).client = { listTools };
+    await expect(paged.listTools()).rejects.toThrow("tool limit");
+    expect(listTools).toHaveBeenCalledTimes(1);
+
+    let next = 0;
+    listTools.mockReset().mockImplementation(async () => ({
+      tools: [],
+      nextCursor: `page-${++next}`,
+    }));
+    await expect(paged.listTools()).rejects.toThrow("page limit");
+    expect(listTools).toHaveBeenCalledTimes(100);
+  });
+
   it("lists an MCP server's tools with their input schemas", async () => {
     client = await connectToMockServer();
     const tools = await client.listTools();

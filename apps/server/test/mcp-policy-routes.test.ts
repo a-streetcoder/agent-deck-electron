@@ -206,8 +206,8 @@ describe("GET /mcp coherent provenance", () => {
 
 describe("GET /mcp live tools (MCP-19)", () => {
   it("passes each tool's own name and description through to the renderer", async () => {
-    // Without this the row can only print the prefixed bridge names it already
-    // had, so the description never reaches the user (Codex).
+    // The UI reads raw metadata rather than trying to derive descriptions from
+    // the model-facing proxy name.
     await harness.fastify.close();
     harness = makeHarness({
       status: [
@@ -215,7 +215,7 @@ describe("GET /mcp live tools (MCP-19)", () => {
           id: "remote",
           transport: "http",
           connected: true,
-          toolNames: ["mcp__remote__echo"],
+          toolNames: ["remote/echo"],
           tools: [{ name: "echo", description: "Echo the input." }],
         },
       ],

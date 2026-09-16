@@ -1,19 +1,19 @@
 import {
   McpClient,
   type HttpServerConfig,
+  type McpToolInfo,
   type McpOAuthProvider,
   type StdioServerConfig,
 } from "@agent-deck/mcp";
 import { interpolateMcpValue, isValidHttpMcpUrl, type McpServerEntry } from "@agent-deck/resources";
-import type { BridgeRegistry } from "./bridge.ts";
+import type { BridgeRegistry, BridgeToolContext } from "./bridge.ts";
 
 /**
  * Proxies configured MCP servers' tools onto the bridge and owns their live
  * connection lifecycle. pi has no native MCP, so the app runs an MCP client per
- * configured server, lists its tools, and registers each on the bridge as
- * `mcp__<server>__<tool>`, forwarding calls to the client. The manager tracks
- * per-server state so the UI can show what connected and add/remove/refresh
- * servers at runtime.
+ * configured server and registers one `mcp` proxy on the bridge. The proxy does
+ * scoped list/search/describe/call operations against the live assigned server
+ * catalog, avoiding one model-facing schema per discovered MCP tool.
  */
 
 /** A configured MCP server: stdio (spawned) or http (remote Streamable HTTP),
@@ -136,7 +136,7 @@ export interface McpServerStatus {
   id: string;
   transport: "stdio" | "http";
   connected: boolean;
-  /** Bridge tool names (mcp__<id>__<tool>) currently registered for this server. */
+  /** Qualified discovery names (`<server>/<tool>`) currently known for this server. */
   toolNames: string[];
   /** Tool metadata exactly as reported by the server. */
   tools: { name: string; description?: string }[];
@@ -144,38 +144,42 @@ export interface McpServerStatus {
   error?: string;
 }
 
+export interface McpSessionToolPolicy {
+  restricted: boolean;
+  allows(serverId: string, toolName: string): boolean;
+}
+
 /** How long to wait for a single MCP server to connect + list its tools. */
 const MCP_CONNECT_TIMEOUT_MS = 15_000;
 
-/** Keep bridge tool names to pi-safe identifier characters. */
-function sanitize(part: string): string {
-  return part.replace(/[^A-Za-z0-9_]/g, "_");
+export const MCP_PROXY_TOOL_NAME = "mcp";
+
+/** True only for an authored legacy exact-tool allowlist, not an explicit proxy grant. */
+export function isLegacyMcpToolPolicy(tools: readonly string[] | undefined): boolean {
+  return tools !== undefined && !tools.includes(MCP_PROXY_TOOL_NAME);
 }
 
-const MCP_TOOL_PREFIX = "mcp__";
+const MCP_REQUEST_TIMEOUT_MS = 60_000;
+const MCP_DISCOVERY_RESULT_LIMIT = 200;
 
-function bridgeToolName(serverId: string, toolName: string): string {
-  return `${MCP_TOOL_PREFIX}${sanitize(serverId)}__${sanitize(toolName)}`;
-}
-
-/**
- * Per-session MCP scoping: keep every non-MCP bridge tool, but keep an MCP tool
- * (mcp__<server>__<tool>) only if its server is in `allowedServerIds`. Used to
- * expose ONLY the MCP servers an agent declared (agent.mcpServers) to its
- * sessions; an empty allowlist drops all MCP tools. Pure + name-based so it needs
- * no live manager state.
- */
-export function scopeMcpBridgeSpecs<T extends { name: string }>(
-  specs: T[],
-  allowedServerIds: string[],
-): T[] {
-  const allowedPrefixes = allowedServerIds.map((id) => `${MCP_TOOL_PREFIX}${sanitize(id)}__`);
-  return specs.filter(
-    (spec) =>
-      !spec.name.startsWith(MCP_TOOL_PREFIX) ||
-      allowedPrefixes.some((prefix) => spec.name.startsWith(prefix)),
-  );
-}
+const MCP_PROXY_SPEC = {
+  name: MCP_PROXY_TOOL_NAME,
+  label: "MCP",
+  description:
+    'Access tools from assigned MCP servers. List with mcp({}); search with mcp({ search: "text" }); inspect with mcp({ describe: "server/tool" }); call with mcp({ tool: "server/tool", args: { ... } }).',
+  promptSnippet: "Call assigned MCP server tools through one list/search/describe/call proxy",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      tool: { type: "string", description: 'Tool to call as "server/tool".' },
+      server: { type: "string", description: "Server name when tool is unqualified." },
+      args: { type: ["object", "string"], description: "Arguments passed to the tool." },
+      search: { type: "string", description: "Search assigned tools by keyword." },
+      describe: { type: "string", description: 'Describe one tool as "server/tool".' },
+    },
+  },
+};
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -245,31 +249,20 @@ async function connectWithTimeout(
   }
 }
 
-/** Ensure the advertised parameters are a valid object JSON-Schema for pi. */
-function normalizeParameters(inputSchema: Record<string, unknown>): Record<string, unknown> {
-  if (inputSchema && typeof inputSchema === "object" && inputSchema.type === "object") {
-    return inputSchema;
-  }
-  return { type: "object", properties: (inputSchema?.properties as unknown) ?? {} };
-}
-
 interface ServerState {
   scope: string;
   config: McpServerConfig;
   client?: McpClient;
   /** Cancels an in-progress connect or tool-discovery operation during shutdown. */
   operationController?: AbortController;
-  /** Bridge names/specs registered for this server (for scoped advertisement and teardown). */
+  /** Qualified names currently shown by the UI and compact proxy discovery. */
   toolNames: string[];
-  tools: { name: string; description?: string }[];
-  toolSpecs: ReturnType<BridgeRegistry["specs"]>;
+  tools: McpToolInfo[];
   error?: string;
 }
 
 export class McpManager {
   private readonly servers = new Map<string, ServerState>();
-  /** Tool registrations are shared by name, but dispatch resolves the authenticated session scope. */
-  private readonly toolOwners = new Map<string, Set<string>>();
   /** Per-id operation chain so connect/refresh/remove for one id never interleave. */
   private readonly locks = new Map<string, Promise<unknown>>();
   /** Whole-catalog reloads are authoritative snapshots and must apply in request order. */
@@ -286,6 +279,15 @@ export class McpManager {
   private readonly isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
   private readonly scopeForSession?: (sessionId: string) => string | undefined;
   private readonly allowServerForSession?: (sessionId: string, serverId: string) => boolean;
+  /** Optional child policy that can retain an authored exact-tool restriction. */
+  private readonly allowToolForSession?: (
+    sessionId: string,
+    serverId: string,
+    toolName: string,
+  ) => boolean;
+  private readonly isToolPolicyRestrictedForSession?: (sessionId: string) => boolean;
+  /** Resolves one live policy snapshot per authorization boundary. */
+  private readonly toolPolicyForSession?: (sessionId: string) => McpSessionToolPolicy;
   /** Live master policy; checked at admission, publication, and dispatch. */
   private readonly isEnabled: () => boolean;
 
@@ -300,6 +302,9 @@ export class McpManager {
       isHttpAuthorizationActive?: (scope: string, id: string) => boolean;
       scopeForSession?: (sessionId: string) => string | undefined;
       allowServerForSession?: (sessionId: string, serverId: string) => boolean;
+      allowToolForSession?: (sessionId: string, serverId: string, toolName: string) => boolean;
+      isToolPolicyRestrictedForSession?: (sessionId: string) => boolean;
+      toolPolicyForSession?: (sessionId: string) => McpSessionToolPolicy;
       isEnabled?: () => boolean;
     } = {},
   ) {
@@ -307,6 +312,9 @@ export class McpManager {
     this.isHttpAuthorizationActive = options.isHttpAuthorizationActive;
     this.scopeForSession = options.scopeForSession;
     this.allowServerForSession = options.allowServerForSession;
+    this.allowToolForSession = options.allowToolForSession;
+    this.isToolPolicyRestrictedForSession = options.isToolPolicyRestrictedForSession;
+    this.toolPolicyForSession = options.toolPolicyForSession;
     this.isEnabled = options.isEnabled ?? (() => true);
   }
 
@@ -344,16 +352,23 @@ export class McpManager {
         transport: isHttpConfig(state.config) ? "http" : "stdio",
         connected: state.client !== undefined,
         toolNames: [...state.toolNames],
-        tools: state.tools.map((tool) => ({ ...tool })),
+        tools: state.tools.map((tool) => ({
+          name: tool.name,
+          ...(tool.description === undefined ? {} : { description: tool.description }),
+        })),
         error: state.error,
       }));
   }
 
-  /** MCP specs available to one authenticated project scope. */
-  specs(scope: string): ReturnType<BridgeRegistry["specs"]> {
-    return [...this.servers.values()]
-      .filter((state) => state.scope === scope)
-      .flatMap((state) => state.toolSpecs);
+  /** One proxy spec, only when this launch has at least one assigned server. */
+  specs(scope: string, allowedServerIds: readonly string[]): ReturnType<BridgeRegistry["specs"]> {
+    if (!this.isEnabled()) return [];
+    const allowed = new Set(allowedServerIds);
+    return [...this.servers.values()].some(
+      (state) => state.scope === scope && allowed.has(state.config.id),
+    )
+      ? [MCP_PROXY_SPEC]
+      : [];
   }
 
   has(id: string, scope = "global"): boolean {
@@ -371,16 +386,9 @@ export class McpManager {
     const key = this.key(scope, id);
     const state = this.servers.get(key);
     if (!state) return;
-    for (const name of state.toolNames) {
-      const owners = this.toolOwners.get(name);
-      owners?.delete(key);
-      if (!owners || owners.size === 0) {
-        this.toolOwners.delete(name);
-        this.bridge.unregister(name);
-      }
-    }
     // Fail closed before potentially fallible process cleanup.
     this.servers.delete(key);
+    if (this.servers.size === 0) this.bridge.unregister(MCP_PROXY_TOOL_NAME);
     try {
       await state.client?.close();
     } catch (error) {
@@ -427,9 +435,9 @@ export class McpManager {
       operationController,
       toolNames: [],
       tools: [],
-      toolSpecs: [],
     };
     this.servers.set(key, state);
+    this.bridge.register(MCP_PROXY_SPEC, (params, ctx) => this.dispatchProxy(params, ctx));
     let client: McpClient | undefined;
     try {
       client = await connectWithTimeout(
@@ -452,75 +460,20 @@ export class McpManager {
       // time out, and shutdown must be able to find and close it in that window.
       state.client = connectedClient;
       const tools = await withTimeout(
-        connectedClient.listTools(),
+        connectedClient.listTools({
+          signal: operationController.signal,
+          timeoutMs: MCP_CONNECT_TIMEOUT_MS,
+        }),
         MCP_CONNECT_TIMEOUT_MS,
         `MCP listTools "${config.id}"`,
         operationController.signal,
       );
       if (!this.isEnabled()) throw new Error("MCP was paused while connecting");
-      const safeId = sanitize(config.id);
-      for (const tool of tools) {
-        if (!this.isEnabled()) throw new Error("MCP was paused while publishing tools");
-        const name = bridgeToolName(config.id, tool.name);
-        // Skip empty-segment or already-claimed names (memory tools, other
-        // servers) rather than silently clobber the bridge registry.
-        const existingOwners = this.toolOwners.get(name);
-        const collidesInScope = [...(existingOwners ?? [])].some(
-          (ownerKey) => ownerKey.startsWith(`${scope}\u0000`) && ownerKey !== key,
-        );
-        if (
-          !safeId ||
-          !sanitize(tool.name) ||
-          collidesInScope ||
-          (this.bridge.specs().some((s) => s.name === name) && !existingOwners)
-        ) {
-          continue;
-        }
-        const spec = {
-          name,
-          label: `${config.id}: ${tool.name}`,
-          description: tool.description,
-          parameters: normalizeParameters(tool.inputSchema),
-        };
-        state.toolNames.push(name);
-        state.tools.push({
-          name: tool.name,
-          ...(tool.description === undefined ? {} : { description: tool.description }),
-        });
-        state.toolSpecs.push(spec);
-        const owners = this.toolOwners.get(name) ?? new Set<string>();
-        owners.add(key);
-        this.toolOwners.set(name, owners);
-        this.bridge.register(spec, async (params, ctx) => {
-          const callScope = this.scopeForSession?.(ctx.sessionId) ?? "global";
-          const owner = this.servers.get(this.key(callScope, config.id));
-          if (
-            !this.isEnabled() ||
-            !this.allowServerForSession?.(ctx.sessionId, config.id) ||
-            !owner?.client ||
-            !owner.toolNames.includes(name)
-          ) {
-            return {
-              content: `MCP server "${config.id}" is not assigned to this session`,
-              isError: true,
-            };
-          }
-          const result = await owner.client.callTool(tool.name, params);
-          return { content: result.content, isError: result.isError };
-        });
-      }
+      state.tools = tools;
+      state.toolNames = tools.map((tool) => `${config.id}/${tool.name}`);
     } catch (error) {
-      for (const name of state.toolNames) {
-        const owners = this.toolOwners.get(name);
-        owners?.delete(key);
-        if (!owners || owners.size === 0) {
-          this.toolOwners.delete(name);
-          this.bridge.unregister(name);
-        }
-      }
       state.toolNames = [];
       state.tools = [];
-      state.toolSpecs = [];
       await client?.close().catch(() => {});
       state.client = undefined;
       state.error = error instanceof Error ? error.message : String(error);
@@ -528,6 +481,262 @@ export class McpManager {
       state.operationController = undefined;
     }
     return this.status(scope).find((s) => s.id === config.id)!;
+  }
+
+  private authorizedStates(sessionId: string): ServerState[] {
+    if (!this.isEnabled()) return [];
+    const scope = this.scopeForSession?.(sessionId);
+    if (!scope) return [];
+    return [...this.servers.values()].filter(
+      (state) =>
+        state.scope === scope && this.allowServerForSession?.(sessionId, state.config.id) === true,
+    );
+  }
+
+  private async discoverState(state: ServerState, ctx: BridgeToolContext): Promise<McpToolInfo[]> {
+    if (!state.client) return [];
+    const tools = await state.client.listTools({
+      signal: ctx.signal,
+      timeoutMs: MCP_REQUEST_TIMEOUT_MS,
+    });
+    // Authorization and ownership may change while remote discovery is in flight.
+    const current = this.servers.get(this.key(state.scope, state.config.id));
+    if (
+      current !== state ||
+      !this.isEnabled() ||
+      this.allowServerForSession?.(ctx.sessionId, state.config.id) !== true
+    ) {
+      throw new Error(`MCP server "${state.config.id}" is no longer assigned to this session`);
+    }
+    state.tools = tools;
+    state.toolNames = tools.map((tool) => `${state.config.id}/${tool.name}`);
+    return tools;
+  }
+
+  private resolveAddress(
+    rawTool: unknown,
+    rawServer: unknown,
+  ): { server: string; tool: string } | undefined {
+    const tool = typeof rawTool === "string" ? rawTool.trim() : "";
+    const serverHint = typeof rawServer === "string" ? rawServer.trim() : "";
+    const slash = tool.indexOf("/");
+    if (slash > 0 && slash < tool.length - 1) {
+      return { server: tool.slice(0, slash), tool: tool.slice(slash + 1) };
+    }
+    return serverHint && tool ? { server: serverHint, tool } : undefined;
+  }
+
+  private resolveToolPolicy(sessionId: string): McpSessionToolPolicy {
+    return (
+      this.toolPolicyForSession?.(sessionId) ?? {
+        restricted: this.isToolPolicyRestrictedForSession?.(sessionId) === true,
+        allows: (serverId, toolName) =>
+          this.allowToolForSession?.(sessionId, serverId, toolName) !== false,
+      }
+    );
+  }
+
+  private toolAllowed(
+    policy: McpSessionToolPolicy,
+    server: string,
+    tool: string,
+    availableTools: readonly McpToolInfo[],
+    authorizedStates: readonly ServerState[],
+  ): boolean {
+    if (!policy.allows(server, tool)) return false;
+    if (!policy.restricted) return true;
+    // Legacy names sanitize server IDs. If two assigned IDs collapse to one
+    // alias, an old exact-tool grant cannot identify which server it meant.
+    const serverAlias = server.replace(/[^A-Za-z0-9_]/g, "_");
+    if (
+      authorizedStates.filter(
+        (state) => state.config.id.replace(/[^A-Za-z0-9_]/g, "_") === serverAlias,
+      ).length !== 1
+    ) {
+      return false;
+    }
+    const alias = tool.replace(/[^A-Za-z0-9_]/g, "_");
+    return (
+      availableTools.filter((candidate) => candidate.name.replace(/[^A-Za-z0-9_]/g, "_") === alias)
+        .length === 1
+    );
+  }
+
+  private async dispatchProxy(
+    params: Record<string, unknown>,
+    ctx: BridgeToolContext,
+  ): Promise<{ content: string; isError?: boolean; details?: unknown }> {
+    const states = this.authorizedStates(ctx.sessionId);
+    if (states.length === 0) {
+      return { content: "No MCP servers are assigned to this session.", isError: true };
+    }
+    const action =
+      typeof params.search === "string" && params.search.trim()
+        ? "search"
+        : typeof params.describe === "string" && params.describe.trim()
+          ? "describe"
+          : typeof params.tool === "string" && params.tool.trim()
+            ? "call"
+            : "list";
+    const address = this.resolveAddress(
+      action === "describe" ? params.describe : params.tool,
+      params.server,
+    );
+
+    if (action === "call") {
+      if (!address) return { content: 'Specify a tool as "server/tool".', isError: true };
+      const state = states.find((candidate) => candidate.config.id === address.server);
+      if (!state?.client) {
+        return {
+          content: `MCP server "${address.server}" or tool "${address.tool}" is not assigned to this session.`,
+          isError: true,
+        };
+      }
+      const liveTools = await this.discoverState(state, ctx);
+      const liveStates = this.authorizedStates(ctx.sessionId);
+      const livePolicy = this.resolveToolPolicy(ctx.sessionId);
+      if (
+        ctx.signal?.aborted ||
+        !liveStates.includes(state) ||
+        !liveTools.some((tool) => tool.name === address.tool) ||
+        !this.toolAllowed(livePolicy, address.server, address.tool, liveTools, liveStates)
+      ) {
+        return {
+          content: `MCP server "${address.server}" or tool "${address.tool}" is not assigned to this session.`,
+          isError: true,
+        };
+      }
+      let args: Record<string, unknown>;
+      if (typeof params.args === "string") {
+        try {
+          const parsed = JSON.parse(params.args) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+          args = parsed as Record<string, unknown>;
+        } catch {
+          return { content: "MCP tool args must be a JSON object.", isError: true };
+        }
+      } else if (params.args === undefined) {
+        args = {};
+      } else if (params.args && typeof params.args === "object" && !Array.isArray(params.args)) {
+        args = params.args as Record<string, unknown>;
+      } else {
+        return { content: "MCP tool args must be an object.", isError: true };
+      }
+      const result = await state.client.callTool(address.tool, args, {
+        signal: ctx.signal,
+        timeoutMs: MCP_REQUEST_TIMEOUT_MS,
+      });
+      if (
+        ctx.signal?.aborted ||
+        this.servers.get(this.key(state.scope, state.config.id)) !== state ||
+        !this.isEnabled() ||
+        this.allowServerForSession?.(ctx.sessionId, address.server) !== true ||
+        !this.toolAllowed(
+          this.resolveToolPolicy(ctx.sessionId),
+          address.server,
+          address.tool,
+          state.tools,
+          this.authorizedStates(ctx.sessionId),
+        )
+      ) {
+        return { content: "MCP assignment changed during the tool call.", isError: true };
+      }
+      return {
+        content: result.content,
+        isError: result.isError,
+        details: { version: 1, server: address.server, tool: address.tool },
+      };
+    }
+
+    if (action === "describe" && !address) {
+      return { content: 'Specify a tool as "server/tool".', isError: true };
+    }
+    const relevantStates = address
+      ? states.filter((state) => state.config.id === address.server)
+      : states;
+    const discovered = await Promise.all(
+      relevantStates.map(async (state) => {
+        if (!state.client)
+          return { state, tools: [] as McpToolInfo[], error: state.error ?? "unavailable" };
+        try {
+          return { state, tools: await this.discoverState(state, ctx) };
+        } catch (error) {
+          if (
+            ctx.signal?.aborted ||
+            !this.isEnabled() ||
+            this.allowServerForSession?.(ctx.sessionId, state.config.id) !== true
+          ) {
+            throw error;
+          }
+          return {
+            state,
+            tools: [] as McpToolInfo[],
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
+    const authorizedNow = new Set(this.authorizedStates(ctx.sessionId));
+    const authorizedStateList = [...authorizedNow];
+    const toolPolicy = this.resolveToolPolicy(ctx.sessionId);
+    if (ctx.signal?.aborted || relevantStates.some((state) => !authorizedNow.has(state))) {
+      throw new Error("MCP assignment changed during discovery");
+    }
+    const entries = discovered.flatMap(({ state, tools }) =>
+      tools
+        .filter((tool) =>
+          this.toolAllowed(toolPolicy, state.config.id, tool.name, tools, authorizedStateList),
+        )
+        .map((tool) => ({ state, tool, qualifiedName: `${state.config.id}/${tool.name}` })),
+    );
+
+    if (action === "describe") {
+      const match = entries.find(
+        (entry) => entry.qualifiedName === `${address!.server}/${address!.tool}`,
+      );
+      if (!match) return { content: `Tool ${address!.server}/${address!.tool} was not found.` };
+      return {
+        content: `${match.qualifiedName}: ${match.tool.description || "(no description)"}\nInput schema:\n${JSON.stringify(match.tool.inputSchema, null, 2)}`,
+      };
+    }
+    if (action === "search") {
+      const query = String(params.search).trim().toLocaleLowerCase();
+      const hits = entries
+        .filter(
+          (entry) =>
+            entry.qualifiedName.toLocaleLowerCase().includes(query) ||
+            entry.tool.description?.toLocaleLowerCase().includes(query),
+        )
+        .slice(0, MCP_DISCOVERY_RESULT_LIMIT);
+      return {
+        content:
+          hits.length === 0
+            ? `No MCP tools matched "${String(params.search).trim()}".`
+            : hits
+                .map(
+                  (entry) =>
+                    `- ${entry.qualifiedName}: ${entry.tool.description || "(no description)"}`,
+                )
+                .join("\n"),
+      };
+    }
+    const lines: string[] = [];
+    for (const { state, error } of discovered) {
+      if (lines.length >= MCP_DISCOVERY_RESULT_LIMIT) break;
+      if (error) {
+        lines.push(`- ${state.config.id}: unavailable (${error})`);
+        continue;
+      }
+      const serverEntries = entries.filter((entry) => entry.state === state);
+      if (serverEntries.length === 0) lines.push(`- ${state.config.id}: 0 tools`);
+      for (const entry of serverEntries) {
+        if (lines.length >= MCP_DISCOVERY_RESULT_LIMIT) break;
+        lines.push(`- ${entry.qualifiedName}: ${entry.tool.description || "(no description)"}`);
+      }
+    }
+    return {
+      content: lines.join("\n"),
+    };
   }
 
   /** Connect many servers in parallel (startup). Best-effort per server. */

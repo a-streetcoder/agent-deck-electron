@@ -46,6 +46,7 @@ const TOOL_META: Record<string, ToolMeta> = {
   update_session_plan: { name: "Plan", Icon: ListChecks },
   managed_subagent: { name: "Agent", Icon: Users },
   subagent: { name: "Agent", Icon: Users },
+  mcp: { name: "MCP", Icon: Wrench, variant: "mcp" },
 };
 
 /** Resolve a tool's card presentation; unknown tools keep their raw name + a wrench. */

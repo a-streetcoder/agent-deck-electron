@@ -49,18 +49,19 @@ export const BRIDGE_TOOL_NAMES: readonly string[] = [
   "ask_user",
   "set_session_plan",
   "update_session_plan",
+  "mcp",
 ];
 
 /**
  * The first app-bridge tool an extension's SOURCE registers (as a quoted string
  * literal — native's PiExtensionConflictDetector heuristic), else null. Also
- * catches the `mcp__` proxy-tool prefix. Source-text based: no code is executed.
+ * catches both the current `mcp` proxy and legacy `mcp__` tool names. Source-text based: no code is executed.
  */
 export function extensionBridgeConflict(source: string): string | null {
   for (const tool of BRIDGE_TOOL_NAMES) {
     if (new RegExp(`['"\`]${tool}['"\`]`).test(source)) return tool;
   }
-  // Any mcp__<server>__<tool> literal collides with the MCP proxy's tools.
+  // Legacy generated MCP tool literals remain conflicts with the app-owned bridge.
   const mcp = /['"`](mcp__[A-Za-z0-9_]+__[A-Za-z0-9_]+)['"`]/.exec(source);
   return mcp ? mcp[1]! : null;
 }
