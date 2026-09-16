@@ -77,6 +77,7 @@ import {
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
+import { FileMcpDefinitionStore, type McpDefinitionStore } from "./mcpDefinitions.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
 import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import { InjectedCommandStore } from "./injectedCommands.ts";
@@ -189,6 +190,8 @@ export interface StartServerOptions {
   mcpAssignmentStore?: McpAssignmentStore;
   /** Narrow authoritative global MCP policy seam. */
   mcpPolicyStore?: McpPolicyStore;
+  /** Narrow durable MCP-definition mutation seam. */
+  mcpDefinitionStore?: McpDefinitionStore;
   composerDraftStore?: ComposerDraftStore;
   /** Device-local OAuth persistence seam for credential lifecycle tests. */
   mcpOAuthStore?: McpOAuthStore;
@@ -231,6 +234,7 @@ async function initServer(
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
   const settings = new SettingsStore(dataDir);
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
+  const mcpDefinitions = options.mcpDefinitionStore ?? new FileMcpDefinitionStore();
   const sessionImages = new SessionImageStore(dataDir);
   const agentAvatars = new FileAgentAvatarStore(dataDir);
   const projectImages = new ProjectImageStore(agentAvatars);
@@ -1320,6 +1324,7 @@ async function initServer(
     mcpOAuth,
     mcpAssignments,
     mcpPolicy,
+    mcpDefinitions,
     reloadMcpConfig,
     reconcileProjectMcp,
     prepareProjectMcpSession,

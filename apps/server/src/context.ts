@@ -20,6 +20,7 @@ import type { McpManager, McpServerConfig } from "./mcpTools.ts";
 import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
 import type { McpAssignmentStore } from "./mcpAssignments.ts";
 import type { McpPolicyStore } from "./mcpPolicy.ts";
+import type { McpDefinitionStore } from "./mcpDefinitions.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { PlanEventServiceShape } from "./services/planEvents.ts";
@@ -156,6 +157,7 @@ export interface ServerContext {
   mcpOAuth: McpOAuthCoordinator;
   mcpAssignments: McpAssignmentStore;
   mcpPolicy: McpPolicyStore;
+  mcpDefinitions: McpDefinitionStore;
   reloadMcpConfig(projectId?: string): Promise<{ ok: true } | { ok: false; error: string }>;
   reconcileProjectMcp(
     projectId: string,

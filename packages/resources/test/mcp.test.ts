@@ -208,6 +208,54 @@ describe("writeMcpServer / deleteMcpServer", () => {
     expect(third.mcpServers.docs).not.toHaveProperty("headers");
   });
 
+  it("applies protected deltas safely for special object keys and rejects mixed transports", () => {
+    const file = mcpConfigPath(roots, "global")!;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      '{"mcpServers":{"files":{"command":"npx","env":{"__proto__":"old","KEEP":"yes"}}}}',
+    );
+    writeMcpServer(
+      roots,
+      "global",
+      "files",
+      { command: "npx" },
+      { env: { set: Object.fromEntries([["__proto__", "new"]]) } },
+    );
+    const document = JSON.parse(readFileSync(file, "utf8")) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(document.mcpServers.files!.env).toEqual(
+      Object.fromEntries([
+        ["__proto__", "new"],
+        ["KEEP", "yes"],
+      ]),
+    );
+    expect(Object.prototype).not.toHaveProperty("KEEP");
+
+    expect(() =>
+      writeMcpServer(
+        roots,
+        "global",
+        "files",
+        { command: "npx" },
+        { headers: { set: { Authorization: "secret" } } },
+      ),
+    ).toThrow("stdio servers cannot have HTTP header operations");
+    expect(() =>
+      writeMcpServer(roots, "global", "files", { command: "npx", env: { TOKEN: "bad\0value" } }),
+    ).toThrow("invalid environment variable value for TOKEN");
+    expect(() =>
+      writeMcpServer(
+        roots,
+        "global",
+        "files",
+        { command: "npx" },
+        { env: { set: { TOKEN: "secret" }, remove: ["TOKEN"] } },
+      ),
+    ).toThrow("cannot be replaced and removed together");
+  });
+
   it("replaces an existing server of the same name", () => {
     writeMcpServer(roots, "global", "db", { command: "old" });
     writeMcpServer(roots, "global", "db", { command: "new" });

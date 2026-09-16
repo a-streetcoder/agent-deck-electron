@@ -4,6 +4,7 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
+import { FileMcpDefinitionStore } from "../src/mcpDefinitions.ts";
 import type { McpPolicyStore } from "../src/mcpPolicy.ts";
 import { registerMcpRoutes } from "../src/routes/mcp.ts";
 
@@ -63,6 +64,7 @@ function makeHarness(
   registerMcpRoutes({
     fastify,
     mcpPolicy: policy,
+    mcpDefinitions: new FileMcpDefinitionStore(),
     mcp: {
       pause,
       status: () => options.status ?? [],

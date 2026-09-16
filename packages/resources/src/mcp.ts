@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { piAgentHome, type ResourceRoots } from "./paths.ts";
 
@@ -30,6 +30,18 @@ export function isValidHttpMcpUrl(value: unknown): value is string {
 export type McpServerInput =
   | { command: string; args?: string[]; env?: Record<string, string> }
   | { url: string; headers?: Record<string, string> };
+
+export interface McpProtectedRecordPatch {
+  /** Values supplied intentionally by the user. Empty strings are meaningful. */
+  set?: Record<string, string>;
+  /** Keys to remove. A key also present in `set` is rejected by the server contract. */
+  remove?: string[];
+}
+
+export interface McpProtectedFieldsPatch {
+  env?: McpProtectedRecordPatch;
+  headers?: McpProtectedRecordPatch;
+}
 
 /**
  * MCP-17 — native's `MCPConfigLoader.interpolate`, character for character.
@@ -158,7 +170,14 @@ function asStringRecord(value: unknown): Record<string, string> | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const out: Record<string, string> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof val === "string") out[key] = val;
+    if (typeof val === "string") {
+      Object.defineProperty(out, key, {
+        value: val,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -339,6 +358,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+let mcpWriteSequence = 0;
+function writeMcpDocument(file: string, document: Record<string, unknown>): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp-${process.pid}-${++mcpWriteSequence}`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+  } catch (error) {
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original persistence error.
+    }
+    throw error;
+  }
+}
+
 /** Overlay submitted transport fields onto an existing mcpServers entry. */
 function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<string, unknown> {
   const next: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
@@ -370,6 +406,93 @@ function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<
   return next;
 }
 
+function applyProtectedRecordPatch(
+  current: unknown,
+  patch: McpProtectedRecordPatch | undefined,
+  caseInsensitive = false,
+): Record<string, string> | undefined {
+  if (!patch) return asStringRecord(current);
+  const next = { ...(asStringRecord(current) ?? {}) };
+  const matchingKey = (key: string): string | undefined =>
+    caseInsensitive
+      ? Object.keys(next).find((candidate) => candidate.toLowerCase() === key.toLowerCase())
+      : Object.hasOwn(next, key)
+        ? key
+        : undefined;
+  for (const key of patch.remove ?? []) {
+    const stored = matchingKey(key);
+    if (stored !== undefined) delete next[stored];
+  }
+  for (const [key, value] of Object.entries(patch.set ?? {})) {
+    const stored = matchingKey(key);
+    Object.defineProperty(next, stored ?? key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function hasAmbiguousCaseInsensitiveKeys(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  const seen = new Set<string>();
+  for (const key of Object.keys(value)) {
+    const folded = key.toLowerCase();
+    if (seen.has(folded)) return true;
+    seen.add(folded);
+  }
+  return false;
+}
+
+function validateEnvRecord(record: Record<string, string> | undefined): void {
+  for (const [name, value] of Object.entries(record ?? {})) {
+    if (!name || name.includes("=") || name.includes("\0")) {
+      throw new McpConfigError(`invalid environment variable name: ${name}`);
+    }
+    if (value.includes("\0")) {
+      throw new McpConfigError(`invalid environment variable value for ${name}`);
+    }
+  }
+}
+
+function validateHeaderRecord(record: Record<string, string> | undefined): void {
+  const names = new Set<string>();
+  for (const [name, value] of Object.entries(record ?? {})) {
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+      throw new McpConfigError(`invalid HTTP header name: ${name}`);
+    }
+    const folded = name.toLowerCase();
+    if (names.has(folded)) throw new McpConfigError("duplicate HTTP header name");
+    names.add(folded);
+    if (/[\r\n]/.test(value)) {
+      throw new McpConfigError(`invalid HTTP header value for ${name}`);
+    }
+  }
+}
+
+function validateProtectedRecordPatch(
+  patch: McpProtectedRecordPatch | undefined,
+  validate: (record: Record<string, string> | undefined) => void,
+  foldCase = false,
+): void {
+  if (!patch) return;
+  validate(patch.set);
+  const normalize = (key: string) => (foldCase ? key.toLowerCase() : key);
+  const setNames = new Set(Object.keys(patch.set ?? {}).map(normalize));
+  const removeNames = new Set<string>();
+  for (const key of patch.remove ?? []) {
+    validate(Object.fromEntries([[key, ""]]));
+    const normalized = normalize(key);
+    if (removeNames.has(normalized)) throw new McpConfigError("duplicate protected field key");
+    if (setNames.has(normalized)) {
+      throw new McpConfigError("a protected field cannot be replaced and removed together");
+    }
+    removeNames.add(normalized);
+  }
+}
+
 /** True when `name` is present as a key in the scope's mcp.json (even if unusable). */
 export function hasMcpServer(roots: ResourceRoots, scope: McpConfigScope, name: string): boolean {
   if (!isValidMcpServerName(name)) return false;
@@ -385,18 +508,51 @@ export function writeMcpServer(
   scope: McpConfigScope,
   name: string,
   config: McpServerInput,
+  protectedPatch?: McpProtectedFieldsPatch,
 ): void {
   if (!isValidMcpServerName(name)) throw new McpConfigError(`invalid MCP server name: ${name}`);
   if ("command" in config) {
     if (!config.command.trim()) throw new McpConfigError("stdio server needs a command");
+    validateEnvRecord(config.env);
   } else if (!isValidHttpMcpUrl(config.url)) {
     throw new McpConfigError("http server needs a valid http(s) url");
+  } else {
+    validateHeaderRecord(config.headers);
   }
+  validateProtectedRecordPatch(protectedPatch?.env, validateEnvRecord);
+  validateProtectedRecordPatch(protectedPatch?.headers, validateHeaderRecord, true);
   const file = requireScopePath(roots, scope);
   const doc = readMcpDocument(file);
-  doc.mcpServers[name] = mergeMcpServerEntry(doc.mcpServers[name], config);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+  const existing = doc.mcpServers[name];
+  if ("command" in config && protectedPatch?.headers !== undefined) {
+    throw new McpConfigError("stdio servers cannot have HTTP header operations");
+  }
+  if ("url" in config && protectedPatch?.env !== undefined) {
+    throw new McpConfigError("http servers cannot have environment operations");
+  }
+  if (
+    "url" in config &&
+    protectedPatch?.headers !== undefined &&
+    isPlainObject(existing) &&
+    hasAmbiguousCaseInsensitiveKeys(existing.headers)
+  ) {
+    throw new McpConfigError(
+      "saved HTTP headers contain duplicate names with different casing; repair mcp.json before editing",
+    );
+  }
+  const merged = mergeMcpServerEntry(existing, config);
+  if (protectedPatch?.env !== undefined) {
+    const env = applyProtectedRecordPatch(merged.env, protectedPatch.env);
+    if (env) merged.env = env;
+    else delete merged.env;
+  }
+  if (protectedPatch?.headers !== undefined) {
+    const headers = applyProtectedRecordPatch(merged.headers, protectedPatch.headers, true);
+    if (headers) merged.headers = headers;
+    else delete merged.headers;
+  }
+  doc.mcpServers[name] = merged;
+  writeMcpDocument(file, doc);
 }
 
 /** Remove a server from the scope's mcp.json. Returns false if it wasn't there. */
@@ -410,6 +566,6 @@ export function deleteMcpServer(
   const doc = readMcpDocument(file);
   if (!Object.prototype.hasOwnProperty.call(doc.mcpServers, name)) return false;
   delete doc.mcpServers[name];
-  writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+  writeMcpDocument(file, doc);
   return true;
 }

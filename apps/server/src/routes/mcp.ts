@@ -1,10 +1,8 @@
 import {
-  deleteMcpServer,
   hasMcpServer,
   isValidHttpMcpUrl,
   McpConfigError,
   readMcpServerCatalog,
-  writeMcpServer,
   type McpServerEntry,
 } from "@agent-deck/resources";
 import { z } from "zod";
@@ -53,6 +51,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     projects,
     mcpAssignments,
     mcpPolicy,
+    mcpDefinitions,
   } = ctx;
 
   const mcpHeaders = z.record(z.string()).superRefine((headers, refinement) => {
@@ -75,12 +74,61 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
   });
 
+  const mcpEnv = z.record(z.string()).superRefine((env, refinement) => {
+    for (const [name, value] of Object.entries(env)) {
+      if (!name || name.includes("=") || name.includes("\0")) {
+        refinement.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message: `invalid environment variable name: ${name}`,
+        });
+      }
+      if (value.includes("\0")) {
+        refinement.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message: `invalid environment variable value for ${name}: must not contain NUL`,
+        });
+      }
+    }
+  });
+
+  const protectedRecordPatch = (record: z.ZodType<Record<string, string>>, foldCase = false) =>
+    z
+      .object({ set: record.optional(), remove: z.array(z.string().min(1)).optional() })
+      .strict()
+      .superRefine((patch, refinement) => {
+        const normalize = (key: string) => (foldCase ? key.toLowerCase() : key);
+        const setKeys = new Set(Object.keys(patch.set ?? {}).map(normalize));
+        const removeKeys = new Set((patch.remove ?? []).map(normalize));
+        if (
+          setKeys.size !== Object.keys(patch.set ?? {}).length ||
+          removeKeys.size !== (patch.remove ?? []).length
+        ) {
+          refinement.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "duplicate protected field key",
+          });
+        }
+        for (const key of setKeys) {
+          if (removeKeys.has(key)) {
+            refinement.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "a protected field cannot be replaced and removed together",
+            });
+          }
+        }
+      });
+
+  const stdioProtectedPatch = z.object({ env: protectedRecordPatch(mcpEnv) }).strict();
+  const httpProtectedPatch = z.object({ headers: protectedRecordPatch(mcpHeaders, true) }).strict();
+
   const mcpAddBody = z.union([
     z.object({
       name: z.string().min(1),
       command: z.string().min(1),
       args: z.array(z.string()).optional(),
-      env: z.record(z.string()).optional(),
+      env: mcpEnv.optional(),
     }),
     z.object({
       name: z.string().min(1),
@@ -92,17 +140,41 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   ]);
 
   const mcpEditBody = z.union([
-    z.object({
-      name: z.string().min(1).optional(),
-      command: z.string().min(1),
-      args: z.array(z.string()).optional(),
-      env: z.record(z.string()).optional(),
-    }),
-    z.object({
-      name: z.string().min(1).optional(),
-      url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
-      headers: mcpHeaders.optional(),
-    }),
+    z
+      .object({
+        name: z.string().min(1).optional(),
+        expectedTransport: z.enum(["stdio", "http"]).optional(),
+        allowTransportChange: z.boolean().optional(),
+        command: z.string().min(1),
+        args: z.array(z.string()).optional(),
+        env: mcpEnv.optional(),
+        protected: stdioProtectedPatch.optional(),
+      })
+      .superRefine((value, refinement) => {
+        if (value.env !== undefined && value.protected?.env !== undefined) {
+          refinement.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "env and protected env operations cannot be submitted together",
+          });
+        }
+      }),
+    z
+      .object({
+        name: z.string().min(1).optional(),
+        expectedTransport: z.enum(["stdio", "http"]).optional(),
+        allowTransportChange: z.boolean().optional(),
+        url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+        headers: mcpHeaders.optional(),
+        protected: httpProtectedPatch.optional(),
+      })
+      .superRefine((value, refinement) => {
+        if (value.headers !== undefined && value.protected?.headers !== undefined) {
+          refinement.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "headers and protected header operations cannot be submitted together",
+          });
+        }
+      }),
   ]);
 
   const reconcileAllProjectsAndBroadcast = async (): Promise<string[]> => {
@@ -118,11 +190,13 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   const definitionFields = (entry: McpServerEntry | undefined) => {
     if (!entry) return {};
     if (entry.transport === "stdio") {
-      return entry.args !== undefined
-        ? { command: entry.command, args: entry.args }
-        : { command: entry.command };
+      return {
+        command: entry.command,
+        ...(entry.args !== undefined ? { args: entry.args } : {}),
+        envKeys: Object.keys(entry.env ?? {}).sort(),
+      };
     }
-    return { url: entry.url };
+    return { url: entry.url, headerKeys: Object.keys(entry.headers ?? {}).sort() };
   };
 
   const definitionProvenance = (
@@ -438,9 +512,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         ? { url: data.url, headers: data.headers }
         : { command: data.command, args: data.args, env: data.env };
     try {
-      writeMcpServer(rootsFor(), "global", data.name, input);
+      mcpDefinitions.write(rootsFor(), "global", data.name, input);
     } catch (error) {
-      const message = error instanceof McpConfigError ? error.message : String(error);
+      const message =
+        error instanceof McpConfigError
+          ? error.message
+          : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
     for (const project of projects.list()) await reconcileProjectMcp(project.id);
@@ -482,14 +559,35 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       // let a PATCH rewrite a hidden app-owned entry while the visible winner
       // was a read-only ecosystem definition — GET said read-only, the mutation
       // routes disagreed (Codex).
-      const usable = readMcpServerCatalog(roots).servers.some(
+      const usableEntry = readMcpServerCatalog(roots).servers.find(
         (entry) => entry.id === id && entry.scope === "global" && entry.writable,
       );
-      if (!exists || !usable) {
+      if (!exists || !usableEntry) {
         return reply.code(404).send({ error: "unknown global MCP server" });
       }
+      if (
+        parsed.data.expectedTransport &&
+        parsed.data.expectedTransport !== usableEntry.transport
+      ) {
+        return reply
+          .code(409)
+          .send({ error: "The MCP server type changed. Reopen the editor and try again." });
+      }
+      const requestedTransport = "url" in parsed.data ? "http" : "stdio";
+      if (
+        parsed.data.expectedTransport &&
+        requestedTransport !== parsed.data.expectedTransport &&
+        !parsed.data.allowTransportChange
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "Changing the MCP server type requires explicit confirmation." });
+      }
     } catch (error) {
-      const message = error instanceof McpConfigError ? error.message : String(error);
+      const message =
+        error instanceof McpConfigError
+          ? error.message
+          : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
     const input =
@@ -497,9 +595,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         ? { url: parsed.data.url, headers: parsed.data.headers }
         : { command: parsed.data.command, args: parsed.data.args, env: parsed.data.env };
     try {
-      writeMcpServer(roots, "global", id, input);
+      mcpDefinitions.write(roots, "global", id, input, parsed.data.protected);
     } catch (error) {
-      const message = error instanceof McpConfigError ? error.message : String(error);
+      const message =
+        error instanceof McpConfigError
+          ? error.message
+          : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
     await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
@@ -565,7 +666,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
     let deletedConfig = false;
     try {
-      deletedConfig = deleteMcpServer(rootsFor(), "global", id);
+      deletedConfig = mcpDefinitions.delete(rootsFor(), "global", id);
     } catch (error) {
       // The durable clear already won. Apply it to live scopes even though the
       // definition remains, so a deletion I/O failure cannot retain capability.

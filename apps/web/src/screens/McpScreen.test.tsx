@@ -1451,6 +1451,7 @@ describe("MCP edit form", () => {
       expect(patch).toBeTruthy();
       expect(JSON.parse(String(patch![1]?.body))).toEqual({
         url: "https://mcp.example.com/new",
+        expectedTransport: "http",
       });
     });
   });
@@ -1484,6 +1485,7 @@ describe("MCP edit form", () => {
       expect(JSON.parse(String(patch![1]?.body))).toEqual({
         command: "uvx",
         args: ["server-fs", "/tmp/hello world"],
+        expectedTransport: "stdio",
       });
     });
   });
@@ -1509,6 +1511,7 @@ describe("MCP edit form", () => {
       expect(JSON.parse(String(patch![1]?.body))).toEqual({
         command: "runner",
         args: ['"foo"', "", "hello world", "line\tbreak"],
+        expectedTransport: "stdio",
       });
     });
   });
@@ -1606,6 +1609,199 @@ describe("MCP edit form", () => {
     expect((screen.getByTestId("mcp-url") as HTMLInputElement).value).toBe(
       "https://mcp.example.com/new",
     );
+  });
+
+  it("edits protected keys without rendering saved values and distinguishes empty replacement", async () => {
+    mockCatalog([
+      {
+        id: "files",
+        transport: "stdio",
+        command: "npx",
+        url: undefined,
+        envKeys: ["EMPTY", "TOKEN"],
+      },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-files");
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+
+    expect(screen.getAllByText("Saved value")).toHaveLength(2);
+    expect(screen.queryByDisplayValue("NEVER_RETURN_THIS_SECRET")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Replace saved value for TOKEN"));
+    const replacement = screen.getByLabelText("Value for TOKEN") as HTMLInputElement;
+    expect(replacement.type).toBe("password");
+    expect(replacement.value).toBe("");
+    await waitFor(() => expect(document.activeElement).toBe(replacement));
+
+    fireEvent.click(screen.getByTestId("mcp-add-protected-stdio"));
+    const key = screen.getByLabelText("environment variable key") as HTMLInputElement;
+    fireEvent.change(key, { target: { value: "ADDED" } });
+    fireEvent.change(screen.getByLabelText("Value for ADDED"), { target: { value: "  " } });
+    fireEvent.click(screen.getByLabelText("Remove EMPTY"));
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+
+    await waitFor(() => {
+      const request = vi.mocked(fetch).mock.calls.find(([input, init]) => {
+        return String(input) === "/mcp/files" && init?.method === "PATCH";
+      });
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        command: "npx",
+        args: [],
+        expectedTransport: "stdio",
+        protected: {
+          env: { set: { TOKEN: "", ADDED: "  " }, remove: ["EMPTY"] },
+        },
+      });
+    });
+  });
+
+  it("resets a replacement to keep and restores focus after removing a row", async () => {
+    mockCatalog([
+      {
+        id: "files",
+        transport: "stdio",
+        command: "npx",
+        url: undefined,
+        envKeys: ["FIRST", "SECOND"],
+      },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-files");
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+    fireEvent.click(screen.getByLabelText("Replace saved value for FIRST"));
+    fireEvent.change(screen.getByLabelText("Value for FIRST"), { target: { value: "draft" } });
+    fireEvent.click(screen.getByLabelText("Reset replacement for FIRST"));
+    expect(screen.getByLabelText("FIRST has a saved value")).toBeTruthy();
+
+    const removeFirst = screen.getByLabelText("Remove FIRST");
+    removeFirst.focus();
+    fireEvent.click(removeFirst);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Replace saved value for SECOND")).toBe(document.activeElement),
+    );
+  });
+
+  it("preserves a saved whitespace-bearing key unless that exact key is replaced", async () => {
+    mockCatalog([
+      {
+        id: "files",
+        transport: "stdio",
+        command: "npx",
+        url: undefined,
+        envKeys: [" TOKEN "],
+      },
+    ]);
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-files");
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => {
+      const patches = vi
+        .mocked(fetch)
+        .mock.calls.filter(
+          ([input, init]) => String(input) === "/mcp/files" && init?.method === "PATCH",
+        );
+      expect(JSON.parse(String(patches[0]?.[1]?.body))).toEqual({
+        command: "npx",
+        args: [],
+        expectedTransport: "stdio",
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("mcp-edit-files"));
+    fireEvent.click(screen.getByLabelText(/Replace saved value for\s+TOKEN/));
+    fireEvent.change(screen.getByLabelText(/Value for\s+TOKEN/), {
+      target: { value: "replacement" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-edit-form"));
+    await waitFor(() => {
+      const patches = vi
+        .mocked(fetch)
+        .mock.calls.filter(
+          ([input, init]) => String(input) === "/mcp/files" && init?.method === "PATCH",
+        );
+      expect(JSON.parse(String(patches[1]?.[1]?.body))).toEqual({
+        command: "npx",
+        args: [],
+        expectedTransport: "stdio",
+        protected: { env: { set: { " TOKEN ": "replacement" } } },
+      });
+    });
+  });
+
+  it("validates HTTP header names and duplicates case-insensitively", async () => {
+    mockCatalog([]);
+    render(<McpScreen />);
+    fireEvent.click(await screen.findByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://example.com/mcp" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-protected-http"));
+    let keys = screen.getAllByLabelText("HTTP header key");
+    fireEvent.change(keys[0]!, { target: { value: "Authorization" } });
+    fireEvent.click(screen.getByTestId("mcp-add-protected-http"));
+    keys = screen.getAllByLabelText("HTTP header key");
+    fireEvent.change(keys[1]!, { target: { value: "authorization" } });
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain("listed more than once");
+    expect((screen.getByTestId("mcp-add-confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(keys[1]!, { target: { value: "Bad Header" } });
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain(
+      "not a valid HTTP header name",
+    );
+  });
+
+  it("posts protected values from both manual add transports", async () => {
+    mockCatalog([]);
+    render(<McpScreen />);
+    fireEvent.click(await screen.findByTestId("mcp-add"));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "local" } });
+    fireEvent.change(screen.getByTestId("mcp-command"), { target: { value: "npx" } });
+    fireEvent.click(screen.getByTestId("mcp-add-protected-stdio"));
+    fireEvent.change(screen.getByLabelText("environment variable key"), {
+      target: { value: "TOKEN" },
+    });
+    fireEvent.change(screen.getByLabelText("Value for TOKEN"), {
+      target: { value: "local-secret" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-add-form"));
+    await waitFor(() => {
+      const post = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([, init]) => init?.method === "POST" && String(init.body).includes("local"),
+        );
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+        name: "local",
+        command: "npx",
+        args: [],
+        env: { TOKEN: "local-secret" },
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("mcp-add"));
+    fireEvent.click(screen.getByRole("radio", { name: "Remote (HTTP)" }));
+    fireEvent.change(screen.getByTestId("mcp-name"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByTestId("mcp-url"), {
+      target: { value: "https://example.com/mcp" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-protected-http"));
+    fireEvent.change(screen.getByLabelText("HTTP header key"), {
+      target: { value: "Authorization" },
+    });
+    fireEvent.change(screen.getByLabelText("Value for Authorization"), {
+      target: { value: "Bearer remote-secret" },
+    });
+    fireEvent.submit(screen.getByTestId("mcp-add-form"));
+    await waitFor(() => {
+      const posts = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(JSON.parse(String(posts.at(-1)?.[1]?.body))).toEqual({
+        name: "remote",
+        url: "https://example.com/mcp",
+        headers: { Authorization: "Bearer remote-secret" },
+      });
+    });
   });
 });
 

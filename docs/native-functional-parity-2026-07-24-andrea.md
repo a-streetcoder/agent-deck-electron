@@ -1,6 +1,6 @@
 # Native functional parity audit — 2026-07-24 — Andrea
 
-> **Owner/scope:** Andrea owns the 1 active P3 row retained in this register, including warnings/settings integration. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
+> **Owner/scope:** Andrea has no active rows remaining in this register after the MCP-18 closure. This records completion of the owner-scoped backlog, not a claim that all product behavior is verified on every platform. The injected-command catalog (CMD-01/02), composer slash universe (CMD-03), MCP HTTP add form (MCP-01), global MCP edit flow (MCP-02), automatic OAuth callback (MCP-03), master pause (MCP-04), and default MCP assignment (MCP-05) are closed. This file is also the canonical shared audit history: it preserves the baseline, method, evidence, corrections, closed and present rows, context, dependencies, validation guidance, and limitations for both owner-scoped backlogs. Ale’s 71 active rows are maintained separately in [`native-functional-parity-2026-07-24-ale.md`](native-functional-parity-2026-07-24-ale.md).
 
 ## Baseline and method
 
@@ -474,7 +474,7 @@ routes a paste through the manual fields, and the reason matters — those field
 name/command/args/url only, so the autofill silently dropped the `env` and `headers` that make a
 server work. The design was rebuilt to match native. Env now reaches disk through the existing add
 body; `headers` did not exist end to end and was added (`McpServerInput`, `POST /mcp`, the writer).
-The manual form still has no env/headers fields — that remains **MCP-18**.
+At that landing the manual form still had no env/headers fields. **MCP-18** subsequently added protected-value editing; see its closure below.
 
 Header semantics are three-way at the writer, because one function serves two callers: absent
 preserves (so fixing a URL typo through the edit form cannot silently drop a credential), non-empty
@@ -608,6 +608,12 @@ The owner selected native's single `mcp` entry point. List/search discover assig
 
 The full local unit run passed, including the formerly failing MCP callback suite. The full pinned real-Pi run passed 143 tests. Final authorization and compatibility changes additionally passed focused manager, assignment, launch, named-parent, and child checks. The full UI run recorded 254 passed, 14 skipped, and one unrelated Loop keyboard-approval failure; that scenario passed on isolated rerun. Doctor now tests a controlled executable/version instead of assuming the globally installed Pi matches the pinned runtime, with separate real pinned-runtime evidence retained. Typecheck, lint/design-system, formatting, native addon build/smoke, web build, and backend build passed. Implementation and independent review used Sol with medium thinking, with orchestration and final review by the primary agent. The [acceptance record](mcp-proxy-acceptance.md) records behavior, test boundaries, and platform coverage; Windows/Linux execution and packaged validation were not run locally.
 
+### MCP-18 — protected environment variables and HTTP headers
+
+Manual add/edit now supports Environment entries for stdio servers and HTTP headers for remote servers. The owner chose keys-only editing: existing values display as **Saved value**, with Replace and Remove actions; new and replacement values use masked inputs. Untouched values remain unchanged, explicit empty values are preserved, and per-key mutations merge against the latest saved file. Header identity is case-insensitive, ambiguous existing header casing fails closed, and stale transport edits require reopening. Existing paste/full-record behavior remains compatible. The new `McpDefinitionStore` seam owns all definition mutations; persistence writes the merged document once through a temporary file and rename.
+
+Focused route, resource, and renderer tests cover authorization, non-disclosure, explicit empty values, preservation, header identity, stale transport, and keyboard focus. Browser acceptance proves saved-value non-disclosure and persistence across restart. The full local unit and real-Pi suites passed; the [acceptance record](mcp-protected-editor-acceptance.md) records final broad UI results, independent Sol-medium review, visual evidence, and platform limitations. Windows/Linux CI and packaged execution are not inferred from macOS validation.
+
 # Comprehensive functional difference register
 
 Each row is one distinct user behavior or safety difference. “Plain English” deliberately restates the technical finding for a non-expert.
@@ -657,10 +663,8 @@ All active skill and repository rows are Ale-owned; see [Ale’s active Skills a
 
 ## MCP
 
-<!-- prettier-ignore -->
-| ID     | Priority | Status    | Difference                  | Plain English                                                                                       | Why it matters                                               | Evidence                                                                               |
-| ------ | -------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| MCP-18 | **P3**   | Partial (blocked on 22) | Transport-specific fields | The manual editor has no Environment or Headers box; the write path for both now exists.            | An authenticated or env-configured server still needs hand-editing. | **E:** `McpScreen.tsx` manual section, `routes/mcp.ts` `definitionFields`. **N:** `MCPServersScreen.swift` `manualSection`/`parsePairs`. Workstream 22. |
+No active Andrea-owned MCP rows remain. MCP-18 and MCP-20 are closed with the
+owner-selected behavior and linked acceptance evidence above.
 
 ## GitHub issues
 
@@ -739,24 +743,12 @@ This is shared historical sequencing and dependency guidance, not a cross-owner 
     and narrow legacy exact-tool compatibility for named parents and children. Direct
     `mcp:<tool>` adapters remain separate. See [acceptance evidence](mcp-proxy-acceptance.md).
 
-22. **Owner — may an editable server's env and header VALUES reach the renderer (MCP-18)?** Native's
-    manual editor shows them, because it reads `mcp.json` itself. Our renderer only knows what
-    `GET /mcp` returns, and `definitionFields` deliberately returns command/args/url and NOTHING
-    else: `mcp-edit.test.ts` pins `not.toHaveProperty("env")` and `not.toHaveProperty("headers")`
-    even for an EDITABLE global row, plus whole-body assertions that no secret substring travels.
-    That is a prior decision, not an oversight, so this slice stopped rather than reverse it. It is
-    load-bearing: without seeded values the form cannot round-trip, and an always-send box would
-    silently CLEAR an untouched server's env on the next save. Three options. (a) NATIVE PARITY —
-    return the values for editable global rows only (project and environment rows stay closed, as
-    they are today); the exposure moves from "a file the user owns" to "the local HTTP API", which
-    any process running as that user could already read from disk. (b) MASKED — return the KEYS with
-    empty values and have PATCH treat an untouched masked entry as "keep"; no secret travels, but a
-    user who genuinely wants an empty value collides with the sentinel. (c) WRITE-ONLY — no seeding,
-    absent-preserves semantics, so the user can add or replace variables but can neither see nor
-    clear the existing ones; safest, and the furthest from native. The option-independent write path
-    (a `parseMcpPairs` port, three-way `env` clear in the writer, and `PATCH` accepting validated
-    `env`/`headers`) has shipped as a LABELED FOUNDATION and is deliberately not yet called by any
-    UI; MCP-18 stays open until this is ruled on.
+22. **Protected MCP environment/header editing (MCP-18), closed 2026-09-16.**
+    The owner selected keys-only editing: saved values remain on the backend,
+    while Replace, Remove, and Add submit explicit per-key operations. An empty
+    replacement is a real value; untouched keys retain their latest saved values.
+    Writable-global authorization and read-only project/environment definitions
+    remain intact. See [acceptance evidence](mcp-protected-editor-acceptance.md).
 
 ### Cross-owner coordination seams
 

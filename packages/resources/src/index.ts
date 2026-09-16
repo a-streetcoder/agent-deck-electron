@@ -32,6 +32,8 @@ export {
   type McpServerCatalog,
   type McpServerEntry,
   type McpServerInput,
+  type McpProtectedFieldsPatch,
+  type McpProtectedRecordPatch,
   type McpTransport,
 } from "./mcp.ts";
 export {

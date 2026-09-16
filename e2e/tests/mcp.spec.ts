@@ -1,5 +1,5 @@
 import { mockMcpServerLaunch } from "@agent-deck/testkit";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, selectProject, test } from "../helpers/fixtures.ts";
@@ -140,6 +140,78 @@ test("edits a remote HTTP server URL from the MCP form", async ({ page }) => {
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByTestId("mcp-remove-remote-edit").click();
   await expect(page.getByTestId("mcp-remote-edit")).toHaveCount(0);
+});
+
+test("edits protected HTTP headers without disclosing saved values", async ({ page }, testInfo) => {
+  const configPath = path.join(harness.piHome, ".pi", "agent", "mcp.json");
+  const savedSecret = "MCP18_SAVED_SECRET_MUST_NOT_RENDER";
+  const created = await fetch(`${harness.baseUrl}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: "protected-edit",
+      url: "http://127.0.0.1:9/mcp",
+      headers: { Authorization: savedSecret, "X-Remove": "old" },
+    }),
+  });
+  expect(created.ok).toBe(true);
+
+  await page.setViewportSize({ width: 1100, height: 850 });
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await page.getByTestId("mcp-edit-protected-edit").click();
+  await expect(page.getByLabel("Authorization has a saved value")).toBeVisible();
+  await expect(page.getByLabel("X-Remove has a saved value")).toBeVisible();
+  expect(await page.content()).not.toContain(savedSecret);
+
+  await page.getByLabel("Replace saved value for Authorization").click();
+  const replacement = page.getByLabel("Value for Authorization");
+  await expect(replacement).toBeFocused();
+  await expect(replacement).toHaveAttribute("type", "password");
+  await page.getByTestId("mcp-add-protected-http").click();
+  await page.getByLabel("HTTP header key").fill("X-Empty");
+  await expect(page.getByLabel("Value for X-Empty")).toHaveValue("");
+  await page.screenshot({
+    path: testInfo.outputPath("mcp18-protected-editor-wide.png"),
+    fullPage: true,
+  });
+  const editor = page.getByTestId("mcp-edit-form");
+  await page.setViewportSize({ width: 940, height: 900 });
+  await editor.scrollIntoViewIfNeeded();
+  await editor.screenshot({
+    path: testInfo.outputPath("mcp18-protected-editor-narrow.png"),
+  });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await editor.screenshot({
+    path: testInfo.outputPath("mcp18-protected-editor-dark.png"),
+  });
+
+  await replacement.fill("replacement-secret");
+  await page.getByLabel("Remove X-Remove").click();
+  await page.getByTestId("mcp-edit-confirm").click();
+  await expect(page.getByTestId("mcp-edit-form")).toHaveCount(0);
+  const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+    mcpServers: Record<string, { headers?: Record<string, string> }>;
+  };
+  expect(document.mcpServers["protected-edit"]?.headers).toEqual({
+    Authorization: "replacement-secret",
+    "X-Empty": "",
+  });
+
+  await harness.restart();
+  await page.goto(harness.baseUrl);
+  await page.getByTestId("nav-mcp").click();
+  await page.getByTestId("mcp-edit-protected-edit").click();
+  await expect(page.getByLabel("Authorization has a saved value")).toBeVisible();
+  await expect(page.getByLabel("X-Empty has a saved value")).toBeVisible();
+  expect(await page.content()).not.toContain("replacement-secret");
+  await page.keyboard.press("Escape");
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByTestId("mcp-remove-protected-edit").click();
+  await expect(page.getByTestId("mcp-protected-edit")).toHaveCount(0);
 });
 
 test("shows the winning project definition's exact read-only path", async ({ page }) => {

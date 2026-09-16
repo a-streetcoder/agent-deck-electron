@@ -67,6 +67,16 @@ interface McpServer {
   command?: string;
   args?: string[];
   url?: string;
+  envKeys?: string[];
+  headerKeys?: string[];
+}
+
+type ProtectedEntryMode = "saved" | "replace" | "add";
+interface ProtectedEntry {
+  id: string;
+  key: string;
+  value: string;
+  mode: ProtectedEntryMode;
 }
 
 // Remote MCP text can contain bidi controls that visually disguise tool text.
@@ -227,11 +237,16 @@ export function McpScreen() {
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
   const [url, setUrl] = useState("");
+  const [envEntries, setEnvEntries] = useState<ProtectedEntry[]>([]);
+  const [headerEntries, setHeaderEntries] = useState<ProtectedEntry[]>([]);
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [loginPendingId, setLoginPendingId] = useState<string | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [code, setCode] = useState("");
   const loadSeq = useRef(0);
+  const protectedIdSeq = useRef(0);
+  const protectedRowRefs = useRef(new Map<string, HTMLDivElement>());
+  const protectedAddRefs = useRef(new Map<McpTransport, HTMLButtonElement>());
   const policySeq = useRef(0);
   const policySwitchRef = useRef<HTMLButtonElement>(null);
   const loadedProject = useRef<string | null | undefined>(undefined);
@@ -250,6 +265,8 @@ export function McpScreen() {
     command: string;
     argsText: string;
     url: string;
+    envEntries: ProtectedEntry[];
+    headerEntries: ProtectedEntry[];
   } | null>(null);
   const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
@@ -365,14 +382,31 @@ export function McpScreen() {
   const editing = editingId !== null;
   const formOpen = adding || editing;
   const duplicateName = !editing && servers.some((server) => server.id === trimmedName);
+  const activeProtectedEntries = transport === "stdio" ? envEntries : headerEntries;
+  const protectedKeyError = (() => {
+    const normalized = new Set<string>();
+    for (const entry of activeProtectedEntries) {
+      const key = entry.mode === "add" ? entry.key.trim() : entry.key;
+      if (!key) return "Each protected value needs a key.";
+      if (transport === "stdio" && (key.includes("=") || key.includes("\0")))
+        return `${key} is not a valid environment variable name.`;
+      if (transport === "http" && !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(key))
+        return `${key} is not a valid HTTP header name.`;
+      const identity = transport === "http" ? key.toLowerCase() : key;
+      if (normalized.has(identity)) return `The key ${key} is listed more than once.`;
+      normalized.add(identity);
+    }
+    return null;
+  })();
 
   /**
    * MCP-12 — native's Paste tab (`MCPServersScreen` + `MCPConfigParser`). A user
    * drops a server's setup straight out of its README — an mcp.json block or a
    * `claude`/`codex mcp add` line — and every server in it is saved with the
    * parsed config VERBATIM. It deliberately does not fill the manual fields:
-   * those hold name/command/args/url only, so routing a paste through them
-   * would silently drop the env and headers that make the server work.
+   * paste is a raw batch replacement workflow, while manual drafts model one
+   * transport and protected-key operations. Keeping them separate preserves
+   * every parsed field and the paste path's whole-record replacement semantics.
    */
   const pasting = !editing && inputMode === "paste";
   const pastedServers = useMemo(
@@ -389,7 +423,8 @@ export function McpScreen() {
       ? pastedServers.length > 0
       : Boolean(trimmedName) &&
         !duplicateName &&
-        (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl));
+        (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl)) &&
+        !protectedKeyError;
 
   const resetDraft = (): void => {
     setInputMode("manual");
@@ -398,8 +433,57 @@ export function McpScreen() {
     setCommand("");
     setArgsText("");
     setUrl("");
+    setEnvEntries([]);
+    setHeaderEntries([]);
     setTransport("stdio");
     editSnapshot.current = null;
+  };
+
+  const setProtectedEntries = (
+    kind: McpTransport,
+    update: (entries: ProtectedEntry[]) => ProtectedEntry[],
+  ): void => {
+    if (kind === "stdio") setEnvEntries(update);
+    else setHeaderEntries(update);
+  };
+
+  const addProtectedEntry = (kind: McpTransport): void => {
+    const id = `new-${kind}-${++protectedIdSeq.current}`;
+    setProtectedEntries(kind, (entries) => [...entries, { id, key: "", value: "", mode: "add" }]);
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLInputElement>(`[data-protected-id="${id}"]`)?.focus(),
+    );
+  };
+
+  const updateProtectedEntry = (
+    kind: McpTransport,
+    id: string,
+    update: Partial<ProtectedEntry>,
+  ): void =>
+    setProtectedEntries(kind, (entries) =>
+      entries.map((entry) => (entry.id === id ? { ...entry, ...update } : entry)),
+    );
+
+  const removeProtectedEntry = (kind: McpTransport, id: string): void =>
+    setProtectedEntries(kind, (entries) => {
+      const index = entries.findIndex((entry) => entry.id === id);
+      const focusId = entries[index + 1]?.id ?? entries[index - 1]?.id;
+      requestAnimationFrame(() => {
+        if (focusId)
+          protectedRowRefs.current.get(focusId)?.querySelector<HTMLElement>("button")?.focus();
+        else protectedAddRefs.current.get(kind)?.focus();
+      });
+      return entries.filter((entry) => entry.id !== id);
+    });
+
+  const replaceProtectedEntry = (kind: McpTransport, id: string): void => {
+    updateProtectedEntry(kind, id, { mode: "replace", value: "" });
+    requestAnimationFrame(() =>
+      protectedRowRefs.current
+        .get(id)
+        ?.querySelector<HTMLInputElement>('input[type="password"]')
+        ?.focus(),
+    );
   };
 
   const postServer = async (body: Record<string, unknown>): Promise<void> => {
@@ -442,8 +526,29 @@ export function McpScreen() {
       } else {
         await postServer(
           transport === "http"
-            ? { name: trimmedName, url: trimmedUrl }
-            : { name: trimmedName, command: trimmedCommand, args: parsedArgs },
+            ? {
+                name: trimmedName,
+                url: trimmedUrl,
+                ...(headerEntries.length > 0
+                  ? {
+                      headers: Object.fromEntries(
+                        headerEntries.map((entry) => [entry.key.trim(), entry.value]),
+                      ),
+                    }
+                  : {}),
+              }
+            : {
+                name: trimmedName,
+                command: trimmedCommand,
+                args: parsedArgs,
+                ...(envEntries.length > 0
+                  ? {
+                      env: Object.fromEntries(
+                        envEntries.map((entry) => [entry.key.trim(), entry.value]),
+                      ),
+                    }
+                  : {}),
+              },
         );
       }
       resetDraft();
@@ -464,6 +569,8 @@ export function McpScreen() {
       setCommand(editSnapshot.current.command);
       setArgsText(editSnapshot.current.argsText);
       setUrl(editSnapshot.current.url);
+      setEnvEntries(editSnapshot.current.envEntries);
+      setHeaderEntries(editSnapshot.current.headerEntries);
     }
     setEditingId(null);
     editSnapshot.current = null;
@@ -494,6 +601,18 @@ export function McpScreen() {
     const nextArgs = argsLineFrom(server.args);
     const nextUrl = server.url ?? "";
     const nextTransport = server.transport;
+    const nextEnvEntries = (server.envKeys ?? []).map((key) => ({
+      id: `saved-env-${key}`,
+      key,
+      value: "",
+      mode: "saved" as const,
+    }));
+    const nextHeaderEntries = (server.headerKeys ?? []).map((key) => ({
+      id: `saved-header-${key}`,
+      key,
+      value: "",
+      mode: "saved" as const,
+    }));
     setAdding(false);
     setEditingId(server.id);
     setName(server.id);
@@ -501,19 +620,65 @@ export function McpScreen() {
     setCommand(nextCommand);
     setArgsText(nextArgs);
     setUrl(nextUrl);
+    setEnvEntries(nextEnvEntries);
+    setHeaderEntries(nextHeaderEntries);
     editSnapshot.current = {
       transport: nextTransport,
       command: nextCommand,
       argsText: nextArgs,
       url: nextUrl,
+      envEntries: nextEnvEntries,
+      headerEntries: nextHeaderEntries,
     };
   };
 
   const saveEdit = async (): Promise<void> => {
     if (!editingId || !canSubmit) return;
     const savedProjectId = currentProjectId;
+    const originalTransport = editSnapshot.current?.transport ?? transport;
+    const makePatch = (
+      entries: ProtectedEntry[],
+      initial: ProtectedEntry[] | undefined,
+      foldCase: boolean,
+    ) => {
+      const normalize = (key: string) => (foldCase ? key.toLowerCase() : key);
+      const submittedKey = (entry: ProtectedEntry) =>
+        entry.mode === "add" ? entry.key.trim() : entry.key;
+      const retained = new Set(entries.map((entry) => normalize(submittedKey(entry))));
+      const remove = (initial ?? [])
+        .filter((entry) => !retained.has(normalize(entry.key)))
+        .map((entry) => entry.key);
+      const set = Object.fromEntries(
+        entries
+          .filter((entry) => entry.mode !== "saved")
+          .map((entry) => [submittedKey(entry), entry.value]),
+      );
+      return {
+        ...(Object.keys(set).length > 0 ? { set } : {}),
+        ...(remove.length > 0 ? { remove } : {}),
+      };
+    };
+    const currentPatch =
+      transport === "http"
+        ? makePatch(headerEntries, editSnapshot.current?.headerEntries, true)
+        : makePatch(envEntries, editSnapshot.current?.envEntries, false);
     const body =
-      transport === "http" ? { url: trimmedUrl } : { command: trimmedCommand, args: parsedArgs };
+      transport === "http"
+        ? {
+            url: trimmedUrl,
+            expectedTransport: originalTransport,
+            ...(transport !== originalTransport ? { allowTransportChange: true } : {}),
+            ...(Object.keys(currentPatch).length > 0
+              ? { protected: { headers: currentPatch } }
+              : {}),
+          }
+        : {
+            command: trimmedCommand,
+            args: parsedArgs,
+            expectedTransport: originalTransport,
+            ...(transport !== originalTransport ? { allowTransportChange: true } : {}),
+            ...(Object.keys(currentPatch).length > 0 ? { protected: { env: currentPatch } } : {}),
+          };
     setSaving(true);
     try {
       const response = await fetch(`/mcp/${encodeURIComponent(editingId)}`, {
@@ -1087,6 +1252,143 @@ export function McpScreen() {
               </label>
             )}
           </div>
+          {!pasting ? (
+            <fieldset className="min-w-0 rounded-lg border border-border-subtle p-2.5">
+              <legend className="px-1 text-caption font-medium text-text-secondary">
+                {transport === "stdio" ? "Environment" : "HTTP headers"}
+              </legend>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-detail text-text-muted">Protected values</span>
+                <Button
+                  ref={(element) => {
+                    if (element) protectedAddRefs.current.set(transport, element);
+                    else protectedAddRefs.current.delete(transport);
+                  }}
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={saving}
+                  data-testid={`mcp-add-protected-${transport}`}
+                  onClick={() => addProtectedEntry(transport)}
+                >
+                  <Plus size={12} /> Add {transport === "stdio" ? "variable" : "header"}
+                </Button>
+              </div>
+              <p className="mb-2 text-detail text-text-muted">
+                Saved values are hidden. Leave an entry unchanged to keep its value.
+              </p>
+              <div className="space-y-2">
+                {activeProtectedEntries.map((entry) => {
+                  const label = transport === "stdio" ? "environment variable" : "HTTP header";
+                  return (
+                    <div
+                      ref={(element) => {
+                        if (element) protectedRowRefs.current.set(entry.id, element);
+                        else protectedRowRefs.current.delete(entry.id);
+                      }}
+                      key={entry.id}
+                      className="flex min-w-0 flex-wrap items-end gap-2 rounded-lg bg-surface-raised p-2"
+                      data-testid={`mcp-protected-row-${entry.id}`}
+                    >
+                      <label className="min-w-40 flex-1">
+                        <span className="block text-detail text-text-muted">{label} key</span>
+                        {entry.mode === "add" ? (
+                          <ControlInput
+                            data-protected-id={entry.id}
+                            data-testid={`mcp-protected-key-${entry.id}`}
+                            className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code"
+                            value={entry.key}
+                            disabled={saving}
+                            onChange={(event) =>
+                              updateProtectedEntry(transport, entry.id, { key: event.target.value })
+                            }
+                          />
+                        ) : (
+                          <span className="block truncate py-1.5 font-mono text-code text-text-primary">
+                            {entry.key}
+                          </span>
+                        )}
+                      </label>
+                      {entry.mode === "saved" ? (
+                        <span
+                          className="min-w-32 flex-1 py-1.5 text-label text-text-muted"
+                          aria-label={`${entry.key} has a saved value`}
+                        >
+                          Saved value
+                        </span>
+                      ) : (
+                        <label className="min-w-40 flex-1">
+                          <span className="block text-detail text-text-muted">
+                            Value for {entry.key || `new ${label}`}
+                          </span>
+                          <ControlInput
+                            type="password"
+                            autoComplete="off"
+                            spellCheck={false}
+                            data-testid={`mcp-protected-value-${entry.id}`}
+                            className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code"
+                            value={entry.value}
+                            disabled={saving}
+                            onChange={(event) =>
+                              updateProtectedEntry(transport, entry.id, {
+                                value: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      )}
+                      {entry.mode === "saved" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={saving}
+                          aria-label={`Replace saved value for ${entry.key}`}
+                          onClick={() => replaceProtectedEntry(transport, entry.id)}
+                        >
+                          Replace
+                        </Button>
+                      ) : entry.mode === "replace" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={saving}
+                          aria-label={`Reset replacement for ${entry.key}`}
+                          onClick={() =>
+                            updateProtectedEntry(transport, entry.id, {
+                              mode: "saved",
+                              value: "",
+                            })
+                          }
+                        >
+                          Reset
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={saving}
+                        aria-label={`Remove ${entry.key || label}`}
+                        onClick={() => removeProtectedEntry(transport, entry.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  );
+                })}
+                {activeProtectedEntries.length === 0 ? (
+                  <p className="text-detail text-text-muted">No protected values configured.</p>
+                ) : null}
+              </div>
+            </fieldset>
+          ) : null}
+          {editing && editSnapshot.current && transport !== editSnapshot.current.transport ? (
+            <AppInlineNotice tone="warning">
+              Changing the server type removes the saved protected values for the previous type.
+            </AppInlineNotice>
+          ) : null}
           <div className="flex items-center justify-end">
             <Button
               size="md"
@@ -1101,6 +1403,10 @@ export function McpScreen() {
           {replacedByPaste.length > 0 ? (
             <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">
               Adding replaces the existing {replacedByPaste.join(", ")}.
+            </p>
+          ) : protectedKeyError ? (
+            <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">
+              {protectedKeyError}
             </p>
           ) : duplicateName ? (
             <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">

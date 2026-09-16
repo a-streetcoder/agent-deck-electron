@@ -316,6 +316,7 @@ describe("GET /mcp definition fields", () => {
       editable: true,
       command: "npx",
       args: ["-y", "server-fs"],
+      envKeys: ["TOKEN"],
       provenance: { source: "global", path: globalMcpPath() },
     });
     expect(files).not.toHaveProperty("env");
@@ -325,6 +326,7 @@ describe("GET /mcp definition fields", () => {
       source: "global",
       editable: true,
       url: "https://example.com/mcp",
+      headerKeys: ["Authorization"],
     });
     expect(remote).not.toHaveProperty("headers");
     expect(env).toMatchObject({
@@ -359,6 +361,7 @@ describe("GET /mcp definition fields", () => {
       editable: true,
       command: "npx",
       args: ["-y", "server-fs"],
+      envKeys: ["TOKEN"],
       provenance: { source: "global", path: globalMcpPath() },
     });
     expect(projectFiles).not.toHaveProperty("env");
@@ -369,5 +372,159 @@ describe("GET /mcp definition fields", () => {
     });
     expect(projectEnv).not.toHaveProperty("command");
     expect(projectEnv).not.toHaveProperty("env");
+  });
+});
+
+describe("PATCH /mcp/:id protected values", () => {
+  it("keeps untouched latest values while replacing, adding, removing, and explicitly emptying keys", async () => {
+    const secret = "NEVER_RETURN_THIS_SECRET_7421";
+    writeGlobalMcp({
+      mcpServers: {
+        files: {
+          command: "npx",
+          env: { KEEP: secret, REPLACE: "old", REMOVE: "gone", EMPTY: "not-empty" },
+        },
+      },
+    });
+    const before = await api("GET", "/mcp");
+    const beforeText = await before.text();
+    expect(beforeText).not.toContain(secret);
+    expect(JSON.parse(beforeText)).toMatchObject({
+      servers: [
+        {
+          id: "files",
+          envKeys: ["EMPTY", "KEEP", "REMOVE", "REPLACE"],
+        },
+      ],
+    });
+
+    // Simulate a concurrent writer after the editor loaded. The key-level patch
+    // must use this latest document and leave every unnamed key untouched.
+    writeGlobalMcp({
+      mcpServers: {
+        files: {
+          command: "npx",
+          env: {
+            KEEP: "newer-concurrent-value",
+            CONCURRENT: "also-keep",
+            REPLACE: "old",
+            REMOVE: "gone",
+            EMPTY: "not-empty",
+          },
+        },
+      },
+    });
+    const response = await api("PATCH", "/mcp/files", {
+      command: "npx",
+      expectedTransport: "stdio",
+      protected: {
+        env: {
+          set: { REPLACE: "new", ADDED: "value", EMPTY: "" },
+          remove: ["REMOVE"],
+        },
+      },
+    });
+    const responseText = await response.text();
+    expect(response.status).toBe(200);
+    expect(responseText).not.toContain(secret);
+    expect(readGlobalMcp()).toEqual({
+      mcpServers: {
+        files: {
+          command: "npx",
+          env: {
+            KEEP: "newer-concurrent-value",
+            CONCURRENT: "also-keep",
+            REPLACE: "new",
+            ADDED: "value",
+            EMPTY: "",
+          },
+        },
+      },
+    });
+  });
+
+  it("matches header names case-insensitively and preserves stored casing", async () => {
+    writeGlobalMcp({
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp",
+          headers: { Authorization: "old", "X-Remove": "gone", "X-Keep": "keep" },
+        },
+      },
+    });
+    const response = await api("PATCH", "/mcp/remote", {
+      url: "https://example.com/mcp",
+      expectedTransport: "http",
+      protected: {
+        headers: {
+          set: { authorization: "new" },
+          remove: ["x-remove"],
+        },
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(readGlobalMcp()).toEqual({
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp",
+          headers: { Authorization: "new", "X-Keep": "keep" },
+        },
+      },
+    });
+  });
+
+  it("rejects ambiguous or overlapping header operations without exposing submitted values", async () => {
+    const sentinel = "SECRET_SENTINEL_MCP18";
+    writeGlobalMcp({
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp",
+          headers: { Authorization: "one", authorization: "two" },
+        },
+      },
+    });
+    const ambiguous = await api("PATCH", "/mcp/remote", {
+      url: "https://example.com/mcp",
+      protected: { headers: { set: { Authorization: sentinel } } },
+    });
+    const ambiguousText = await ambiguous.text();
+    expect(ambiguous.status).toBe(400);
+    expect(ambiguousText).not.toContain(sentinel);
+
+    writeGlobalMcp({
+      mcpServers: { remote: { url: "https://example.com/mcp", headers: { Authorization: "old" } } },
+    });
+    const overlap = await api("PATCH", "/mcp/remote", {
+      url: "https://example.com/mcp",
+      protected: {
+        headers: { set: { Authorization: sentinel }, remove: ["authorization"] },
+      },
+    });
+    const overlapText = await overlap.text();
+    expect(overlap.status).toBe(400);
+    expect(overlapText).not.toContain(sentinel);
+    expect(readGlobalMcp()).toEqual({
+      mcpServers: { remote: { url: "https://example.com/mcp", headers: { Authorization: "old" } } },
+    });
+  });
+
+  it("rejects a stale transport edit and opposite-transport protected operations", async () => {
+    writeGlobalMcp({
+      mcpServers: { server: { url: "https://example.com/mcp", headers: { Authorization: "new" } } },
+    });
+    const stale = await api("PATCH", "/mcp/server", {
+      command: "npx",
+      expectedTransport: "stdio",
+      protected: { env: { set: { TOKEN: "secret" } } },
+    });
+    expect(stale.status).toBe(409);
+    const opposite = await api("PATCH", "/mcp/server", {
+      url: "https://example.com/mcp",
+      protected: { env: { set: { TOKEN: "secret" } } },
+    });
+    expect(opposite.status).toBe(400);
+    expect(readGlobalMcp()).toEqual({
+      mcpServers: { server: { url: "https://example.com/mcp", headers: { Authorization: "new" } } },
+    });
   });
 });
