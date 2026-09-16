@@ -68,7 +68,7 @@ Approved type exceptions:
 
 ## Theme behavior
 
-`installSystemTheme` follows the operating-system appearance and emits a design-system theme event. React code uses `useResolvedTheme`; imperative integrations subscribe through their adapter. Every new token must have acceptable contrast in both themes.
+`installSystemTheme` resolves the saved Auto, Light, or Dark appearance and emits a design-system theme event. Auto follows the operating system. React code uses `useResolvedTheme`; imperative integrations subscribe through their adapter. Every new token must have acceptable contrast in both themes.
 
 - `--color-primary` is the action fill (control-grade teal). `--color-accent` is identity sky cyan.
 - Filled chrome that carries a label uses `bg-primary text-on-accent` in both themes.

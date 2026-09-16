@@ -21,6 +21,9 @@ export const DEFAULT_TRANSCRIPT_VISIBILITY: Readonly<TranscriptVisibilitySetting
   showMCPCards: true,
 };
 
+/** Controls whether the renderer follows the host appearance or overrides it. */
+export type AppAppearance = "auto" | "light" | "dark";
+
 /** Persisted color theme shared by the settings API and renderer. */
 export interface AppColorTheme {
   id: string;

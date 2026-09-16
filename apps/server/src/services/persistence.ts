@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import envPaths from "env-paths";
 import type {
+  AppAppearance,
   AppColorTheme,
   KeybindingBinding,
   ProjectMeta,
@@ -94,6 +95,7 @@ export type ProjectIndexHandle = JsonArrayStoreHandle<ProjectMeta>;
 
 export interface AppSettings {
   /** Native color-theme selection and user-created editable themes. */
+  appearance: AppAppearance;
   selectedThemeID: string;
   customThemes: AppColorTheme[];
   /** Skills injected into EVERY project's parent sessions ("All Projects"). */
@@ -481,6 +483,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
     // left untouched and fail closed.
     let persistLegacySemanticSeed = legacySemanticSeedRequested && !settingsFileExists;
     let settings: AppSettings = {
+      appearance: "auto",
       selectedThemeID: "11111111-1111-1111-1111-111111111111",
       customThemes: [],
       defaultSkills: [],
@@ -530,6 +533,10 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
         persistLegacySemanticSeed =
           !semanticMemoryPreferenceWasPersisted && legacySemanticSeedRequested;
         settings = {
+          appearance:
+            record.appearance === "light" || record.appearance === "dark"
+              ? record.appearance
+              : "auto",
           selectedThemeID:
             typeof record.selectedThemeID === "string"
               ? record.selectedThemeID
@@ -662,6 +669,7 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       // Fields newer than the oldest settings files stay absent when empty, keeping
       // untouched files byte-stable across load/save cycles.
       const persisted: Partial<AppSettings> = { ...value };
+      if (value.appearance === "auto") delete persisted.appearance;
       if (value.selectedThemeID === "11111111-1111-1111-1111-111111111111")
         delete persisted.selectedThemeID;
       if (value.customThemes.length === 0) delete persisted.customThemes;

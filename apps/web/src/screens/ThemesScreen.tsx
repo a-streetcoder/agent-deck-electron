@@ -1,6 +1,7 @@
-import type { AppColorTheme } from "@agent-deck/contracts";
+import type { AppAppearance, AppColorTheme } from "@agent-deck/contracts";
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppInlineNotice } from "@/design-system/components/AppInlineNotice";
+import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
 import { Card } from "@/design-system/components/Card";
@@ -8,11 +9,12 @@ import { ControlButton, ControlInput } from "@/design-system/components/NativeCo
 import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { BUILT_IN_THEMES, THEME_COLOR_FIELDS, themeSwatches } from "@/design-system/themes";
-import { applyColorTheme } from "@/lib/systemTheme";
-import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { applyAppearance, applyColorTheme } from "@/lib/systemTheme";
+import { Check, Copy, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 interface ThemeSettings {
+  appearance: AppAppearance;
   selectedThemeID: string;
   customThemes: AppColorTheme[];
 }
@@ -113,12 +115,24 @@ export function ThemesScreen() {
       if (!response.ok) throw new Error("We couldn’t save the theme.");
       setMessage("Saved");
     } catch (error) {
-      if (previous) setSettings(previous);
-      applyColorTheme(selected);
+      if (previous) {
+        setSettings(previous);
+        const previousTheme =
+          themes.find((item) => item.id === previous.selectedThemeID) ?? selected;
+        applyAppearance(previous.appearance);
+        applyColorTheme(previousTheme);
+      }
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);
     }
+  };
+
+  const selectAppearance = (appearance: AppAppearance): void => {
+    if (!settings || appearance === settings.appearance) return;
+    const next = { ...settings, appearance };
+    applyAppearance(appearance);
+    void persist(next, { appearance });
   };
 
   const selectTheme = (value: AppColorTheme): void => {
@@ -204,6 +218,28 @@ export function ThemesScreen() {
         </AppInlineNotice>
       ) : (
         <div className="space-y-5">
+          <Card title="Appearance">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-label font-medium text-text-primary">Light and dark mode</p>
+                <p className="mt-1 text-caption text-text-muted">
+                  Auto follows your computer’s appearance.
+                </p>
+              </div>
+              <AppSegmentedPicker<AppAppearance>
+                aria-label="Appearance"
+                value={settings.appearance}
+                onChange={selectAppearance}
+                disabled={saving}
+                options={[
+                  { id: "auto", label: "Auto", icon: <Monitor /> },
+                  { id: "light", label: "Light", icon: <Sun /> },
+                  { id: "dark", label: "Dark", icon: <Moon /> },
+                ]}
+              />
+            </div>
+          </Card>
+
           <section aria-labelledby="theme-presets-heading">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -214,8 +250,7 @@ export function ThemesScreen() {
                   Presets
                 </h2>
                 <p className="mt-1 text-caption text-text-muted">
-                  Color palettes from the original Agent Deck. Your system still controls light and
-                  dark appearance.
+                  Color palettes from the original Agent Deck.
                 </p>
               </div>
               <Button size="sm" leadingIcon={<Copy size={14} />} onClick={duplicate}>

@@ -372,6 +372,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       .strict();
     const parsed = z
       .object({
+        appearance: z.enum(["auto", "light", "dark"]).optional(),
         selectedThemeID: z.string().min(1).max(100).optional(),
         customThemes: z.array(customTheme).max(100).optional(),
         defaultSkills: z.array(RESOURCE_NAME).optional(),
@@ -465,6 +466,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // arrays like defaultSkills through the object spread in settings.update).
     const d = parsed.data;
     const patch: Partial<AppSettings> = {};
+    if (d.appearance !== undefined) patch.appearance = d.appearance;
     if (d.selectedThemeID !== undefined) patch.selectedThemeID = d.selectedThemeID;
     if (d.customThemes !== undefined) patch.customThemes = d.customThemes;
     if (d.defaultSkills !== undefined) patch.defaultSkills = d.defaultSkills;

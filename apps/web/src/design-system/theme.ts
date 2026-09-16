@@ -12,7 +12,7 @@ function subscribe(listener: () => void): () => void {
   return () => window.removeEventListener(THEME_CHANGE_EVENT, listener);
 }
 
-/** Reactive access to the OS-resolved application theme. */
+/** Reactive access to the effective application theme after any user override. */
 export function useResolvedTheme(): ResolvedTheme {
   return useSyncExternalStore(subscribe, getResolvedTheme, () => "dark");
 }

@@ -1,4 +1,4 @@
-import type { AppColorTheme } from "@agent-deck/contracts";
+import type { AppAppearance, AppColorTheme } from "@agent-deck/contracts";
 import { DEFAULT_THEME_ID } from "@agent-deck/contracts";
 import { BUILT_IN_THEMES } from "../design-system/themes";
 import { THEME_CHANGE_EVENT } from "../design-system/theme";
@@ -16,6 +16,8 @@ const SURFACE_VARS = [
 ] as const;
 
 let activeTheme: AppColorTheme = BUILT_IN_THEMES.find((item) => item.id === DEFAULT_THEME_ID)!;
+let activeAppearance: AppAppearance = "auto";
+let systemPrefersDark = false;
 
 function channel(hex: string, offset: number): number {
   return Number.parseInt(hex.slice(offset, offset + 2), 16);
@@ -92,23 +94,51 @@ function applyResolvedTheme(resolved: ResolvedTheme): void {
 
 export function applyColorTheme(value: AppColorTheme): void {
   activeTheme = value;
-  localStorage.setItem(CACHE_KEY, JSON.stringify({ value }));
-  applyResolvedTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  writeCache();
+  applyActiveAppearance();
 }
 
-/** Follow the host OS appearance and keep every mounted theme adapter in sync. */
+function writeCache(): void {
+  localStorage.setItem(
+    CACHE_KEY,
+    JSON.stringify({ value: activeTheme, appearance: activeAppearance }),
+  );
+}
+
+function applyActiveAppearance(): void {
+  applyResolvedTheme(
+    activeAppearance === "auto" ? (systemPrefersDark ? "dark" : "light") : activeAppearance,
+  );
+}
+
+/** Apply and cache the user's host/light/dark appearance choice immediately. */
+export function applyAppearance(value: AppAppearance): void {
+  activeAppearance = value;
+  writeCache();
+  applyActiveAppearance();
+}
+
+/** Restore the saved appearance and keep every mounted theme adapter in sync. */
 export function installSystemTheme(): () => void {
   const query = window.matchMedia("(prefers-color-scheme: dark)");
   const apply = (): void => {
-    const theme: ResolvedTheme = query.matches ? "dark" : "light";
-    applyResolvedTheme(theme);
+    systemPrefersDark = query.matches;
+    applyActiveAppearance();
   };
   try {
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null") as {
       value?: AppColorTheme;
+      appearance?: AppAppearance;
     } | null;
     if (cached?.value) {
       activeTheme = cached.value;
+    }
+    if (
+      cached?.appearance === "auto" ||
+      cached?.appearance === "light" ||
+      cached?.appearance === "dark"
+    ) {
+      activeAppearance = cached.appearance;
     }
   } catch {
     // Ignore a corrupt renderer cache; persisted server settings reconcile below.
@@ -121,6 +151,7 @@ export function installSystemTheme(): () => void {
     .then(
       (body: {
         settings: {
+          appearance: AppAppearance;
           selectedThemeID: string;
           customThemes: AppColorTheme[];
         };
@@ -128,6 +159,7 @@ export function installSystemTheme(): () => void {
         const all = [...BUILT_IN_THEMES, ...(body.settings.customThemes ?? [])];
         const selected =
           all.find((item) => item.id === body.settings.selectedThemeID) ?? activeTheme;
+        applyAppearance(body.settings.appearance ?? "auto");
         applyColorTheme(selected);
       },
     )
