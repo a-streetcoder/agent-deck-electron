@@ -50,6 +50,7 @@ import {
   switchToAgent,
 } from "../state/wsBridge.ts";
 import {
+  AgentChip,
   ModelChip,
   SendStopButton,
   ThinkingChip,
@@ -1263,22 +1264,13 @@ export function Composer() {
             drop under this row's intrinsic width — the chips wrap instead of
             sliding (unclickably) beneath the panel. */}
         <div className="flex flex-wrap items-center gap-2 px-3 pb-3 pt-1">
-          <label className={chipClass()} title="Agent">
-            <ControlSelect
-              data-testid="agent-picker"
-              className="max-w-[18ch] cursor-pointer truncate bg-transparent text-detail font-medium outline-none"
-              value={currentAgentName ?? ""}
-              disabled={running}
-              onChange={(event) => void switchToAgent(event.target.value || null)}
-            >
-              <option value="">Pi Agent</option>
-              {pickableAgents.map((agent) => (
-                <option key={agent.filePath} value={agent.name}>
-                  {agent.name} ({agent.scope})
-                </option>
-              ))}
-            </ControlSelect>
-          </label>
+          <AgentChip
+            currentName={currentAgentName}
+            agents={pickableAgents}
+            projectScoped={Boolean(session?.projectId)}
+            disabled={running}
+            onSelect={(name) => void switchToAgent(name)}
+          />
           <ModelChip
             state={piState}
             models={models}

@@ -84,8 +84,8 @@ it("edits draft project and isolation without changing its session identity", as
   });
   vi.stubGlobal("fetch", request);
   render(<SessionStartupCard />);
-  expect((screen.getByLabelText("Isolate draft in a worktree") as HTMLInputElement).checked).toBe(
-    true,
+  expect(screen.getByLabelText("Isolate draft in a worktree").getAttribute("aria-checked")).toBe(
+    "true",
   );
   fireEvent.change(screen.getByLabelText("Draft project"), { target: { value: "project" } });
   await waitFor(() => expect(useAppStore.getState().session?.projectId).toBe("project"));

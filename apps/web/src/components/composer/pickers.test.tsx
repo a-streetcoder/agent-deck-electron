@@ -2,9 +2,32 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModelChip, ThinkingChip } from "./pickers.tsx";
+import { AgentChip, ModelChip, ThinkingChip } from "./pickers.tsx";
 
 afterEach(cleanup);
+
+it("uses the shared composer chip and selects an agent from its listbox", async () => {
+  const onSelect = vi.fn();
+  render(
+    <AgentChip
+      currentName={null}
+      agents={[{ filePath: "/agents/reviewer.md", name: "Reviewer", scope: "global" }]}
+      projectScoped
+      onSelect={onSelect}
+    />,
+  );
+
+  const trigger = screen.getByTestId("agent-picker");
+  expect(trigger.className).toContain("min-h-control-sm");
+  expect(screen.getByTestId("agent-chip-label").textContent).toBe("Orchestrator");
+  fireEvent.click(trigger);
+  expect(screen.getByTestId("agent-menu").getAttribute("role")).toBe("dialog");
+  expect(screen.getByText("Available for this project")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Search agents"), { target: { value: "review" } });
+  fireEvent.click(screen.getByTestId("agent-option-Reviewer"));
+  expect(onSelect).toHaveBeenCalledWith("Reviewer");
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
 
 describe("thinking-level presentation", () => {
   it("shows the raw level and no speculative menu while metadata is loading", () => {

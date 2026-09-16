@@ -1,9 +1,11 @@
+import { AppTextField } from "@/design-system/components/AppTextField";
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Brain, ChevronDown, Cpu, Square } from "lucide-react";
+import { ArrowUp, Bot, Brain, ChevronDown, Cpu, Search, Square } from "lucide-react";
 import type { SessionModelInfo } from "@agent-deck/contracts";
-import { THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
+import { THINKING_LEVELS, type AgentInfo, type ThinkingLevel } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
+import { sectionHeaderClass } from "@/design-system/styles";
 import { ProviderLogo } from "../ProviderLogo.tsx";
 
 /**
@@ -22,7 +24,8 @@ export interface PiComposerState {
 
 export function chipClass(active = false): string {
   return cn(
-    "flex items-center gap-1.5 rounded-capsule border px-2.5 py-1 text-detail font-medium transition-colors",
+    "flex min-h-control-sm items-center gap-control-gap rounded-capsule border px-control-x-sm text-detail font-medium outline-none transition-colors",
+    "focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-55",
     active
       ? "border-selection-stroke bg-selection text-text-primary"
       : "border-border-subtle bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary",
@@ -50,6 +53,164 @@ function useDismiss(onDismiss: () => void) {
     };
   }, [onDismiss]);
   return ref;
+}
+
+export function AgentChip({
+  currentName,
+  agents,
+  projectScoped,
+  onSelect,
+  disabled = false,
+}: {
+  currentName: string | null;
+  agents: readonly Pick<AgentInfo, "description" | "filePath" | "name" | "scope" | "whenToUse">[];
+  projectScoped: boolean;
+  onSelect: (name: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const ref = useDismiss(() => setOpen(false));
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const prioritizedAgents = [...agents].sort((left, right) => {
+    if (left.name === currentName) return -1;
+    if (right.name === currentName) return 1;
+    if (projectScoped) {
+      const leftAssigned = left.scope !== "builtin";
+      const rightAssigned = right.scope !== "builtin";
+      if (leftAssigned !== rightAssigned) return leftAssigned ? -1 : 1;
+    }
+    return 0;
+  });
+  const matchingAgents = normalizedQuery
+    ? prioritizedAgents.filter((agent) =>
+        `${agent.name} ${agent.scope} ${agent.description ?? ""} ${agent.whenToUse ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalizedQuery),
+      )
+    : prioritizedAgents;
+  const visibleAgents = normalizedQuery ? matchingAgents : matchingAgents.slice(0, 12);
+  const hiddenCount = matchingAgents.length - visibleAgents.length;
+
+  const select = (name: string | null): void => {
+    if (disabled) return;
+    setOpen(false);
+    onSelect(name);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <ControlButton
+        ref={triggerRef}
+        data-testid="agent-picker"
+        className={chipClass(open)}
+        title="Agent"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setOpen(true);
+          requestAnimationFrame(() => searchRef.current?.focus());
+        }}
+      >
+        <Bot size={12} />
+        <span className="max-w-[16ch] truncate" data-testid="agent-chip-label">
+          {currentName ?? "Orchestrator"}
+        </span>
+        <ChevronDown size={11} className="opacity-60" />
+      </ControlButton>
+      {open ? (
+        <div
+          data-testid="agent-menu"
+          role="dialog"
+          aria-label="Choose agent"
+          className="absolute bottom-full left-0 z-20 mb-1.5 flex max-h-96 w-72 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-elevated shadow-elevated"
+        >
+          <div className="border-b border-border-subtle p-2">
+            <AppTextField
+              ref={searchRef}
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              leadingIcon={<Search aria-hidden />}
+              placeholder="Search agents"
+              aria-label="Search agents"
+              showClear
+            />
+          </div>
+          <div className="min-h-0 overflow-y-auto p-1.5">
+            <ControlButton
+              data-testid="agent-option-default"
+              className={cn(
+                "flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left",
+                currentName === null
+                  ? "bg-selection text-text-primary"
+                  : "text-text-secondary hover:bg-hover",
+              )}
+              onClick={() => select(null)}
+            >
+              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-icon bg-accent/20 text-accent">
+                <Bot size={12} aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2 text-label font-medium">
+                  <span>Orchestrator</span>
+                  <span className="text-micro font-medium text-accent">Default</span>
+                </span>
+                <span className="mt-0.5 block text-detail text-text-muted">
+                  Runs the conversation and delegates to specialists.
+                </span>
+              </span>
+            </ControlButton>
+            <div className={cn(sectionHeaderClass, "px-2 pb-1 pt-3 text-text-muted")}>
+              {projectScoped ? "Available for this project" : "All agents"}
+            </div>
+            <div role="listbox" aria-label="Agents">
+              {visibleAgents.map((agent) => (
+                <ControlButton
+                  key={agent.filePath}
+                  role="option"
+                  aria-selected={agent.name === currentName}
+                  data-testid={`agent-option-${agent.name}`}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-detail",
+                    agent.name === currentName
+                      ? "bg-selection text-text-primary"
+                      : "text-text-secondary hover:bg-hover",
+                  )}
+                  onClick={() => select(agent.name)}
+                >
+                  <span className="truncate">{agent.name}</span>
+                  <span className="shrink-0 text-micro text-text-muted">{agent.scope}</span>
+                </ControlButton>
+              ))}
+            </div>
+            {visibleAgents.length === 0 ? (
+              <div className="px-2 py-3 text-caption text-text-muted">No matching agents.</div>
+            ) : hiddenCount > 0 ? (
+              <div className="px-2 py-2 text-detail text-text-muted">
+                Search to find {hiddenCount} more agent{hiddenCount === 1 ? "" : "s"}.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function ModelChip({
