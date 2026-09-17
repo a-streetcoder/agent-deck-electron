@@ -9,7 +9,7 @@ pnpm dev
 pnpm build
 ```
 
-`pnpm dev` runs the normal full-stack loop: Vite hot-reloads renderer changes, the server restarts under `tsx watch`, and Electron restarts for main-process or preload changes.
+`pnpm dev` runs the normal full-stack loop: Vite hot-reloads renderer changes, the server restarts under `node --watch` with the tsx loader, and Electron restarts for main-process or preload changes.
 
 Useful focused commands:
 
