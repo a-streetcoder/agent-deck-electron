@@ -5,12 +5,6 @@ import path from "node:path";
 import { expect, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
-/**
- * Git is project-scoped and currently has no local picker. Without a globally
- * selected project the screen stays on its empty state. Commit still works
- * over HTTP against a registered project.
- */
-
 let harness: E2eHarness;
 const project = mkdtempSync(path.join(tmpdir(), "proj-git-"));
 
@@ -39,12 +33,14 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("Git stays empty until the screen has its own project picker", async ({ page }) => {
+test("Git selects a registered project without an active session", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await page.getByTestId("nav-git").click();
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
   await expect(page.getByTestId("git-no-project")).toBeVisible();
-  await expect(page.getByTestId("git-commit-message")).toHaveCount(0);
+  await page.getByTestId("git-project-picker").selectOption({ label: path.basename(project) });
+  await expect(page.getByTestId("git-clean")).toBeVisible();
+  await expect(page.getByTestId("git-branch")).toHaveText("main");
 });
 
 test("rejects an empty commit and reports it", async () => {

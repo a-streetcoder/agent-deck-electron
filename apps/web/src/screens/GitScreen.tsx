@@ -1,4 +1,4 @@
-import { ControlTextArea } from "@/design-system/components/NativeControls";
+import { ControlSelect, ControlTextArea } from "@/design-system/components/NativeControls";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { Button } from "@/design-system/components/Button";
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
@@ -10,7 +10,7 @@ import {
   SectionHeroButton,
   SectionHeroMeta,
 } from "@/design-system/components/SectionHero";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
@@ -61,8 +61,61 @@ async function apiError(response: Response): Promise<string> {
 }
 
 export function GitScreen() {
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
-  const session = useAppStore((state) => state.session);
+  const projects = useAppStore((state) => state.projects);
+  const sessionProjectId = useAppStore((state) => state.session?.projectId);
+  const [selection, setSelection] = useState<string | null>(null);
+  const available = projects.filter((project) => !project.hidden);
+  const currentProjectId = available.some((project) => project.id === selection)
+    ? selection
+    : (available.find((project) => project.id === sessionProjectId)?.id ?? null);
+  const picker = (
+    <label className="mb-3 flex items-center gap-2 text-detail text-text-muted">
+      Project
+      <ControlSelect
+        aria-label="Git project"
+        data-testid="git-project-picker"
+        size="sm"
+        fullWidth={false}
+        value={currentProjectId ?? ""}
+        onChange={(event) => setSelection(event.target.value)}
+      >
+        <option value="" disabled>
+          Select a project
+        </option>
+        {available.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </ControlSelect>
+    </label>
+  );
+  // A new scope owns fresh drafts and request state, even for A -> B -> A.
+  return (
+    <GitProjectScreen
+      key={currentProjectId ?? "no-project"}
+      currentProjectId={currentProjectId}
+      picker={picker}
+    />
+  );
+}
+
+function GitProjectScreen({
+  currentProjectId,
+  picker,
+}: {
+  currentProjectId: string | null;
+  picker: ReactNode;
+}) {
+  const activeSession = useAppStore((state) => state.session);
+  const session = activeSession?.projectId === currentProjectId ? activeSession : null;
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // Merging auto-commits ALL uncommitted worktree work before merging, so a
   // mid-turn merge would push a half-written tree onto the source branch. Gate
   // the merge on the agent being idle — same guard the diff-panel merge toolbar
@@ -114,7 +167,7 @@ export function GitScreen() {
     const projectId = currentProjectId;
     // An async handler can retain an older callback after project activation.
     // Do not let that stale callback clear/supersede the current project's load.
-    if (useAppStore.getState().currentProjectId !== projectId) return;
+    if (!mounted.current) return;
     const generation = ++statusRequestGeneration.current;
     setStatus(null);
     setStatusProjectId(null);
@@ -124,21 +177,13 @@ export function GitScreen() {
       const response = await fetch(`/projects/${encodeURIComponent(projectId)}/git/status`);
       if (!response.ok) throw new Error(await response.text());
       const nextStatus = (await response.json()) as GitStatus;
-      if (
-        statusRequestGeneration.current !== generation ||
-        useAppStore.getState().currentProjectId !== projectId
-      )
-        return;
+      if (statusRequestGeneration.current !== generation || !mounted.current) return;
       setStatus(nextStatus);
       setStatusProjectId(projectId);
     } catch (err) {
-      if (
-        statusRequestGeneration.current !== generation ||
-        useAppStore.getState().currentProjectId !== projectId
-      )
-        return;
+      if (statusRequestGeneration.current !== generation || !mounted.current) return;
       setStatusLoadFailedProjectId(projectId);
-      setError(String(err));
+      if (mounted.current) setError(String(err));
     }
   }, [currentProjectId, setError]);
 
@@ -207,7 +252,7 @@ export function GitScreen() {
   const commit = async (push: boolean): Promise<void> => {
     if (
       !currentProjectId ||
-      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !mounted.current ||
       statusProjectId !== currentProjectId ||
       !status?.repo ||
       status.clean ||
@@ -225,21 +270,21 @@ export function GitScreen() {
         body: JSON.stringify({ message: message.trim(), push }),
       });
       if (!response.ok) throw new Error(await response.text());
-      if (useAppStore.getState().currentProjectId !== projectId) return;
+      if (!mounted.current) return;
       setMessage("");
       pushToast({ kind: "success", message: push ? "Committed & pushed" : "Committed" });
       await load();
     } catch (err) {
-      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
+      if (mounted.current) setError(String(err));
     } finally {
-      setCommitting(false);
+      if (mounted.current) setCommitting(false);
     }
   };
 
   const generateMessage = async (): Promise<void> => {
     if (
       !currentProjectId ||
-      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !mounted.current ||
       statusProjectId !== currentProjectId ||
       !status?.repo ||
       status.clean ||
@@ -257,18 +302,18 @@ export function GitScreen() {
       );
       if (!response.ok) throw new Error(await response.text());
       const { message: generated } = (await response.json()) as { message: string };
-      if (useAppStore.getState().currentProjectId === projectId) setMessage(generated);
+      if (mounted.current) setMessage(generated);
     } catch (err) {
-      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
+      if (mounted.current) setError(String(err));
     } finally {
-      setGenerating(false);
+      if (mounted.current) setGenerating(false);
     }
   };
 
   const push = async (): Promise<void> => {
     if (
       !currentProjectId ||
-      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !mounted.current ||
       statusProjectId !== currentProjectId ||
       !status?.repo ||
       committing ||
@@ -284,9 +329,9 @@ export function GitScreen() {
       });
       if (!response.ok) throw new Error(await response.text());
     } catch (err) {
-      if (useAppStore.getState().currentProjectId === projectId) setError(String(err));
+      if (mounted.current) setError(String(err));
     } finally {
-      setPushing(false);
+      if (mounted.current) setPushing(false);
     }
   };
 
@@ -295,7 +340,7 @@ export function GitScreen() {
   const merge = async (): Promise<void> => {
     if (
       !statusReady ||
-      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !mounted.current ||
       gitActions !== true ||
       !session?.id ||
       useAppStore.getState().session?.id !== session.id ||
@@ -310,6 +355,7 @@ export function GitScreen() {
     setError(null);
     try {
       const { sourceBranch, commits, cleanup } = await mergeWorktreeSession(session.id);
+      if (!mounted.current || useAppStore.getState().session?.id !== session.id) return;
       if (cleanup.status === "failed") {
         // Recovery can require stopping Pi or deleting the session; keep the
         // one coherent merge+cleanup message in the persistent alert banner.
@@ -322,9 +368,10 @@ export function GitScreen() {
       }
       void load();
     } catch (err) {
+      if (!mounted.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setMerging(false);
+      if (mounted.current) setMerging(false);
     }
   };
 
@@ -335,7 +382,7 @@ export function GitScreen() {
   }, []);
 
   const loadReleasePreflight = useCallback(async (): Promise<"loaded" | "stale"> => {
-    if (!currentProjectId) return "stale";
+    if (!currentProjectId || !mounted.current) return "stale";
     invalidateReleasePreflight();
     const generation = releaseRequestRef.current.generation;
     const controller = new AbortController();
@@ -349,11 +396,15 @@ export function GitScreen() {
       );
       if (!response.ok) throw new Error(await apiError(response));
       const nextPreflight = (await response.json()) as ReleasePreflight;
-      if (releaseRequestRef.current.generation !== generation) return "stale";
+      if (!mounted.current || releaseRequestRef.current.generation !== generation) return "stale";
       setPreflight(nextPreflight);
       return "loaded";
     } catch (error) {
-      if (controller.signal.aborted || releaseRequestRef.current.generation !== generation) {
+      if (
+        !mounted.current ||
+        controller.signal.aborted ||
+        releaseRequestRef.current.generation !== generation
+      ) {
         return "stale";
       }
       throw error;
@@ -406,7 +457,7 @@ export function GitScreen() {
   const openRelease = async (): Promise<void> => {
     if (
       !currentProjectId ||
-      useAppStore.getState().currentProjectId !== currentProjectId ||
+      !mounted.current ||
       !statusReady ||
       !status?.repo ||
       gitActions !== true ||
@@ -419,13 +470,14 @@ export function GitScreen() {
     try {
       await loadReleasePreflight();
     } catch (err) {
+      if (!mounted.current) return;
       setError(err instanceof Error ? err.message : String(err));
       releaseCancelRef.current?.focus();
     }
   };
 
   const draftNotes = async (): Promise<void> => {
-    if (!currentProjectId || !preflight) return;
+    if (!mounted.current || !currentProjectId || !preflight || gitActions !== true) return;
     setDraftingNotes(true);
     setError(null);
     try {
@@ -439,16 +491,16 @@ export function GitScreen() {
       );
       if (!response.ok) throw new Error(await response.text());
       const { notes: drafted } = (await response.json()) as { notes: string };
-      setNotes(drafted);
+      if (mounted.current) setNotes(drafted);
     } catch (err) {
-      setError(String(err));
+      if (mounted.current) setError(String(err));
     } finally {
-      setDraftingNotes(false);
+      if (mounted.current) setDraftingNotes(false);
     }
   };
 
   const release = async (): Promise<void> => {
-    if (!currentProjectId || !preflight) return;
+    if (!mounted.current || !currentProjectId || !preflight || gitActions !== true) return;
     const tag = preflight.nextVersions[bump];
     setReleasing(true);
     setError(null);
@@ -460,6 +512,7 @@ export function GitScreen() {
       });
       if (!response.ok) {
         const message = await apiError(response);
+        if (!mounted.current) return;
         // The POST performs a fresh synchronization check. Reflect that newest
         // state in the still-open panel after every rejected release attempt.
         try {
@@ -471,13 +524,15 @@ export function GitScreen() {
         }
         throw new Error(message);
       }
+      if (!mounted.current) return;
       pushToast({ kind: "success", message: `Released ${tag}` });
       closeRelease(true);
       setNotes("");
     } catch (err) {
+      if (!mounted.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setReleasing(false);
+      if (mounted.current) setReleasing(false);
     }
   };
 
@@ -619,9 +674,10 @@ export function GitScreen() {
           />
         }
       >
+        {picker}
         <AppEmptyState
           data-testid="git-no-project"
-          heading="Git is project-scoped. Open a project to see its changes and commit."
+          heading="Select a project to see its changes and commit."
         />
       </PageShell>
     );
@@ -662,6 +718,7 @@ export function GitScreen() {
         />
       }
     >
+      {picker}
       {releaseOpen ? (
         <div
           data-testid="git-release-panel"
