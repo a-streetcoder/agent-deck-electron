@@ -18,7 +18,17 @@ import type { BridgeRegistry, BridgeToolContext } from "./bridge.ts";
 
 /** A configured MCP server: stdio (spawned) or http (remote Streamable HTTP),
  * discriminated by whether it carries a `url`. */
-export type McpServerConfig = { id: string } & (StdioServerConfig | HttpServerConfig);
+export type McpServerConfig = { id: string; enabledTools?: string[]; disabledTools?: string[] } & (
+  | StdioServerConfig
+  | HttpServerConfig
+);
+
+function configToolAllowed(config: McpServerConfig, tool: string): boolean {
+  return (
+    (config.enabledTools === undefined || config.enabledTools.includes(tool)) &&
+    !config.disabledTools?.includes(tool)
+  );
+}
 
 /** True for an http (Streamable HTTP) server config. */
 function isHttpConfig(config: McpServerConfig): config is { id: string } & HttpServerConfig {
@@ -90,10 +100,33 @@ export function mcpEntryToConfig(
   homeDir: string,
   environment: Record<string, string | undefined> = process.env,
 ): McpServerConfig[] {
+  const policy = { enabledTools: entry.enabledTools, disabledTools: entry.disabledTools };
+  const reference = (name: string): string | undefined =>
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && Object.hasOwn(environment, name)
+      ? environment[name]
+      : undefined;
   if (entry.transport === "http" && entry.url) {
+    const headers = { ...entry.headers };
+    for (const [key, name] of Object.entries(entry.envHttpHeaders ?? {})) {
+      const value = reference(name);
+      if (value === undefined || /[\r\n\0]/.test(value)) return [];
+      headers[key] = value;
+    }
+    if (entry.bearerTokenEnvVar) {
+      const value = reference(entry.bearerTokenEnvVar);
+      if (!value || /[\r\n\0]/.test(value)) return [];
+      headers.Authorization = `Bearer ${value}`;
+    }
     // Native interpolates ONLY the four stdio fields below — never `url` or
     // `headers` — so these pass through untouched.
-    return [{ id: entry.id, url: entry.url, ...(entry.headers ? { headers: entry.headers } : {}) }];
+    return [
+      {
+        id: entry.id,
+        ...policy,
+        url: entry.url,
+        ...(Object.keys(headers).length ? { headers } : {}),
+      },
+    ];
   }
   if (entry.command) {
     const launch = normalizeStdioLaunch(
@@ -107,12 +140,25 @@ export function mcpEntryToConfig(
       homeDir,
       environment,
     );
-    return launch ? [launch] : [];
+    if (!launch) return [];
+    for (const name of entry.envVars ?? []) {
+      // Codex explicit env overrides inherited env_vars, including empty values.
+      if (Object.hasOwn(entry.env ?? {}, name)) continue;
+      const value = reference(name);
+      if (value === undefined || value.includes("\0")) return [];
+      launch.env = { ...launch.env, [name]: value };
+    }
+    return [{ ...launch, ...policy }];
   }
   return [];
 }
 
 export function mcpServerConfigsEqual(left: McpServerConfig, right: McpServerConfig): boolean {
+  if (
+    JSON.stringify([left.enabledTools, left.disabledTools]) !==
+    JSON.stringify([right.enabledTools, right.disabledTools])
+  )
+    return false;
   if (left.id !== right.id || isHttpConfig(left) !== isHttpConfig(right)) return false;
   if (isHttpConfig(left) && isHttpConfig(right)) {
     return left.url === right.url && stringRecordEqual(left.headers, right.headers);
@@ -469,8 +515,8 @@ export class McpManager {
         operationController.signal,
       );
       if (!this.isEnabled()) throw new Error("MCP was paused while connecting");
-      state.tools = tools;
-      state.toolNames = tools.map((tool) => `${config.id}/${tool.name}`);
+      state.tools = tools.filter((tool) => configToolAllowed(config, tool.name));
+      state.toolNames = state.tools.map((tool) => `${config.id}/${tool.name}`);
     } catch (error) {
       state.toolNames = [];
       state.tools = [];
@@ -508,9 +554,9 @@ export class McpManager {
     ) {
       throw new Error(`MCP server "${state.config.id}" is no longer assigned to this session`);
     }
-    state.tools = tools;
-    state.toolNames = tools.map((tool) => `${state.config.id}/${tool.name}`);
-    return tools;
+    state.tools = tools.filter((tool) => configToolAllowed(state.config, tool.name));
+    state.toolNames = state.tools.map((tool) => `${state.config.id}/${tool.name}`);
+    return state.tools;
   }
 
   private resolveAddress(
@@ -544,6 +590,8 @@ export class McpManager {
     authorizedStates: readonly ServerState[],
   ): boolean {
     if (!policy.allows(server, tool)) return false;
+    const state = authorizedStates.find((candidate) => candidate.config.id === server);
+    if (!state || !configToolAllowed(state.config, tool)) return false;
     if (!policy.restricted) return true;
     // Legacy names sanitize server IDs. If two assigned IDs collapse to one
     // alias, an old exact-tool grant cannot identify which server it meant.

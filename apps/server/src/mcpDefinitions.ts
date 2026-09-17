@@ -15,6 +15,7 @@ export interface McpDefinitionStore {
     name: string,
     definition: McpServerInput,
     protectedPatch?: McpProtectedFieldsPatch,
+    mode?: "merge" | "replace",
   ): void;
   delete(roots: ResourceRoots, scope: McpConfigScope, name: string): boolean;
 }
@@ -26,8 +27,9 @@ export class FileMcpDefinitionStore implements McpDefinitionStore {
     name: string,
     definition: McpServerInput,
     protectedPatch?: McpProtectedFieldsPatch,
+    mode?: "merge" | "replace",
   ): void {
-    writeMcpServer(roots, scope, name, definition, protectedPatch);
+    writeMcpServer(roots, scope, name, definition, protectedPatch, mode);
   }
 
   delete(roots: ResourceRoots, scope: McpConfigScope, name: string): boolean {

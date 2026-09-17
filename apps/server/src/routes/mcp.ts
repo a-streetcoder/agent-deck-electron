@@ -6,6 +6,7 @@ import {
   type McpServerEntry,
 } from "@agent-deck/resources";
 import { z } from "zod";
+import { McpImportDiscovery } from "../mcpImport.ts";
 import type { ServerContext } from "../context.ts";
 
 const MCP_ENV_SOURCE = "AGENT_DECK_MCP_SERVERS" as const;
@@ -123,14 +124,31 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   const stdioProtectedPatch = z.object({ env: protectedRecordPatch(mcpEnv) }).strict();
   const httpProtectedPatch = z.object({ headers: protectedRecordPatch(mcpHeaders, true) }).strict();
 
+  const settingsFields = {
+    enabledTools: z.array(z.string().regex(/^[A-Za-z0-9_.-]+$/)).optional(),
+    disabledTools: z.array(z.string().regex(/^[A-Za-z0-9_.-]+$/)).optional(),
+    envVars: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).optional(),
+    envHttpHeaders: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).optional(),
+    bearerTokenEnvVar: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+      .optional(),
+  };
   const mcpAddBody = z.union([
     z.object({
+      ...settingsFields,
       name: z.string().min(1),
+      cwd: z
+        .string()
+        .min(1)
+        .refine((v) => !v.includes("\0"))
+        .optional(),
       command: z.string().min(1),
       args: z.array(z.string()).optional(),
       env: mcpEnv.optional(),
     }),
     z.object({
+      ...settingsFields,
       name: z.string().min(1),
       url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
       // A pasted remote server usually carries its auth header; dropping it
@@ -142,9 +160,15 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   const mcpEditBody = z.union([
     z
       .object({
+        ...settingsFields,
         name: z.string().min(1).optional(),
         expectedTransport: z.enum(["stdio", "http"]).optional(),
         allowTransportChange: z.boolean().optional(),
+        cwd: z
+          .string()
+          .min(1)
+          .refine((v) => !v.includes("\0"))
+          .optional(),
         command: z.string().min(1),
         args: z.array(z.string()).optional(),
         env: mcpEnv.optional(),
@@ -160,6 +184,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       }),
     z
       .object({
+        ...settingsFields,
         name: z.string().min(1).optional(),
         expectedTransport: z.enum(["stdio", "http"]).optional(),
         allowTransportChange: z.boolean().optional(),
@@ -503,16 +528,46 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
+  const importDiscovery = new McpImportDiscovery();
+  fastify.post("/mcp/import/discover", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return importDiscovery.discover();
+  });
+
   fastify.post("/mcp", async (request, reply) => {
-    const parsed = mcpAddBody.safeParse(request.body);
+    const importRequest = z
+      .object({ importToken: z.string(), overwrite: z.boolean().optional() })
+      .strict()
+      .safeParse(request.body);
+    let body = request.body;
+    if (importRequest.success) {
+      const candidate = importDiscovery.resolve(importRequest.data.importToken);
+      if (!candidate)
+        return reply.code(400).send({ error: "Import preview expired. Discover again." });
+      if (!importRequest.data.overwrite && hasMcpServer(rootsFor(), "global", candidate.name)) {
+        return reply.code(409).send({
+          error: "A global definition already exists. Confirm replacement before importing.",
+        });
+      }
+      // Import replaces the source definition in full, including absent secrets.
+      body = {
+        name: candidate.name,
+        ...candidate.definition,
+      };
+    }
+    const parsed = mcpAddBody.safeParse(body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
     const data = parsed.data;
-    const input =
-      "url" in data
-        ? { url: data.url, headers: data.headers }
-        : { command: data.command, args: data.args, env: data.env };
+    const input = "url" in data ? { ...data, url: data.url } : { ...data, command: data.command };
     try {
-      mcpDefinitions.write(rootsFor(), "global", data.name, input);
+      mcpDefinitions.write(
+        rootsFor(),
+        "global",
+        data.name,
+        input,
+        undefined,
+        importRequest.success ? "replace" : "merge",
+      );
     } catch (error) {
       const message =
         error instanceof McpConfigError
@@ -592,8 +647,8 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
     const input =
       "url" in parsed.data
-        ? { url: parsed.data.url, headers: parsed.data.headers }
-        : { command: parsed.data.command, args: parsed.data.args, env: parsed.data.env };
+        ? { ...parsed.data, url: parsed.data.url }
+        : { ...parsed.data, command: parsed.data.command };
     try {
       mcpDefinitions.write(roots, "global", id, input, parsed.data.protected);
     } catch (error) {

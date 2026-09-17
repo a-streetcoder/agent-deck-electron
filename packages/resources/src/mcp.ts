@@ -27,9 +27,19 @@ export function isValidHttpMcpUrl(value: unknown): value is string {
 }
 
 /** The shape a caller supplies to add/update a server (stdio or http). */
-export type McpServerInput =
-  | { command: string; args?: string[]; env?: Record<string, string> }
-  | { url: string; headers?: Record<string, string> };
+export interface McpServerSettings {
+  enabledTools?: string[];
+  disabledTools?: string[];
+  envVars?: string[];
+  envHttpHeaders?: Record<string, string>;
+  bearerTokenEnvVar?: string;
+}
+
+export type McpServerInput = McpServerSettings &
+  (
+    | { command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
+    | { url: string; headers?: Record<string, string> }
+  );
 
 export interface McpProtectedRecordPatch {
   /** Values supplied intentionally by the user. Empty strings are meaningful. */
@@ -132,7 +142,7 @@ export function interpolateMcpValue(
 export class McpConfigError extends Error {}
 
 /** A normalized MCP server config resolved from an mcp.json entry. */
-export interface McpServerEntry {
+export interface McpServerEntry extends McpServerSettings {
   /** The mcpServers key. */
   id: string;
   transport: McpTransport;
@@ -188,6 +198,19 @@ interface ParsedMcpFile {
   valid: boolean;
 }
 
+function readMcpSettings(config: Record<string, unknown>): McpServerSettings {
+  const settings: McpServerSettings = {};
+  for (const key of ["enabledTools", "disabledTools", "envVars"] as const) {
+    if (Array.isArray(config[key]))
+      settings[key] = config[key].filter((v): v is string => typeof v === "string");
+  }
+  if (typeof config.bearerTokenEnvVar === "string")
+    settings.bearerTokenEnvVar = config.bearerTokenEnvVar;
+  const headers = asStringRecord(config.envHttpHeaders);
+  if (headers) settings.envHttpHeaders = headers;
+  return settings;
+}
+
 function parseMcpFile(file: string, scope: McpConfigScope, writable: boolean): ParsedMcpFile {
   let data: unknown;
   try {
@@ -209,6 +232,7 @@ function parseMcpFile(file: string, scope: McpConfigScope, writable: boolean): P
     const config = raw as Record<string, unknown>;
     if (typeof config.command === "string") {
       entries.push({
+        ...readMcpSettings(config),
         id,
         transport: "stdio",
         command: config.command,
@@ -226,6 +250,7 @@ function parseMcpFile(file: string, scope: McpConfigScope, writable: boolean): P
     } else if (isValidHttpMcpUrl(config.url)) {
       const headers = asStringRecord(config.headers);
       entries.push({
+        ...readMcpSettings(config),
         id,
         transport: "http",
         url: config.url,
@@ -378,7 +403,19 @@ function writeMcpDocument(file: string, document: Record<string, unknown>): void
 /** Overlay submitted transport fields onto an existing mcpServers entry. */
 function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<string, unknown> {
   const next: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
+  for (const key of [
+    "enabledTools",
+    "disabledTools",
+    "envVars",
+    "envHttpHeaders",
+    "bearerTokenEnvVar",
+  ] as const) {
+    if (config[key] !== undefined) next[key] = config[key];
+  }
   if ("command" in config) {
+    if (config.cwd !== undefined) next.cwd = config.cwd;
+    delete next.envHttpHeaders;
+    delete next.bearerTokenEnvVar;
     next.command = config.command;
     if (config.args !== undefined) next.args = config.args;
     else delete next.args;
@@ -398,6 +435,7 @@ function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<
       if (Object.keys(config.headers).length > 0) next.headers = config.headers;
       else delete next.headers;
     }
+    delete next.envVars;
     delete next.command;
     delete next.args;
     delete next.env;
@@ -502,16 +540,31 @@ export function hasMcpServer(roots: ResourceRoots, scope: McpConfigScope, name: 
   return Object.prototype.hasOwnProperty.call(doc.mcpServers, name);
 }
 
-/** Add or merge a server in the scope's mcp.json (preserving other keys). */
+/** Add/merge by default; import may replace one entry atomically, preserving other servers. */
 export function writeMcpServer(
   roots: ResourceRoots,
   scope: McpConfigScope,
   name: string,
   config: McpServerInput,
   protectedPatch?: McpProtectedFieldsPatch,
+  mode: "merge" | "replace" = "merge",
 ): void {
   if (!isValidMcpServerName(name)) throw new McpConfigError(`invalid MCP server name: ${name}`);
+  for (const name of [
+    ...(config.envVars ?? []),
+    ...Object.values(config.envHttpHeaders ?? {}),
+    ...(config.bearerTokenEnvVar ? [config.bearerTokenEnvVar] : []),
+  ]) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      throw new McpConfigError("invalid environment reference name");
+  }
+  validateHeaderRecord(config.envHttpHeaders);
+  for (const name of [...(config.enabledTools ?? []), ...(config.disabledTools ?? [])]) {
+    if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new McpConfigError("invalid tool policy name");
+  }
   if ("command" in config) {
+    if (config.cwd !== undefined && (!config.cwd.trim() || config.cwd.includes("\0")))
+      throw new McpConfigError("invalid working directory");
     if (!config.command.trim()) throw new McpConfigError("stdio server needs a command");
     validateEnvRecord(config.env);
   } else if (!isValidHttpMcpUrl(config.url)) {
@@ -523,7 +576,12 @@ export function writeMcpServer(
   validateProtectedRecordPatch(protectedPatch?.headers, validateHeaderRecord, true);
   const file = requireScopePath(roots, scope);
   const doc = readMcpDocument(file);
-  const existing = doc.mcpServers[name];
+  // Replacement starts from an empty entry, never a delete followed by a write.
+  // Protected patches are edit operations and must not be mixed with replacement.
+  if (mode === "replace" && protectedPatch !== undefined) {
+    throw new McpConfigError("replacement cannot include protected edit operations");
+  }
+  const existing = mode === "replace" ? undefined : doc.mcpServers[name];
   if ("command" in config && protectedPatch?.headers !== undefined) {
     throw new McpConfigError("stdio servers cannot have HTTP header operations");
   }

@@ -949,3 +949,93 @@ describe("malformed env-override fields cannot abort startup (MCP-17)", () => {
     expect(config).toMatchObject({ command: "srv", args: ["", "ok"], cwd: "/home/u" });
   });
 });
+
+it("resolves live references only at launch and propagates policy", () => {
+  const entry: McpServerEntry = {
+    id: "remote",
+    transport: "http",
+    scope: "global",
+    writable: true,
+    sourcePath: "fixture",
+    url: "https://example.test",
+    envHttpHeaders: { "X-Key": "KEY" },
+    bearerTokenEnvVar: "TOKEN",
+    enabledTools: ["read"],
+    disabledTools: ["write"],
+  };
+  const before = JSON.stringify(entry);
+  expect(
+    mcpEntryToConfig(entry, "/home", { KEY: "live-key", TOKEN: "live-token" })[0],
+  ).toMatchObject({
+    headers: { "X-Key": "live-key", Authorization: "Bearer live-token" },
+    enabledTools: ["read"],
+    disabledTools: ["write"],
+  });
+  expect(mcpEntryToConfig(entry, "/home", {})).toEqual([]);
+  expect(JSON.stringify(entry)).toBe(before);
+  const local: McpServerEntry = {
+    ...entry,
+    transport: "stdio",
+    url: undefined,
+    command: "node",
+    cwd: "~/work",
+    envVars: ["KEY"],
+  };
+  expect(mcpEntryToConfig(local, "/home", { KEY: "$literal-secret" })[0]).toMatchObject({
+    cwd: "/home/work",
+    env: { KEY: "$literal-secret" },
+    enabledTools: ["read"],
+  });
+});
+
+it("enforces imported tool policy in status, discovery, describe and execution", async () => {
+  const client = fakeClient();
+  client.listTools.mockResolvedValue(
+    ["read", "write", "other"].map((name) => ({ name, inputSchema: { type: "object" } })),
+  );
+  client.callTool.mockResolvedValue({ content: "ok" });
+  vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+  const bridge = new BridgeRegistry();
+  const manager = new McpManager(bridge, {
+    scopeForSession: () => "global",
+    allowServerForSession: () => true,
+  });
+  await manager.connect({
+    id: "fixture",
+    command: "node",
+    enabledTools: ["read", "write"],
+    disabledTools: ["write"],
+  });
+  const dispatch = (params: Record<string, unknown>) =>
+    bridge.dispatch(
+      { sessionId: "session", toolCallId: "call", tool: "mcp", params, token: "token" },
+      { token: "token" },
+    );
+  expect(manager.status()[0]?.toolNames).toEqual(["fixture/read"]);
+  expect((await dispatch({})).content).toContain("fixture/read");
+  expect((await dispatch({ search: "write" })).content).not.toContain("fixture/write");
+  expect((await dispatch({ describe: "fixture/write" })).content).toContain("not found");
+  expect(await dispatch({ tool: "fixture/write" })).toMatchObject({ isError: true });
+  expect(await dispatch({ tool: "fixture/other" })).toMatchObject({ isError: true });
+  expect(client.callTool).not.toHaveBeenCalled();
+  expect(await dispatch({ tool: "fixture/read" })).toMatchObject({ content: "ok" });
+  await manager.close();
+});
+
+it("Codex explicit env wins over envVars even when inherited values are missing", () => {
+  const entry: McpServerEntry = {
+    id: "fixture",
+    transport: "stdio",
+    command: "node",
+    scope: "global",
+    writable: true,
+    sourcePath: "fixture",
+    env: { KEY: "explicit", EMPTY: "" },
+    envVars: ["KEY", "EMPTY"],
+  };
+  for (const environment of [{ KEY: "inherited", EMPTY: "inherited" }, {}]) {
+    expect(mcpEntryToConfig(entry, "/home", environment)[0]).toMatchObject({
+      env: { KEY: "explicit", EMPTY: "" },
+    });
+  }
+});

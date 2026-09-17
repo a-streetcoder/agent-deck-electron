@@ -713,3 +713,73 @@ describe("read-only provenance (MCP-11)", () => {
     expect(readMcpServers(roots).find((s) => s.id === "dup")!.writable).toBe(true);
   });
 });
+
+it("persists cwd, reference names and tool policy without expanding secrets; preserves on edits", () => {
+  writeMcpServer(roots, "global", "local", {
+    command: "node",
+    cwd: "~/workspace",
+    envVars: ["TEST_SECRET"],
+    enabledTools: ["read"],
+    disabledTools: ["write"],
+    env: { TEMPLATE: "${TEST_SECRET}" },
+  });
+  writeMcpServer(roots, "global", "remote", {
+    url: "https://example.test",
+    envHttpHeaders: { "X-Key": "TEST_SECRET" },
+    bearerTokenEnvVar: "TEST_TOKEN",
+    enabledTools: [],
+  });
+  writeMcpServer(roots, "global", "local", { command: "node", args: ["updated"] });
+  const text = readFileSync(mcpConfigPath(roots, "global")!, "utf8");
+  const doc = JSON.parse(text);
+  expect(doc.mcpServers.local).toMatchObject({
+    cwd: "~/workspace",
+    envVars: ["TEST_SECRET"],
+    enabledTools: ["read"],
+    disabledTools: ["write"],
+    env: { TEMPLATE: "${TEST_SECRET}" },
+  });
+  expect(readMcpServers(roots).find((entry) => entry.id === "remote")).toMatchObject({
+    envHttpHeaders: { "X-Key": "TEST_SECRET" },
+    bearerTokenEnvVar: "TEST_TOKEN",
+    enabledTools: [],
+  });
+  expect(text).toContain("${TEST_SECRET}");
+});
+
+it("atomically replaces imported entries without retaining absent optional fields", () => {
+  const optional = {
+    envVars: ["OLD_ENV"],
+    envHttpHeaders: { "X-Key": "OLD_KEY" },
+    bearerTokenEnvVar: "OLD_TOKEN",
+    cwd: "/old",
+    enabledTools: ["read"],
+    disabledTools: ["write"],
+  };
+  for (const config of [{ command: "node" }, { url: "https://example.test" }]) {
+    writeGlobal({
+      otherSetting: true,
+      mcpServers: { fixture: { ...config, ...optional }, untouched: { command: "keep" } },
+    });
+    writeMcpServer(roots, "global", "fixture", config);
+    const edited = JSON.parse(readFileSync(mcpConfigPath(roots, "global")!, "utf8")).mcpServers
+      .fixture;
+    expect(edited).toMatchObject({ enabledTools: ["read"], disabledTools: ["write"] });
+    if ("command" in config) expect(edited).toMatchObject({ cwd: "/old", envVars: ["OLD_ENV"] });
+    else
+      expect(edited).toMatchObject({
+        envHttpHeaders: { "X-Key": "OLD_KEY" },
+        bearerTokenEnvVar: "OLD_TOKEN",
+      });
+    writeMcpServer(roots, "global", "fixture", config, undefined, "replace");
+    expect(JSON.parse(readFileSync(mcpConfigPath(roots, "global")!, "utf8"))).toEqual({
+      otherSetting: true,
+      mcpServers: { fixture: config, untouched: { command: "keep" } },
+    });
+    const before = readFileSync(mcpConfigPath(roots, "global")!, "utf8");
+    expect(() => writeMcpServer(roots, "global", "fixture", config, {}, "replace")).toThrow(
+      "protected edit",
+    );
+    expect(readFileSync(mcpConfigPath(roots, "global")!, "utf8")).toBe(before);
+  }
+});

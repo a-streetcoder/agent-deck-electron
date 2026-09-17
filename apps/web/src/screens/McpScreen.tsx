@@ -15,6 +15,7 @@ import { responseErrorMessage } from "@/lib/responseError";
 import { openExternal, revealResourceFile } from "@/lib/native";
 import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
+import { McpImportPanel } from "./McpImportPanel.tsx";
 import { updateProject } from "../state/wsBridge.ts";
 
 /**
@@ -1118,6 +1119,13 @@ export function McpScreen() {
             : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
         </p>
       </Card>
+
+      <McpImportPanel
+        existingNames={servers.map((server) => server.id)}
+        onImported={async () => {
+          await load();
+        }}
+      />
 
       {formOpen ? (
         <form
