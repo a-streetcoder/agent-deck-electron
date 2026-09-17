@@ -6,6 +6,18 @@ packages:
 # Install locked dependencies immediately; do not apply pnpm's release-age delay.
 minimumReleaseAge: 0
 
+# pi-claude-bridge drives the user's own Claude Code install. Never ship the Agent
+# SDK's bundled ~220 MB per-platform `claude` binary; Claude Code is a prerequisite.
+ignoredOptionalDependencies:
+  - "@anthropic-ai/claude-agent-sdk-linux-x64"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64"
+  - "@anthropic-ai/claude-agent-sdk-linux-x64-musl"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64-musl"
+  - "@anthropic-ai/claude-agent-sdk-darwin-x64"
+  - "@anthropic-ai/claude-agent-sdk-darwin-arm64"
+  - "@anthropic-ai/claude-agent-sdk-win32-x64"
+  - "@anthropic-ai/claude-agent-sdk-win32-arm64"
+
 allowBuilds:
   "@google/genai": true
   electron: true

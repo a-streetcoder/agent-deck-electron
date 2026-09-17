@@ -7,6 +7,12 @@ export {
   type PiSpawnPlan,
   type ResolvedPi,
 } from "./resolve.ts";
+export {
+  bundledClaudeBridgeExtension,
+  claudeBridgeProviderExtensions,
+  ensureClaudeBridgeConfig,
+  resolveClaudeCodeExecutable,
+} from "./claudeBridge.ts";
 export { PiProcess, type PiProcessExit, type PiProcessOptions } from "./PiProcess.ts";
 export {
   discoverModelCatalog,

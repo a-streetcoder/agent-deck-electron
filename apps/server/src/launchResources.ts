@@ -8,7 +8,7 @@ import { projectMemoryDir } from "@agent-deck/memory";
 import { scanPrompts } from "@agent-deck/resources";
 import type { LaunchPlan } from "@agent-deck/pi-host";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
-import { asThinkingLevel, type ServerContext } from "./context.ts";
+import { asThinkingLevel, envDefaults, type ServerContext } from "./context.ts";
 import { finalizeExtensions, resolveInstructionsFile } from "./routes/shared.ts";
 
 /** Durable compatibility inputs needed to recompute catalog-derived launch flags.
@@ -211,6 +211,10 @@ export function resolveLaunchResources(
     ...baseExtensions,
     ...(request.agentName ? [] : ctx.enabledExtensionPaths(request.projectId)),
     ...injectedCommands,
+    // Provider-registration extensions are app-owned like the resume path's: a
+    // model the catalog offers must exist at launch, whatever the loading mode.
+    // Read here, not from `defaults`: every caller passes a narrowed copy.
+    ...(envDefaults().providerExtensions ?? []),
   ]);
 
   // User-facing ordinary and named chats share assignments; delegated children

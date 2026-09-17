@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { claudeBridgeProviderExtensions } from "@agent-deck/pi-host";
 import { isMainModule } from "./mainModule.ts";
 import { startServer } from "./server.ts";
 
@@ -34,6 +35,15 @@ export {
 // CLI entry: `pnpm --filter @agent-deck/server dev`
 if (isMainModule(import.meta.url, process.argv[1])) {
   const port = Number(process.env.PORT ?? 4200);
+
+  // Claude models through the user's own Claude Code install. Done at the real
+  // entry point only: embedders and tests calling startServer() stay hermetic.
+  process.env.AGENT_DECK_PROVIDER_EXTENSIONS = [
+    ...(process.env.AGENT_DECK_PROVIDER_EXTENSIONS?.split(path.delimiter) ?? []),
+    ...claudeBridgeProviderExtensions(),
+  ]
+    .filter(Boolean)
+    .join(path.delimiter);
 
   // A packaged Electron app passes an explicit resource path. Workspace runs
   // retain the source-relative default.
