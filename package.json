@@ -22,6 +22,7 @@
     "smoke:packaged-native": "node scripts/smoke-packaged-loop-catalog.mjs release",
     "generate:icons": "bash scripts/generate-icons.sh",
     "pack:mac": "pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.hardenedRuntime=false",
+    "pack:win": "pnpm build && electron-builder --win dir --x64 --publish never -c.npmRebuild=false",
     "release:mac": "pnpm build && electron-builder --mac dmg --arm64",
     "validate:mac": "bash scripts/validate-macos-release.sh",
     "demo:chat": "tsx packages/testkit/demo/chat.ts",

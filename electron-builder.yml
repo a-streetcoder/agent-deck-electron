@@ -7,7 +7,8 @@ directories:
   buildResources: build
 
 files:
-  - apps/desktop/main.js
+  - apps/desktop/*.js
+  - "!apps/desktop/*.test.js"
   - apps/desktop/preload.cjs
   - apps/web/dist/**
   - dist/server/**
