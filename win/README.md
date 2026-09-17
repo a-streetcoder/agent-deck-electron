@@ -14,6 +14,6 @@ The launcher does not install dependencies or change the packaged application. S
 
 ## Development versus packaged app
 
-Close the packaged app before starting development, and run only one development launcher at a time. UI edits hot-reload; backend and Electron edits restart their respective processes and can interrupt active agent work. This launcher does not create a separate data sandbox or copy packaged-app data into development.
+The development app and the packaged app can run side by side: they use separate data folders (`%LOCALAPPDATA%agent-deck-electron` versus `%APPDATA%Agent Deck`) and separate ports, and share only Pi's own configuration in `~/.pi/agent`. Packaged-app projects and sessions are not copied into development. Run only one development launcher at a time. UI edits hot-reload; backend and Electron edits restart their respective processes and can interrupt active agent work in the development app.
 
-The stable Windows build is separate, under `release/win-unpacked` after running `pnpm pack:win`. Do not move these development launchers into that generated directory; it can be replaced during packaging.
+The stable Windows build is produced by `pnpm pack:win` in `release/win-unpacked`. Copy it elsewhere before using it as your daily app, and close the development launcher before packing: packaging clears that directory and rebuilds the native addon. Do not move these development launchers into it. See [the Windows guide](../docs/agent-guidelines/WINDOWS.md) for the full loop.

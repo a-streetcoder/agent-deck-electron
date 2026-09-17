@@ -26,7 +26,7 @@ if not exist "node_modules\" (
 
 echo Starting Agent Deck in development mode...
 echo Keep this window open for logs. Press Ctrl+C here to stop development.
-echo Close the packaged app first. Backend changes may interrupt active responses.
+echo The packaged app can stay open. Backend changes may interrupt active responses here.
 echo.
 call pnpm dev
 if errorlevel 1 goto :failed

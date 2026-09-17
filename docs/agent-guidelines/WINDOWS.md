@@ -23,7 +23,7 @@ They share no app data and no ports, so both can run at once. They do share Pi's
 - **Never run the stable app from `release\win-unpacked`.** `pnpm pack:win` clears that folder; packing while an app runs from it deletes files underneath it (the bundled Pi runtime goes first) and new sessions then fail until restart.
 - **Close the dev instance before `pnpm build:native`, `pnpm build`, or `pnpm pack:win`.** A running backend holds `loop-catalog-native.win32-x64.node`, and the rebuild fails with `EPERM`.
 - **Do not run agent sessions in the folder the dev instance runs from.** Every saved backend file restarts its server and interrupts that instance's active turns. Worktree sessions avoid this.
-- **Start the dev instance from its own terminal window** and stop it with Ctrl+C there. A backend orphaned from its console cannot spawn Pi: sessions fail with `pi exited (code=3221225794)` (`0xC0000142`). Closing only the app window stops the dev servers too (`concurrently --kill-others`); a window whose servers died reports `TypeError: Failed to fetch` on every action.
+- **Start the dev instance from its own terminal window** and stop it with Ctrl+C there. A backend orphaned from its console cannot spawn Pi: sessions fail with `pi exited (code=3221225794)` (`0xC0000142`). Closing only the app window leaves the dev servers running (the Electron step runs under `nodemon`, which stays alive after a clean exit). A window whose servers have died reports `TypeError: Failed to fetch` on every action.
 - **If a change breaks session launch or the Pi bridge in the stable app,** you cannot fix it from inside that app. Roll back to the previous folder, or use plain `pi` or another coding agent in a terminal.
 
 ## Machine setup
