@@ -24,6 +24,7 @@ export default defineConfig({
       "/sessions": { target: serverTarget },
       "/session-images": { target: serverTarget },
       "/projects": { target: serverTarget },
+      "/issues": { target: serverTarget },
       "/resources": { target: serverTarget },
       "/runtime": { target: serverTarget },
       "/settings": { target: serverTarget },
