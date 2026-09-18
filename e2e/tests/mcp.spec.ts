@@ -224,9 +224,12 @@ test("shows the winning project definition's exact read-only path", async ({ pag
 
   await openProjectMcp(page);
   await page.getByTestId("mcp-reload").click();
-  // Global management intentionally hides project-only definitions. Their
-  // exact read-only provenance remains available through the scoped API.
-  await expect(page.getByTestId("mcp-project-origin")).toHaveCount(0);
+  // The screen scopes to the session's project, so the project-only definition
+  // is listed read-only with its exact provenance; the scoped API agrees.
+  const row = page.getByTestId("mcp-project-origin");
+  await expect(row).toBeVisible();
+  await expect(page.getByTestId("mcp-provenance-project-origin")).toContainText(".pi");
+  await expect(row.getByRole("button", { name: "Edit" })).toHaveCount(0);
   const { servers } = await scopedMcp();
   expect(servers).toEqual(
     expect.arrayContaining([
@@ -431,4 +434,61 @@ test("signs in to an OAuth http server: open link, paste code, becomes authorize
   // The UI parsed the OAuth state out of the authorization URL and echoed it back
   // with the code (CSRF round-trip).
   expect(callbackBody).toEqual({ code: "browser-code", state: "STATE123" });
+});
+
+test("imports a Codex definition with its tool policy and refuses a blocked one", async ({
+  page,
+}) => {
+  // Codex config in the hermetic home: one importable server carrying a tools
+  // table, one whose header helper must never run, one disabled in the source.
+  const codexDir = path.join(harness.piHome, ".codex");
+  mkdirSync(codexDir, { recursive: true });
+  writeFileSync(
+    path.join(codexDir, "config.toml"),
+    [
+      "[mcp_servers.imported-cf]",
+      'url = "https://mcp.cloudflare.example/mcp"',
+      "startup_timeout_sec = 45",
+      "[mcp_servers.imported-cf.tools.execute]",
+      'approval_mode = "approve"',
+      "[mcp_servers.imported-cf.tools.deploy]",
+      'approval_mode = "prompt"',
+      "[mcp_servers.helper]",
+      'url = "https://helper.example/mcp"',
+      'http_headers_helper = "/usr/local/bin/mint-headers"',
+      "[mcp_servers.paused]",
+      'command = "node"',
+      "enabled = false",
+    ].join("\n"),
+  );
+
+  await openProjectMcp(page);
+  await page.getByRole("button", { name: "Discover local servers" }).click();
+
+  const importable = page.getByTestId("mcp-import-imported-cf");
+  await expect(importable).toContainText("startup 45s");
+  await expect(importable).toContainText("2 tool approval");
+  const blocked = page.getByTestId("mcp-import-helper");
+  await expect(blocked).toContainText("cannot be imported");
+  await expect(blocked).toContainText("http_headers_helper");
+  await expect(blocked.getByRole("checkbox")).toBeDisabled();
+  await expect(page.getByTestId("mcp-import-paused")).toContainText("Disabled in source");
+  // No value from the source file reaches the page.
+  await expect(page.locator("body")).not.toContainText("mint-headers");
+  await expect(page.locator("body")).not.toContainText("mcp.cloudflare.example");
+
+  await importable.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByTestId("mcp-imported-cf")).toBeVisible();
+  const doc = JSON.parse(
+    readFileSync(path.join(harness.piHome, ".pi", "agent", "mcp.json"), "utf8"),
+  ) as { mcpServers: Record<string, Record<string, unknown>> };
+  expect(doc.mcpServers["imported-cf"]).toEqual({
+    url: "https://mcp.cloudflare.example/mcp",
+    startupTimeoutMs: 45_000,
+    toolApproval: { execute: "approve", deploy: "prompt" },
+  });
+  expect(doc.mcpServers.helper).toBeUndefined();
+  // The Codex file is untouched.
+  expect(readFileSync(path.join(codexDir, "config.toml"), "utf8")).toContain("mint-headers");
 });

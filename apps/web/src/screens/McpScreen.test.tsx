@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { McpScreen } from "./McpScreen.tsx";
@@ -11,6 +11,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   });
 }
+
+/** The screen's picker defaults to the active session's project (never the
+ *  legacy global `currentProjectId`, which session activation clears). */
+const sessionFor = (projectId: string) =>
+  ({ id: "session", projectId }) as NonNullable<ReturnType<typeof useAppStore.getState>["session"]>;
+const pickProject = (projectId: string): void => {
+  fireEvent.change(screen.getByTestId("mcp-project-picker"), { target: { value: projectId } });
+};
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -28,6 +36,7 @@ beforeEach(() => {
     toasts: [],
     projects: [],
     projectsLoaded: true,
+    session: null,
     currentProjectId: null,
   });
 });
@@ -300,7 +309,7 @@ describe("MCP configuration reload", () => {
 describe("MCP definition provenance", () => {
   it("shows exact global, project, and environment origins with unchanged ownership", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -383,7 +392,7 @@ describe("MCP definition provenance", () => {
 describe("project MCP assignments", () => {
   it("shows trust/source state and persists an assignment from an accessible checkbox", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -453,7 +462,7 @@ describe("project MCP assignments", () => {
 
   it("keeps an explicit project value while All Projects is inherited, then restores its control", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -554,7 +563,7 @@ describe("project MCP assignments", () => {
 
   it("visibly distinguishes inherited state with no explicit project assignment", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -582,7 +591,7 @@ describe("project MCP assignments", () => {
 
   it("renders a keyboard-removable missing assignment and project empty state", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -645,7 +654,7 @@ describe("project MCP assignment saving state", () => {
   };
 
   it("is optimistic, id-locked/aria-busy while saving, and preserves focus", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     let resolvePatch!: () => void;
     let patchCount = 0;
     let catalogLoads = 0;
@@ -703,7 +712,7 @@ describe("project MCP assignment saving state", () => {
 
   it("does not apply an old-project assignment refresh or focus after switching projects", async () => {
     const second = { ...project, id: "project-next", name: "Next project" };
-    useAppStore.setState({ currentProjectId: project.id, projects: [project, second] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project, second] });
     let resolvePatch!: (response: Response) => void;
     vi.mocked(fetch).mockImplementation((input, init) => {
       const url = String(input);
@@ -732,7 +741,7 @@ describe("project MCP assignment saving state", () => {
     const oldToggle = await screen.findByTestId("mcp-assign-old");
     oldToggle.focus();
     fireEvent.click(oldToggle);
-    useAppStore.setState({ currentProjectId: second.id });
+    pickProject(second.id);
     expect(await screen.findByTestId("mcp-new")).toBeTruthy();
     resolvePatch(jsonResponse({ project: {} }));
     await waitFor(() => expect(screen.queryByTestId("mcp-old")).toBeNull());
@@ -746,7 +755,7 @@ describe("project MCP assignment saving state", () => {
   });
 
   it("serializes different server assignments without losing the first", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     let assigned: string[] = [];
     let releaseFirst!: () => void;
     const patchBodies: string[][] = [];
@@ -805,7 +814,7 @@ describe("project MCP assignment saving state", () => {
   });
 
   it("reconciles a failed save, rolls back, and surfaces the server error", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     vi.mocked(fetch).mockImplementation((input, init) => {
       const url = String(input);
       if (url === `/mcp?projectId=${project.id}`)
@@ -844,7 +853,7 @@ describe("project MCP assignment saving state", () => {
   it("clears old rows when a project-switch catalog load fails", async () => {
     const first = { ...project, id: "first", name: "First" };
     const second = { ...project, id: "second", name: "Second" };
-    useAppStore.setState({ currentProjectId: first.id, projects: [first, second] });
+    useAppStore.setState({ session: sessionFor(first.id), projects: [first, second] });
     vi.mocked(fetch).mockImplementation((input) => {
       const url = String(input);
       if (url === "/mcp?projectId=first")
@@ -859,7 +868,7 @@ describe("project MCP assignment saving state", () => {
     });
     render(<McpScreen />);
     expect(await screen.findByTestId("mcp-old-row")).toBeTruthy();
-    useAppStore.setState({ currentProjectId: second.id });
+    pickProject(second.id);
     expect(await screen.findByTestId("mcp-load-error")).toBeTruthy();
     expect(screen.queryByTestId("mcp-old-row")).toBeNull();
     expect(screen.queryByTestId("mcp-empty")).toBeNull();
@@ -896,7 +905,7 @@ describe("MCP OAuth callback", () => {
   };
 
   it("opens the browser, waits accessibly, preserves paste fallback, and cancels", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     const openExternal = vi.fn().mockResolvedValue(true);
     window.agentDeck = { isElectron: true, openExternal };
     let cancelled = false;
@@ -957,7 +966,7 @@ describe("MCP OAuth callback", () => {
   });
 
   it("cancels stale cross-server login responses without replacing the newer flow", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     const openExternal = vi.fn().mockResolvedValue(true);
     window.agentDeck = { isElectron: true, openExternal };
     let resolveFirst!: (response: Response) => void;
@@ -1019,7 +1028,7 @@ describe("MCP OAuth callback", () => {
   });
 
   it("cancels a pending login after unmount once its stale response materializes", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     let resolveLogin!: (response: Response) => void;
     let cancelled = false;
     vi.mocked(fetch).mockImplementation((input, init) => {
@@ -1065,7 +1074,7 @@ describe("MCP OAuth callback", () => {
   });
 
   it("locks repeated manual submission and announces pending state", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
     let callbackCount = 0;
     let resolveCallback!: (response: Response) => void;
@@ -1126,7 +1135,7 @@ describe("MCP OAuth callback", () => {
   });
 
   it("replaces dead manual input with an actionable restart after an automatic failure", async () => {
-    useAppStore.setState({ currentProjectId: project.id, projects: [project] });
+    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
     window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
     let failed = false;
     let begins = 0;
@@ -1815,7 +1824,7 @@ describe("MCP edit form", () => {
 describe("MCP read-only global provenance (MCP-09)", () => {
   it("labels a non-editable global definition read only", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -1853,7 +1862,7 @@ describe("MCP read-only global provenance (MCP-09)", () => {
 
   it("still labels the app-owned global config editable", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -1895,7 +1904,7 @@ describe("MCP read-only global provenance (MCP-09)", () => {
 describe("MCP unknown ownership fails closed (MCP-09)", () => {
   it("labels a global server read only and hides both actions when editable is absent", async () => {
     useAppStore.setState({
-      currentProjectId: "project-1",
+      session: sessionFor("project-1"),
       projects: [
         {
           id: "project-1",
@@ -1945,7 +1954,7 @@ describe("MCP smart paste (MCP-12)", () => {
    * env or headers.
    */
   const openPasteTab = async (existing: { id: string }[] = []): Promise<void> => {
-    useAppStore.setState({ currentProjectId: null, projects: [] });
+    useAppStore.setState({ session: null, projects: [] });
     vi.mocked(fetch).mockImplementation((input, init) => {
       const url = String(input);
       if (url === "/mcp" && init?.method === "POST") {
@@ -2053,7 +2062,7 @@ describe("MCP smart paste (MCP-12)", () => {
   });
 
   it("offers Paste when adding but not when editing an existing server", async () => {
-    useAppStore.setState({ currentProjectId: null, projects: [] });
+    useAppStore.setState({ session: null, projects: [] });
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         servers: [
@@ -2085,7 +2094,7 @@ describe("MCP smart paste (MCP-12)", () => {
  */
 describe("MCP reveal config (MCP-10)", () => {
   const withServers = async (servers: Record<string, unknown>[]): Promise<void> => {
-    useAppStore.setState({ currentProjectId: null, projects: [] });
+    useAppStore.setState({ session: null, projects: [] });
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         servers: servers.map((server) => ({
@@ -2169,7 +2178,7 @@ describe("MCP per-tool descriptions (MCP-19)", () => {
   };
 
   const show = async (server: Record<string, unknown>): Promise<void> => {
-    useAppStore.setState({ currentProjectId: null, projects: [] });
+    useAppStore.setState({ session: null, projects: [] });
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ servers: [server] }));
     render(<McpScreen />);
     await screen.findByTestId("mcp-provenance-github");
@@ -2221,5 +2230,263 @@ describe("MCP per-tool descriptions (MCP-19)", () => {
     const region = await screen.findByTestId("mcp-tools-github");
     expect(region.textContent).not.toMatch(/[‪-‮⁦-⁩]/);
     expect(region.textContent).toContain("safe");
+  });
+});
+
+/**
+ * Issue #23 follow-up: the screen used the legacy global `currentProjectId`,
+ * which session activation clears. Without a project scope GET /mcp reports
+ * `auth.status = "none"`, hiding Sign in and the assignment controls. The
+ * picker is screen-local and defaults to the active session's project.
+ */
+describe("MCP project picker", () => {
+  const alpha = {
+    id: "alpha",
+    name: "Alpha",
+    path: "/tmp/alpha",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    assignedMcpServers: [] as string[],
+  };
+  const beta = { ...alpha, id: "beta", name: "Beta" };
+  const http = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    transport: "http",
+    connected: false,
+    toolNames: [],
+    ...extra,
+  });
+
+  it("starts with no project when there is no session, hiding project controls and Sign in", async () => {
+    useAppStore.setState({ session: null, projects: [alpha, beta] });
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (String(input) === "/mcp")
+        return Promise.resolve(
+          jsonResponse({ servers: [http("remote", { auth: { status: "none" } })] }),
+        );
+      throw new Error(`unexpected request: ${String(input)}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-remote");
+    expect((screen.getByTestId("mcp-project-picker") as HTMLSelectElement).value).toBe("");
+    expect(screen.queryByTestId("mcp-assign-remote")).toBeNull();
+    expect(screen.queryByTestId("mcp-login-remote")).toBeNull();
+    expect(screen.queryByTestId("mcp-auth-remote")).toBeNull();
+    expect(screen.getByTestId("mcp-trust-copy").textContent).toContain("Pick a project");
+    expect(screen.getByTestId("mcp-trust-copy").textContent).toContain(
+      "assigning it grants access",
+    );
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+
+  it("defaults to the session project, keeps an explicit choice, and reloads per selection", async () => {
+    useAppStore.setState({ session: sessionFor(alpha.id), projects: [alpha, beta] });
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [http("global")] }));
+      if (url === "/mcp?projectId=alpha")
+        return Promise.resolve(jsonResponse({ assignedServerIds: [], servers: [http("a-row")] }));
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(jsonResponse({ assignedServerIds: [], servers: [http("b-row")] }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-a-row");
+    const picker = screen.getByTestId("mcp-project-picker") as HTMLSelectElement;
+    expect(picker.value).toBe("alpha");
+    expect(screen.getByTestId("mcp-assign-a-row")).toBeTruthy();
+    pickProject("beta");
+    await screen.findByTestId("mcp-b-row");
+    expect(screen.queryByTestId("mcp-a-row")).toBeNull();
+    // The session changing later does not override an explicit choice…
+    act(() => useAppStore.setState({ session: sessionFor(alpha.id) }));
+    expect(picker.value).toBe("beta");
+    // …and the global store is never written.
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+    pickProject("");
+    await screen.findByTestId("mcp-global");
+    expect(screen.queryByTestId("mcp-assign-global")).toBeNull();
+  });
+
+  it("assigns to the selected project rather than the session project", async () => {
+    useAppStore.setState({ session: sessionFor(alpha.id), projects: [alpha, beta] });
+    const patched: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith("/mcp?projectId="))
+        return Promise.resolve(
+          jsonResponse({
+            assignedServerIds: patched.length ? ["server"] : [],
+            servers: [http("server")],
+          }),
+        );
+      if (url.startsWith("/projects/") && init?.method === "PATCH") {
+        patched.push(url);
+        return Promise.resolve(jsonResponse({ project: {} }));
+      }
+      if (url === "/projects")
+        return Promise.resolve(
+          jsonResponse({ projects: [alpha, { ...beta, assignedMcpServers: ["server"] }] }),
+        );
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-assign-server");
+    pickProject("beta");
+    await waitFor(() =>
+      expect(screen.getByTestId("mcp-assign-server").getAttribute("aria-label")).toContain("Beta"),
+    );
+    fireEvent.click(screen.getByTestId("mcp-assign-server"));
+    await waitFor(() => expect(patched).toEqual(["/projects/beta"]));
+    await screen.findByText("Assigned");
+  });
+
+  it("shows Sign in only for an assigned, unconnected OAuth server and starts the flow for the selected project", async () => {
+    useAppStore.setState({ session: null, projects: [alpha, beta] });
+    window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
+    const logins: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(
+          jsonResponse({
+            assignedServerIds: ["oauth", "public"],
+            defaultAssignedServerIds: ["signed"],
+            servers: [
+              http("oauth", { auth: { status: "unauthenticated" } }),
+              // Connected without a sign-in: a public endpoint, not "sign-in required".
+              http("public", { connected: true, auth: { status: "unauthenticated" } }),
+              // Not assigned here: nothing has tried to connect, so no login yet.
+              http("unassigned", { auth: { status: "unauthenticated" } }),
+              http("signed", { connected: true, auth: { status: "authorized" } }),
+            ],
+          }),
+        );
+      if (url === "/mcp/oauth/login?projectId=beta" && init?.method === "POST") {
+        logins.push(url);
+        return Promise.resolve(
+          jsonResponse({
+            auth: { status: "authorizing", automatic: true, authUrl: "https://a.example/?state=S" },
+          }),
+        );
+      }
+      if (url === "/mcp/oauth/login?projectId=beta" && init?.method === "DELETE")
+        return Promise.resolve(jsonResponse({ ok: true }));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    pickProject("beta");
+    await screen.findByTestId("mcp-oauth");
+    expect(screen.getByTestId("mcp-login-oauth")).toBeTruthy();
+    expect(screen.getByTestId("mcp-auth-oauth").textContent).toBe("sign-in required");
+    expect(screen.queryByTestId("mcp-login-public")).toBeNull();
+    expect(screen.queryByTestId("mcp-auth-public")).toBeNull();
+    expect(screen.queryByTestId("mcp-login-unassigned")).toBeNull();
+    expect(screen.getByTestId("mcp-logout-signed")).toBeTruthy();
+    expect(screen.getByTestId("mcp-auth-signed").textContent).toBe("signed in");
+    fireEvent.click(screen.getByTestId("mcp-login-oauth"));
+    await screen.findByTestId("mcp-login-panel-oauth");
+    expect(logins).toEqual(["/mcp/oauth/login?projectId=beta"]);
+  });
+
+  it("drops a reconnect's catalog refresh that completes after switching projects", async () => {
+    useAppStore.setState({ session: sessionFor(alpha.id), projects: [alpha, beta] });
+    let resolveRefresh!: (response: Response) => void;
+    let alphaLoads = 0;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp?projectId=alpha") {
+        alphaLoads += 1;
+        return Promise.resolve(jsonResponse({ servers: [http("a-row")] }));
+      }
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(jsonResponse({ servers: [http("b-row")] }));
+      if (url === "/mcp/a-row/refresh?projectId=alpha" && init?.method === "POST")
+        return new Promise<Response>((resolve) => (resolveRefresh = resolve));
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-a-row");
+    fireEvent.click(screen.getByTestId("mcp-refresh-a-row"));
+    pickProject("beta");
+    await screen.findByTestId("mcp-b-row");
+    resolveRefresh(jsonResponse({ ok: true }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("mcp-b-row")).toBeTruthy();
+    expect(screen.queryByTestId("mcp-a-row")).toBeNull();
+    expect(alphaLoads).toBe(1);
+  });
+});
+
+describe("MCP edit form settings round-trip", () => {
+  it("resends every received setting and edits timeouts in seconds and approvals", async () => {
+    useAppStore.setState({ session: null, projects: [] });
+    const patches: unknown[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp/tools" && init?.method === "PATCH") {
+        patches.push(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url === "/mcp")
+        return Promise.resolve(
+          jsonResponse({
+            servers: [
+              {
+                id: "tools",
+                transport: "stdio",
+                connected: false,
+                toolNames: [],
+                editable: true,
+                command: "npx",
+                args: ["server"],
+                enabledTools: ["read"],
+                envVars: ["HOME"],
+                envInterpolation: "claude",
+                startupTimeoutMs: 120000,
+                toolApproval: { write: "prompt" },
+                defaultToolApproval: "approve",
+              },
+            ],
+          }),
+        );
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    fireEvent.click(await screen.findByTestId("mcp-edit-tools"));
+    expect((screen.getByTestId("mcp-startup-timeout") as HTMLInputElement).value).toBe("120");
+    expect((screen.getByTestId("mcp-tool-approval-name-0") as HTMLInputElement).value).toBe(
+      "write",
+    );
+    fireEvent.change(screen.getByTestId("mcp-tool-timeout"), { target: { value: "30" } });
+    fireEvent.change(screen.getByTestId("mcp-tool-approval-mode-0"), {
+      target: { value: "approve" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-add-tool-approval"));
+    expect((screen.getByTestId("mcp-edit-confirm") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mcp-add-hint").textContent).toContain("tool name");
+    fireEvent.change(screen.getByTestId("mcp-tool-approval-name-1"), {
+      target: { value: "delete" },
+    });
+    fireEvent.change(screen.getByTestId("mcp-tool-approval-mode-1"), {
+      target: { value: "auto" },
+    });
+    fireEvent.click(screen.getByTestId("mcp-edit-confirm"));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({
+      command: "npx",
+      args: ["server"],
+      expectedTransport: "stdio",
+      enabledTools: ["read"],
+      envVars: ["HOME"],
+      envInterpolation: "claude",
+      startupTimeoutMs: 120000,
+      toolTimeoutMs: 30000,
+      defaultToolApproval: "approve",
+      toolApproval: { write: "approve", delete: "auto" },
+    });
   });
 });

@@ -7,7 +7,11 @@ import { AppSwitch } from "@/design-system/components/AppSwitch";
 import { Card } from "@/design-system/components/Card";
 import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
-import { ControlInput, ControlTextArea } from "@/design-system/components/NativeControls";
+import {
+  ControlInput,
+  ControlSelect,
+  ControlTextArea,
+} from "@/design-system/components/NativeControls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, LogIn, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -54,7 +58,39 @@ type McpDefinitionProvenance =
   | { source: "global" | "project"; path: string }
   | { source: "environment"; variable: "AGENT_DECK_MCP_SERVERS" };
 
-interface McpServer {
+/** Mirrors `McpToolApproval` in @agent-deck/resources (not importable in the renderer). */
+type McpToolApproval = "auto" | "prompt" | "writes" | "approve";
+const MCP_TOOL_APPROVALS: readonly McpToolApproval[] = ["auto", "prompt", "writes", "approve"];
+const MCP_MAX_TIMEOUT_SECONDS = 3600;
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** Non-secret settings the catalog round-trips on an editable row and PATCH accepts. */
+interface McpServerSettings {
+  enabledTools?: string[];
+  disabledTools?: string[];
+  envVars?: string[];
+  envHttpHeaders?: Record<string, string>;
+  bearerTokenEnvVar?: string;
+  startupTimeoutMs?: number;
+  toolTimeoutMs?: number;
+  toolApproval?: Record<string, McpToolApproval>;
+  defaultToolApproval?: McpToolApproval;
+  envInterpolation?: "claude";
+}
+const MCP_SETTINGS_KEYS = [
+  "enabledTools",
+  "disabledTools",
+  "envVars",
+  "envHttpHeaders",
+  "bearerTokenEnvVar",
+  "startupTimeoutMs",
+  "toolTimeoutMs",
+  "toolApproval",
+  "defaultToolApproval",
+  "envInterpolation",
+] as const;
+
+interface McpServer extends McpServerSettings {
   id: string;
   transport: McpTransport;
   connected: boolean;
@@ -70,6 +106,97 @@ interface McpServer {
   url?: string;
   envKeys?: string[];
   headerKeys?: string[];
+}
+
+/** Editable slice of the settings: seconds in the UI, milliseconds on the wire. */
+interface AdvancedDraft {
+  startupSeconds: string;
+  toolSeconds: string;
+  defaultToolApproval: McpToolApproval | "";
+  toolApproval: { tool: string; mode: McpToolApproval }[];
+}
+const EMPTY_ADVANCED: AdvancedDraft = {
+  startupSeconds: "",
+  toolSeconds: "",
+  defaultToolApproval: "",
+  toolApproval: [],
+};
+
+function advancedFrom(server: McpServerSettings): AdvancedDraft {
+  return {
+    startupSeconds:
+      server.startupTimeoutMs !== undefined ? String(server.startupTimeoutMs / 1000) : "",
+    toolSeconds: server.toolTimeoutMs !== undefined ? String(server.toolTimeoutMs / 1000) : "",
+    defaultToolApproval: server.defaultToolApproval ?? "",
+    toolApproval: Object.entries(server.toolApproval ?? {}).map(([tool, mode]) => ({
+      tool,
+      mode,
+    })),
+  };
+}
+
+function parseSeconds(value: string): number | undefined | null {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const seconds = Number(trimmed);
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MCP_MAX_TIMEOUT_SECONDS) return null;
+  return Math.round(seconds * 1000);
+}
+
+/** Settings sent with a save: everything the row carried, with the edited slice on top,
+ *  so a field the editor does not expose is never dropped. */
+function settingsBody(
+  received: McpServerSettings,
+  draft: AdvancedDraft,
+): McpServerSettings & Record<string, unknown> {
+  const startupTimeoutMs = parseSeconds(draft.startupSeconds);
+  const toolTimeoutMs = parseSeconds(draft.toolSeconds);
+  // ponytail: PATCH has no "clear" for a timeout (schema forbids null); an emptied field keeps the saved value.
+  return {
+    ...Object.fromEntries(
+      MCP_SETTINGS_KEYS.filter((key) => received[key] !== undefined).map((key) => [
+        key,
+        received[key],
+      ]),
+    ),
+    ...(typeof startupTimeoutMs === "number" ? { startupTimeoutMs } : {}),
+    ...(typeof toolTimeoutMs === "number" ? { toolTimeoutMs } : {}),
+    ...(draft.defaultToolApproval ? { defaultToolApproval: draft.defaultToolApproval } : {}),
+    ...(draft.toolApproval.length > 0 || received.toolApproval !== undefined
+      ? {
+          toolApproval: Object.fromEntries(
+            draft.toolApproval.map((entry) => [entry.tool.trim(), entry.mode]),
+          ),
+        }
+      : {}),
+  };
+}
+
+function advancedError(draft: AdvancedDraft): string | null {
+  if (parseSeconds(draft.startupSeconds) === null || parseSeconds(draft.toolSeconds) === null)
+    return `Timeouts are seconds between 0 and ${MCP_MAX_TIMEOUT_SECONDS}.`;
+  const names = new Set<string>();
+  for (const entry of draft.toolApproval) {
+    const tool = entry.tool.trim();
+    if (!TOOL_NAME_PATTERN.test(tool)) return "Each tool approval needs a tool name.";
+    if (names.has(tool)) return `The tool ${tool} is listed more than once.`;
+    names.add(tool);
+  }
+  return null;
+}
+
+/** What the backend actually reports. An http row needs a sign-in only when it
+ *  is assigned here and is NOT connected: a public endpoint connects while its
+ *  auth state still reads "unauthenticated", and an unassigned row has not tried. */
+function authPresentation(
+  server: McpServer,
+  assigned: boolean,
+): "authorized" | "required" | undefined {
+  if (server.transport !== "http" || !server.auth || server.auth.status === "none")
+    return undefined;
+  if (server.auth.status === "authorized") return "authorized";
+  if (server.connected || !assigned) return undefined;
+  return "required";
 }
 
 type ProtectedEntryMode = "saved" | "replace" | "add";
@@ -210,9 +337,20 @@ export function McpScreen() {
   const setError = useAppStore((state) => state.setError);
   const pushToast = useAppStore((state) => state.pushToast);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
   const projects = useAppStore((state) => state.projects);
-  const selectedProject = projects.find((project) => project.id === currentProjectId);
+  const sessionProjectId = useAppStore((state) => state.session?.projectId);
+  // Screen-local scope (same pattern as GitScreen): the global project selection
+  // is cleared by session activation, which hid project-scoped auth and
+  // assignment controls. undefined = follow the session; "" = no project.
+  const [projectSelection, setProjectSelection] = useState<string | undefined>(undefined);
+  const availableProjects = projects.filter((project) => !project.hidden);
+  const currentProjectId =
+    projectSelection === ""
+      ? null
+      : availableProjects.some((project) => project.id === projectSelection)
+        ? projectSelection!
+        : (availableProjects.find((project) => project.id === sessionProjectId)?.id ?? null);
+  const selectedProject = availableProjects.find((project) => project.id === currentProjectId);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [mcpEnabled, setMcpEnabled] = useState<boolean | null>(null);
   const [policySaving, setPolicySaving] = useState(false);
@@ -240,6 +378,7 @@ export function McpScreen() {
   const [url, setUrl] = useState("");
   const [envEntries, setEnvEntries] = useState<ProtectedEntry[]>([]);
   const [headerEntries, setHeaderEntries] = useState<ProtectedEntry[]>([]);
+  const [advanced, setAdvanced] = useState<AdvancedDraft>(EMPTY_ADVANCED);
   const [login, setLogin] = useState<LoginFlow | null>(null);
   const [loginPendingId, setLoginPendingId] = useState<string | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
@@ -268,6 +407,9 @@ export function McpScreen() {
     url: string;
     envEntries: ProtectedEntry[];
     headerEntries: ProtectedEntry[];
+    advanced: AdvancedDraft;
+    /** Settings as received, resent untouched on save (round-trip). */
+    settings: McpServerSettings;
   } | null>(null);
   const latestLoad = useRef<Promise<CatalogLoadResult> | null>(null);
   // Bumped whenever a sign-in flow starts, so a slow /login (or /callback) for one
@@ -276,6 +418,10 @@ export function McpScreen() {
 
   const load = useCallback(
     (preserveRows = false): Promise<CatalogLoadResult> => {
+      // A handler that captured this callback before a project switch (refresh,
+      // logout, remove…) must not fetch, let alone apply, the old project's catalog.
+      if (loadedProject.current !== undefined && loadedProject.current !== currentProjectId)
+        return Promise.resolve("superseded");
       const seq = ++loadSeq.current;
       const pending = (async (): Promise<CatalogLoadResult> => {
         try {
@@ -399,6 +545,7 @@ export function McpScreen() {
     }
     return null;
   })();
+  const advancedHint = advancedError(advanced);
 
   /**
    * MCP-12 — native's Paste tab (`MCPServersScreen` + `MCPConfigParser`). A user
@@ -425,7 +572,8 @@ export function McpScreen() {
       : Boolean(trimmedName) &&
         !duplicateName &&
         (transport === "stdio" ? Boolean(trimmedCommand) : isValidHttpUrl(trimmedUrl)) &&
-        !protectedKeyError;
+        !protectedKeyError &&
+        !advancedHint;
 
   const resetDraft = (): void => {
     setInputMode("manual");
@@ -436,6 +584,7 @@ export function McpScreen() {
     setUrl("");
     setEnvEntries([]);
     setHeaderEntries([]);
+    setAdvanced(EMPTY_ADVANCED);
     setTransport("stdio");
     editSnapshot.current = null;
   };
@@ -528,6 +677,7 @@ export function McpScreen() {
         await postServer(
           transport === "http"
             ? {
+                ...settingsBody({}, advanced),
                 name: trimmedName,
                 url: trimmedUrl,
                 ...(headerEntries.length > 0
@@ -539,6 +689,7 @@ export function McpScreen() {
                   : {}),
               }
             : {
+                ...settingsBody({}, advanced),
                 name: trimmedName,
                 command: trimmedCommand,
                 args: parsedArgs,
@@ -572,6 +723,7 @@ export function McpScreen() {
       setUrl(editSnapshot.current.url);
       setEnvEntries(editSnapshot.current.envEntries);
       setHeaderEntries(editSnapshot.current.headerEntries);
+      setAdvanced(editSnapshot.current.advanced);
     }
     setEditingId(null);
     editSnapshot.current = null;
@@ -623,6 +775,8 @@ export function McpScreen() {
     setUrl(nextUrl);
     setEnvEntries(nextEnvEntries);
     setHeaderEntries(nextHeaderEntries);
+    const nextAdvanced = advancedFrom(server);
+    setAdvanced(nextAdvanced);
     editSnapshot.current = {
       transport: nextTransport,
       command: nextCommand,
@@ -630,6 +784,8 @@ export function McpScreen() {
       url: nextUrl,
       envEntries: nextEnvEntries,
       headerEntries: nextHeaderEntries,
+      advanced: nextAdvanced,
+      settings: server,
     };
   };
 
@@ -663,9 +819,11 @@ export function McpScreen() {
       transport === "http"
         ? makePatch(headerEntries, editSnapshot.current?.headerEntries, true)
         : makePatch(envEntries, editSnapshot.current?.envEntries, false);
+    const settings = settingsBody(editSnapshot.current?.settings ?? {}, advanced);
     const body =
       transport === "http"
         ? {
+            ...settings,
             url: trimmedUrl,
             expectedTransport: originalTransport,
             ...(transport !== originalTransport ? { allowTransportChange: true } : {}),
@@ -674,6 +832,7 @@ export function McpScreen() {
               : {}),
           }
         : {
+            ...settings,
             command: trimmedCommand,
             args: parsedArgs,
             expectedTransport: originalTransport,
@@ -1113,10 +1272,30 @@ export function McpScreen() {
                   ? "MCP is on."
                   : "MCP is paused.")}
         </div>
-        <p className="break-words text-caption text-text-muted" data-testid="mcp-trust-copy">
+        <label className="mt-2 flex items-center gap-2 text-detail text-text-muted">
+          Project
+          <ControlSelect
+            aria-label="MCP project"
+            data-testid="mcp-project-picker"
+            size="sm"
+            fullWidth={false}
+            value={currentProjectId ?? ""}
+            onChange={(event) => setProjectSelection(event.target.value)}
+          >
+            <option value="">No project (global catalog)</option>
+            {availableProjects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </ControlSelect>
+        </label>
+        <p className="mt-2 break-words text-caption text-text-muted" data-testid="mcp-trust-copy">
           {selectedProject
             ? `All Projects defaults and this project's explicit assignments are combined for ordinary ${selectedProject.name} chats. Named-agent chats use only that agent's MCP list. Project .pi/mcp.json definitions are read-only and may run repository-controlled commands; review them before assigning.`
-            : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog."}
+            : "All Projects applies only to ordinary chats attached to a real project; no-project chats receive no MCP servers. Add and remove edit only your global ~/.pi/agent/mcp.json catalog. Pick a project to assign servers and sign in to remote ones."}{" "}
+          Adding or importing a server only stores its definition; assigning it grants access, and a
+          remote server may still need a separate sign-in for the selected project.
         </p>
       </Card>
 
@@ -1392,6 +1571,150 @@ export function McpScreen() {
               </div>
             </fieldset>
           ) : null}
+          {!pasting ? (
+            <details data-testid="mcp-advanced" className="min-w-0">
+              <summary className="cursor-pointer text-caption font-medium text-text-secondary">
+                Advanced settings
+              </summary>
+              <div className="mt-2 flex flex-col gap-2 rounded-lg border border-border-subtle p-2.5">
+                <div className="flex flex-wrap gap-2">
+                  <label className="flex min-w-32 flex-1 flex-col gap-1">
+                    <span className="text-detail text-text-muted">Startup timeout (seconds)</span>
+                    <ControlInput
+                      data-testid="mcp-startup-timeout"
+                      inputMode="decimal"
+                      className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code"
+                      placeholder="default"
+                      value={advanced.startupSeconds}
+                      disabled={saving}
+                      onChange={(event) =>
+                        setAdvanced((draft) => ({ ...draft, startupSeconds: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="flex min-w-32 flex-1 flex-col gap-1">
+                    <span className="text-detail text-text-muted">Tool timeout (seconds)</span>
+                    <ControlInput
+                      data-testid="mcp-tool-timeout"
+                      inputMode="decimal"
+                      className="rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code"
+                      placeholder="default"
+                      value={advanced.toolSeconds}
+                      disabled={saving}
+                      onChange={(event) =>
+                        setAdvanced((draft) => ({ ...draft, toolSeconds: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="flex min-w-32 flex-1 flex-col gap-1">
+                    <span className="text-detail text-text-muted">Default tool approval</span>
+                    <ControlSelect
+                      data-testid="mcp-default-approval"
+                      size="sm"
+                      value={advanced.defaultToolApproval}
+                      disabled={saving}
+                      onChange={(event) =>
+                        setAdvanced((draft) => ({
+                          ...draft,
+                          defaultToolApproval: event.target.value as McpToolApproval | "",
+                        }))
+                      }
+                    >
+                      <option value="">auto (default)</option>
+                      {MCP_TOOL_APPROVALS.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </ControlSelect>
+                  </label>
+                </div>
+                <p className="text-detail text-text-muted">
+                  prompt and writes need an approval prompt Agent Deck does not have, so those tools
+                  are blocked until set to approve or auto.
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-detail text-text-muted">Per-tool approval</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={saving}
+                    data-testid="mcp-add-tool-approval"
+                    onClick={() =>
+                      setAdvanced((draft) => ({
+                        ...draft,
+                        toolApproval: [...draft.toolApproval, { tool: "", mode: "approve" }],
+                      }))
+                    }
+                  >
+                    <Plus size={12} /> Add tool
+                  </Button>
+                </div>
+                {advanced.toolApproval.map((entry, index) => (
+                  <div key={index} className="flex flex-wrap items-end gap-2">
+                    <label className="min-w-40 flex-1">
+                      <span className="block text-detail text-text-muted">Tool</span>
+                      <ControlInput
+                        data-testid={`mcp-tool-approval-name-${index}`}
+                        className="w-full rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 font-mono text-code"
+                        value={entry.tool}
+                        disabled={saving}
+                        onChange={(event) =>
+                          setAdvanced((draft) => ({
+                            ...draft,
+                            toolApproval: draft.toolApproval.map((item, i) =>
+                              i === index ? { ...item, tool: event.target.value } : item,
+                            ),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="min-w-32">
+                      <span className="block text-detail text-text-muted">Approval</span>
+                      <ControlSelect
+                        data-testid={`mcp-tool-approval-mode-${index}`}
+                        size="sm"
+                        value={entry.mode}
+                        disabled={saving}
+                        onChange={(event) =>
+                          setAdvanced((draft) => ({
+                            ...draft,
+                            toolApproval: draft.toolApproval.map((item, i) =>
+                              i === index
+                                ? { ...item, mode: event.target.value as McpToolApproval }
+                                : item,
+                            ),
+                          }))
+                        }
+                      >
+                        {MCP_TOOL_APPROVALS.map((mode) => (
+                          <option key={mode} value={mode}>
+                            {mode}
+                          </option>
+                        ))}
+                      </ControlSelect>
+                    </label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={saving}
+                      aria-label={`Remove tool approval ${entry.tool || index + 1}`}
+                      onClick={() =>
+                        setAdvanced((draft) => ({
+                          ...draft,
+                          toolApproval: draft.toolApproval.filter((_, i) => i !== index),
+                        }))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
           {editing && editSnapshot.current && transport !== editSnapshot.current.transport ? (
             <AppInlineNotice tone="warning">
               Changing the server type removes the saved protected values for the previous type.
@@ -1415,6 +1738,10 @@ export function McpScreen() {
           ) : protectedKeyError ? (
             <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">
               {protectedKeyError}
+            </p>
+          ) : advancedHint ? (
+            <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">
+              {advancedHint}
             </p>
           ) : duplicateName ? (
             <p id="mcp-add-hint" className="text-caption text-warning" data-testid="mcp-add-hint">
@@ -1450,6 +1777,12 @@ export function McpScreen() {
               server.tools ?? server.toolNames.map((name) => ({ name, description: undefined }));
             const toolsExpanded = expandedToolServers.has(server.id);
             const toolsRegionId = `mcp-tools-region-${server.id}`;
+            // Without a project scope the backend reports no auth state at all.
+            const assignedHere =
+              !currentProjectId ||
+              defaultAssignedServerIds.includes(server.id) ||
+              assignedServerIds.includes(server.id);
+            const auth = authPresentation(server, assignedHere);
             return (
               <div key={server.id}>
                 <div
@@ -1575,20 +1908,18 @@ export function McpScreen() {
                       <span className="rounded-capsule border border-border-subtle px-1.5 text-micro text-text-muted">
                         {server.transport}
                       </span>
-                      {server.transport === "http" &&
-                      server.auth &&
-                      server.auth.status !== "none" ? (
+                      {auth ? (
                         <span
                           data-testid={`mcp-auth-${server.id}`}
-                          data-auth={server.auth.status}
+                          data-auth={server.auth?.status}
                           className={cn(
                             "rounded-capsule border px-1.5 text-micro",
-                            server.auth.status === "authorized"
+                            auth === "authorized"
                               ? "border-success text-success"
                               : "border-border-subtle text-text-muted",
                           )}
                         >
-                          {server.auth.status === "authorized" ? "signed in" : "sign-in required"}
+                          {auth === "authorized" ? "signed in" : "sign-in required"}
                         </span>
                       ) : null}
                       <Button
@@ -1624,8 +1955,8 @@ export function McpScreen() {
                       </div>
                     ) : null}
                   </div>
-                  {server.transport === "http" && server.auth && server.auth.status !== "none" ? (
-                    server.auth.status === "authorized" ? (
+                  {auth ? (
+                    auth === "authorized" ? (
                       <Button
                         data-testid={`mcp-logout-${server.id}`}
                         size="sm"
