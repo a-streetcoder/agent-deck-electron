@@ -26,6 +26,43 @@ export function isValidHttpMcpUrl(value: unknown): value is string {
   }
 }
 
+/** A Claude-interpolated URL is validated with its `${VAR}` / `${VAR:-default}`
+ * placeholders stood in for, since `new URL()` rejects a brace in a host. The
+ * launcher re-validates the expanded URL before connecting. */
+export function isValidHttpMcpUrlTemplate(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    isValidHttpMcpUrl(value.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}/g, "x"))
+  );
+}
+
+/** Codex's per-tool approval modes, kept verbatim so a policy survives a round
+ * trip. `auto`/`approve` run; `prompt`/`writes` need an approval prompt this app
+ * does not have, so the runtime blocks those tools rather than silently allow them. */
+export type McpToolApproval = "auto" | "prompt" | "writes" | "approve";
+export const MCP_TOOL_APPROVALS: readonly McpToolApproval[] = [
+  "auto",
+  "prompt",
+  "writes",
+  "approve",
+];
+
+/** Timeouts are bounded so a typo cannot hang discovery for a day. */
+export const MCP_MAX_TIMEOUT_MS = 60 * 60_000;
+
+export const MCP_SETTINGS_KEYS = [
+  "enabledTools",
+  "disabledTools",
+  "envVars",
+  "envHttpHeaders",
+  "bearerTokenEnvVar",
+  "startupTimeoutMs",
+  "toolTimeoutMs",
+  "toolApproval",
+  "defaultToolApproval",
+  "envInterpolation",
+] as const;
+
 /** The shape a caller supplies to add/update a server (stdio or http). */
 export interface McpServerSettings {
   enabledTools?: string[];
@@ -33,7 +70,24 @@ export interface McpServerSettings {
   envVars?: string[];
   envHttpHeaders?: Record<string, string>;
   bearerTokenEnvVar?: string;
+  /** Bounds connect + initial tool listing (Codex `startup_timeout_sec`). */
+  startupTimeoutMs?: number;
+  /** Bounds one tool call (Codex `tool_timeout_sec`). */
+  toolTimeoutMs?: number;
+  /** Per-tool approval overrides (Codex `[mcp_servers.<id>.tools.<tool>]`). */
+  toolApproval?: Record<string, McpToolApproval>;
+  /** Approval for tools without an override (Codex `default_tools_approval_mode`). */
+  defaultToolApproval?: McpToolApproval;
+  /** Resolve `${VAR}` / `${VAR:-default}` in EVERY field at launch, the way
+   * Claude Code does for a definition imported from it. Absent keeps native's
+   * stdio-only rules. */
+  envInterpolation?: "claude";
 }
+
+export const isMcpToolApproval = (value: unknown): value is McpToolApproval =>
+  MCP_TOOL_APPROVALS.includes(value as McpToolApproval);
+export const isMcpTimeoutMs = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MCP_MAX_TIMEOUT_MS;
 
 export type McpServerInput = McpServerSettings &
   (
@@ -139,6 +193,31 @@ export function interpolateMcpValue(
   return output;
 }
 
+/**
+ * Claude Code's expansion for a definition imported from it: `${VAR}` and
+ * `${VAR:-default}` only (no bare `$VAR`, no tilde), applied to every field
+ * including `url` and `headers`. A variable that is unset and has no default is
+ * reported in `missing` and left as-is, so the caller can fail closed by NAME
+ * without ever seeing a value; Claude Code likewise refuses to start the server.
+ */
+export function interpolateClaudeMcpValue(
+  raw: string,
+  environment: Record<string, string | undefined>,
+): { value: string; missing: string[] } {
+  const missing: string[] = [];
+  const value = raw.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+    (token, name: string, fallback: string | undefined) => {
+      const current = Object.hasOwn(environment, name) ? environment[name] : undefined;
+      if (typeof current === "string") return current;
+      if (fallback !== undefined) return fallback;
+      missing.push(name);
+      return token;
+    },
+  );
+  return { value, missing };
+}
+
 export class McpConfigError extends Error {}
 
 /** A normalized MCP server config resolved from an mcp.json entry. */
@@ -208,6 +287,19 @@ function readMcpSettings(config: Record<string, unknown>): McpServerSettings {
     settings.bearerTokenEnvVar = config.bearerTokenEnvVar;
   const headers = asStringRecord(config.envHttpHeaders);
   if (headers) settings.envHttpHeaders = headers;
+  for (const key of ["startupTimeoutMs", "toolTimeoutMs"] as const) {
+    const value = config[key];
+    if (isMcpTimeoutMs(value)) settings[key] = value;
+  }
+  if (isPlainObject(config.toolApproval)) {
+    const approvals: Record<string, McpToolApproval> = {};
+    for (const [tool, mode] of Object.entries(config.toolApproval))
+      if (isMcpToolApproval(mode)) approvals[tool] = mode;
+    if (Object.keys(approvals).length > 0) settings.toolApproval = approvals;
+  }
+  if (isMcpToolApproval(config.defaultToolApproval))
+    settings.defaultToolApproval = config.defaultToolApproval;
+  if (config.envInterpolation === "claude") settings.envInterpolation = "claude";
   return settings;
 }
 
@@ -247,7 +339,12 @@ function parseMcpFile(file: string, scope: McpConfigScope, writable: boolean): P
         scope,
         sourcePath: file,
       });
-    } else if (isValidHttpMcpUrl(config.url)) {
+    } else if (
+      typeof config.url === "string" &&
+      (config.envInterpolation === "claude"
+        ? isValidHttpMcpUrlTemplate(config.url)
+        : isValidHttpMcpUrl(config.url))
+    ) {
       const headers = asStringRecord(config.headers);
       entries.push({
         ...readMcpSettings(config),
@@ -403,13 +500,7 @@ function writeMcpDocument(file: string, document: Record<string, unknown>): void
 /** Overlay submitted transport fields onto an existing mcpServers entry. */
 function mergeMcpServerEntry(existing: unknown, config: McpServerInput): Record<string, unknown> {
   const next: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
-  for (const key of [
-    "enabledTools",
-    "disabledTools",
-    "envVars",
-    "envHttpHeaders",
-    "bearerTokenEnvVar",
-  ] as const) {
+  for (const key of MCP_SETTINGS_KEYS) {
     if (config[key] !== undefined) next[key] = config[key];
   }
   if ("command" in config) {
@@ -559,15 +650,35 @@ export function writeMcpServer(
       throw new McpConfigError("invalid environment reference name");
   }
   validateHeaderRecord(config.envHttpHeaders);
-  for (const name of [...(config.enabledTools ?? []), ...(config.disabledTools ?? [])]) {
+  for (const name of [
+    ...(config.enabledTools ?? []),
+    ...(config.disabledTools ?? []),
+    ...Object.keys(config.toolApproval ?? {}),
+  ]) {
     if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new McpConfigError("invalid tool policy name");
   }
+  for (const key of ["startupTimeoutMs", "toolTimeoutMs"] as const) {
+    if (config[key] !== undefined && !isMcpTimeoutMs(config[key]))
+      throw new McpConfigError(`invalid ${key}: expected an integer 1..${MCP_MAX_TIMEOUT_MS} ms`);
+  }
+  for (const mode of [
+    ...Object.values(config.toolApproval ?? {}),
+    ...(config.defaultToolApproval !== undefined ? [config.defaultToolApproval] : []),
+  ]) {
+    if (!isMcpToolApproval(mode)) throw new McpConfigError("invalid tool approval mode");
+  }
+  if (config.envInterpolation !== undefined && config.envInterpolation !== "claude")
+    throw new McpConfigError("invalid envInterpolation");
   if ("command" in config) {
     if (config.cwd !== undefined && (!config.cwd.trim() || config.cwd.includes("\0")))
       throw new McpConfigError("invalid working directory");
     if (!config.command.trim()) throw new McpConfigError("stdio server needs a command");
     validateEnvRecord(config.env);
-  } else if (!isValidHttpMcpUrl(config.url)) {
+  } else if (
+    !(config.envInterpolation === "claude"
+      ? isValidHttpMcpUrlTemplate(config.url)
+      : isValidHttpMcpUrl(config.url))
+  ) {
     throw new McpConfigError("http server needs a valid http(s) url");
   } else {
     validateHeaderRecord(config.headers);

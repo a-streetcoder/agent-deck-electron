@@ -5,7 +5,13 @@ import {
   type McpOAuthProvider,
   type StdioServerConfig,
 } from "@agent-deck/mcp";
-import { interpolateMcpValue, isValidHttpMcpUrl, type McpServerEntry } from "@agent-deck/resources";
+import {
+  interpolateClaudeMcpValue,
+  interpolateMcpValue,
+  isValidHttpMcpUrl,
+  type McpServerEntry,
+  type McpToolApproval,
+} from "@agent-deck/resources";
 import type { BridgeRegistry, BridgeToolContext } from "./bridge.ts";
 
 /**
@@ -18,15 +24,34 @@ import type { BridgeRegistry, BridgeToolContext } from "./bridge.ts";
 
 /** A configured MCP server: stdio (spawned) or http (remote Streamable HTTP),
  * discriminated by whether it carries a `url`. */
-export type McpServerConfig = { id: string; enabledTools?: string[]; disabledTools?: string[] } & (
-  | StdioServerConfig
-  | HttpServerConfig
-);
+export type McpServerConfig = {
+  id: string;
+  enabledTools?: string[];
+  disabledTools?: string[];
+  startupTimeoutMs?: number;
+  toolTimeoutMs?: number;
+  toolApproval?: Record<string, McpToolApproval>;
+  defaultToolApproval?: McpToolApproval;
+  /** A launch precondition failed (an unset environment reference, an
+   * interpolated URL that is not http(s)). Names only, never values: the
+   * server is listed with this as its error instead of silently vanishing. */
+  blocked?: string;
+} & (StdioServerConfig | HttpServerConfig);
+
+/** Why a tool cannot run under its imported approval mode, or undefined when it can.
+ * Codex prompts a human for `prompt`/`writes`; this app has no such prompt, so
+ * honouring the policy means refusing rather than quietly auto-approving. */
+export function toolApprovalBlock(config: McpServerConfig, tool: string): string | undefined {
+  const mode = config.toolApproval?.[tool] ?? config.defaultToolApproval ?? "auto";
+  if (mode === "auto" || mode === "approve") return undefined;
+  return `Tool "${tool}" on "${config.id}" is set to approval mode "${mode}", which needs an approval prompt Agent Deck does not have. Set its approval to "approve" or "auto" in the server settings to allow it.`;
+}
 
 function configToolAllowed(config: McpServerConfig, tool: string): boolean {
   return (
     (config.enabledTools === undefined || config.enabledTools.includes(tool)) &&
-    !config.disabledTools?.includes(tool)
+    !config.disabledTools?.includes(tool) &&
+    toolApprovalBlock(config, tool) === undefined
   );
 }
 
@@ -70,13 +95,17 @@ function stringRecordEqual(
 function normalizeStdioLaunch<T extends { id: string } & StdioServerConfig>(
   config: T,
   homeDir: string,
-  environment: Record<string, string | undefined>,
+  environment: Record<string, string | undefined> | { expand: (value: string) => string },
 ): T | null {
   // A non-string slipped past validation (AGENT_DECK_MCP_SERVERS validates only
   // `id` and the transport) must not THROW here: that would abort backend
   // startup instead of failing one server's connection (Codex).
   const expand = (value: unknown): string =>
-    typeof value === "string" ? interpolateMcpValue(value, environment, homeDir) : "";
+    typeof value !== "string"
+      ? ""
+      : "expand" in environment && typeof environment.expand === "function"
+        ? environment.expand(value)
+        : interpolateMcpValue(value, environment as Record<string, string | undefined>, homeDir);
   const command = expand(config.command);
   if (command.length === 0) return null;
   return {
@@ -100,30 +129,72 @@ export function mcpEntryToConfig(
   homeDir: string,
   environment: Record<string, string | undefined> = process.env,
 ): McpServerConfig[] {
-  const policy = { enabledTools: entry.enabledTools, disabledTools: entry.disabledTools };
+  const policy = {
+    enabledTools: entry.enabledTools,
+    disabledTools: entry.disabledTools,
+    ...(entry.startupTimeoutMs !== undefined ? { startupTimeoutMs: entry.startupTimeoutMs } : {}),
+    ...(entry.toolTimeoutMs !== undefined ? { toolTimeoutMs: entry.toolTimeoutMs } : {}),
+    ...(entry.toolApproval !== undefined ? { toolApproval: entry.toolApproval } : {}),
+    ...(entry.defaultToolApproval !== undefined
+      ? { defaultToolApproval: entry.defaultToolApproval }
+      : {}),
+  };
   const reference = (name: string): string | undefined =>
     /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && Object.hasOwn(environment, name)
       ? environment[name]
       : undefined;
+  // A failed precondition is reported by NAME on a listed-but-unlaunchable
+  // config: the user sees which variable to set instead of a vanished server.
+  const missing = (names: string[]): string =>
+    `Environment variable${names.length > 1 ? "s" : ""} ${names.map((n) => `"${n}"`).join(", ")} ${names.length > 1 ? "are" : "is"} not set for "${entry.id}". Set ${names.length > 1 ? "them" : "it"} in Environment and reconnect.`;
+  // Claude-imported definitions expand `${VAR}` / `${VAR:-default}` in every
+  // field at launch (Claude Code's rule), never persisting the resolved values.
+  const claude = entry.envInterpolation === "claude";
+  const unresolved = new Set<string>();
+  const expandClaude = (value: string): string => {
+    const result = interpolateClaudeMcpValue(value, environment);
+    for (const name of result.missing) unresolved.add(name);
+    return result.value;
+  };
   if (entry.transport === "http" && entry.url) {
-    const headers = { ...entry.headers };
+    const url = claude ? expandClaude(entry.url) : entry.url;
+    const headers = Object.fromEntries(
+      Object.entries(entry.headers ?? {}).map(([k, v]) => [k, claude ? expandClaude(v) : v]),
+    );
     for (const [key, name] of Object.entries(entry.envHttpHeaders ?? {})) {
       const value = reference(name);
-      if (value === undefined || /[\r\n\0]/.test(value)) return [];
+      if (value === undefined) return [{ id: entry.id, ...policy, url, blocked: missing([name]) }];
+      if (/[\r\n\0]/.test(value)) return [];
       headers[key] = value;
     }
     if (entry.bearerTokenEnvVar) {
       const value = reference(entry.bearerTokenEnvVar);
-      if (!value || /[\r\n\0]/.test(value)) return [];
+      if (!value)
+        return [{ id: entry.id, ...policy, url, blocked: missing([entry.bearerTokenEnvVar]) }];
+      if (/[\r\n\0]/.test(value)) return [];
       headers.Authorization = `Bearer ${value}`;
     }
+    if (unresolved.size)
+      return [{ id: entry.id, ...policy, url, blocked: missing([...unresolved]) }];
+    if (
+      claude &&
+      (!isValidHttpMcpUrl(url) || Object.values(headers).some((v) => /[\r\n\0]/.test(v)))
+    )
+      return [
+        {
+          id: entry.id,
+          ...policy,
+          url: entry.url,
+          blocked: `The interpolated URL or headers of "${entry.id}" are not valid. Check the referenced environment variables.`,
+        },
+      ];
     // Native interpolates ONLY the four stdio fields below — never `url` or
-    // `headers` — so these pass through untouched.
+    // `headers` — so without the Claude flag these pass through untouched.
     return [
       {
         id: entry.id,
         ...policy,
-        url: entry.url,
+        url,
         ...(Object.keys(headers).length ? { headers } : {}),
       },
     ];
@@ -138,27 +209,35 @@ export function mcpEntryToConfig(
         ...(entry.cwd ? { cwd: entry.cwd } : {}),
       },
       homeDir,
-      environment,
+      claude ? { expand: expandClaude } : environment,
     );
     if (!launch) return [];
     for (const name of entry.envVars ?? []) {
       // Codex explicit env overrides inherited env_vars, including empty values.
       if (Object.hasOwn(entry.env ?? {}, name)) continue;
       const value = reference(name);
-      if (value === undefined || value.includes("\0")) return [];
+      if (value === undefined) return [{ ...launch, ...policy, blocked: missing([name]) }];
+      if (value.includes("\0")) return [];
       launch.env = { ...launch.env, [name]: value };
     }
+    if (unresolved.size) return [{ ...launch, ...policy, blocked: missing([...unresolved]) }];
     return [{ ...launch, ...policy }];
   }
   return [];
 }
 
+const settingsOf = (config: McpServerConfig): unknown => [
+  config.enabledTools,
+  config.disabledTools,
+  config.startupTimeoutMs,
+  config.toolTimeoutMs,
+  config.toolApproval,
+  config.defaultToolApproval,
+  config.blocked,
+];
+
 export function mcpServerConfigsEqual(left: McpServerConfig, right: McpServerConfig): boolean {
-  if (
-    JSON.stringify([left.enabledTools, left.disabledTools]) !==
-    JSON.stringify([right.enabledTools, right.disabledTools])
-  )
-    return false;
+  if (JSON.stringify(settingsOf(left)) !== JSON.stringify(settingsOf(right))) return false;
   if (left.id !== right.id || isHttpConfig(left) !== isHttpConfig(right)) return false;
   if (isHttpConfig(left) && isHttpConfig(right)) {
     return left.url === right.url && stringRecordEqual(left.headers, right.headers);
@@ -278,17 +357,18 @@ async function connectWithTimeout(
   connect: (signal: AbortSignal) => Promise<McpClient>,
   label: string,
   controller: AbortController,
+  timeoutMs = MCP_CONNECT_TIMEOUT_MS,
 ): Promise<McpClient> {
   const promise = connect(controller.signal);
   let accepted = false;
   try {
-    const client = await withTimeout(promise, MCP_CONNECT_TIMEOUT_MS, label, controller.signal);
+    const client = await withTimeout(promise, timeoutMs, label, controller.signal);
     accepted = true;
     return client;
   } finally {
     if (!accepted) {
       if (!controller.signal.aborted) {
-        controller.abort(new Error(`${label} timed out after ${MCP_CONNECT_TIMEOUT_MS}ms`));
+        controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`));
       }
       void promise.then((client) => client.close()).catch(() => {});
     }
@@ -484,11 +564,18 @@ export class McpManager {
     };
     this.servers.set(key, state);
     this.bridge.register(MCP_PROXY_SPEC, (params, ctx) => this.dispatchProxy(params, ctx));
+    if (config.blocked) {
+      // Listed so the user can see WHY it is unavailable; never spawned.
+      state.error = config.blocked;
+      state.operationController = undefined;
+      return this.status(scope).find((s) => s.id === config.id)!;
+    }
+    const startupTimeoutMs = config.startupTimeoutMs ?? MCP_CONNECT_TIMEOUT_MS;
     let client: McpClient | undefined;
     try {
       client = await connectWithTimeout(
         (signal) => {
-          const connectOptions = { signal, timeoutMs: MCP_CONNECT_TIMEOUT_MS };
+          const connectOptions = { signal, timeoutMs: startupTimeoutMs };
           return isHttpConfig(config)
             ? McpClient.connectHttp(config, {
                 ...connectOptions,
@@ -500,6 +587,7 @@ export class McpManager {
         },
         `MCP connect "${config.id}"`,
         operationController,
+        startupTimeoutMs,
       );
       const connectedClient = client;
       // Own the client as soon as it connects. Tool discovery can still fail or
@@ -508,9 +596,9 @@ export class McpManager {
       const tools = await withTimeout(
         connectedClient.listTools({
           signal: operationController.signal,
-          timeoutMs: MCP_CONNECT_TIMEOUT_MS,
+          timeoutMs: startupTimeoutMs,
         }),
-        MCP_CONNECT_TIMEOUT_MS,
+        startupTimeoutMs,
         `MCP listTools "${config.id}"`,
         operationController.signal,
       );
@@ -640,6 +728,8 @@ export class McpManager {
           isError: true,
         };
       }
+      const approvalBlock = toolApprovalBlock(state.config, address.tool);
+      if (approvalBlock) return { content: approvalBlock, isError: true };
       const liveTools = await this.discoverState(state, ctx);
       const liveStates = this.authorizedStates(ctx.sessionId);
       const livePolicy = this.resolveToolPolicy(ctx.sessionId);
@@ -672,7 +762,7 @@ export class McpManager {
       }
       const result = await state.client.callTool(address.tool, args, {
         signal: ctx.signal,
-        timeoutMs: MCP_REQUEST_TIMEOUT_MS,
+        timeoutMs: state.config.toolTimeoutMs ?? MCP_REQUEST_TIMEOUT_MS,
       });
       if (
         ctx.signal?.aborted ||

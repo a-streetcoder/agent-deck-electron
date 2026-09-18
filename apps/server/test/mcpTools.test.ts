@@ -971,7 +971,12 @@ it("resolves live references only at launch and propagates policy", () => {
     enabledTools: ["read"],
     disabledTools: ["write"],
   });
-  expect(mcpEntryToConfig(entry, "/home", {})).toEqual([]);
+  // A missing reference is reported by NAME (never a value) instead of the
+  // server silently vanishing from the catalog.
+  const blocked = mcpEntryToConfig(entry, "/home", {});
+  expect(blocked).toHaveLength(1);
+  expect(blocked[0]!.blocked).toContain('"KEY"');
+  expect(blocked[0]!.blocked).not.toContain("live");
   expect(JSON.stringify(entry)).toBe(before);
   const local: McpServerEntry = {
     ...entry,
@@ -1038,4 +1043,97 @@ it("Codex explicit env wins over envVars even when inherited values are missing"
       env: { KEY: "explicit", EMPTY: "" },
     });
   }
+});
+
+it("honours imported approval modes: prompt/writes are blocked with a reason, approve/auto run", async () => {
+  const client = fakeClient();
+  client.listTools.mockResolvedValue(
+    ["execute", "read", "list"].map((name) => ({ name, inputSchema: { type: "object" } })),
+  );
+  client.callTool.mockResolvedValue({ content: "ok" });
+  vi.mocked(McpClient.connectStdio).mockResolvedValue(client as unknown as McpClient);
+  const bridge = new BridgeRegistry();
+  const manager = new McpManager(bridge, {
+    scopeForSession: () => "global",
+    allowServerForSession: () => true,
+  });
+  await manager.connect({
+    id: "cf",
+    command: "node",
+    toolApproval: { execute: "approve", read: "prompt" },
+    defaultToolApproval: "writes",
+  });
+  const dispatch = (params: Record<string, unknown>) =>
+    bridge.dispatch(
+      { sessionId: "session", toolCallId: "call", tool: "mcp", params, token: "token" },
+      { token: "token" },
+    );
+  // Advertised AND executed surfaces agree: only the pre-approved tool is usable.
+  expect(manager.status()[0]?.toolNames).toEqual(["cf/execute"]);
+  const blocked = await dispatch({ tool: "cf/read" });
+  expect(blocked.isError).toBe(true);
+  expect(blocked.content).toContain('approval mode "prompt"');
+  expect((await dispatch({ tool: "cf/list" })).content).toContain('approval mode "writes"');
+  expect(client.callTool).not.toHaveBeenCalled();
+  expect(await dispatch({ tool: "cf/execute" })).toMatchObject({ content: "ok" });
+  await manager.close();
+});
+
+it("lists a blocked config with its reason and never connects it", async () => {
+  const bridge = new BridgeRegistry();
+  const manager = new McpManager(bridge, {
+    scopeForSession: () => "global",
+    allowServerForSession: () => true,
+  });
+  const status = await manager.connect({
+    id: "needs-key",
+    url: "https://example.test",
+    blocked: 'Environment variable "KEY" is not set for "needs-key".',
+  });
+  expect(status).toMatchObject({ connected: false, error: expect.stringContaining('"KEY"') });
+  expect(McpClient.connectHttp).not.toHaveBeenCalled();
+  await manager.close();
+});
+
+it("applies Claude interpolation with defaults to url and headers at launch only", () => {
+  const entry: McpServerEntry = {
+    id: "context7",
+    transport: "http",
+    scope: "global",
+    writable: true,
+    sourcePath: "fixture",
+    url: "https://${C7_HOST:-mcp.context7.com}/mcp",
+    headers: { Authorization: "${CONTEXT7_API_KEY:-}", "X-Team": "${TEAM}" },
+    envInterpolation: "claude",
+  };
+  const before = JSON.stringify(entry);
+  expect(mcpEntryToConfig(entry, "/home", { TEAM: "t1" })[0]).toMatchObject({
+    url: "https://mcp.context7.com/mcp",
+    headers: { Authorization: "", "X-Team": "t1" },
+  });
+  const blocked = mcpEntryToConfig(entry, "/home", {})[0]!;
+  expect(blocked.blocked).toContain('"TEAM"');
+  expect(blocked.blocked).not.toContain("t1");
+  expect(JSON.stringify(entry)).toBe(before);
+  // Without the flag, `${TEAM}` in a URL is a literal (native never touches url).
+  const native = mcpEntryToConfig({ ...entry, envInterpolation: undefined }, "/home", {})[0]!;
+  expect(native.blocked).toBeUndefined();
+  expect(native).toMatchObject({ url: entry.url });
+});
+
+it("carries imported timeouts to the launch config and treats them as identity", () => {
+  const entry: McpServerEntry = {
+    id: "repl",
+    transport: "stdio",
+    scope: "global",
+    writable: true,
+    sourcePath: "fixture",
+    command: "node",
+    startupTimeoutMs: 120_000,
+    toolTimeoutMs: 300_000,
+  };
+  const [config] = mcpEntryToConfig(entry, "/home", {});
+  expect(config).toMatchObject({ startupTimeoutMs: 120_000, toolTimeoutMs: 300_000 });
+  const [changed] = mcpEntryToConfig({ ...entry, toolTimeoutMs: 1_000 }, "/home", {});
+  expect(mcpServerConfigsEqual(config!, changed!)).toBe(false);
 });

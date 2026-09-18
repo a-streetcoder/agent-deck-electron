@@ -8,6 +8,7 @@ import {
   isValidMcpServerName,
   mcpConfigPath,
   McpConfigError,
+  interpolateClaudeMcpValue,
   interpolateMcpValue,
   mcpReadLocations,
   readMcpServerCatalog,
@@ -782,4 +783,89 @@ it("atomically replaces imported entries without retaining absent optional field
     );
     expect(readFileSync(mcpConfigPath(roots, "global")!, "utf8")).toBe(before);
   }
+});
+
+describe("imported compatibility settings (timeouts, approval, interpolation)", () => {
+  it("round-trips through mcp.json, keeps them on ordinary edits, and drops them on replace", () => {
+    writeMcpServer(roots, "global", "repl", {
+      command: "node",
+      startupTimeoutMs: 120_000,
+      toolTimeoutMs: 300_000,
+      toolApproval: { execute: "approve", write: "prompt" },
+      defaultToolApproval: "writes",
+    });
+    writeMcpServer(roots, "global", "c7", {
+      url: "https://${C7_HOST:-mcp.context7.com}/mcp",
+      headers: { Authorization: "${CONTEXT7_API_KEY:-}" },
+      envInterpolation: "claude",
+    });
+    const repl = readMcpServers(roots).find((s) => s.id === "repl");
+    expect(repl).toMatchObject({
+      startupTimeoutMs: 120_000,
+      toolTimeoutMs: 300_000,
+      toolApproval: { execute: "approve", write: "prompt" },
+      defaultToolApproval: "writes",
+    });
+    expect(readMcpServers(roots).find((s) => s.id === "c7")?.envInterpolation).toBe("claude");
+    // An ordinary edit that omits the settings keeps them.
+    writeMcpServer(roots, "global", "repl", { command: "node", args: ["--x"] });
+    expect(readMcpServers(roots).find((s) => s.id === "repl")?.startupTimeoutMs).toBe(120_000);
+    // A replacement starts from an empty entry.
+    writeMcpServer(roots, "global", "repl", { command: "node" }, undefined, "replace");
+    expect(readMcpServers(roots).find((s) => s.id === "repl")?.startupTimeoutMs).toBeUndefined();
+  });
+
+  it("rejects out-of-range timeouts, unknown approval modes, and unknown interpolation on write, and ignores them on read", () => {
+    expect(() =>
+      writeMcpServer(roots, "global", "a", { command: "node", startupTimeoutMs: 0 }),
+    ).toThrow(McpConfigError);
+    expect(() =>
+      writeMcpServer(roots, "global", "a", { command: "node", toolTimeoutMs: 1.5 }),
+    ).toThrow(McpConfigError);
+    expect(() =>
+      writeMcpServer(roots, "global", "a", {
+        command: "node",
+        toolApproval: { x: "sometimes" as never },
+      }),
+    ).toThrow(McpConfigError);
+    expect(() =>
+      writeMcpServer(roots, "global", "a", { command: "node", envInterpolation: "bash" as never }),
+    ).toThrow(McpConfigError);
+    writeGlobal({
+      mcpServers: {
+        a: {
+          command: "node",
+          startupTimeoutMs: -1,
+          toolTimeoutMs: "60",
+          toolApproval: { ok: "approve", bad: 3 },
+          defaultToolApproval: "nope",
+          envInterpolation: "bash",
+        },
+      },
+    });
+    const a = readMcpServers(roots).find((s) => s.id === "a");
+    expect(a?.startupTimeoutMs).toBeUndefined();
+    expect(a?.toolTimeoutMs).toBeUndefined();
+    expect(a?.toolApproval).toEqual({ ok: "approve" });
+    expect(a?.defaultToolApproval).toBeUndefined();
+    expect(a?.envInterpolation).toBeUndefined();
+  });
+});
+
+describe("interpolateClaudeMcpValue", () => {
+  it("expands ${VAR} and ${VAR:-default}, reports unset names, and leaves other syntax alone", () => {
+    const env = { HOST: "h.test", EMPTY: "" };
+    expect(interpolateClaudeMcpValue("https://${HOST}/${PATH:-mcp}", env)).toEqual({
+      value: "https://h.test/mcp",
+      missing: [],
+    });
+    // Set-but-empty is a value, not a miss; an empty default is allowed.
+    expect(interpolateClaudeMcpValue("${EMPTY:-x}|${KEY:-}", env).value).toBe("|");
+    expect(interpolateClaudeMcpValue("${TOKEN} $HOST ~/x", env)).toEqual({
+      value: "${TOKEN} $HOST ~/x",
+      missing: ["TOKEN"],
+    });
+    // Prototype members are not variables.
+    expect(interpolateClaudeMcpValue("${constructor}", env).missing).toEqual(["constructor"]);
+  });
 });
