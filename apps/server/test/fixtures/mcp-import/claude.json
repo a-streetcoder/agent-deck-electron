@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "Neon": {
+      "type": "http",
+      "url": "https://mcp.neon.example/mcp",
+      "headers": { "Authorization": "Bearer fixture-neon-token" }
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://${C7_HOST:-mcp.context7.example}/mcp",
+      "headers": { "Authorization": "${CONTEXT7_API_KEY:-}" }
+    },
+    "local": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js", "${WORKDIR}"],
+      "env": { "TOKEN": "fixture-secret" },
+      "cwd": "/tmp/work"
+    },
+    "ws": { "type": "ws", "url": "wss://example.test" },
+    "unknown-keys": { "command": "node", "sandbox": true }
+  },
+  "projects": {
+    "C:/Users/fixture/proj": {
+      "mcpServers": { "ahrefs": { "type": "http", "url": "https://api.ahrefs.example/mcp" } },
+      "enabledMcpjsonServers": ["approved"],
+      "disabledMcpjsonServers": ["rejected"]
+    },
+    "/home/fixture/other": {
+      "mcpServers": { "private": { "command": "node", "env": { "SECRET": "fixture-other-secret" } } }
+    }
+  },
+  "oauthAccount": { "token": "never-copy" }
+}

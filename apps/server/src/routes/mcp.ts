@@ -1,12 +1,17 @@
 import {
   hasMcpServer,
   isValidHttpMcpUrl,
+  isValidHttpMcpUrlTemplate,
+  MCP_MAX_TIMEOUT_MS,
+  MCP_SETTINGS_KEYS,
+  MCP_TOOL_APPROVALS,
   McpConfigError,
   readMcpServerCatalog,
   type McpServerEntry,
+  type McpToolApproval,
 } from "@agent-deck/resources";
 import { z } from "zod";
-import { McpImportDiscovery } from "../mcpImport.ts";
+import { claudePluginMcpSources, McpImportDiscovery, mcpImportSources } from "../mcpImport.ts";
 import type { ServerContext } from "../context.ts";
 
 const MCP_ENV_SOURCE = "AGENT_DECK_MCP_SERVERS" as const;
@@ -49,6 +54,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     oauthKey,
     broadcast,
     rootsFor,
+    resourceHome,
     projects,
     mcpAssignments,
     mcpPolicy,
@@ -133,6 +139,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       .string()
       .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
       .optional(),
+    startupTimeoutMs: z.number().int().min(1).max(MCP_MAX_TIMEOUT_MS).optional(),
+    toolTimeoutMs: z.number().int().min(1).max(MCP_MAX_TIMEOUT_MS).optional(),
+    toolApproval: z
+      .record(
+        z.string().regex(/^[A-Za-z0-9_.-]+$/),
+        z.enum(MCP_TOOL_APPROVALS as [McpToolApproval, ...McpToolApproval[]]),
+      )
+      .optional(),
+    defaultToolApproval: z
+      .enum(MCP_TOOL_APPROVALS as [McpToolApproval, ...McpToolApproval[]])
+      .optional(),
+    envInterpolation: z.literal("claude").optional(),
   };
   const mcpAddBody = z.union([
     z.object({
@@ -150,7 +168,14 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     z.object({
       ...settingsFields,
       name: z.string().min(1),
-      url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+      // A Claude-interpolated template is accepted here; the writer re-checks it
+      // against `envInterpolation`, and the launcher against the expanded URL.
+      url: z
+        .string()
+        .refine(
+          (v) => isValidHttpMcpUrl(v) || isValidHttpMcpUrlTemplate(v),
+          "url must be a valid http(s) URL",
+        ),
       // A pasted remote server usually carries its auth header; dropping it
       // saves a definition that can only 401 (MCP-12).
       headers: mcpHeaders.optional(),
@@ -188,7 +213,14 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         name: z.string().min(1).optional(),
         expectedTransport: z.enum(["stdio", "http"]).optional(),
         allowTransportChange: z.boolean().optional(),
-        url: z.string().refine(isValidHttpMcpUrl, "url must be a valid http(s) URL"),
+        // A Claude-interpolated template is accepted here; the writer re-checks it
+        // against `envInterpolation`, and the launcher against the expanded URL.
+        url: z
+          .string()
+          .refine(
+            (v) => isValidHttpMcpUrl(v) || isValidHttpMcpUrlTemplate(v),
+            "url must be a valid http(s) URL",
+          ),
         headers: mcpHeaders.optional(),
         protected: httpProtectedPatch.optional(),
       })
@@ -212,6 +244,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return [...new Set(errors)];
   };
 
+  // Settings (policy, timeouts, references) are not secrets: they round-trip so
+  // an import can be reviewed and adjusted in the editor.
+  const settingsOf = (entry: McpServerEntry) =>
+    Object.fromEntries(
+      MCP_SETTINGS_KEYS.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]),
+    );
   const definitionFields = (entry: McpServerEntry | undefined) => {
     if (!entry) return {};
     if (entry.transport === "stdio") {
@@ -219,9 +257,14 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         command: entry.command,
         ...(entry.args !== undefined ? { args: entry.args } : {}),
         envKeys: Object.keys(entry.env ?? {}).sort(),
+        ...settingsOf(entry),
       };
     }
-    return { url: entry.url, headerKeys: Object.keys(entry.headers ?? {}).sort() };
+    return {
+      url: entry.url,
+      headerKeys: Object.keys(entry.headers ?? {}).sort(),
+      ...settingsOf(entry),
+    };
   };
 
   const definitionProvenance = (
@@ -529,9 +572,25 @@ export function registerMcpRoutes(ctx: ServerContext): void {
   });
 
   const importDiscovery = new McpImportDiscovery();
-  fastify.post("/mcp/import/discover", async (_request, reply) => {
+  // Project-private configuration is read only for ONE explicitly named
+  // project; user-level sources and user-scoped plugins are always included.
+  fastify.post("/mcp/import/discover", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
-    return importDiscovery.discover();
+    const parsed = z
+      .object({ projectId: z.string().nullable().optional() })
+      .strict()
+      .safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid discovery request" });
+    const projectId = parsed.data.projectId ?? undefined;
+    if (projectId !== undefined && !projectScope(projectId))
+      return reply.status(404).send({ error: "unknown project" });
+    const projectPath = projectId ? projects.find((p) => p.id === projectId)?.path : undefined;
+    const home = resourceHome();
+    const scope = { home, projectPath };
+    return importDiscovery.discover(
+      [...mcpImportSources(scope), ...(await claudePluginMcpSources(scope))],
+      { projectId: projectId ?? null, projectPath, home },
+    );
   });
 
   fastify.post("/mcp", async (request, reply) => {

@@ -1,0 +1,54 @@
+# Sanitized from a real Codex config.toml (2026-09). Values are placeholders.
+model = "gpt-5"
+
+[mcp_servers.Neon]
+url = "https://mcp.neon.example/mcp"
+
+[mcp_servers.Neon.http_headers]
+Authorization = "Bearer fixture-neon-token"
+
+[mcp_servers.node_repl]
+args = []
+command = "C:\\Users\\fixture\\AppData\\Local\\Programs\\codex\\node_repl.exe"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_NODE_PATH = "C:\\Users\\fixture\\node"
+CODEX_HOME = "C:\\Users\\fixture\\.codex"
+
+[mcp_servers.cloudflare]
+url = "https://mcp.cloudflare.example/mcp"
+
+[mcp_servers.cloudflare.tools.execute]
+approval_mode = "approve"
+
+[mcp_servers.cloudflare.tools.deploy]
+approval_mode = "prompt"
+output_token_limit = 4000
+
+# Codex wrote environment-looking keys directly into the server table (not an
+# `env` sub-table). Codex itself ignores unknown keys.
+[mcp_servers.cloudflare-observability]
+url = "https://observability.mcp.cloudflare.example/mcp"
+CODEX_HOME = "C:\\Users\\fixture\\.codex"
+BROWSER_USE_AVAILABLE_BACKENDS = "fixture-secret-backend"
+
+[mcp_servers.paused]
+command = "node"
+args = ["paused.js"]
+enabled = false
+tool_timeout_sec = 300.5
+
+[mcp_servers.remote-env]
+command = "node"
+env_vars = [{ name = "TOKEN", source = "remote" }]
+
+[mcp_servers.helper]
+url = "https://helper.example/mcp"
+http_headers_helper = "/usr/local/bin/mint-headers"
+
+[mcp_servers.sso]
+url = "https://sso.example/mcp"
+auth = "oauth"
+scopes = ["read"]
+bearer_token = "fixture-literal-token"
