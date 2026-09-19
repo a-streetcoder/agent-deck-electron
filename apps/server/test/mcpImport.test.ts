@@ -141,6 +141,16 @@ describe("Claude import", () => {
     expect(project.map((c) => c.name)).toEqual(["ahrefs"]);
   });
 
+  it("lists claude.ai connectors as not importable, for the user-level file only", () => {
+    expect(blocking(claude["claude.ai Gmail"])).toEqual(["claudeAiMcpEverConnected"]);
+    expect(claude["claude.ai Gmail"]?.definition).toBeUndefined();
+    const project = parseMcpImport(fixture("claude.json"), {
+      format: "claude",
+      projectKey: "C:/Users/fixture/proj",
+    });
+    expect(project.map((c) => c.name)).not.toContain("claude.ai Gmail");
+  });
+
   it("resolves ${CLAUDE_PLUGIN_ROOT} for plugin definitions only", () => {
     const text = JSON.stringify({
       mcpServers: {

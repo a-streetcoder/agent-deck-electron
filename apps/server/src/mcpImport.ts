@@ -527,16 +527,42 @@ export function parseMcpImport(
     const key = Object.keys(projects).find((k) => samePath(k, source.projectKey!));
     entries = key !== undefined && record(projects[key]) ? projects[key].mcpServers : undefined;
   } else entries = data.mcpServers;
-  if (entries === undefined) return [];
+  // claude.ai connectors (Gmail, Drive, …) show in `claude mcp list` but live on
+  // the user's claude.ai account: `.claude.json` records only their names. List
+  // them as not importable so the preview accounts for everything Claude shows.
+  const connectors: McpImportCandidate[] =
+    source.format === "claude" &&
+    source.projectKey === undefined &&
+    source.pluginRoot === undefined &&
+    Array.isArray(data.claudeAiMcpEverConnected)
+      ? data.claudeAiMcpEverConnected
+          .filter((name): name is string => typeof name === "string")
+          .slice(0, 50)
+          .map((name) => ({
+            name,
+            diagnostics: [
+              block(
+                "claudeAiMcpEverConnected",
+                "A claude.ai connector: it is hosted on the claude.ai account and has no local definition, and its sign-in belongs to claude.ai.",
+                "Add the service's own MCP server in Agent Deck and sign in there.",
+              ),
+            ],
+          }))
+      : [];
+  if (entries === undefined) return connectors;
   if (!record(entries)) throw new Error("Invalid server map");
-  return Object.entries(entries).map(([name, raw]): McpImportCandidate => {
-    if (!isValidMcpServerName(name))
-      return { name, diagnostics: [block("name", "Not a valid Agent Deck server name.")] };
-    if (!record(raw)) return { name, diagnostics: [block("definition", "Must be an object.")] };
-    return source.format === "codex"
-      ? parseCodexServer(name, raw)
-      : parseClaudeServer(name, raw, source.pluginRoot);
-  });
+  return [...parseEntries(entries), ...connectors];
+
+  function parseEntries(map: Record<string, unknown>): McpImportCandidate[] {
+    return Object.entries(map).map(([name, raw]): McpImportCandidate => {
+      if (!isValidMcpServerName(name))
+        return { name, diagnostics: [block("name", "Not a valid Agent Deck server name.")] };
+      if (!record(raw)) return { name, diagnostics: [block("definition", "Must be an object.")] };
+      return source.format === "codex"
+        ? parseCodexServer(name, raw)
+        : parseClaudeServer(name, raw, source.pluginRoot);
+    });
+  }
 }
 
 /** `.claude.json` keys projects by the path Claude saw (forward slashes even on

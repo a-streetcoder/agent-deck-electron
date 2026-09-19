@@ -76,6 +76,8 @@ Resolution happens in `mcpEntryToConfig` (`apps/server/src/mcpTools.ts`) at conn
 
 ## Not covered
 
+- claude.ai connectors (Gmail, Drive, Calendar, …): they appear in `claude mcp list` but are hosted on the claude.ai account; `.claude.json` records only their names (`claudeAiMcpEverConnected`). They are listed in the preview as not importable, with that reason.
+
 - Codex `output_token_limit`, `required`, `omit_tools_from`, `supports_parallel_tool_calls` (host behaviour).
 - Enterprise auth (`ema_auth`), remote environments, header helpers.
 - Claude Code `ws` transport.
