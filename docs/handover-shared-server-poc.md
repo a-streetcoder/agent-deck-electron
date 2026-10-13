@@ -57,3 +57,14 @@ Tests at 218a414: server 1236 pass (2 env-only symlink EPERM failures, see WINDO
 ## Working-tree warning
 
 This checkout (`E:\AI Playground\a-streetcoding\agent-deck-electron`) currently has `poc/shared-server` checked out, and it is mirrored live to the VM by Syncthing. Switching branches here changes the VM's working tree too (the running server only re-reads on restart; `pnpm build:web` rebuilds from whatever is checked out). If you need main, prefer a separate clone or coordinate before switching.
+
+## Decision 2026-10-14: login via the system browser, not the Electron window
+
+Ale's call for gap 4. Replace the in-window Cloudflare/GitHub login with a **system-browser login handed back to the app**:
+
+1. The app opens `https://deck.moretti.cc/desktop/login?state=<nonce>` in the user's default browser (where the Cloudflare session and passkeys already work).
+2. Cloudflare Access authenticates as today; the page then hands the result back to the app, either via a custom URL scheme (`agentdeck://login?code=…`, registered by the Electron shell) or a one-time code shown in the browser that the user pastes into the app.
+3. The server exchanges the code for an app session: simplest is to mint a short-lived server-issued token bound to the verified email (the Access JWT is still the proof of identity; the server already verifies it in `trustedProxy.ts`), and have the desktop shell attach it to every request/WS as a bearer header. Alternatively copy the `CF_Authorization` cookie into Electron's session for the app origin.
+4. The Electron window then loads the app origin already authenticated; no GitHub pages are ever rendered inside Electron, so WebAuthn/passkeys are no longer an issue.
+
+Why not a Cloudflare Access service token: it authenticates the app, not the person, and would erase per-user identity.
