@@ -85,6 +85,23 @@ Recorded so we don't lose them. Each needs a decision, or is large / low-value.
   work, taken up after the Track-2 honesty fix.
 - **Agent avatars (AI-gen)** — CUT (macOS-only Image Playground).
 - **Parity minor/cosmetic tail** — deferred; see slice K + the audit's minor rows.
+- **Orchestrator: two ideas from t3code orchestration-v2** (donor drifted;
+  see their `docs/orchestration-v2/`). Worth taking with Pi as the only engine:
+  - **Execution-node tree** — model a run as a tree of nodes (message,
+    reasoning, tool, approval, subagent, hook) instead of flat cards; only the
+    root node completes the run, child nodes complete independently. Gives the
+    timeline and subagent views one structure to render and replay.
+  - **Delta merge-back for subagent results** — when a child reports to the
+    parent, feed the parent what changed since it last looked (t3's
+    `delta_since_target_last_seen`), not the whole child transcript; keep the
+    full transcript reachable on demand.
+  - Deliberately NOT taking: the AppThread/provider-thread split and
+    ContextHandoff machinery — they only pay off with a second engine.
+- **S21 follow-up — shared server POC** (`poc/shared-server` branch,
+  `docs/remote-server-poc.md`): Cloudflare Access identity, createdBy/author on
+  sessions and messages, desktop remote mode. Needs an ADR against
+  VISION_EDGE before it can land; open items: REST origin/CSRF guard, per-user
+  git author + GitHub credentials, GitHub passkey login inside Electron.
 
 ---
 
