@@ -47,3 +47,16 @@ export function allowRemoteShellNavigation(url, controlPlaneOrigin, teamDomain) 
   if (!teamDomain && host.endsWith(".cloudflareaccess.com")) return true;
   return host === "github.com" || host === "www.github.com";
 }
+
+/**
+ * Did the main frame land on the app itself? True only for a page on the
+ * control-plane origin, so the Access login pages (team domain, GitHub) that
+ * precede it never count as "the app loaded".
+ */
+export function isControlPlanePage(url, controlPlaneOrigin) {
+  try {
+    return new URL(url).origin === controlPlaneOrigin;
+  } catch {
+    return false;
+  }
+}

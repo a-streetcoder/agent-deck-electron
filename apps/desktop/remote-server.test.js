@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowRemoteShellNavigation, remoteServerOrigin } from "./remote-server.js";
+import {
+  allowRemoteShellNavigation,
+  isControlPlanePage,
+  remoteServerOrigin,
+} from "./remote-server.js";
 
 test("remote server origin accepts only credential-free https URLs", () => {
   assert.equal(remoteServerOrigin(undefined), null);
@@ -60,4 +64,17 @@ test("remote shell navigation allows the app, the Access team domain, and GitHub
   );
   assert.equal(allowRemoteShellNavigation("file:///etc/passwd", origin, team), false);
   assert.equal(allowRemoteShellNavigation("garbage", origin, team), false);
+});
+
+test("only a page on the control-plane origin counts as the app having loaded", () => {
+  const origin = "https://deck.example.com";
+  assert.equal(isControlPlanePage("https://deck.example.com/", origin), true);
+  assert.equal(isControlPlanePage("https://deck.example.com/sessions?x=1", origin), true);
+  assert.equal(
+    isControlPlanePage("https://team.cloudflareaccess.com/cdn-cgi/access/login", origin),
+    false,
+  );
+  assert.equal(isControlPlanePage("https://github.com/login", origin), false);
+  assert.equal(isControlPlanePage("https://deck.example.com.evil.test/", origin), false);
+  assert.equal(isControlPlanePage("garbage", origin), false);
 });

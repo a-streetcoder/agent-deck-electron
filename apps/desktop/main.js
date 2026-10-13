@@ -19,7 +19,11 @@ import {
   configurePreviewSession,
   PREVIEW_PARTITION,
 } from "./preview-guard.js";
-import { allowRemoteShellNavigation, remoteServerOrigin } from "./remote-server.js";
+import {
+  allowRemoteShellNavigation,
+  isControlPlanePage,
+  remoteServerOrigin,
+} from "./remote-server.js";
 import {
   catalogEndpoint,
   catalogListsPath,
@@ -363,30 +367,19 @@ function waitForHealth(port, timeoutMs = 20_000) {
 }
 
 /**
- * Remote attach: poll GET /health through the session-aware fetch. Access
- * answers an unauthenticated probe with a login redirect (HTML, not 200), so
- * this also fails fast when the shell has no valid Access cookie yet; the window
- * then performs the login itself (see createWindow's navigation policy).
+ * Remote attach: one GET /health through the session-aware fetch, run only AFTER
+ * the window has loaded a page on the control-plane origin (so the Access
+ * cookie exists). Before login Access answers a redirect, never a 200, which is
+ * why this cannot gate window creation.
  */
-async function waitForRemoteHealth(timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = "unreachable";
-  while (Date.now() < deadline) {
-    try {
-      const response = await controlPlaneFetch("/health", {
-        signal: AbortSignal.timeout(5_000),
-        redirect: "manual",
-      });
-      if (response.status === 200) return true;
-      lastStatus = String(response.status);
-      // A redirect means Access wants a login: let the window do it.
-      if (response.status >= 300 && response.status < 400) return false;
-    } catch {
-      lastStatus = "unreachable";
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+async function checkRemoteHealth() {
+  const response = await controlPlaneFetch("/health", {
+    signal: AbortSignal.timeout(10_000),
+    redirect: "manual",
+  });
+  if (response.status !== 200) {
+    throw new Error(`remote server /health answered ${response.status || "a redirect"}`);
   }
-  throw new Error(`remote server did not become healthy in time (${lastStatus})`);
 }
 
 function createWindow() {
@@ -450,6 +443,26 @@ function createWindow() {
     };
     mainWindow.webContents.on("will-navigate", guardRemoteNavigation);
     mainWindow.webContents.on("will-redirect", guardRemoteNavigation);
+
+    // Startup completes once the app itself (not an Access/GitHub login page)
+    // has loaded in the main frame: the session now holds the Access cookie, so
+    // the control-plane health check and the badge refresh can run.
+    let remoteStartupDone = false;
+    mainWindow.webContents.on("did-navigate", (_event, url) => {
+      if (remoteStartupDone || !isControlPlanePage(url, controlPlaneOrigin)) return;
+      remoteStartupDone = true;
+      startupTrace("remote app page loaded");
+      void checkRemoteHealth().then(
+        () => {
+          startupTrace("remote server health confirmed");
+          void refreshDesktopAttention();
+        },
+        (error) => {
+          dialog.showErrorBox("agent-deck failed to start", String(error));
+          app.quit();
+        },
+      );
+    });
   }
 
   // Open external links (docs, GitHub) in the user's browser, not the app.
@@ -1089,11 +1102,11 @@ async function bootstrap() {
     remoteServer = remoteServerOrigin(process.env.AGENT_DECK_REMOTE_SERVER_URL);
     if (remoteServer) {
       // Remote attach: no owned server, no loopback port. The renderer and every
-      // control-plane call go to the published origin through Access.
+      // control-plane call go to the published origin through Access. The window
+      // opens straight away so the user can sign in; the health check runs once
+      // the app page has loaded (createWindow's did-navigate handler).
       controlPlaneOrigin = remoteServer;
       startupTrace("remote server configured");
-      const healthy = await waitForRemoteHealth();
-      startupTrace(healthy ? "remote server health confirmed" : "remote server needs login");
     } else {
       const configuredPort = externalServerPort();
       serverPort = configuredPort ?? (await startServer());
@@ -1115,7 +1128,7 @@ async function bootstrap() {
   Menu.setApplicationMenu(buildAppMenu());
   startupTrace("creating main window");
   createWindow();
-  void refreshDesktopAttention();
+  if (!remoteServer) void refreshDesktopAttention();
   startupTrace("main window created");
 }
 

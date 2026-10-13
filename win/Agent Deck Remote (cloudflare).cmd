@@ -24,5 +24,6 @@ REM set AGENT_DECK_DESKTOP_RECOVERY_TOKEN=
 
 echo Starting Agent Deck against %AGENT_DECK_REMOTE_SERVER_URL% ...
 cd apps\desktop
-call ..\..\node_modules\.bin\electron.cmd .
+REM Extra arguments reach Electron unchanged (for example --remote-debugging-port=9222).
+call ..\..\node_modules\.bin\electron.cmd . %*
 endlocal
