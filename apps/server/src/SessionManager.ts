@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { ForkProvenance, SessionMeta } from "@agent-deck/contracts";
+import type { ForkProvenance, SessionMeta, UserIdentity } from "@agent-deck/contracts";
 import type {
   AskUserAnswer,
   AskUserCell,
@@ -105,6 +105,8 @@ export interface CreateSessionOptions {
   worktree?: { path: string; branch: string; sourceBranch: string; identityToken?: string };
   /** Server-owned marker for retained Loop review semantics. */
   loopReviewRunId?: string;
+  /** Verified creator on a shared server (trusted proxy); absent on loopback. */
+  createdBy?: UserIdentity;
   /** Route transaction seam: delay persistence/broadcast/receipt until the
    * caller has completed immediate setup and explicitly commits creation. */
   deferAnnouncement?: boolean;
@@ -955,6 +957,7 @@ export class SessionManager {
           }
         : {}),
       ...(options.loopReviewRunId ? { loopReviewRunId: options.loopReviewRunId } : {}),
+      ...(options.createdBy ? { createdBy: options.createdBy } : {}),
     };
     if (options.environmentOverride !== undefined) {
       this.sessionEnvironmentOverrides.set(meta.id, { ...options.environmentOverride });

@@ -14,6 +14,8 @@ import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { TerminalGateway } from "./terminalGateway.ts";
+import { authenticateProxiedRequest, type CloudflareAccessVerifier } from "./trustedProxy.ts";
+import type { SessionAuthorStore } from "./sessionAuthors.ts";
 
 export interface WebSocketLayer {
   /** Push a server message to every connected RPC client (wrapped as a frame). */
@@ -47,6 +49,11 @@ export function setupWebSocket(deps: {
   rollback: CheckpointRollbackGateway;
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
+  sessionAuthors?: SessionAuthorStore;
+  /** Remote-server POC: browser origin reachable through the trusted proxy. */
+  publicOrigin?: string;
+  /** Remote-server POC: when set, every upgrade must carry a valid Access assertion. */
+  accessVerifier?: CloudflareAccessVerifier;
 }): WebSocketLayer {
   const { fastify, sessions, terminals, diffs, editors, files, scripts, checkpoints, rollback } =
     deps;
@@ -65,6 +72,7 @@ export function setupWebSocket(deps: {
     rollback,
     sessionImages: deps.sessionImages,
     sessionPastes: deps.sessionPastes,
+    sessionAuthors: deps.sessionAuthors,
   });
 
   // Browsers may open cross-origin WebSockets to localhost services; only
@@ -72,6 +80,10 @@ export function setupWebSocket(deps: {
   // no Origin header) so a hostile web page can't drive sessions.
   const isTrustedOrigin = (origin: string | undefined, host: string | undefined): boolean => {
     if (origin === undefined) return true; // ws library clients, curl, tests
+    // Remote-server POC: the proxied browser origin is trusted as-is; its Host
+    // is whatever cloudflared forwards, and the Access assertion (below) is
+    // what actually authenticates the connection.
+    if (deps.publicOrigin && origin === deps.publicOrigin) return true;
     if (!host) return false;
     try {
       const url = new URL(origin);
@@ -94,7 +106,15 @@ export function setupWebSocket(deps: {
       return;
     }
     // Only `/rpc` (the Effect-RPC frames) is accepted; anything else is rejected.
-    if (request.url === RPC_WS_PATH) {
+    if (request.url !== RPC_WS_PATH) {
+      socket.destroy();
+      return;
+    }
+    const accept = (): void => {
+      if (admissionClosed || socket.destroyed) {
+        socket.destroy();
+        return;
+      }
       rpc.wss.handleUpgrade(request, socket, head, (ws) => {
         if (admissionClosed) {
           ws.close(1012, "Server shutting down");
@@ -102,9 +122,17 @@ export function setupWebSocket(deps: {
         }
         rpc.wss.emit("connection", ws, request);
       });
-    } else {
-      socket.destroy();
+    };
+    if (!deps.accessVerifier) {
+      accept();
+      return;
     }
+    // Trusted proxy on: the upgrade is authenticated like any HTTP request, and
+    // the verified user is attached to the raw request for rpcHandler.
+    void authenticateProxiedRequest(deps.accessVerifier, request).then(
+      (result) => (result.user ? accept() : socket.destroy()),
+      () => socket.destroy(),
+    );
   });
 
   return {

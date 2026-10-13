@@ -1,4 +1,4 @@
-import type { ProjectMeta, SessionMeta } from "@agent-deck/contracts";
+import type { ProjectMeta, SessionMeta, UserIdentity } from "@agent-deck/contracts";
 import { Effect, Option } from "effect";
 import { runSyncUnwrapped } from "./effectRun.ts";
 import {
@@ -90,6 +90,21 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
         delete normalized.draftThinkingLevel;
       }
       if (!validAudit) delete normalized.finalSystemPromptAudit;
+      const rawCreator = (session as SessionMeta & { createdBy?: unknown }).createdBy;
+      if (
+        !rawCreator ||
+        typeof rawCreator !== "object" ||
+        typeof (rawCreator as { id?: unknown }).id !== "string" ||
+        !["undefined", "string"].includes(typeof (rawCreator as { name?: unknown }).name)
+      ) {
+        delete normalized.createdBy;
+      } else {
+        const creator = rawCreator as { id: string; name?: string };
+        normalized.createdBy = {
+          id: creator.id.slice(0, 320),
+          ...(creator.name !== undefined ? { name: creator.name.slice(0, 200) } : {}),
+        };
+      }
       const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })
         .launchResourceConfig;
       const validStringArray = (value: unknown): value is string[] | undefined =>
@@ -158,6 +173,29 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
       }
       return normalized;
     });
+  }
+}
+
+/** One row per session: the authors of its user messages (sessionAuthors.ts). */
+export interface SessionAuthorRecord {
+  id: string;
+  turns: Array<{ signature: string; author: UserIdentity; claimed?: boolean; entryId?: string }>;
+}
+
+export class SessionAuthorIndex extends JsonArrayStore<SessionAuthorRecord> {
+  constructor(dataDir: string = defaultDataDir()) {
+    super(dataDir, "session-authors.json", (record) => ({
+      id: record.id,
+      turns: Array.isArray(record.turns)
+        ? record.turns.filter(
+            (turn) =>
+              turn &&
+              typeof turn.signature === "string" &&
+              turn.author &&
+              typeof turn.author.id === "string",
+          )
+        : [],
+    }));
   }
 }
 

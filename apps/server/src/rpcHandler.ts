@@ -18,7 +18,10 @@ import {
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
+import type { IncomingMessage } from "node:http";
 import type { SessionPasteStore } from "./sessionPastes.ts";
+import type { SessionAuthorStore } from "./sessionAuthors.ts";
+import { requestUser, type AuthenticatedUser } from "./trustedProxy.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { ScriptEvent } from "./services/scriptRunner.ts";
@@ -83,6 +86,9 @@ export function createRpcConnection(deps: {
   rollback: CheckpointRollbackGateway;
   sessionImages?: SessionImageStore;
   sessionPastes?: SessionPasteStore;
+  sessionAuthors?: SessionAuthorStore;
+  /** Verified identity of this connection's user (trusted proxy); absent on loopback. */
+  user?: AuthenticatedUser;
   send: (frame: RpcServerFrame) => void;
   /** Socket send-buffer depth in bytes (`ws` bufferedAmount); 0 when absent. */
   bufferedAmount?: () => number;
@@ -98,8 +104,19 @@ export function createRpcConnection(deps: {
     rollback,
     sessionImages,
     sessionPastes,
+    sessionAuthors,
     send,
   } = deps;
+  // Author attribution: who typed it is a property of the connection, stamped
+  // server-side before the message reaches Pi.
+  const stageAuthor = (sessionId: string, message: string): void => {
+    if (deps.user) {
+      sessionAuthors?.stage(sessionId, message, {
+        id: deps.user.id,
+        ...(deps.user.name ? { name: deps.user.name } : {}),
+      });
+    }
+  };
   const externalTerminal = deps.externalTerminal ?? createExternalTerminalLauncher();
   const bufferedAmount = deps.bufferedAmount ?? ((): number => 0);
   const push = (message: ServerMessage): void => send({ kind: "push", message });
@@ -826,6 +843,7 @@ export function createRpcConnection(deps: {
             stagedImages = request.images?.length
               ? sessionImages?.stage(session.meta.id, request.message, request.images)
               : undefined;
+            stageAuthor(session.meta.id, request.message);
             await session.prompt(
               request.message,
               request.images?.map(({ type, data, mimeType }) => ({ type, data, mimeType })),
@@ -848,9 +866,11 @@ export function createRpcConnection(deps: {
           break;
         }
         case "steer":
+          stageAuthor(session.meta.id, request.message);
           await session.steer(request.message);
           break;
         case "follow_up":
+          stageAuthor(session.meta.id, request.message);
           await session.followUp(request.message);
           break;
         case "abort":
@@ -939,6 +959,7 @@ export function setupRpcEndpoint(deps: {
   rollback: CheckpointRollbackGateway;
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
+  sessionAuthors?: SessionAuthorStore;
 }): RpcEndpoint {
   const {
     sessions,
@@ -968,7 +989,7 @@ export function setupRpcEndpoint(deps: {
     for (const client of clients) sendTo(client, { kind: "diff_push", message });
   };
 
-  wss.on("connection", (socket: WebSocket) => {
+  wss.on("connection", (socket: WebSocket, upgradeRequest?: IncomingMessage) => {
     if (admissionClosed) {
       socket.close(1012, "Server shutting down");
       return;
@@ -987,6 +1008,8 @@ export function setupRpcEndpoint(deps: {
       rollback,
       sessionImages,
       sessionPastes,
+      sessionAuthors: deps.sessionAuthors,
+      user: upgradeRequest ? requestUser(upgradeRequest) : undefined,
       send: (frame) => sendTo(socket, frame),
       // Terminal push backpressure reads the real socket send-buffer depth.
       bufferedAmount: () => socket.bufferedAmount,

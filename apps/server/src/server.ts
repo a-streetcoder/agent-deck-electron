@@ -79,7 +79,13 @@ import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignment
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
 import { FileMcpDefinitionStore, type McpDefinitionStore } from "./mcpDefinitions.ts";
 import { registerMemoryTools } from "./memoryTools.ts";
-import { defaultDataDir, ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
+import {
+  defaultDataDir,
+  ProjectIndex,
+  SessionAuthorIndex,
+  SessionIndex,
+  SettingsStore,
+} from "./persistence.ts";
 import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
@@ -96,6 +102,13 @@ import { SessionManager } from "./SessionManager.ts";
 import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
+import { SessionAuthorStore } from "./sessionAuthors.ts";
+import {
+  authenticateProxiedRequest,
+  CloudflareAccessVerifier,
+  requestUser,
+  trustedProxyConfigFromEnv,
+} from "./trustedProxy.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
@@ -239,6 +252,13 @@ async function initServer(
   const agentAvatars = new FileAgentAvatarStore(dataDir);
   const projectImages = new ProjectImageStore(agentAvatars);
   const sessionPastes = new SessionPasteStore(dataDir);
+  // Remote-server POC (docs/remote-server-poc.md): behind cloudflared + Access,
+  // every request carries a verified identity; sessions and prompts record it.
+  const trustedProxy = trustedProxyConfigFromEnv();
+  const accessVerifier = trustedProxy ? new CloudflareAccessVerifier(trustedProxy) : undefined;
+  const sessionAuthors = trustedProxy
+    ? new SessionAuthorStore(new SessionAuthorIndex(dataDir))
+    : undefined;
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -610,6 +630,12 @@ async function initServer(
         decorated = sessionPastes.attachToUserCell(sessionId, decorated, rawContent);
       } catch {
         // Corrupt/missing paste metadata never drops user text or image metadata.
+      }
+      try {
+        if (sessionAuthors)
+          decorated = sessionAuthors.attachToUserCell(sessionId, decorated, rawContent);
+      } catch {
+        // Attribution is a label; losing it never drops the message.
       }
       return decorated;
     },
@@ -1126,6 +1152,29 @@ async function initServer(
   const closeHttpAdmission = (): void => {
     shuttingDown = true;
   };
+
+  if (accessVerifier) {
+    // Trusted proxy: cloudflared (loopback) authenticated the person and attached
+    // the Access assertion. Anything else is refused, except the health probe and
+    // the local Pi subprocess calling its own per-session-token tool bridge.
+    fastify.addHook("onRequest", async (request, reply) => {
+      const route = request.routeOptions.url;
+      if (route === "/health" || route === "/bridge") return;
+      const result = await authenticateProxiedRequest(accessVerifier, request.raw);
+      if (!result.user) {
+        return reply.status(401).send({ code: "unauthenticated", error: result.reason });
+      }
+    });
+  }
+  // Who the server believes the caller is. `null` on a single-user loopback server.
+  fastify.get("/me", async (request) => {
+    const user = requestUser(request.raw);
+    return {
+      user: user
+        ? { id: user.id, email: user.email, ...(user.name ? { name: user.name } : {}) }
+        : null,
+    };
+  });
   const drainHttpRequests = (): Promise<void> => {
     if (admissionDrain) return admissionDrain;
     admissionDrain =
@@ -1261,6 +1310,9 @@ async function initServer(
     rollback,
     sessionImages,
     sessionPastes,
+    sessionAuthors,
+    publicOrigin: trustedProxy?.publicOrigin,
+    accessVerifier,
   });
   broadcast = (message) => {
     wsBroadcast(message);

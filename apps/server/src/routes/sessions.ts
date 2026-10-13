@@ -2,12 +2,19 @@ import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
-import type { ProjectMeta, SessionModelInfo, SessionMeta } from "@agent-deck/contracts";
+import type {
+  ProjectMeta,
+  SessionModelInfo,
+  SessionMeta,
+  UserIdentity,
+} from "@agent-deck/contracts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { LaunchPlan } from "@agent-deck/pi-host";
+import type { IncomingMessage } from "node:http";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
+import { requestUser } from "../trustedProxy.ts";
 import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
 import { z } from "zod";
 import {
@@ -42,6 +49,12 @@ import { LaunchResourceResolutionError, resolveLaunchResources } from "../launch
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 
 const mergeLocks = new Set<string>();
+
+/** The verified creator (trusted proxy), as the identity shape persisted on SessionMeta. */
+function sessionCreator(raw: IncomingMessage): UserIdentity | undefined {
+  const user = requestUser(raw);
+  return user ? { id: user.id, ...(user.name ? { name: user.name } : {}) } : undefined;
+}
 
 const createSessionBody = z.object({
   startImmediately: z.boolean().optional(),
@@ -1533,7 +1546,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
-  async function launchSession(body: z.infer<typeof createSessionBody>, draft?: SessionMeta) {
+  async function launchSession(
+    body: z.infer<typeof createSessionBody>,
+    draft?: SessionMeta,
+    createdBy?: UserIdentity,
+  ) {
     const reply = {
       statusCode: 200,
       status(code: number) {
@@ -1715,6 +1732,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
 
       const session = sessions.create({
         ...(draft ? { draftMeta: draft } : {}),
+        ...(createdBy ? { createdBy } : {}),
         cwd,
         projectId: body.projectId,
         agentName: body.agentName,
@@ -1880,9 +1898,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const parsed = createSessionBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const body = parsed.data;
+    const createdBy = sessionCreator(request.raw);
     try {
       if (body.startImmediately)
-        return reply.status(201).send({ session: (await launchSession(body)).meta });
+        return reply
+          .status(201)
+          .send({ session: (await launchSession(body, undefined, createdBy)).meta });
       const defaults = envDefaults();
       const project = body.projectId
         ? projects.find((item) => item.id === body.projectId)
@@ -1897,6 +1918,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         createdAt: now,
         updatedAt: now,
         lifecycle: "draft",
+        ...(createdBy ? { createdBy } : {}),
         projectId: body.projectId,
         agentName: body.agentName,
         draftWorktreeIsolation: settings.get().worktreeIsolation,
