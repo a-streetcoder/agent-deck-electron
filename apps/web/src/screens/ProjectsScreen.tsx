@@ -25,6 +25,7 @@ import { ProjectImage } from "../components/ProjectImage.tsx";
 import { ProjectTypeIcon } from "../components/ProjectTypeIcon.tsx";
 import { useAppStore } from "../state/store.ts";
 import { addProject, refreshProjects, updateProject } from "../state/wsBridge.ts";
+import { ServerFolderBrowser } from "../components/ServerFolderBrowser.tsx";
 
 type Filter = "all" | "available" | "unavailable";
 
@@ -60,6 +61,12 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
   const [discovered, setDiscovered] = useState<DiscoveredProject[]>([]);
   const [rootDraft, setRootDraft] = useState("");
   const [projectDraft, setProjectDraft] = useState("");
+  // Server-side browsing position (browser / remote shell); "" = the browse root.
+  const [browsePath, setBrowsePath] = useState("");
+  const navigateServerFolder = useCallback((next: string) => {
+    setBrowsePath(next);
+    setProjectDraft(next);
+  }, []);
   const [scanning, setScanning] = useState(true);
 
   const scan = useCallback(async () => {
@@ -181,6 +188,16 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
           <section>
             <h3 className="text-label font-semibold text-text-primary">Choose a project</h3>
+            {!canPickLocalPaths() ? (
+              <p className="mt-0.5 text-caption text-text-muted">
+                Browse the folders on the server, or type a path there.
+              </p>
+            ) : null}
+            {!canPickLocalPaths() ? (
+              <div className="mt-2">
+                <ServerFolderBrowser path={browsePath} onNavigate={navigateServerFolder} />
+              </div>
+            ) : null}
             <div className="mt-2 flex min-w-0 gap-2">
               {!canPickLocalPaths() ? (
                 <AppTextField

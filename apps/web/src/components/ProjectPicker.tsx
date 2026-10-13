@@ -1,11 +1,11 @@
-import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { Button } from "@/design-system/components/Button";
+import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, CornerLeftUp, Folder, LayoutGrid, Plus } from "lucide-react";
+import { ChevronDown, LayoutGrid, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { canPickLocalPaths, chooseDirectory } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
 import { ProjectImage } from "./ProjectImage.tsx";
+import { ServerProjectPathPicker } from "./ServerFolderBrowser.tsx";
 import { addProject, switchToProject } from "../state/wsBridge.ts";
 
 /**
@@ -39,97 +39,11 @@ function useDismiss(onDismiss: () => void) {
   return ref;
 }
 
-interface ServerDirListing {
-  root: string;
-  path: string;
-  parent: string | null;
-  dirs: { name: string; path: string }[];
-}
-
-/**
- * Browse folders on the SERVER (GET /fs/dirs) for clients that cannot pick a
- * path on that machine: a browser, or the desktop shell attached to a remote
- * server. `path` is the folder being shown ("" = the server's browse root).
- */
-function ServerFolderBrowser({
-  path,
-  onNavigate,
-}: {
-  path: string;
-  onNavigate: (path: string) => void;
-}) {
-  const [listing, setListing] = useState<ServerDirListing | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const query = path ? `?path=${encodeURIComponent(path)}` : "";
-    fetch(`/fs/dirs${query}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error("This folder cannot be browsed on the server.");
-        return (await response.json()) as ServerDirListing;
-      })
-      .then((next) => {
-        if (cancelled) return;
-        setListing(next);
-        setError(null);
-        // The root is only known once listed; make it the folder "Add project" adds.
-        if (!path) onNavigate(next.path);
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, onNavigate]);
-
-  if (error) {
-    return <div className="px-1 py-1 text-detail text-danger">{error}</div>;
-  }
-  if (!listing) {
-    return <div className="px-1 py-1 text-detail text-text-muted">Loading folders…</div>;
-  }
-  const rowClass =
-    "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-label text-text-secondary hover:bg-hover";
-  return (
-    <div className="max-h-48 overflow-y-auto" data-testid="server-folder-browser">
-      {listing.parent !== null ? (
-        <ControlButton
-          className={rowClass}
-          data-testid="server-folder-up"
-          onClick={() => onNavigate(listing.parent!)}
-        >
-          <CornerLeftUp size={13} className="shrink-0" aria-hidden="true" />
-          <span className="truncate">Up one level</span>
-        </ControlButton>
-      ) : null}
-      {listing.dirs.map((dir) => (
-        <ControlButton
-          key={dir.path}
-          className={rowClass}
-          title={dir.path}
-          data-testid={`server-folder-${dir.name}`}
-          onClick={() => onNavigate(dir.path)}
-        >
-          <Folder size={13} className="shrink-0" aria-hidden="true" />
-          <span className="truncate">{dir.name}</span>
-        </ControlButton>
-      ))}
-      {listing.dirs.length === 0 ? (
-        <div className="px-2 py-1 text-detail text-text-muted">No subfolders</div>
-      ) : null}
-    </div>
-  );
-}
-
 export function ProjectPicker() {
   const projects = useAppStore((state) => state.projects);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [draftPath, setDraftPath] = useState("");
-  // Server-side browsing position (remote/browser flow); "" = the browse root.
-  const [browsePath, setBrowsePath] = useState("");
   const [pendingProjectId, setPendingProjectId] = useState<string | null | undefined>(undefined);
   const pickerButtonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -210,10 +124,7 @@ export function ProjectPicker() {
     }
   };
 
-  const submitPath = async (): Promise<void> => {
-    const path = draftPath.trim();
-    if (!path) return;
-    setDraftPath("");
+  const submitPath = async (path: string): Promise<void> => {
     setAdding(false);
     setOpen(false);
     await addProject(path);
@@ -329,36 +240,8 @@ export function ProjectPicker() {
           <div className="my-1 h-px bg-border-subtle" />
 
           {adding ? (
-            <div className="space-y-1.5 px-1 py-1">
-              <ServerFolderBrowser
-                path={browsePath}
-                onNavigate={(next) => {
-                  setBrowsePath(next);
-                  setDraftPath(next);
-                }}
-              />
-              <ControlInput
-                autoFocus
-                data-testid="add-project-path"
-                className="w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 font-mono text-code text-text-primary outline-none focus:border-accent"
-                placeholder="/path/to/project"
-                value={draftPath}
-                onChange={(event) => setDraftPath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void submitPath();
-                  if (event.key === "Escape") setAdding(false);
-                }}
-              />
-              <Button
-                size="sm"
-                variant="primary"
-                fullWidth
-                className="rounded-capsule"
-                data-testid="add-project-confirm"
-                onClick={() => void submitPath()}
-              >
-                Add project
-              </Button>
+            <div className="px-1 py-1">
+              <ServerProjectPathPicker onConfirm={submitPath} />
             </div>
           ) : (
             <ControlButton

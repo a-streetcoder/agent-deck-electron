@@ -141,14 +141,22 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   messages show their author.
 - **Desktop (Windows)**: double-click `win\Agent Deck Remote (cloudflare).cmd`. It sets
   `AGENT_DECK_REMOTE_SERVER_URL=https://deck.moretti.cc` and starts Electron from
-  `apps/desktop`. The first launch shows the Access login inside the window (allowed
-  navigation: the app origin, the team's `cloudflareaccess.com` pages, `github.com`); every
+  `apps/desktop`; extra arguments (for example `--remote-debugging-port=9222`) pass through to
+  Electron. Startup order in remote mode: the window opens on the remote origin at once (no
+  pre-window health wait, since Access answers a login redirect, never 200, before a cookie
+  exists); the first launch shows the Access login inside the window (allowed navigation: the
+  app origin, the team's `cloudflareaccess.com` pages, `github.com`); once the main frame has
+  loaded a page on the app origin the shell runs the session-aware `/health` check and the
+  badge refresh, and only a failure at that point shows the "failed to start" dialog. Every
   other link still opens in the system browser. To enable "Reveal …" actions that need the
   recovery token, set `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` in the launcher to the VM's value.
   **Folders are chosen on the server**: the preload reports `remote: true`, so the native
   folder/file pickers are disabled (they would pick paths on your PC) and "Add project" opens
   the in-popover server folder browser (`/fs/dirs`) plus the type-a-path input, exactly like a
-  browser. Skill-folder and prompt-file imports fall back to their typed-path inputs likewise.
+  browser. The same server folder browser is reachable from every add-project entry: the
+  toolbar project picker, the Projects screen's "Add Projects…" dialog, and the "Add project…"
+  button next to the new-session Project dropdown (which also selects the new project for the
+  draft). Skill-folder and prompt-file imports fall back to their typed-path inputs likewise.
 - **Desktop over SSH** (`win\Agent Deck Remote (dev VM).cmd`) still works, but through the
   tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
   answers 401. Use one mode or the other on the VM.

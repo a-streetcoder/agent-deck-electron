@@ -2,9 +2,12 @@ import { AppSwitch } from "../design-system/components/AppSwitch.tsx";
 import { Card } from "../design-system/components/Card.tsx";
 import { ControlSelect } from "../design-system/components/NativeControls.tsx";
 import { useState } from "react";
-import { updateSessionDraft } from "../state/wsBridge.ts";
-import { Folder, WandSparkles } from "lucide-react";
+import { addProject, updateSessionDraft } from "../state/wsBridge.ts";
+import { Folder, Plus, WandSparkles } from "lucide-react";
+import { canPickLocalPaths, chooseDirectory } from "@/lib/native";
+import { Button } from "../design-system/components/Button.tsx";
 import { useAppStore } from "../state/store.ts";
+import { ServerProjectPathPicker } from "./ServerFolderBrowser.tsx";
 
 /**
  * Pre-launch surface shown in an empty session (native PiAgentStartupViews):
@@ -15,6 +18,9 @@ import { useAppStore } from "../state/store.ts";
  */
 export function SessionStartupCard() {
   const [saving, setSaving] = useState(false);
+  // "Add project…" from the draft: the server-side folder picker (browser or
+  // remote shell) renders inline; a local shell opens the native chooser.
+  const [addingProject, setAddingProject] = useState(false);
   const currentAgentName = useAppStore((state) => state.currentAgentName);
   const projects = useAppStore((state) => state.projects);
   const session = useAppStore((state) => state.session);
@@ -28,6 +34,24 @@ export function SessionStartupCard() {
     }
   };
   const project = projects.find((p) => p.id === session?.projectId) ?? null;
+
+  const addAndSelectProject = async (path: string): Promise<void> => {
+    setAddingProject(false);
+    const created = await addProject(path);
+    if (created)
+      await update({ projectId: created.id, agentName: created.defaultAgentName ?? null });
+  };
+  const startAddProject = async (): Promise<void> => {
+    if (!canPickLocalPaths()) {
+      setAddingProject((value) => !value);
+      return;
+    }
+    const [picked] = await chooseDirectory({
+      title: "Add Project",
+      message: "Choose a repo or project root to add",
+    });
+    if (picked) await addAndSelectProject(picked);
+  };
   const agentName = currentAgentName ?? session?.agentName ?? "Orchestrator";
   const projectName = project?.name ?? "All Projects";
   const skills = project?.assignedSkills ?? [];
@@ -73,6 +97,22 @@ export function SessionStartupCard() {
                   ))}
                 </ControlSelect>
               </label>
+              <Button
+                size="sm"
+                data-testid="startup-add-project"
+                aria-expanded={addingProject}
+                disabled={saving}
+                onClick={() => void startAddProject()}
+              >
+                <Plus size={13} aria-hidden /> Add project…
+              </Button>
+              {addingProject ? (
+                <ServerProjectPathPicker
+                  onConfirm={addAndSelectProject}
+                  confirmLabel="Add and use this project"
+                  testIdPrefix="startup-add-project"
+                />
+              ) : null}
               <AppSwitch
                 aria-label="Isolate draft in a worktree"
                 disabled={saving || !session.projectId}

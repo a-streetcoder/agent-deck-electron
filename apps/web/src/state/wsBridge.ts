@@ -1479,17 +1479,19 @@ export async function switchToAgent(agentName: string | null): Promise<void> {
   await activateSession(useAppStore.getState().currentProjectId, agentName);
 }
 
-export async function addProject(path: string): Promise<void> {
+export async function addProject(path: string): Promise<ProjectMeta | undefined> {
   const store = useAppStore.getState();
   try {
-    await fetchJson<{ project: ProjectMeta }>("/projects", {
+    const { project } = await fetchJson<{ project: ProjectMeta }>("/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path }),
     });
     await refreshProjects();
+    return project;
   } catch (error) {
     store.setError(String(error));
+    return undefined;
   }
 }
 
