@@ -195,6 +195,40 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
   };
 
+  // Server-side folder browsing for clients that cannot pick paths on this
+  // machine (a browser, or the desktop shell attached remotely). Read-only,
+  // directory names only, confined to AGENT_DECK_PROJECT_ROOT (default: the
+  // server user's home); symlinks are never followed out of it.
+  fastify.get("/fs/dirs", async (request, reply) => {
+    const browseRoot = realpathSync.native(
+      nodePath.resolve(process.env.AGENT_DECK_PROJECT_ROOT || homedir()),
+    );
+    const requested = (request.query as { path?: unknown }).path;
+    const candidate =
+      typeof requested === "string" && requested.trim()
+        ? nodePath.resolve(browseRoot, requested.trim())
+        : browseRoot;
+    const inside = (target: string): boolean =>
+      target === browseRoot || target.startsWith(browseRoot + nodePath.sep);
+    let current: string;
+    try {
+      current = realpathSync.native(candidate);
+      if (!inside(current) || !statSync(current).isDirectory()) throw new Error("outside");
+    } catch {
+      return reply.status(404).send({ error: "folder is not browsable" });
+    }
+    const dirs = readdirSync(current, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => ({ name: entry.name, path: nodePath.join(current, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      root: browseRoot,
+      path: current,
+      parent: current === browseRoot ? null : nodePath.dirname(current),
+      dirs,
+    };
+  });
+
   // Discovery roots + scan. GET returns the configured roots and every
   // project candidate found under them (flagged if already registered).
   fastify.get("/projects/discovery", async () => {

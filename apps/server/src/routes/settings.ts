@@ -46,6 +46,7 @@ import {
   type DiagnosticWarning,
 } from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
+import { trustedProxyConfigFromEnv } from "../trustedProxy.ts";
 import {
   createExternalCommandLauncher,
   findDoctorFixCommand,
@@ -105,6 +106,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     const origin = request.headers.origin;
     const host = request.headers.host;
     if (typeof origin !== "string" || origin.length === 0) return false;
+    // Remote-server POC: the proxied browser origin is the app's own renderer.
+    if (trustedProxyConfigFromEnv()?.publicOrigin === origin) return false;
     try {
       return new URL(origin).host !== host;
     } catch {

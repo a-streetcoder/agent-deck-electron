@@ -20,7 +20,7 @@ import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
 import { ControlButton, ControlInput } from "@/design-system/components/NativeControls";
-import { chooseDirectory, isElectron } from "@/lib/native";
+import { canPickLocalPaths, chooseDirectory } from "@/lib/native";
 import { ProjectImage } from "../components/ProjectImage.tsx";
 import { ProjectTypeIcon } from "../components/ProjectTypeIcon.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -120,7 +120,7 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
   };
 
   const chooseProject = async () => {
-    if (isElectron()) {
+    if (canPickLocalPaths()) {
       const [picked] = await chooseDirectory({
         title: "Choose Project Folder",
         message: "Choose a repo or project root to add",
@@ -182,7 +182,7 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
           <section>
             <h3 className="text-label font-semibold text-text-primary">Choose a project</h3>
             <div className="mt-2 flex min-w-0 gap-2">
-              {!isElectron() ? (
+              {!canPickLocalPaths() ? (
                 <AppTextField
                   data-testid="projects-add-path"
                   size="sm"
@@ -196,10 +196,10 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
                 />
               ) : null}
               <Button
-                data-testid={isElectron() ? "choose-project-folder" : "projects-add-confirm"}
+                data-testid={canPickLocalPaths() ? "choose-project-folder" : "projects-add-confirm"}
                 size="sm"
                 variant="primary"
-                disabled={!isElectron() && !projectDraft.trim()}
+                disabled={!canPickLocalPaths() && !projectDraft.trim()}
                 onClick={() => void chooseProject()}
               >
                 <Plus size={14} /> Choose Project Folder…
@@ -286,7 +286,7 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
           <section>
             <h3 className="text-label font-semibold text-text-primary">Monitored folders</h3>
             <div className="mt-2 flex gap-2">
-              {isElectron() ? (
+              {canPickLocalPaths() ? (
                 <Button
                   data-testid="discovery-root-browse"
                   size="sm"

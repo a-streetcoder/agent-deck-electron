@@ -414,6 +414,9 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
+      // Tells the preload (and so the renderer) that local pickers pick on the
+      // wrong machine; the renderer then uses the server-side path flows.
+      additionalArguments: remoteServer ? ["--agent-deck-remote-server"] : [],
       // Enable the <webview> tag so the Slice L2 general-purpose browser can
       // mount a REAL Chromium guest (not an iframe). The guest's own security
       // posture is force-hardened in the web-contents-created handler below —

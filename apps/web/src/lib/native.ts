@@ -46,6 +46,8 @@ export interface DroppedPathItem {
 
 export interface AgentDeckBridge {
   isElectron?: boolean;
+  /** The shell is attached to a remote server; local file/folder pickers are wrong-machine. */
+  remote?: boolean;
   /** Flush pending draft persistence before desktop shutdown. */
   onFlushDrafts?(handler: () => Promise<void>): () => void;
   platform?: string;
@@ -102,6 +104,20 @@ export function nativeBridge(): AgentDeckBridge | undefined {
 /** True when running inside the Electron shell (native folder picker available). */
 export function isElectron(): boolean {
   return nativeBridge()?.isElectron === true;
+}
+
+/** The Electron shell is attached to a remote server (docs/remote-server-poc.md). */
+export function isRemoteServer(): boolean {
+  return isElectron() && nativeBridge()?.remote === true;
+}
+
+/**
+ * Whether a native picker would return paths that mean something to the
+ * server: only in the Electron shell, and only when the server runs on this
+ * machine. Remote mode must use the server-side path flows instead.
+ */
+export function canPickLocalPaths(): boolean {
+  return isElectron() && !isRemoteServer();
 }
 
 /** Whether this renderer has the purpose-built desktop reveal capability. */
@@ -219,7 +235,8 @@ export async function chooseDirectory(
   options?: Parameters<NonNullable<AgentDeckBridge["chooseDirectory"]>>[0],
 ): Promise<string[]> {
   const bridge = nativeBridge();
-  if (!bridge?.chooseDirectory) return [];
+  // Remote server: a local path is meaningless there; callers fall back to typed paths.
+  if (!bridge?.chooseDirectory || bridge.remote === true) return [];
   try {
     const result: unknown = await bridge.chooseDirectory(options);
     if (!Array.isArray(result)) return [];
@@ -235,7 +252,7 @@ export async function chooseFiles(
   options?: Parameters<NonNullable<AgentDeckBridge["chooseFiles"]>>[0],
 ): Promise<string[]> {
   const bridge = nativeBridge();
-  if (!bridge?.chooseFiles) return [];
+  if (!bridge?.chooseFiles || bridge.remote === true) return [];
   try {
     const result: unknown = await bridge.chooseFiles(options);
     if (!Array.isArray(result)) return [];

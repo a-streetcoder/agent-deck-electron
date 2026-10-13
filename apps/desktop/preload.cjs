@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
   platform: process.platform,
   /**
+   * True when the shell is attached to a remote server (AGENT_DECK_REMOTE_SERVER_URL):
+   * native file/folder pickers would choose paths on THIS machine, not the one
+   * running the agents, so the renderer must use server-side path flows.
+   */
+  remote: process.argv.includes("--agent-deck-remote-server"),
+  /**
    * Open the native folder chooser. Resolves to the selected absolute path(s),
    * or [] if the user cancels.
    * @param {{ title?: string, message?: string, buttonLabel?: string, multiple?: boolean }} [options]

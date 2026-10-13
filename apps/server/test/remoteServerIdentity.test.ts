@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -109,6 +109,53 @@ describe("trusted proxy on the HTTP surface", () => {
       id: "ale@example.com",
       name: "Ale",
     });
+  });
+});
+
+describe("GET /fs/dirs", () => {
+  it("browses directories inside the configured root only", async () => {
+    const browseRoot = mkdtempSync(path.join(tmpdir(), "deck-browse-root-"));
+    mkdirSync(path.join(browseRoot, "beta", "nested"), { recursive: true });
+    mkdirSync(path.join(browseRoot, "alpha"));
+    mkdirSync(path.join(browseRoot, ".hidden"));
+    writeFileSync(path.join(browseRoot, "file.txt"), "x");
+    process.env.AGENT_DECK_PROJECT_ROOT = browseRoot;
+    try {
+      const realRoot = realpathSync.native(browseRoot);
+      const top = (await (await fetch(endpoint("/fs/dirs"), { headers: ale })).json()) as {
+        root: string;
+        path: string;
+        parent: string | null;
+        dirs: Array<{ name: string; path: string }>;
+      };
+      expect(top.root).toBe(realRoot);
+      expect(top.path).toBe(realRoot);
+      expect(top.parent).toBeNull();
+      expect(top.dirs.map((dir) => dir.name)).toEqual(["alpha", "beta"]);
+
+      const beta = (await (
+        await fetch(endpoint(`/fs/dirs?path=${encodeURIComponent(top.dirs[1]!.path)}`), {
+          headers: ale,
+        })
+      ).json()) as { parent: string | null; dirs: Array<{ name: string }> };
+      expect(beta.parent).toBe(realRoot);
+      expect(beta.dirs.map((dir) => dir.name)).toEqual(["nested"]);
+
+      const escaped = await fetch(
+        endpoint(`/fs/dirs?path=${encodeURIComponent(path.join(browseRoot, ".."))}`),
+        { headers: ale },
+      );
+      expect(escaped.status).toBe(404);
+      const file = await fetch(
+        endpoint(`/fs/dirs?path=${encodeURIComponent(path.join(browseRoot, "file.txt"))}`),
+        { headers: ale },
+      );
+      expect(file.status).toBe(404);
+      expect((await fetch(endpoint("/fs/dirs"))).status).toBe(401);
+    } finally {
+      delete process.env.AGENT_DECK_PROJECT_ROOT;
+      if (process.platform !== "win32") rmSync(browseRoot, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canPickLocalPaths,
   canRevealSubagentArtifacts,
   chooseDirectory,
   chooseFiles,
+  isRemoteServer,
   notifyAttention,
   onFocusSession,
   resolveDroppedItems,
@@ -23,6 +25,30 @@ describe("subagent artifact capability", () => {
     expect(canRevealSubagentArtifacts()).toBe(false);
     stubBridge({ revealSubagentArtifacts: vi.fn() });
     expect(canRevealSubagentArtifacts()).toBe(true);
+  });
+});
+
+describe("remote server shell", () => {
+  it("disables local pickers when the shell is attached to a remote server", async () => {
+    const chooseDirectorySpy = vi.fn(async () => ["/home/pc/project"]);
+    const chooseFilesSpy = vi.fn(async () => ["/home/pc/prompt.md"]);
+    stubBridge({
+      isElectron: true,
+      remote: true,
+      chooseDirectory: chooseDirectorySpy,
+      chooseFiles: chooseFilesSpy,
+    });
+    expect(isRemoteServer()).toBe(true);
+    expect(canPickLocalPaths()).toBe(false);
+    expect(await chooseDirectory()).toEqual([]);
+    expect(await chooseFiles()).toEqual([]);
+    expect(chooseDirectorySpy).not.toHaveBeenCalled();
+    expect(chooseFilesSpy).not.toHaveBeenCalled();
+
+    stubBridge({ isElectron: true, chooseDirectory: chooseDirectorySpy });
+    expect(isRemoteServer()).toBe(false);
+    expect(canPickLocalPaths()).toBe(true);
+    expect(await chooseDirectory()).toEqual(["/home/pc/project"]);
   });
 });
 
