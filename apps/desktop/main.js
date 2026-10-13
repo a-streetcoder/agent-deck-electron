@@ -19,6 +19,7 @@ import {
   configurePreviewSession,
   PREVIEW_PARTITION,
 } from "./preview-guard.js";
+import { allowRemoteShellNavigation, remoteServerOrigin } from "./remote-server.js";
 import {
   catalogEndpoint,
   catalogListsPath,
@@ -49,7 +50,9 @@ startupTrace("module loaded");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
 const repoRoot = path.resolve(__dirname, "..", "..");
-const desktopRecoveryToken = randomUUID();
+// A remote server (docs/remote-server-poc.md) cannot receive a token this shell
+// generated, so the two sides may share one through the environment instead.
+const desktopRecoveryToken = process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN || randomUUID();
 const legacySkillRecoveryTokenPattern =
   /^\.agent-deck-resource-recovery-v1-[1-9][0-9]{0,2}-[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$/;
 // The shared skill engine names retained trees `.<slug>.displaced.<pid>.<sequence>`.
@@ -71,6 +74,11 @@ const windowColors = () =>
 
 let serverProcess = null;
 let serverPort = null;
+// The privileged control-plane origin (this app's own server). Loopback runs
+// derive it from `serverPort`; a remote attach (AGENT_DECK_REMOTE_SERVER_URL)
+// sets it to that https origin and spawns no server.
+let controlPlaneOrigin = null;
+let remoteServer = null;
 let mainWindow = null;
 let draftsFlushedForQuit = false;
 let draftFlushRequest = null;
@@ -115,9 +123,24 @@ ipcMain.on("drafts:flushed", (event, payload) => {
 // have no CSRF/Origin guard, so no guest webContents may ever reach it. Reads
 // `serverPort` at CALL time — the server may start after handlers are wired.
 const isControlPlaneUrl = (parsed) =>
-  serverPort !== null &&
-  (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
-  parsed.port === String(serverPort);
+  (controlPlaneOrigin !== null && parsed.origin === controlPlaneOrigin) ||
+  (serverPort !== null &&
+    (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+    parsed.port === String(serverPort));
+/** The renderer's origin: the Vite dev server when set, else the control plane. */
+const expectedRendererOriginNow = () =>
+  controlPlaneOrigin
+    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `${controlPlaneOrigin}/`).origin
+    : null;
+/**
+ * Fetch from this app's own server. A remote attach goes through Electron's
+ * session so the Cloudflare Access cookie the window logged in with applies;
+ * loopback keeps Node's fetch.
+ */
+const controlPlaneFetch = (pathname, init) =>
+  remoteServer
+    ? session.defaultSession.fetch(`${controlPlaneOrigin}${pathname}`, init)
+    : fetch(`${controlPlaneOrigin}${pathname}`, init);
 // Generation-orders backend refreshes so a slower old response cannot restore
 // a stale badge. The count itself is always derived from distinct durable rows.
 let attentionRefreshGeneration = 0;
@@ -339,7 +362,34 @@ function waitForHealth(port, timeoutMs = 20_000) {
   });
 }
 
-function createWindow(port) {
+/**
+ * Remote attach: poll GET /health through the session-aware fetch. Access
+ * answers an unauthenticated probe with a login redirect (HTML, not 200), so
+ * this also fails fast when the shell has no valid Access cookie yet; the window
+ * then performs the login itself (see createWindow's navigation policy).
+ */
+async function waitForRemoteHealth(timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = "unreachable";
+  while (Date.now() < deadline) {
+    try {
+      const response = await controlPlaneFetch("/health", {
+        signal: AbortSignal.timeout(5_000),
+        redirect: "manual",
+      });
+      if (response.status === 200) return true;
+      lastStatus = String(response.status);
+      // A redirect means Access wants a login: let the window do it.
+      if (response.status >= 300 && response.status < 400) return false;
+    } catch {
+      lastStatus = "unreachable";
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`remote server did not become healthy in time (${lastStatus})`);
+}
+
+function createWindow() {
   const { width: workAreaWidth } = screen.getPrimaryDisplay().workAreaSize;
   const initialWidth = Math.max(940, Math.round(workAreaWidth * 0.6));
   mainWindow = new BrowserWindow({
@@ -374,8 +424,30 @@ function createWindow(port) {
 
   // AGENT_DECK_RENDERER_URL points at the Vite dev server (HMR) when set;
   // otherwise load the server-served production build same-origin.
-  const rendererUrl = process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${port}/`;
+  const rendererUrl = process.env.AGENT_DECK_RENDERER_URL || `${controlPlaneOrigin}/`;
   void mainWindow.loadURL(rendererUrl);
+
+  if (remoteServer) {
+    // Attached to a remote server: the window may only travel the Access login
+    // round-trip (team domain, GitHub) and back; any other target opens in the
+    // system browser. Applied to redirects too, since login is all redirects.
+    const teamDomain = process.env.AGENT_DECK_CF_ACCESS_TEAM_DOMAIN;
+    const guardRemoteNavigation = (event, url) => {
+      if (allowRemoteShellNavigation(url, controlPlaneOrigin, teamDomain)) return;
+      event.preventDefault();
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return;
+      }
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        void shell.openExternal(url);
+      }
+    };
+    mainWindow.webContents.on("will-navigate", guardRemoteNavigation);
+    mainWindow.webContents.on("will-redirect", guardRemoteNavigation);
+  }
 
   // Open external links (docs, GitHub) in the user's browser, not the app.
   // Parse the URL and compare the exact host so a look-alike like
@@ -387,7 +459,11 @@ function createWindow(port) {
     } catch {
       return { action: "deny" };
     }
-    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
+    if (
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "localhost" ||
+      (remoteServer && parsed.origin === controlPlaneOrigin)
+    ) {
       return { action: "allow" };
     }
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
@@ -561,9 +637,7 @@ function buildAppMenu() {
  * present in the requested project-scoped agent/prompt/MCP catalog.
  */
 async function validatedResourceFile(event, request) {
-  const expectedRendererOrigin = serverPort
-    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
-    : null;
+  const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
   try {
     senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
@@ -575,7 +649,7 @@ async function validatedResourceFile(event, request) {
     event.sender !== mainWindow.webContents ||
     event.senderFrame !== mainWindow.webContents.mainFrame ||
     senderOrigin !== expectedRendererOrigin ||
-    !serverPort
+    !controlPlaneOrigin
   ) {
     throw new Error("Resource file is unavailable");
   }
@@ -584,7 +658,7 @@ async function validatedResourceFile(event, request) {
   const { kind, projectId, filePath } = parsedRequest;
 
   if (projectId !== null) {
-    const projectsResponse = await fetch(`http://127.0.0.1:${serverPort}/projects`);
+    const projectsResponse = await controlPlaneFetch("/projects");
     const projectsBody = await projectsResponse.json().catch(() => null);
     if (
       !projectsResponse.ok ||
@@ -597,7 +671,7 @@ async function validatedResourceFile(event, request) {
 
   const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
   const endpoint = catalogEndpoint(kind);
-  const response = await fetch(`http://127.0.0.1:${serverPort}${endpoint}${query}`);
+  const response = await controlPlaneFetch(`${endpoint}${query}`);
   if (!response.ok) throw new Error("Resource file is unavailable");
   const body = await response.json().catch(() => null);
   if (!catalogListsPath(kind, body, filePath)) {
@@ -647,13 +721,13 @@ ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   assertTrustedPickerSender(event, "Subagent artifacts are unavailable");
   if (
-    !serverPort ||
+    !controlPlaneOrigin ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
   ) {
     throw new Error("Subagent artifacts are unavailable");
   }
-  const response = await fetch(
-    `http://127.0.0.1:${serverPort}/subagent-runs/${encodeURIComponent(runId)}/artifact-directory`,
+  const response = await controlPlaneFetch(
+    `/subagent-runs/${encodeURIComponent(runId)}/artifact-directory`,
     { headers: { "x-agent-deck-desktop-recovery-token": desktopRecoveryToken } },
   );
   if (!response.ok) throw new Error("Subagent artifacts are unavailable");
@@ -669,9 +743,7 @@ ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
 
 ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
   const runId = typeof rawRunId === "string" ? rawRunId : "";
-  const expectedRendererOrigin = serverPort
-    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
-    : null;
+  const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
   try {
     senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
@@ -683,13 +755,13 @@ ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
     event.sender !== mainWindow.webContents ||
     event.senderFrame !== mainWindow.webContents.mainFrame ||
     senderOrigin !== expectedRendererOrigin ||
-    !serverPort ||
+    !controlPlaneOrigin ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
   ) {
     throw new Error("Loop run is unavailable");
   }
-  const response = await fetch(
-    `http://127.0.0.1:${serverPort}/loops/runs/${encodeURIComponent(runId)}/artifact-directory`,
+  const response = await controlPlaneFetch(
+    `/loops/runs/${encodeURIComponent(runId)}/artifact-directory`,
   );
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -709,7 +781,7 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
     !mainWindow ||
     event.sender !== mainWindow.webContents ||
     event.senderFrame !== mainWindow.webContents.mainFrame ||
-    !serverPort ||
+    !controlPlaneOrigin ||
     token.length < 1 ||
     token.length > 512 ||
     (!legacySkillRecoveryTokenPattern.test(token) && !engineSkillRecoveryTokenPattern.test(token))
@@ -717,8 +789,8 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
     throw new Error("Skill recovery is unavailable");
   }
   const headers = { "x-agent-deck-desktop-recovery-token": desktopRecoveryToken };
-  const lookup = await fetch(
-    `http://127.0.0.1:${serverPort}/resources/skill-recoveries/${encodeURIComponent(token)}/trash-path`,
+  const lookup = await controlPlaneFetch(
+    `/resources/skill-recoveries/${encodeURIComponent(token)}/trash-path`,
     { headers },
   );
   if (!lookup.ok) throw new Error("Skill recovery could not be revalidated");
@@ -729,8 +801,8 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
   await shell.trashItem(body.path);
   let acknowledgementPending = false;
   try {
-    const acknowledged = await fetch(
-      `http://127.0.0.1:${serverPort}/resources/skill-recoveries/${encodeURIComponent(token)}/acknowledge`,
+    const acknowledged = await controlPlaneFetch(
+      `/resources/skill-recoveries/${encodeURIComponent(token)}/acknowledge`,
       { method: "POST", headers },
     );
     acknowledgementPending = !acknowledged.ok;
@@ -744,9 +816,7 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
 
 ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
   const runId = typeof rawRunId === "string" ? rawRunId : "";
-  const expectedRendererOrigin = serverPort
-    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
-    : null;
+  const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
   try {
     senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
@@ -758,13 +828,13 @@ ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
     event.sender !== mainWindow.webContents ||
     event.senderFrame !== mainWindow.webContents.mainFrame ||
     senderOrigin !== expectedRendererOrigin ||
-    !serverPort ||
+    !controlPlaneOrigin ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
   ) {
     throw new Error("Loop run is unavailable");
   }
-  const response = await fetch(
-    `http://127.0.0.1:${serverPort}/loops/runs/${encodeURIComponent(runId)}/worktree-directory`,
+  const response = await controlPlaneFetch(
+    `/loops/runs/${encodeURIComponent(runId)}/worktree-directory`,
   );
   if (!response.ok) {
     throw new Error("The retained Loop worktree is unavailable for review");
@@ -778,9 +848,7 @@ ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
 });
 
 function assertTrustedPickerSender(event, errorMessage) {
-  const expectedRendererOrigin = serverPort
-    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `http://127.0.0.1:${serverPort}/`).origin
-    : null;
+  const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
   try {
     senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
@@ -910,10 +978,10 @@ ipcMain.handle("app-menu:open", (_event, menuName, anchor) => {
 /** Read the backend-owned durable set. Renderer messages are hints only; they
  * cannot choose the count or claim that an arbitrary session needs review. */
 async function refreshDesktopAttention(notificationHint) {
-  if (!serverPort) return;
+  if (!controlPlaneOrigin) return;
   const generation = ++attentionRefreshGeneration;
   try {
-    const response = await fetch(`http://127.0.0.1:${serverPort}/sessions`);
+    const response = await controlPlaneFetch("/sessions");
     const body = await response.json().catch(() => null);
     if (!response.ok || !Array.isArray(body?.sessions)) return;
     const pending = body.sessions.filter(
@@ -1015,11 +1083,22 @@ ipcMain.on("attention:notify", (event, payload) => {
 async function bootstrap() {
   startupTrace("bootstrap started");
   try {
-    const configuredPort = externalServerPort();
-    serverPort = configuredPort ?? (await startServer());
-    startupTrace("server port acquired");
-    await waitForHealth(serverPort);
-    startupTrace("server health confirmed");
+    remoteServer = remoteServerOrigin(process.env.AGENT_DECK_REMOTE_SERVER_URL);
+    if (remoteServer) {
+      // Remote attach: no owned server, no loopback port. The renderer and every
+      // control-plane call go to the published origin through Access.
+      controlPlaneOrigin = remoteServer;
+      startupTrace("remote server configured");
+      const healthy = await waitForRemoteHealth();
+      startupTrace(healthy ? "remote server health confirmed" : "remote server needs login");
+    } else {
+      const configuredPort = externalServerPort();
+      serverPort = configuredPort ?? (await startServer());
+      controlPlaneOrigin = `http://127.0.0.1:${serverPort}`;
+      startupTrace("server port acquired");
+      await waitForHealth(serverPort);
+      startupTrace("server health confirmed");
+    }
   } catch (error) {
     dialog.showErrorBox("agent-deck failed to start", String(error));
     app.quit();
@@ -1032,7 +1111,7 @@ async function bootstrap() {
   });
   Menu.setApplicationMenu(buildAppMenu());
   startupTrace("creating main window");
-  createWindow(serverPort);
+  createWindow();
   void refreshDesktopAttention();
   startupTrace("main window created");
 }
@@ -1158,8 +1237,8 @@ app.whenReady().then(() => {
 
 app.on("activate", () => {
   // macOS: re-open a window when the dock icon is clicked and none are open.
-  if (BrowserWindow.getAllWindows().length === 0 && serverPort) {
-    createWindow(serverPort);
+  if (BrowserWindow.getAllWindows().length === 0 && controlPlaneOrigin) {
+    createWindow();
   }
 });
 
