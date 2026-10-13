@@ -247,8 +247,16 @@ function updateWorkspaceTabs(
   return { ...map, [sessionId]: next };
 }
 
+/** The signed-in person on a shared server (GET /me); null on a loopback server. */
+export interface CurrentUser {
+  id: string;
+  email: string;
+  name?: string;
+}
+
 export interface AppState {
   connection: ConnectionStatus;
+  me: CurrentUser | null;
   /** True only after the current session's (re)subscription ack settles. */
   sessionSubscriptionSettled: boolean;
   view: AppView;
@@ -405,6 +413,7 @@ export interface AppState {
   setCurrentAgent(agentName: string | null): void;
   setSession(session: SessionMeta | null): void;
   setSessions(sessions: SessionMeta[]): void;
+  setMe(me: CurrentUser | null): void;
   setAttentionAnnouncement(message: string): void;
   setAttentionRoutingToken(token: number | null): void;
   setPendingComposerText(pending: PendingComposerText | null): void;
@@ -508,6 +517,7 @@ let nextMemoryNavigationRequestId = 0;
 
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
+  me: null,
   sessionSubscriptionSettled: false,
   view: "chat",
   panelExpanded: initialPanelExpanded(),
@@ -601,6 +611,7 @@ export const useAppStore = create<AppState>((set) => ({
           },
     ),
   setSessions: (sessions) => set({ sessions, sessionsLoaded: true }),
+  setMe: (me) => set({ me }),
   setAttentionAnnouncement: (text) =>
     set((state) => ({
       attentionAnnouncement: { id: (state.attentionAnnouncement?.id ?? 0) + 1, text },

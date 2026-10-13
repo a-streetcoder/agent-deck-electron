@@ -25,7 +25,7 @@ import type {
 } from "@agent-deck/client-runtime";
 import { responseErrorMessage } from "../lib/responseError.ts";
 import { RpcClientTransport, type ClientTransport, type TransportHost } from "./clientTransport.ts";
-import { useAppStore } from "./store.ts";
+import { useAppStore, type CurrentUser } from "./store.ts";
 
 /**
  * The ONLY module that touches the WebSocket. Server messages mutate the
@@ -1493,7 +1493,18 @@ export async function addProject(path: string): Promise<void> {
   }
 }
 
+/** Who the server says we are. Best-effort: a loopback server answers null. */
+export async function refreshMe(): Promise<void> {
+  try {
+    const { user } = await fetchJson<{ user: CurrentUser | null }>("/me");
+    useAppStore.getState().setMe(user);
+  } catch {
+    useAppStore.getState().setMe(null);
+  }
+}
+
 export async function connectAndBootstrap(): Promise<void> {
+  void refreshMe();
   try {
     await refreshProjects();
     await switchToProject(null);

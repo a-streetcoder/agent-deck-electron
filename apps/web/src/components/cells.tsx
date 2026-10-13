@@ -54,6 +54,7 @@ import {
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
+import { userDisplayName } from "../lib/userIdentity.ts";
 import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -811,6 +812,15 @@ function UserCellView({
   return (
     <div className="flex justify-end" data-testid="user-cell">
       <div className="max-w-[80%] space-y-2">
+        {cell.author ? (
+          <div
+            className="truncate text-right text-detail text-text-muted"
+            title={cell.author.id}
+            data-testid="user-cell-author"
+          >
+            {userDisplayName(cell.author)}
+          </div>
+        ) : null}
         {visibleText || attachments.length > 0 ? (
           cell.text ? (
             <CopyableMessage text={cell.text} side="leading">

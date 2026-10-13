@@ -21,6 +21,7 @@ import {
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { isMacDesktop } from "@/lib/native";
+import { userDisplayName } from "@/lib/userIdentity";
 import { useAppStore, type AppView } from "../state/store.ts";
 import {
   PANEL_FADE,
@@ -68,6 +69,7 @@ export function Sidebar({ width }: { width?: number }) {
   const setView = useAppStore((state) => state.setView);
   const panelExpanded = useAppStore((state) => state.panelExpanded);
   const setPanelExpanded = useAppStore((state) => state.setPanelExpanded);
+  const me = useAppStore((state) => state.me);
   // On the macOS desktop build the window's traffic lights overlap the top-left,
   // so drop the wordmark below them and make the strip a drag region.
   const macDesktop = isMacDesktop();
@@ -112,6 +114,15 @@ export function Sidebar({ width }: { width?: number }) {
           </span>
         ))}
       </div>
+      {me ? (
+        <div
+          className="truncate px-4 pb-1 text-detail text-text-muted"
+          title={me.email}
+          data-testid="sidebar-signed-in"
+        >
+          Signed in as {userDisplayName(me)}
+        </div>
+      ) : null}
 
       {/* Panel host: everything below the logo. Two permanently-mounted
           layers — the nav (with the collapsed sessions card at its bottom)

@@ -17,6 +17,7 @@ import type { SessionMeta } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrdering";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
+import { userDisplayName, userInitials } from "@/lib/userIdentity";
 import { useAppStore } from "../state/store.ts";
 import { SessionStatusIndicator } from "./SessionStatusIndicator.tsx";
 import {
@@ -210,6 +211,16 @@ export function SessionRow({
           </span>
         ) : null}
       </div>
+      {session.createdBy ? (
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-selection-stroke bg-accent-surface text-detail font-semibold text-text-primary"
+          title={`Created by ${userDisplayName(session.createdBy)}`}
+          aria-label={`Created by ${userDisplayName(session.createdBy)}`}
+          data-testid="chat-owner"
+        >
+          {userInitials(session.createdBy)}
+        </span>
+      ) : null}
       {running ? <TypingDots /> : null}
       {session.pinnedAt ? (
         <Pin
