@@ -102,6 +102,16 @@ Recorded so we don't lose them. Each needs a decision, or is large / low-value.
   sessions and messages, desktop remote mode. Needs an ADR against
   VISION_EDGE before it can land; open items: REST origin/CSRF guard, per-user
   git author + GitHub credentials, GitHub passkey login inside Electron.
+- **Session move between backends (local ↔ shared server)** — "Move to
+  server" / "Bring back local" on a session. Export = Pi session file (opaque
+  JSONL, same pinned Pi on both sides) + Agent Deck session metadata + the
+  worktree branch pushed to the remote; import = fetch the branch into a
+  worktree of the matching project, remap the recorded cwd/paths, register the
+  session, resume. Both directions. Depends on: per-user identity on the shared
+  server (so the moved session keeps its owner), project identity shared across
+  backends (same origin URL), and a path-remap rule for the transcript. Until
+  then the manual path is push the branch + start a fresh session with a short
+  handoff (delta, not transcript).
 
 ---
 
