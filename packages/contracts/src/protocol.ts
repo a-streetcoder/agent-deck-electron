@@ -410,6 +410,17 @@ export const MemoryRecallSnapshot = Schema.mutable(
 );
 export type MemoryRecallSnapshot = typeof MemoryRecallSnapshot.Type;
 
+/** Who did something, as verified by the trusted proxy in front of a shared
+ * server (remote-server POC). `id` is the verified email; `name` is display
+ * only. Absent on every record written by a single-user loopback server. */
+export const UserIdentity = Schema.mutable(
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.optional(Schema.String),
+  }),
+);
+export type UserIdentity = typeof UserIdentity.Type;
+
 /** Future producers may add live statuses, but this version acts only on failed. */
 const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
   (_input: unknown): _input is "failed" => true,
@@ -421,6 +432,8 @@ export const SessionMeta = Schema.mutable(
     id: Schema.String,
     cwd: Schema.String,
     createdAt: Schema.String,
+    /** The authenticated user who created this session (shared server only). */
+    createdBy: Schema.optional(UserIdentity),
     /** Absent on legacy sessions, which retain their existing resume semantics. */
     lifecycle: Schema.optional(Schema.Literal("draft", "started")),
     /** Draft launch choices; no checkout or process exists until the first send. */

@@ -41,8 +41,16 @@ export interface UserPasteRef {
   text: string;
 }
 
+/** Verified author of a user message on a shared server (contracts `UserIdentity`). */
+export interface UserAuthor {
+  id: string;
+  name?: string;
+}
+
 export interface UserCell {
   kind: "user";
+  /** Who sent this message; absent on single-user loopback servers and legacy history. */
+  author?: UserAuthor;
   /** Stable Pi session-entry identity when available (resume/fork history). */
   entryId?: string;
   id: string;
