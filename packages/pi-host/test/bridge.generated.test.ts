@@ -1,7 +1,7 @@
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writeBridgeExtension } from "../src/bridge.ts";
+import { sweepStaleBridgeExtensions, writeBridgeExtension } from "../src/bridge.ts";
 
 describe("generated recall bridge", () => {
   it("persists only versioned recalled source metadata after a nonempty recall", () => {
@@ -158,6 +158,24 @@ describe("generated recall bridge", () => {
     } finally {
       vi.unstubAllGlobals();
       rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stale bridge sweep", () => {
+  it("removes generated folders older than the limit and keeps fresh ones", () => {
+    const spec = { endpoint: "http://127.0.0.1:1/bridge", token: "t", tools: [] };
+    const stale = dirname(writeBridgeExtension({ ...spec, sessionId: "stale" }));
+    const fresh = dirname(writeBridgeExtension({ ...spec, sessionId: "fresh" }));
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    try {
+      sweepStaleBridgeExtensions();
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+    } finally {
+      rmSync(stale, { recursive: true, force: true });
+      rmSync(fresh, { recursive: true, force: true });
     }
   });
 });

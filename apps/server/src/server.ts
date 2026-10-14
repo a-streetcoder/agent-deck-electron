@@ -29,7 +29,11 @@ import {
   type ProviderLoginFn,
   type ResourceRoots,
 } from "@agent-deck/resources";
-import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host";
+import {
+  hasEffectiveEnvValue,
+  sweepStaleBridgeExtensions,
+  writeBridgeExtension,
+} from "@agent-deck/pi-host";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
@@ -77,7 +81,7 @@ import {
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
 } from "./mcpTools.ts";
-import { nativeMcpList } from "./mcpNative.ts";
+import { nativeMcpEnabled, nativeMcpList, nativeMcpToolPattern } from "./mcpNative.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
@@ -251,6 +255,9 @@ async function initServer(
   // capability opens it: create it if missing, reject a linked/reparse root, and resolve ancestor
   // links to one authoritative physical directory for all app-data services below.
   const dataDir = resolveTrustedDataDir(requestedDataDir);
+  // Generated bridge extensions can embed resolved MCP credentials (PI-03b);
+  // session exit removes them, this clears what a crash left.
+  sweepStaleBridgeExtensions();
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
@@ -310,18 +317,20 @@ async function initServer(
   const childAllowedTools = new Map<string, ReadonlySet<string>>();
   // PI-03b, behind AGENT_DECK_NATIVE_MCP=1 until the proxy goes (PI-03f): each
   // session's MCP servers are embedded in its generated bridge extension and
-  // hosted by Pi's own MCP client. Pi server name -> Agent Deck id per session.
-  const nativeMcpEnabled = () => process.env.AGENT_DECK_NATIVE_MCP === "1";
-  const nativeMcpIdMaps = new Map<string, Map<string, string>>();
+  // hosted by Pi's own MCP client. A missing or hidden project gets none.
   const nativeMcpFor = (
     projectId: string,
     serverIds: readonly string[],
     toolAllowlist?: string[],
-  ) =>
-    nativeMcpList(
-      effectiveMcpConfigs(projectId).configs.filter((config) => serverIds.includes(config.id)),
+  ) => {
+    const project = projects.find((candidate) => candidate.id === projectId);
+    return nativeMcpList(
+      project && !project.hidden
+        ? effectiveMcpConfigs(projectId).configs.filter((config) => serverIds.includes(config.id))
+        : [],
       toolAllowlist,
     );
+  };
   // Blocking supervisor requests awaiting an answer: requestId → resolver. The
   // child's contact_supervisor call is suspended on the /bridge request until
   // answerSupervisor() (via POST /supervisor/:id/answer) settles it.
@@ -462,8 +471,6 @@ async function initServer(
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       const allow = mcpAllowlistForSession(meta);
       const native = scope && nativeMcpEnabled() ? nativeMcpFor(scope, allow) : undefined;
-      if (native) nativeMcpIdMaps.set(meta.id, native.idMap);
-      else nativeMcpIdMaps.delete(meta.id);
       const tools = scope && !native ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
@@ -564,7 +571,6 @@ async function initServer(
             ? { nativeMcp: { servers: native.servers, blockedTools: native.blockedTools } }
             : {}),
         });
-        if (native) nativeMcpIdMaps.set(childSessionId, native.idMap);
         const disposeAccess = registerChildBridgeAccess({
           sessionId: childSessionId,
           token,
@@ -593,14 +599,13 @@ async function initServer(
           // narrows a legacy exact-tool allowlist).
           toolNames: [
             ...toolNames,
-            ...(native?.servers ?? []).map((s) => `mcp__${s.name.replace(/-/g, "_")}__*`),
+            ...(native?.servers ?? []).map((s) => nativeMcpToolPattern(s.name)),
           ],
           dispose: async () => {
             cancelChildSupervisorRequests(childSessionId);
             disposeAccess();
             childSupervisors.delete(childSessionId);
             childMcpAssignments.delete(childSessionId);
-            nativeMcpIdMaps.delete(childSessionId);
             try {
               rmSync(nodePath.dirname(extension), { recursive: true, force: true });
             } catch {

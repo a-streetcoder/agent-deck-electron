@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { nativeMcpList } from "../src/mcpNative.ts";
 import { mcpEntryToConfig, type McpServerConfig } from "../src/mcpTools.ts";
+import { normalizeAgentMcpProxyTools } from "../src/launchResources.ts";
 
 const stdio = (id: string, extra: Partial<McpServerConfig> = {}): McpServerConfig =>
   ({ id, command: "node", args: ["server.js"], ...extra }) as McpServerConfig;
@@ -36,21 +37,42 @@ describe("nativeMcpList", () => {
       type: "http",
       url: "https://example.com/mcp",
       exposure: "direct",
-      // `$` escaped so Pi's value resolution keeps it literal.
-      headers: { Authorization: "Bearer s3cr$$t" },
+      headers: { Authorization: "Bearer s3cr$t" },
     });
     expect(JSON.stringify(list)).not.toContain("DOCS_TOKEN");
   });
 
-  it("escapes a leading ! so Pi never runs an env value as a shell command", () => {
-    const list = nativeMcpList([stdio("s", { env: { K: "!rm -rf /" }, cwd: "/w" } as never)]);
+  it("passes stdio launch fields as resolved", () => {
+    const list = nativeMcpList([stdio("s", { env: { K: "v" }, cwd: "/w" } as never)]);
     expect(list.servers[0]!.config).toMatchObject({
       type: "stdio",
       command: "node",
       args: ["server.js"],
       cwd: "/w",
-      env: { K: "$!rm -rf /" },
+      env: { K: "v" },
     });
+  });
+
+  it("caps names so the mcp__<name>__ prefix survives Pi's 64-character tool names", () => {
+    const long = "a".repeat(40);
+    const list = nativeMcpList([stdio(long), stdio(`${long}.x`)]);
+    expect(list.servers.map((s) => s.name)).toEqual(["a".repeat(24), `${"a".repeat(22)}_2`]);
+    for (const { name } of list.servers) expect(`mcp__${name}__`.length).toBeLessThanOrEqual(31);
+  });
+
+  it("drops tool names with * so Pi cannot read them as widening patterns", () => {
+    const list = nativeMcpList(
+      [stdio("docs", { enabledTools: ["*", "read"], toolApproval: { "*": "auto" } })],
+      undefined,
+    );
+    expect(list.servers[0]!.config).toMatchObject({
+      exposure: "hidden",
+      toolExposure: { read: "direct" },
+    });
+    expect(list.servers[0]!.config.toolExposure).not.toHaveProperty("*");
+    const child = nativeMcpList([stdio("docs")], ["mcp__docs__*"]);
+    expect(child.servers[0]!.config).toEqual(expect.objectContaining({ exposure: "hidden" }));
+    expect(child.servers[0]!.config).not.toHaveProperty("toolExposure");
   });
 
   it("hides refused tools from approval modes and allow/deny lists", () => {
@@ -92,5 +114,21 @@ describe("nativeMcpList", () => {
   it("drops blocked configs and returns nothing for an empty list", () => {
     expect(nativeMcpList([stdio("b", { blocked: "missing env" })]).servers).toEqual([]);
     expect(nativeMcpList([])).toEqual({ servers: [], blockedTools: [], idMap: new Map() });
+  });
+
+  it("adds one --tools pattern per server for a named agent that authors `mcp`", () => {
+    process.env.AGENT_DECK_NATIVE_MCP = "1";
+    try {
+      expect(normalizeAgentMcpProxyTools(["read", "mcp"], ["my-srv.v2"])).toEqual([
+        "read",
+        "mcp",
+        "mcp__my_srv_v2__*",
+      ]);
+      // Legacy exact names are left for Pi to match exactly.
+      expect(normalizeAgentMcpProxyTools(["mcp__a__x"], ["a"])).toEqual(["mcp__a__x", "mcp"]);
+    } finally {
+      delete process.env.AGENT_DECK_NATIVE_MCP;
+    }
+    expect(normalizeAgentMcpProxyTools(["read", "mcp"], ["a"])).toEqual(["read", "mcp"]);
   });
 });

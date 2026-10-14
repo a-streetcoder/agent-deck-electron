@@ -54,6 +54,7 @@ export {
   type HealthCheck,
 } from "./doctor.ts";
 export {
+  sweepStaleBridgeExtensions,
   writeBridgeExtension,
   type BridgeCallRequest,
   type BridgeCallResponse,
