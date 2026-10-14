@@ -7,6 +7,8 @@ import { THINKING_LEVELS, type AgentInfo, type ThinkingLevel } from "@agent-deck
 import { cn } from "@/lib/cn";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { ProviderLogo } from "../ProviderLogo.tsx";
+import { credentialsOwnerLabel } from "@/lib/userIdentity";
+import { useAppStore } from "@/state/store";
 
 /**
  * Composer footer chips + send button, styled per the native composer footer
@@ -229,6 +231,7 @@ export function ModelChip({
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
+  const ownerLabel = useAppStore((s) => credentialsOwnerLabel(s.me, s.session?.createdBy));
 
   const byProvider = new Map<string, PiModelInfo[]>();
   for (const model of models) {
@@ -254,6 +257,11 @@ export function ModelChip({
         <span className="max-w-[16ch] truncate" data-testid="model-chip-label">
           {state?.modelId ?? "model"}
         </span>
+        {ownerLabel ? (
+          <span className="max-w-[24ch] truncate text-text-muted" data-testid="model-chip-owner">
+            {ownerLabel}
+          </span>
+        ) : null}
         <ChevronDown size={11} className="opacity-60" />
       </ControlButton>
       {open ? (
@@ -294,6 +302,9 @@ export function ModelChip({
           ))}
           {models.length === 0 ? (
             <div className="px-2 py-2 text-detail text-text-muted">No models available.</div>
+          ) : null}
+          {ownerLabel ? (
+            <div className="px-2 pb-1 pt-1.5 text-micro text-text-muted">{ownerLabel}</div>
           ) : null}
         </div>
       ) : null}

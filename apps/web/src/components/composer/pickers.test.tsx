@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAppStore } from "../../state/store.ts";
 import { AgentChip, ModelChip, ThinkingChip } from "./pickers.tsx";
 
 afterEach(cleanup);
@@ -166,5 +167,42 @@ describe("running picker guards", () => {
     expect(screen.queryByTestId("thinking-menu")).toBeNull();
     fireEvent.click(oldOption);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("SRV-14 credentials owner label", () => {
+  afterEach(() => useAppStore.setState({ me: null, session: null }));
+  const chip = (
+    <ModelChip
+      state={{ provider: "mock", modelId: "a", thinkingLevel: "off" }}
+      models={[{ provider: "mock", id: "b" }]}
+      onSelect={vi.fn()}
+    />
+  );
+
+  it("names the owner in the chip and the menu when the viewer is not the owner", () => {
+    useAppStore.setState({
+      me: { id: "ale@example.com", email: "ale@example.com" },
+      session: { createdBy: { id: "andrea@example.com", name: "Andrea" } } as never,
+    });
+    render(chip);
+    expect(screen.getByTestId("model-chip-owner").textContent).toBe("runs on Andrea's credentials");
+    fireEvent.click(screen.getByTestId("model-chip"));
+    expect(screen.getByTestId("model-menu").textContent).toContain("runs on Andrea's credentials");
+  });
+
+  it("stays hidden for own sessions and on loopback", () => {
+    useAppStore.setState({
+      me: { id: "ale@example.com", email: "ale@example.com" },
+      session: { createdBy: { id: "ale@example.com" } } as never,
+    });
+    const view = render(chip);
+    expect(screen.queryByTestId("model-chip-owner")).toBeNull();
+    useAppStore.setState({
+      me: null,
+      session: { createdBy: { id: "andrea@example.com" } } as never,
+    });
+    view.rerender(chip);
+    expect(screen.queryByTestId("model-chip-owner")).toBeNull();
   });
 });

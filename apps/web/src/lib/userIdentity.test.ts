@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { userDisplayName, userInitials } from "./userIdentity.ts";
+import { credentialsOwnerLabel, userDisplayName, userInitials } from "./userIdentity.ts";
 
 describe("userIdentity", () => {
   it("prefers the name, then the email local part", () => {
@@ -14,5 +14,15 @@ describe("userIdentity", () => {
     expect(userInitials({ id: "andrea.rossi@example.com" })).toBe("AR");
     expect(userInitials({ id: "ale@example.com" })).toBe("AL");
     expect(userInitials({ id: "" })).toBe("?");
+  });
+  it("SRV-14: names the owner whose credentials a shared session runs on", () => {
+    const me = { id: "andrea@example.com" };
+    expect(credentialsOwnerLabel(me, { id: "ale@example.com", name: "Ale" })).toBe(
+      "runs on Ale's credentials",
+    );
+    expect(credentialsOwnerLabel(me, { id: "ale@example.com" })).toBe("runs on ale's credentials");
+    expect(credentialsOwnerLabel(me, { id: "andrea@example.com", name: "Andrea" })).toBeNull();
+    expect(credentialsOwnerLabel(me, undefined)).toBeNull();
+    expect(credentialsOwnerLabel(null, { id: "ale@example.com" })).toBeNull();
   });
 });
