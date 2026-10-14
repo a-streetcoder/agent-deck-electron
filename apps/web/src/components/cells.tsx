@@ -96,7 +96,7 @@ function ToolCellView({
   const memoryLabel = memoryToolCardLabel(cell);
   // Every other tool gets a friendly name + a distinct icon (native toolVerb /
   // toolIcon) instead of the raw tool name under one generic terminal glyph.
-  const preso = memoryLabel ? null : toolPresentation(cell.toolName);
+  const preso = memoryLabel ? null : toolPresentation(cell.toolName, session?.mcpServerNames);
   const PresoIcon = preso?.Icon;
   const filePath = FILE_TOOLS.has(cell.toolName.toLowerCase())
     ? toolFilePath(cell.args)

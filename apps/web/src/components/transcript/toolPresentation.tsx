@@ -49,14 +49,30 @@ const TOOL_META: Record<string, ToolMeta> = {
   mcp: { name: "MCP", Icon: Wrench, variant: "mcp" },
 };
 
-/** Resolve a tool's card presentation; unknown tools keep their raw name + a wrench. */
-export function toolPresentation(toolName: string): ToolPresentation {
+/** Resolve a tool's card presentation; unknown tools keep their raw name + a wrench.
+ * `mcpServerNames` (session meta: Pi server name -> Agent Deck id) labels native
+ * MCP tools with the server the user configured. */
+export function toolPresentation(
+  toolName: string,
+  mcpServerNames?: Readonly<Record<string, string>>,
+): ToolPresentation {
   const meta = TOOL_META[toolName.toLowerCase()];
   if (meta) return { name: meta.name, Icon: meta.Icon, variant: meta.variant ?? "generic" };
-  // MCP tools are namespaced `mcp__<server>__<tool>` — surface the tool part.
+  // Native MCP tools are `mcp__<server>__<tool>`; Pi turns `-` into `_` in the
+  // server part. The longest known server wins; else split on the first `__`.
   if (toolName.startsWith("mcp__")) {
-    const leaf = toolName.split("__").pop() || toolName;
-    return { name: leaf, Icon: Wrench, variant: "mcp" };
+    const known = Object.entries(mcpServerNames ?? {})
+      .map(([name, id]) => ({ id, prefix: `mcp__${name.replace(/-/g, "_")}__` }))
+      .filter(({ prefix }) => toolName.startsWith(prefix) && toolName.length > prefix.length)
+      .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+    const rest = toolName.slice("mcp__".length);
+    const split = rest.indexOf("__");
+    const [server, tool] = known
+      ? [known.id, toolName.slice(known.prefix.length)]
+      : split > 0
+        ? [rest.slice(0, split), rest.slice(split + 2)]
+        : [undefined, rest];
+    return { name: server && tool ? `${server} › ${tool}` : rest, Icon: Wrench, variant: "mcp" };
   }
   return { name: toolName, Icon: Wrench, variant: "generic" };
 }
