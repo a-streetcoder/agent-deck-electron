@@ -4,6 +4,8 @@ _Decision of record: Syncr #125 (M.25 execution model) + #122 ADR notes. 2026-07
 
 **Agents run on their owner's machine. Period — including in the multiuser future.**
 
+_Exception: an opt-in shared headless host for trusted co-workers, see [ADR 0003](docs/adr/0003-shared-server-trust-model.md)._
+
 The cloud (Syncr) is the coordination plane: identity, projects, channels, events, jobs, audit.
 The edges — each member's Agent Deck — execute. Code, worktrees, API keys, model traffic, and
 agent runtime never touch the coordination plane. This is simultaneously our privacy posture
@@ -17,11 +19,10 @@ an offline member's agent sits `pending` in the event stream until their host co
 claims it (Syncr M.24). Presence makes this legible, never embarrassing:
 `@release-agent — owner offline, 2 jobs queued`.
 
-**Shared headless project hosts are explicitly not committed.** The client/server split
-(React ⇄ WS ⇄ `apps/server`) means the same server binary _could_ run detached — we know that,
-and we are still not designing for it. If it is ever revisited, it is an ADR-level decision
-(Syncr #122): a host holding agent keys for a project is a new attestation subject class, and
-per-user-machine execution must remain first-class regardless.
+**Edge execution stays the product default.** A shared headless host is supported only as the
+opt-in deployment for mutually trusted co-workers described in
+[ADR 0003](docs/adr/0003-shared-server-trust-model.md); per-user-machine execution remains
+first-class regardless.
 
 ## Offline mode is first-class
 

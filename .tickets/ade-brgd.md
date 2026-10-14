@@ -1,6 +1,6 @@
 ---
 id: ade-brgd
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-14T00:08:57Z
