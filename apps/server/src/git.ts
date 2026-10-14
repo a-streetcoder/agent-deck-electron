@@ -974,6 +974,11 @@ export async function gitCommitOid(cwd: string, revision: string): Promise<strin
   return (await runGit(cwd, ["rev-parse", "--verify", `${revision}^{commit}`])).trim();
 }
 
+/** The best common ancestor commit of two validated revisions (`a...b` base). */
+export async function gitMergeBase(cwd: string, a: string, b: string): Promise<string> {
+  return (await runGit(cwd, ["merge-base", "--", a, b])).trim();
+}
+
 /** Commits on `branch` not yet reachable from `base` (native commitsAhead). */
 export async function gitCommitsAhead(cwd: string, branch: string, base: string): Promise<number> {
   const out = (await runGit(cwd, ["rev-list", "--count", `${base}..${branch}`])).trim();

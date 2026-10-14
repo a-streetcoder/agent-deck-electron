@@ -555,7 +555,7 @@ export function createRpcConnection(deps: {
         return;
       }
       try {
-        const base = await sessionDiffBase(meta);
+        const base = await sessionDiffBase(meta, request.base);
         if (request.type === "diff_files") {
           const set = await diffs.listFiles(meta.id, meta.cwd, base);
           send({

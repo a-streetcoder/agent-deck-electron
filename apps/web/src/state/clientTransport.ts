@@ -88,12 +88,13 @@ export interface ClientTransport {
    * like {@link send} — the drawer resyncs via reattach on reconnect). */
   sendTerminal(message: Exclude<TerminalClientRequest, { type: "terminal_open" }>): void;
   /** Fetch the session's changed-file set (Slice 10); rejects offline. */
-  diffFiles(sessionId: string): Promise<DiffFilesResult>;
+  diffFiles(sessionId: string, base?: "head" | "branch"): Promise<DiffFilesResult>;
   /** Fetch one changed file's bounded unified diff; rejects offline. */
   diffFile(
     sessionId: string,
     path: string,
     scope?: "all" | "staged" | "unstaged",
+    base?: "head" | "branch",
   ): Promise<DiffFileResult>;
   /** List the editors detected server-side (Slice 11); rejects offline. */
   listEditors(): Promise<readonly EditorId[]>;
@@ -307,24 +308,25 @@ export class RpcClientTransport implements ClientTransport {
     });
   }
 
-  diffFiles(sessionId: string): Promise<DiffFilesResult> {
+  diffFiles(sessionId: string, base?: "head" | "branch"): Promise<DiffFilesResult> {
     const transport = this.transport;
     if (!transport || transport.getState() !== "connected") {
       return Promise.reject(new Error("transport not connected"));
     }
-    return transport.diffFiles(sessionId);
+    return transport.diffFiles(sessionId, base);
   }
 
   diffFile(
     sessionId: string,
     path: string,
     scope?: "all" | "staged" | "unstaged",
+    base?: "head" | "branch",
   ): Promise<DiffFileResult> {
     const transport = this.transport;
     if (!transport || transport.getState() !== "connected") {
       return Promise.reject(new Error("transport not connected"));
     }
-    return transport.diffFile(sessionId, path, scope);
+    return transport.diffFile(sessionId, path, scope, base);
   }
 
   listEditors(): Promise<readonly EditorId[]> {

@@ -5,6 +5,8 @@ import path from "node:path";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitFullyQualifiedBranchRef, parseNameStatusZ, parseNumstatZ } from "../src/git.ts";
+import type { SessionMeta } from "@agent-deck/contracts";
+import { sessionDiffBase } from "../src/diffGateway.ts";
 import { makeSessionDiff, type SessionDiffShape } from "../src/services/diff.ts";
 
 // Real git repos + spawns compete with the rest of the suite (node-pty,
@@ -459,5 +461,49 @@ describe("SessionDiff service (services/diff.ts)", () => {
     ]);
     const patch = await run(diff.fileDiff("s1", repo, "first.txt"));
     expect(patch.diff).toContain("+hello");
+  });
+});
+
+describe("worktree session branch base (ROAD-S20)", () => {
+  it("the branch toggle shows committed worktree work since the source branch's merge base", async () => {
+    const repo = makeRepo();
+    const worktree = path.join(makeTempDir(), "wt");
+    git(repo, ["worktree", "add", "-b", "agent-deck/session-s1", worktree, "main"]);
+    git(worktree, ["config", "user.email", "t@example.com"]);
+    git(worktree, ["config", "user.name", "Test"]);
+    writeFileSync(path.join(worktree, "committed.txt"), "committed session work\n");
+    git(worktree, ["add", "committed.txt"]);
+    git(worktree, ["commit", "-m", "session commit"]);
+    writeFileSync(path.join(worktree, "a.txt"), "uncommitted session work\n");
+    // The source branch moves on after the fork: its commit must not show up as
+    // a deletion in the worktree's review (merge base, not the source tip).
+    writeFileSync(path.join(repo, "main-only.txt"), "source work\n");
+    git(repo, ["add", "main-only.txt"]);
+    git(repo, ["commit", "-m", "source commit"]);
+
+    const meta = {
+      id: "s1",
+      cwd: worktree,
+      worktreePath: worktree,
+      worktreeBranch: "agent-deck/session-s1",
+      worktreeSourceBranch: "main",
+    } as SessionMeta;
+    const diff = makeSessionDiff();
+
+    expect(await sessionDiffBase(meta)).toBeUndefined();
+    const head = await listFiles(diff, "s1", worktree, await sessionDiffBase(meta, "head"));
+    expect(head.files.map((file) => file.path)).toEqual(["a.txt"]);
+
+    const base = await sessionDiffBase(meta, "branch");
+    const branch = await listFiles(diff, "s1", worktree, base);
+    expect(branch.files.map((file) => file.path)).toEqual(["a.txt", "committed.txt"]);
+    const patch = await run(diff.fileDiff("s1", worktree, "committed.txt", base));
+    expect(patch.diff).toContain("+committed session work");
+  });
+
+  it("refuses the branch base for a session without its own worktree", async () => {
+    const repo = makeRepo();
+    const meta = { id: "s2", cwd: repo, worktreeSourceBranch: "main" } as SessionMeta;
+    await expect(sessionDiffBase(meta, "branch")).rejects.toThrow(/worktree sessions/);
   });
 });
