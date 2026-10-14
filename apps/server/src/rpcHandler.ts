@@ -834,6 +834,9 @@ export function createRpcConnection(deps: {
           let stagedPastes: { rollback: () => void } | undefined;
           let stagedImages: { rollback: () => void } | undefined;
           try {
+            // Author first: the catch unstages by (session, text, author), so it
+            // must only run once this request has staged its own record.
+            stageAuthor(session.meta.id, request.message);
             stagedPastes =
               request.pastes && request.transcriptText !== undefined
                 ? sessionPastes?.stage(
@@ -846,7 +849,6 @@ export function createRpcConnection(deps: {
             stagedImages = request.images?.length
               ? sessionImages?.stage(session.meta.id, request.message, request.images)
               : undefined;
-            stageAuthor(session.meta.id, request.message);
             await session.prompt(
               request.message,
               request.images?.map(({ type, data, mimeType }) => ({ type, data, mimeType })),

@@ -771,6 +771,55 @@ describe("createRpcConnection", () => {
     }
   });
 
+  it("a failed attachment stage leaves an earlier queued author turn intact", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "deck-rpc-authors-"));
+    try {
+      const sessionAuthors = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
+      const { session } = makeSession("s1");
+      const sessionPastes = {
+        stage: vi.fn(() => {
+          throw new Error("paste stage failed");
+        }),
+      } as unknown as SessionPasteStore;
+      const frames: Frame[] = [];
+      const conn = createRpcConnection({
+        sessions: makeManager({ s1: session }),
+        terminals: makeTerminalGateway().gateway,
+        diffs: makeDiffGateway().gateway,
+        editors: makeEditorLauncher().launcher,
+        files: makeFileService().service,
+        scripts: makeScriptGateway().gateway,
+        checkpoints: makeCheckpointService().service,
+        rollback: makeRollbackGateway().gateway,
+        sessionAuthors,
+        sessionPastes,
+        user: { id: "ale@example.com", email: "ale@example.com" },
+        send: (frame) => frames.push(frame),
+      });
+      await conn.handleMessage(frame(1, { type: "prompt", sessionId: "s1", message: "hi" }));
+      await conn.handleMessage(
+        frame(2, {
+          type: "prompt",
+          sessionId: "s1",
+          message: "hi",
+          transcriptText: "[paste #1 2 chars]",
+          pastes: [{ id: 1, marker: "[paste #1 2 chars]", text: "hi" }],
+        }),
+      );
+
+      expect(frames).toEqual([
+        { kind: "reply", id: 1, ok: true },
+        { kind: "reply", id: 2, ok: false, error: "Error: paste stage failed" },
+      ]);
+      const cell = { kind: "user", id: "u1", text: "hi" } as const;
+      expect(sessionAuthors.attachToUserCell("s1", cell, undefined).author).toMatchObject({
+        id: "ale@example.com",
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("set_model rejects a model pi does not offer", async () => {
     const { session, ops } = makeSession("s1");
     const { conn, frames } = harness(makeManager({ s1: session }));
