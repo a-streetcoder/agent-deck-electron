@@ -206,3 +206,67 @@ describe("SRV-14 credentials owner label", () => {
     expect(screen.queryByTestId("model-chip-owner")).toBeNull();
   });
 });
+
+describe("PRV-01 one Claude entry per model", () => {
+  const open = (models: { provider: string; id: string }[]) => {
+    render(<ModelChip state={null} models={models} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("model-chip"));
+    return screen.getByTestId("model-group-claude");
+  };
+  const options = (group: HTMLElement) =>
+    [...group.querySelectorAll("button")].map((button) => button.textContent);
+
+  it("shows bridge models as plain Claude, without bridge wording", () => {
+    const group = open([
+      { provider: "claude-bridge", id: "claude-opus-4-5" },
+      { provider: "claude-bridge", id: "claude-sonnet-4-5" },
+    ]);
+    expect(group.textContent).not.toMatch(/bridge/i);
+    expect(group.firstElementChild?.textContent).toBe("Claude");
+    expect(options(group)).toEqual(["claude-opus-4-5", "claude-sonnet-4-5"]);
+    expect(screen.queryByTestId("model-group-claude-bridge")).toBeNull();
+  });
+
+  it("labels API-key anthropic models as API under the same group", () => {
+    const group = open([{ provider: "anthropic", id: "claude-opus-4-5" }]);
+    expect(options(group)).toEqual(["claude-opus-4-5 · API"]);
+    expect(screen.queryByTestId("model-group-anthropic")).toBeNull();
+  });
+
+  it("lists both transports per model, the API one after its bridge twin", () => {
+    const group = open([
+      { provider: "anthropic", id: "claude-opus-4-5" },
+      { provider: "anthropic", id: "claude-haiku-api-only" },
+      { provider: "claude-bridge", id: "claude-opus-4-5" },
+      { provider: "claude-bridge", id: "claude-sonnet-4-5" },
+    ]);
+    expect(options(group)).toEqual([
+      "claude-opus-4-5",
+      "claude-opus-4-5 · API",
+      "claude-sonnet-4-5",
+      "claude-haiku-api-only · API",
+    ]);
+  });
+
+  it("badges the chip API only when the model is API-key backed", () => {
+    const state = { provider: "anthropic", modelId: "claude-opus-4-5", thinkingLevel: "off" };
+    const view = render(
+      <ModelChip
+        state={state}
+        models={[{ provider: "anthropic", id: "claude-opus-4-5" }]}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("model-chip-label").textContent).toBe("claude-opus-4-5");
+    expect(screen.getByTestId("model-chip-api").textContent).toBe("API");
+    // An existing session still on the OAuth sign-in: the server lists no anthropic.
+    view.rerender(
+      <ModelChip
+        state={state}
+        models={[{ provider: "claude-bridge", id: "claude-opus-4-5" }]}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("model-chip-api")).toBeNull();
+  });
+});

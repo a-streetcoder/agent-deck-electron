@@ -10,14 +10,22 @@ import type {
 } from "@agent-deck/contracts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { IncomingMessage } from "node:http";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
-import { userRoots } from "../userAgentDirs.ts";
-import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
+import { API_KEY_ONLY_PROVIDERS, listProjectFiles } from "@agent-deck/resources";
+import {
+  ANTHROPIC_NEEDS_API_KEY,
+  claudeChoice,
+  claudeLaunchModel,
+  ensureBridgeCatalog,
+  liveUsable,
+  ownerCatalog,
+  ownerRuntime,
+  ownerTransport,
+} from "../claudeTransport.ts";
 import { z } from "zod";
 import {
   canonicalWorktreePath,
@@ -263,39 +271,25 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // SRV-11: a draft lists the models its OWNER's credentials unlock (the owner's
   // agent dir), since that is what the session will spawn with. models.json
   // stays the shared operator config.
-  async function draftModels(owner: UserIdentity | undefined) {
-    const runtime = await ModelRuntime.create({
-      authPath: nodePath.join(
-        piAgentHome(userRoots(ctx.rootsFor(), owner, ctx.userAgentDirs)),
-        "auth.json",
-      ),
-      modelsPath: nodePath.join(piAgentHome(ctx.rootsFor()), "models.json"),
-      allowModelNetwork: false,
-    });
-    const disabled = new Set(settings.get().disabledModels);
-    const models: SessionModelInfo[] = (await runtime.getAvailable()).map((model) => ({
-      ...model,
-      supportedThinkingLevels: getSupportedThinkingLevels(model),
-      disabled: disabled.has(`${model.provider}:${model.id}`),
-    }));
-    // Extension-defined providers can be selected after an explicit Models
-    // refresh. Reuse that catalog without launching any process for this draft.
-    // SRV-13: the catalog is the operator's discovery (anyone may refresh it), so
-    // an owner only gets the models whose provider their own dir has auth for.
-    for (const model of ctx.discoveredModels ?? []) {
-      if (owner && !runtime.getProviderAuthStatus(model.provider).configured) continue;
-      if (!models.some((entry) => entry.provider === model.provider && entry.id === model.id)) {
-        models.push({ ...model, disabled: disabled.has(`${model.provider}:${model.id}`) });
-      }
-    }
-    return models;
-  }
+  const draftModels = (owner: UserIdentity | undefined) => ownerCatalog(ctx, owner);
+  // PRV-01: a live set_model to a refused anthropic model switches to its
+  // claude-bridge twin, or is refused (rpcHandler).
+  sessions.modelChoice = async (meta, provider, modelId, available) => {
+    const transport = await ownerTransport(ctx, await ownerRuntime(ctx, meta.createdBy));
+    return claudeChoice(provider, modelId, transport.refused, liveUsable(available, transport));
+  };
 
   // SRV-13: an owner (shared server) whose credentials unlock no model at all
   // gets one stable, actionable message instead of `unknown model` or Pi's
   // missing-API-key error after the spawn.
   async function ownerModels(owner: UserIdentity | undefined) {
-    const models = await draftModels(owner);
+    let models = await draftModels(owner);
+    // PRV-01: an OAuth-only owner with the host's Claude Code login reaches the
+    // bridge: fill its catalog (lazy discovery) before calling them unconnected.
+    if (owner && models.length === 0) {
+      await ensureBridgeCatalog(ctx);
+      models = await draftModels(owner);
+    }
     if (owner && models.length === 0) {
       throw Object.assign(
         new Error("No model provider connected. Connect one under Settings > Providers."),
@@ -312,7 +306,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
-      const models = await session.getAvailableModels();
+      const transport = await ownerTransport(ctx, await ownerRuntime(ctx, session.meta.createdBy));
+      const models = liveUsable(await session.getAvailableModels(), transport);
       // Mark models the user hid from the picker (app-level, native "Disabled").
       const disabled = new Set(settings.get().disabledModels);
       return {
@@ -1583,8 +1578,23 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     do {
       copyTo = nodePath.join(dir, `${base}-fork-${randomUUID()}${ext}`);
     } while (existsSync(copyTo));
+    // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
+    // plan or its history) moves to the claude-bridge twin, or the fork is refused.
+    let source = meta;
+    const sourcePlan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    if (sourcePlan.kind !== "helper") {
+      try {
+        const pinned = await claudeLaunchModel(ctx, meta.createdBy, sourcePlan, {
+          cwd: meta.cwd,
+          sessionFile: meta.piSessionFile,
+        });
+        if (pinned) source = { ...meta, launchPlan: { ...sourcePlan, ...pinned } };
+      } catch (error) {
+        return reply.status(409).send({ error: (error as Error).message });
+      }
+    }
     try {
-      const session = await sessions.fork(meta, meta.piSessionFile, copyTo, envDefaults().env);
+      const session = await sessions.fork(source, meta.piSessionFile, copyTo, envDefaults().env);
       index.upsert(session.meta);
       return reply.status(201).send({ session: session.meta });
     } catch (error) {
@@ -1654,6 +1664,27 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         .send({
           error: error instanceof Error ? error.message : "Launch resources are unavailable.",
         });
+    }
+    // PRV-01: a refused anthropic/* (explicit, Agent Deck or Pi default) launches
+    // on its claude-bridge twin, recorded as the request override so a resource
+    // refresh keeps it; with no twin the 409 lands before any worktree exists.
+    if (resolvedLaunch.plan.kind !== "helper") {
+      const pinned = await claudeLaunchModel(
+        ctx,
+        draft?.createdBy ?? createdBy,
+        resolvedLaunch.plan,
+        {
+          cwd,
+        },
+      );
+      if (pinned) {
+        body = { ...body, provider: pinned.provider, model: pinned.model };
+        resolvedLaunch = resolveLaunchResources(
+          ctx,
+          { ...body, cwd },
+          { provider: defaults.provider, model: defaults.model, extensions: defaults.extensions },
+        );
+      }
     }
     let plan = resolvedLaunch.plan;
 
@@ -1876,8 +1907,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     broadcast,
     validateModel: async (provider, modelId, owner) => {
       const models = await ownerModels(owner);
-      if (!models.some((model) => model.provider === provider && model.id === modelId))
+      if (!models.some((model) => model.provider === provider && model.id === modelId)) {
+        if (API_KEY_ONLY_PROVIDERS.has(provider))
+          throw Object.assign(new Error(ANTHROPIC_NEEDS_API_KEY), { statusCode: 409 });
         throw new Error(`unknown model: ${provider}/${modelId}`);
+      }
     },
     launch: (draft) => {
       const config = draft.launchResourceConfig;

@@ -52,6 +52,12 @@ runs that host:
    dir and also serve sessions without an owner. This is storage and billing separation, not
    isolation: under the one Unix user any agent can read every user's `auth.json`, OAuth
    refresh tokens included.
+   _Amended 2026-10-14 (ade-c7ad, PRV-01):_ the accepted terms-of-service risk covers sharing a
+   subscription, not impersonation. Claude on a subscription runs only through `claude-bridge`
+   (the real Claude Code under the host's login); Pi's Anthropic OAuth sign-in, which presents
+   Pi as Claude Code, is no longer offered or accepted, and `anthropic/*` needs an API key.
+   This applies on every server, desktop and loopback included, not only on the shared host:
+   the owner's instruction and the terms problem are not specific to the shared deployment.
 5. **A "Linux target" for distribution may mean this headless server deploy**, not a desktop
    package. Register rows DST-05 and DST-06 are re-scoped in the DST epic, not here.
 

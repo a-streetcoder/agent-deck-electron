@@ -924,14 +924,27 @@ export function createRpcConnection(deps: {
         case "set_model": {
           // Only switch to models pi actually offers.
           const available = await session.getAvailableModels();
-          const known = available.some(
-            (m) => m.provider === request.provider && m.id === request.modelId,
-          );
-          if (!known) {
-            replyError(`unknown model: ${request.provider}/${request.modelId}`);
+          let choice = { provider: request.provider, modelId: request.modelId };
+          try {
+            choice =
+              (await sessions.modelChoice?.(
+                session.meta,
+                choice.provider,
+                choice.modelId,
+                available,
+              )) ?? choice;
+          } catch (error) {
+            replyError(error instanceof Error ? error.message : String(error));
             return;
           }
-          await session.setModel(request.provider, request.modelId);
+          const known = available.some(
+            (m) => m.provider === choice.provider && m.id === choice.modelId,
+          );
+          if (!known) {
+            replyError(`unknown model: ${choice.provider}/${choice.modelId}`);
+            return;
+          }
+          await session.setModel(choice.provider, choice.modelId);
           break;
         }
         case "set_thinking":

@@ -178,6 +178,9 @@ function makeRoutes(
       enabledExtensionPaths: () => [],
       agentMemoryEnabled: () => false,
       worktreesRoot: path.join(home, "managed-worktrees"),
+      // PRV-01: never probe the real Claude Code from these tests.
+      claudeCodeLoggedIn: async () => true,
+      settings: { get: () => ({ disabledModels: [] }) },
     } as unknown as ServerContext,
     {
       canonicalCheckoutLockKey: canonicalCheckoutEffect,
@@ -597,6 +600,60 @@ describe("loop route honesty gate", () => {
     expect(runSubagent).toHaveBeenCalledWith("provider-parent", "evaluate", undefined, "none", {
       provider: "provider-b",
       model: "shared-model",
+      thinking: undefined,
+    });
+  });
+
+  it("runs a refused anthropic evaluator on its claude-bridge twin (PRV-01)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-evaluator-claude-"));
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 },
+      }),
+    );
+    writeLoopFile(
+      { home },
+      {
+        name: "Claude Evaluator",
+        structure: "singleAgent",
+        goal: "Run safely.",
+        agentName: "Agent A",
+        evaluatorProvider: "anthropic",
+        evaluatorModel: "claude-m-20251101",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const { fastify, createSession, startEngine, settledEngine, runSubagent } = makeRoutes(home);
+    createSession.mockReturnValue({
+      meta: { id: "claude-parent", cwd: home, createdAt: new Date().toISOString() },
+      getAvailableModels: vi.fn(async () => [
+        { provider: "anthropic", id: "claude-m-20251101" },
+        { provider: "claude-bridge", id: "claude-m" },
+      ]),
+    });
+    startEngine.mockReturnValue({ id: "claude-run", status: "running" });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    runSubagent.mockResolvedValue("SUCCESS");
+
+    const response = await fastify.inject({
+      method: "POST",
+      url: catalogActionUrl(home, "Claude Evaluator", "run"),
+      payload: { projectId: "project", provider: "claude-bridge", model: "claude-m" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const options = startEngine.mock.calls[0]?.[2];
+    await options.executeRole({
+      prompt: "evaluate",
+      phase: "evaluator",
+      provider: "anthropic",
+      model: "claude-m-20251101",
+    });
+    expect(runSubagent).toHaveBeenCalledWith("claude-parent", "evaluate", undefined, "none", {
+      provider: "claude-bridge",
+      model: "claude-m",
       thinking: undefined,
     });
   });

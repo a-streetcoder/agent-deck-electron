@@ -50,6 +50,14 @@ import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 import { requestUser } from "../trustedProxy.ts";
+import {
+  claudeChoice,
+  claudeLaunchModel,
+  credentialTransport,
+  liveUsable,
+  ownerRuntime,
+  ownerTransport,
+} from "../claudeTransport.ts";
 
 export function canonicalCheckoutLockKey(
   candidate: string,
@@ -668,6 +676,22 @@ export function registerLoopRoutes(
         });
       }
     }
+    // PRV-01: the Loop parent runs on the requester's credentials; a refused
+    // anthropic/* (explicit or Pi default) moves to its claude-bridge twin, or
+    // the run is refused before any lock or worktree.
+    const loopRunner = requestUser(request.raw);
+    let parentModel: { provider?: string; model?: string } = {
+      provider: body.provider ?? defaults.provider,
+      model: body.model ?? defaults.model,
+    };
+    try {
+      parentModel =
+        (await claudeLaunchModel(ctx, loopRunner ? { id: loopRunner.id } : undefined, parentModel, {
+          cwd: project.path,
+        })) ?? parentModel;
+    } catch (error) {
+      return reply.status(409).send({ error: (error as Error).message });
+    }
     let checkoutLockKey: string | undefined;
     if (loop.writeTarget === "currentCheckout") {
       try {
@@ -783,8 +807,7 @@ export function registerLoopRoutes(
           : {}),
         plan: {
           kind: "parent",
-          provider: body.provider ?? defaults.provider,
-          model: body.model ?? defaults.model,
+          ...parentModel,
           extensions: finalizedBase.length > 0 ? finalizedBase : undefined,
         },
         // The transient parent becomes externally visible only after the engine
@@ -794,16 +817,30 @@ export function registerLoopRoutes(
       // A Loop has no independent pre-allocation model catalog. Validate against
       // the exact transient parent Pi session after allocation, but before the
       // engine can dispatch maker/stage/branch work.
+      // PRV-01: evaluator and stage models go through the same Claude choice as
+      // the parent (a refused anthropic/<m> runs on claude-bridge/<m> or fails).
+      const runnerRuntime = await ownerRuntime(ctx, loopRunner ? { id: loopRunner.id } : undefined);
+      const { refused } = await credentialTransport(runnerRuntime);
+      const loopParent = parent;
+      const roleModel = async (provider: string | undefined, model: string | undefined) => {
+        if (!provider || !model || !refused.has(provider)) return { provider, modelId: model };
+        const transport = await ownerTransport(ctx, runnerRuntime);
+        const available = liveUsable(await loopParent.getAvailableModels(), transport);
+        return claudeChoice(provider, model, refused, available);
+      };
       if (loop.evaluatorModel) {
         const availableModels = await parent.getAvailableModels();
-        const evaluatorProvider = loop.evaluatorProvider ?? body.provider ?? defaults.provider;
+        const evaluator = await roleModel(
+          loop.evaluatorProvider ?? parentModel.provider,
+          loop.evaluatorModel,
+        );
         if (
           !availableModels.some(
-            (model) => model.provider === evaluatorProvider && model.id === loop.evaluatorModel,
+            (model) => model.provider === evaluator.provider && model.id === evaluator.modelId,
           )
         ) {
           throw new Error(
-            `Evaluator model "${evaluatorProvider}/${loop.evaluatorModel}" is unavailable.`,
+            `Evaluator model "${evaluator.provider}/${evaluator.modelId}" is unavailable.`,
           );
         }
       }
@@ -817,7 +854,15 @@ export function registerLoopRoutes(
           checkoutLockKey,
           ...(worktreeOwnership ? { worktree: worktreeOwnership } : {}),
         },
-        executeRole: ({ prompt, agentName, phase, provider, model, thinking }) => {
+        executeRole: async ({
+          prompt,
+          agentName,
+          phase,
+          provider: asked,
+          model: askedModel,
+          thinking,
+        }) => {
+          const { provider, modelId: model } = await roleModel(asked, askedModel);
           const toolPolicy =
             phase === "evaluator"
               ? "none"
