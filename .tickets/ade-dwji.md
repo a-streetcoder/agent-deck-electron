@@ -1,7 +1,7 @@
 ---
 id: ade-dwji
-status: open
-deps: [ade-0v9e]
+status: in_progress
+deps: []
 links: []
 created: 2026-10-14T23:39:28Z
 type: chore
@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 ARCHITECTURE.md under ~250 lines with every removed section reachable by link; no dead links (grep the moved headings); prettier clean.
+
+## Notes
+
+**2026-10-14T23:52:38Z**
+
+2026-10-15 unblocked from D1: both ADR 0005 options retire the seam posture, so the sync-seams closing note and the parity-loop seam rule removal can be written now; the AGENTS.md skill-storage paragraph stays as is until D1 lands (say so in the note).
