@@ -23,6 +23,7 @@ import {
   allowRemoteShellNavigation,
   isControlPlanePage,
   remoteServerOrigin,
+  retryInSlots,
 } from "./remote-server.js";
 import {
   catalogEndpoint,
@@ -367,19 +368,22 @@ function waitForHealth(port, timeoutMs = 20_000) {
 }
 
 /**
- * Remote attach: one GET /health through the session-aware fetch, run only AFTER
+ * Remote attach: GET /health through the session-aware fetch, run only AFTER
  * the window has loaded a page on the control-plane origin (so the Access
  * cookie exists). Before login Access answers a redirect, never a 200, which is
- * why this cannot gate window creation.
+ * why this cannot gate window creation. Retried every 5 s for 30 s (retryInSlots) so a
+ * server that is still restarting is accepted once it answers.
  */
-async function checkRemoteHealth() {
-  const response = await controlPlaneFetch("/health", {
-    signal: AbortSignal.timeout(10_000),
-    redirect: "manual",
+function checkRemoteHealth() {
+  return retryInSlots(async (timeoutMs) => {
+    const response = await controlPlaneFetch("/health", {
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "manual",
+    });
+    if (response.status !== 200) {
+      throw new Error(`remote server /health answered ${response.status || "a redirect"}`);
+    }
   });
-  if (response.status !== 200) {
-    throw new Error(`remote server /health answered ${response.status || "a redirect"}`);
-  }
 }
 
 function createWindow() {

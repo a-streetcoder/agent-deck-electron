@@ -79,6 +79,18 @@ export class SessionAuthorStore {
     return { ...cell, author: { ...selected.author } };
   }
 
+  /** The session is gone (DELETE /sessions/:id): its authors go with it. */
+  deleteSession(sessionId: string): void {
+    this.index.remove(sessionId);
+  }
+
+  /** Startup: drop rows whose session is no longer in sessions.json. */
+  retainSessions(sessionIds: ReadonlySet<string>): void {
+    for (const { id } of [...this.index.list()]) {
+      if (!sessionIds.has(id)) this.index.remove(id);
+    }
+  }
+
   private turns(sessionId: string): AuthorTurn[] {
     return (
       this.index.find((item) => item.id === sessionId)?.turns.map((turn) => ({ ...turn })) ?? []

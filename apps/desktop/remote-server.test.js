@@ -4,6 +4,7 @@ import {
   allowRemoteShellNavigation,
   isControlPlanePage,
   remoteServerOrigin,
+  retryInSlots,
 } from "./remote-server.js";
 
 test("remote server origin accepts only credential-free https URLs", () => {
@@ -77,4 +78,39 @@ test("only a page on the control-plane origin counts as the app having loaded", 
   assert.equal(isControlPlanePage("https://github.com/login", origin), false);
   assert.equal(isControlPlanePage("https://deck.example.com.evil.test/", origin), false);
   assert.equal(isControlPlanePage("garbage", origin), false);
+});
+
+test("remote health retry accepts a server that becomes healthy within 30 s", async () => {
+  let clock = 0;
+  const clockOptions = {
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+  };
+  const timeouts = [];
+  // Fast 502s, one attempt that hangs to its timeout, healthy at 29 s: the 30 s check passes.
+  const result = await retryInSlots(async (timeoutMs) => {
+    timeouts.push(timeoutMs);
+    if (clock === 10_000) {
+      clock += timeoutMs;
+      throw new Error("timed out");
+    }
+    if (clock < 29_000) throw new Error("502");
+    return "ok";
+  }, clockOptions);
+  assert.equal(result, "ok");
+  assert.deepEqual(timeouts, Array(7).fill(5_000));
+
+  clock = 0;
+  let calls = 0;
+  await assert.rejects(
+    retryInSlots(async () => {
+      calls += 1;
+      throw new Error(`down ${calls}`);
+    }, clockOptions),
+    /down 7/,
+  );
+  assert.equal(calls, 7);
+  assert.equal(clock, 30_000, "no wait after the last attempt");
 });

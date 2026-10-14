@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -37,6 +37,9 @@ let jwks: Server;
 let server: AgentDeckServer;
 const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathname}`;
 const ale = { "cf-access-jwt-assertion": assertionFor("ale@example.com", "Ale") };
+const AUTHORED_SESSION = randomUUID();
+const authorRowIds = (): string[] =>
+  new SessionAuthorIndex(dataDir).list().map((record) => record.id);
 
 beforeAll(async () => {
   jwks = createServer((_request, response) => {
@@ -54,6 +57,22 @@ beforeAll(async () => {
   process.env.AGENT_DECK_CF_ACCESS_AUD = AUD;
   process.env.AGENT_DECK_PUBLIC_ORIGIN = PUBLIC_ORIGIN;
   process.env.AGENT_DECK_CF_ACCESS_JWKS_URL = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/certs`;
+  // An ended session with an authors row, plus an authors row whose session is gone.
+  const now = new Date().toISOString();
+  writeFileSync(
+    path.join(dataDir, "sessions.json"),
+    JSON.stringify([
+      { id: AUTHORED_SESSION, cwd: dataDir, createdAt: now, updatedAt: now, endedAt: now },
+    ]),
+  );
+  const turn = { signature: "a".repeat(64), author: { id: "ale@example.com", name: "Ale" } };
+  writeFileSync(
+    path.join(dataDir, "session-authors.json"),
+    JSON.stringify([
+      { id: AUTHORED_SESSION, turns: [turn] },
+      { id: "deleted-while-offline", turns: [turn] },
+    ]),
+  );
   server = await startServer({ dataDir });
 });
 afterAll(async () => {
@@ -194,6 +213,18 @@ describe("trusted proxy on the WebSocket upgrade", () => {
 
   it("rejects an upgrade without an assertion", async () => {
     await expect(attempt({ origin: PUBLIC_ORIGIN })).resolves.toEqual({ opened: false });
+  });
+});
+
+describe("session-authors.json pruning", () => {
+  it("drops orphan rows at startup and the session's row on delete", async () => {
+    expect(authorRowIds()).toEqual([AUTHORED_SESSION]);
+    const deleted = await fetch(endpoint(`/sessions/${AUTHORED_SESSION}`), {
+      method: "DELETE",
+      headers: ale,
+    });
+    expect(deleted.status).toBe(200);
+    expect(authorRowIds()).toEqual([]);
   });
 });
 

@@ -259,6 +259,7 @@ async function initServer(
   const sessionAuthors = trustedProxy
     ? new SessionAuthorStore(new SessionAuthorIndex(dataDir))
     : undefined;
+  sessionAuthors?.retainSessions(new Set(index.list().map((session) => session.id)));
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -1378,6 +1379,7 @@ async function initServer(
     agentAvatars,
     projectImages,
     sessionPastes,
+    sessionAuthors,
     index,
     projects,
     settings,

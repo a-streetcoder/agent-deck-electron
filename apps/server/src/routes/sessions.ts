@@ -876,6 +876,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         // Session deletion already committed; retain optional paste metadata conservatively.
       }
       try {
+        ctx.sessionAuthors?.deleteSession(id);
+      } catch {
+        // Session deletion already committed; startup drops the orphan row.
+      }
+      try {
         // SUB-14: the plan history dies with its session, as native's delete does.
         ctx.planEvents.deleteSession(id);
       } catch {
