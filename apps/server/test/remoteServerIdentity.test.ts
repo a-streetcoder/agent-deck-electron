@@ -1,5 +1,13 @@
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -144,6 +152,79 @@ describe("SRV-09 host launchers on a shared server", () => {
         error: "Not available on a shared server: use the in-app terminal",
       });
     }
+  });
+});
+
+describe("SRV-10 shared provider credentials on a shared server", () => {
+  const agentDir = () => path.join(fakeHome, ".pi", "agent");
+  const post = (route: string, body: unknown) =>
+    fetch(endpoint(route), {
+      method: "POST",
+      headers: { ...ale, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const putEnv = (key: string) =>
+    fetch(endpoint("/runtime/env"), {
+      method: "PUT",
+      headers: { ...ale, "content-type": "application/json" },
+      body: JSON.stringify({ scope: "global", key, value: "secret-value" }),
+    });
+  const deleteEnv = (key: string) =>
+    fetch(endpoint("/runtime/env"), {
+      method: "DELETE",
+      headers: { ...ale, "content-type": "application/json" },
+      body: JSON.stringify({ scope: "global", key }),
+    });
+
+  it("refuses provider login and logout with 409 and leaves auth.json alone", async () => {
+    mkdirSync(agentDir(), { recursive: true });
+    const authFile = path.join(agentDir(), "auth.json");
+    const auth = JSON.stringify({ anthropic: { type: "api_key", key: "operator" } });
+    writeFileSync(authFile, auth);
+    for (const [route, body] of [
+      ["/runtime/providers/anthropic/login", { authType: "api_key" }],
+      ["/runtime/providers/anthropic/logout", {}],
+    ] as const) {
+      const refused = await post(route, body);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({
+        error:
+          "Not available on a shared server: provider sign-ins are shared by everyone here; per-user sign-in is coming",
+      });
+    }
+    expect(readFileSync(authFile, "utf8")).toBe(auth);
+  });
+
+  it("refuses a provider key in the env but still writes EXA_API_KEY", async () => {
+    const envFile = path.join(agentDir(), ".env");
+    const before = existsSync(envFile) ? readFileSync(envFile, "utf8") : null;
+    for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) {
+      const refused = await putEnv(key);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({
+        error:
+          "Not available on a shared server: provider keys are personal, add them under Providers",
+      });
+    }
+    expect(existsSync(envFile) ? readFileSync(envFile, "utf8") : null).toBe(before);
+    expect((await putEnv("EXA_API_KEY")).status).toBe(200);
+    expect(readFileSync(envFile, "utf8")).toContain("EXA_API_KEY=");
+  });
+
+  it("refuses deleting a provider key from the env but still deletes EXA_API_KEY", async () => {
+    mkdirSync(agentDir(), { recursive: true });
+    const envFile = path.join(agentDir(), ".env");
+    const seeded = "ANTHROPIC_API_KEY=operator\nEXA_API_KEY=shared\n";
+    writeFileSync(envFile, seeded);
+    const refused = await deleteEnv("ANTHROPIC_API_KEY");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error:
+        "Not available on a shared server: provider keys are personal, add them under Providers",
+    });
+    expect(readFileSync(envFile, "utf8")).toBe(seeded);
+    expect((await deleteEnv("EXA_API_KEY")).status).toBe(200);
+    expect(readFileSync(envFile, "utf8")).not.toContain("EXA_API_KEY");
   });
 });
 

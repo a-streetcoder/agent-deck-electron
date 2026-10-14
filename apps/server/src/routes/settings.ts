@@ -83,6 +83,48 @@ export function readPiRuntimeDefaultModel(home: string): string | null {
   }
 }
 
+/**
+ * SRV-10: provider credential env names, copied from pi-ai 0.82.0
+ * dist/env-api-keys.js (getApiKeyEnvVars, not exported). EXA_API_KEY is absent on
+ * purpose: web search is shared by design.
+ */
+const PROVIDER_CREDENTIAL_ENV_KEYS = new Set([
+  "COPILOT_GITHUB_TOKEN",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANT_LING_API_KEY",
+  "QWEN_TOKEN_PLAN_API_KEY",
+  "QWEN_TOKEN_PLAN_CN_API_KEY",
+  "OPENAI_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "NVIDIA_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_CLOUD_API_KEY",
+  "GROQ_API_KEY",
+  "CEREBRAS_API_KEY",
+  "XAI_API_KEY",
+  "RADIUS_API_KEY",
+  "OPENROUTER_API_KEY",
+  "AI_GATEWAY_API_KEY",
+  "ZAI_API_KEY",
+  "ZAI_CODING_CN_API_KEY",
+  "MISTRAL_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CN_API_KEY",
+  "MOONSHOT_API_KEY",
+  "HF_TOKEN",
+  "FIREWORKS_API_KEY",
+  "TOGETHER_API_KEY",
+  "OPENCODE_API_KEY",
+  "KIMI_API_KEY",
+  "CLOUDFLARE_API_KEY",
+  "XIAOMI_API_KEY",
+  "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+  "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+  "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+]);
+
 export function registerSettingsRoutes(ctx: ServerContext): void {
   const {
     fastify,
@@ -142,6 +184,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { projectId, scope, key, value } = parsed.data;
+    if (ctx.sharedServer && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerKey });
+    }
     if (scope === "project" && !rootsFor(projectId).projectPath) {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
@@ -165,6 +210,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { projectId, scope, key } = parsed.data;
+    if (ctx.sharedServer && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerKey });
+    }
     if (scope === "project" && !rootsFor(projectId).projectPath) {
       return reply.status(400).send({ error: "projectId required for project scope" });
     }
@@ -295,6 +343,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // Disconnect a stored provider credential (native logout). Only a known
   // provider id is accepted, so arbitrary keys can't be poked into auth.json.
   fastify.post("/runtime/providers/:id/logout", async (request, reply) => {
+    // SRV-10 interim (SRV-11 removes it): one shared auth.json serves every user.
+    if (ctx.sharedServer) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerSignIn });
+    }
     const { id } = request.params as { id: string };
     const provider = (await listProviders(rootsFor())).find((entry) => entry.id === id);
     if (!provider) return reply.status(404).send({ error: `unknown provider: ${id}` });
@@ -311,6 +363,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // session that relays pi's AuthStorage.login callbacks (auth-url / device-code
   // / prompt / select / progress) to the client and threads responses back.
   fastify.post("/runtime/providers/:id/login", async (request, reply) => {
+    // SRV-10 interim (SRV-11 removes it): one shared auth.json serves every user.
+    if (ctx.sharedServer) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerSignIn });
+    }
     const { id } = request.params as { id: string };
     const parsed = z.object({ authType: z.enum(["api_key", "oauth"]) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });

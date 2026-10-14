@@ -52,6 +52,33 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  useAppStore.setState({ me: null });
+});
+
+describe("SRV-10 shared server", () => {
+  it("disables Connect and Sign out and shows the notice when signed in", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ providers: [connected] }));
+    useAppStore.setState({ me: { id: "ale@example.com", email: "ale@example.com" } });
+    render(<ProvidersScreen />);
+    const signOut = await screen.findByRole("button", { name: "Sign out of Provider A" });
+    expect(signOut).toHaveProperty("disabled", true);
+    expect(signOut.getAttribute("title")).toBe("Not available on a shared server");
+    const connect = document.querySelector<HTMLButtonElement>('[data-provider-id="provider-a"]');
+    expect(connect?.disabled).toBe(true);
+    expect(connect?.getAttribute("title")).toBe("Not available on a shared server");
+    expect(screen.getByTestId("providers-shared-notice")).toBeTruthy();
+  });
+
+  it("keeps the controls enabled without a signed-in user", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ providers: [connected] }));
+    useAppStore.setState({ me: null });
+    render(<ProvidersScreen />);
+    const signOut = await screen.findByRole("button", { name: "Sign out of Provider A" });
+    expect(signOut).toHaveProperty("disabled", false);
+    const connect = document.querySelector<HTMLButtonElement>('[data-provider-id="provider-a"]');
+    expect(connect?.disabled).toBe(false);
+    expect(screen.queryByTestId("providers-shared-notice")).toBeNull();
+  });
 });
 
 describe("provider catalog refresh ordering", () => {

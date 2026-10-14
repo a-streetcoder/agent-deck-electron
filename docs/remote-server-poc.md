@@ -390,3 +390,12 @@ Electron.
   reply `ok:false`, and `POST /runtime/doctor/fix` and `POST /runtime/doctor/update-pi`
   answer 409. The web UI hides "Continue in external terminal" and shows the "Open in editor"
   controls disabled. Use the in-app terminal instead.
+- Provider credentials are shared on a shared server (ade-4lga, interim until per-user
+  sign-in in ade-n41e): there is one Pi `auth.json` and one global `.env`, so any user's
+  sign-in, sign-out or provider key would apply to everyone. `POST /runtime/providers/:id/login`
+  and `/logout` answer 409, and `PUT` and `DELETE /runtime/env` (both scopes) answer 409 for a provider
+  credential env name (the pi-ai list, e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`).
+  `EXA_API_KEY` stays writable because web search is shared by design. The Providers screen
+  shows Connect and Sign out disabled with a notice. Ambient credential names outside the
+  pi-ai list also stay writable by design: `AWS_*` for Bedrock and
+  `GOOGLE_APPLICATION_CREDENTIALS` for Vertex.
