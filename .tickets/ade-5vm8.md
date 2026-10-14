@@ -1,6 +1,6 @@
 ---
 id: ade-5vm8
-status: in_progress
+status: closed
 deps: [ade-cdd5]
 links: []
 created: 2026-10-14T19:54:18Z
@@ -26,3 +26,7 @@ Unit tests: id mapping (dots, dash/underscore collisions), bearer header transla
 **2026-10-14T21:12:26Z**
 
 2026-10-14 approved by the owner (PI-03b..f lane). Dispatch note: the main-session extension switches to nativeMcp with the resolved list and drops the proxy spec from its tools; children get their subset the same way; live policy comes in PI-03c, so the build is NOT deployed to the VM before PI-03c merges.
+
+**2026-10-14T21:38:52Z**
+
+2026-10-14 merged (wt/ade-5vm8: 8147179 + review fix f11e987). Contrarian: one blocking (real-Pi child test) + env leak to stdio servers, secrets on disk, hidden-project check, named-agent patterns, name length, idMap; GPT review6: pattern keys in toolExposure, legacy raw-name grants, truncation, blocklist identifiers, child test. All fixed except the two handed on: legacy allowlists vs raw tool names with - or . (PI-03c enforces in the tool_call hook on the Pi name) and colliding identifiers in blockedTools (PI-03e resolves against Pi's registration). Flag AGENT_DECK_NATIVE_MCP=1 accepted as interim; PI-03f flips the default and removes the dual pool. NOT enabled on the VM; the VM build is not refreshed before PI-03c merges. Tests: mcpNative 9 + mcpTools 46, mcp-native.pi 2, mcp.pi 1, pi-host nativeMcp.pi 9, bridge.generated 4; tsc server + pi-host clean; eslint, prettier clean.
