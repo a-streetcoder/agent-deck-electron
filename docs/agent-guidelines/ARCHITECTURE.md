@@ -75,7 +75,7 @@ removing the parent checkout. The claim is released on success and failure.
 
 ## Managed child provider settlement
 
-Managed children consume the pinned Pi 0.82.0 stream through `agent_settled`,
+Managed children consume the pinned Pi 1.2.0 stream through `agent_settled`,
 not the first `agent_end`. `agent_end.willRetry` describes Pi's next provider
 retry; `auto_retry_end.success` can arrive before the final low-level run ends
 (and even after an aborted assistant). Neither event alone proves completion.

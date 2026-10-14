@@ -48,6 +48,7 @@ export const PROVIDER_LOGOS: Record<string, string> = {
 /** pi provider id → logo key (native ProviderLogo mapping). */
 export const PROVIDER_LOGO_KEY: Record<string, string> = {
   anthropic: "claude",
+  azure: "openai",
   "azure-openai-responses": "openai",
   openai: "openai",
   "openai-codex": "openai",

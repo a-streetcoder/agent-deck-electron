@@ -209,7 +209,7 @@ test("reaches preferences and discovers/persists a model before any session", as
         report: {
           checks: [
             { id: "pi-binary", label: "Pi", status: "ok", detail: "ready" },
-            { id: "pi-version", label: "Pi version", status: "ok", detail: "0.82.0" },
+            { id: "pi-version", label: "Pi version", status: "ok", detail: "1.2.0" },
             { id: "node", label: "Node", status: "ok", detail: "ready" },
             { id: "bash", label: "Shell", status: "ok", detail: "ready" },
             { id: "auth", label: "Models", status: "ok", detail: "1 connected" },
@@ -326,7 +326,7 @@ const READY_DOCTOR = {
   report: {
     checks: [
       { id: "pi-binary", label: "Pi", status: "ok", detail: "ready" },
-      { id: "pi-version", label: "Pi version", status: "ok", detail: "0.82.0" },
+      { id: "pi-version", label: "Pi version", status: "ok", detail: "1.2.0" },
       { id: "node", label: "Node", status: "ok", detail: "ready" },
       { id: "bash", label: "Shell", status: "ok", detail: "ready" },
       { id: "auth", label: "Models", status: "ok", detail: "1 connected" },

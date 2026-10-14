@@ -67,7 +67,7 @@ describe("generated recall bridge", () => {
       );
 
       const result = (await handlers.get("before_agent_start")!(
-        { prompt: "question", systemPrompt: "base" },
+        { messageType: "user", prompt: "question", systemPrompt: "base" },
         { getSystemPrompt: () => "base" },
       )) as { systemPrompt: string };
 
@@ -115,7 +115,7 @@ describe("generated recall bridge", () => {
       vi.stubGlobal("fetch", fetch);
 
       const result = (await handlers.get("before_agent_start")!(
-        { prompt: "question", systemPrompt: "base" },
+        { messageType: "user", prompt: "question", systemPrompt: "base" },
         { getSystemPrompt: () => "base" },
       )) as { systemPrompt: string };
       expect(result.systemPrompt).toBe("base\n\nrecall-block");
@@ -135,16 +135,26 @@ describe("generated recall bridge", () => {
       // A later before_agent_start clears any unconsumed prior payload before
       // fetching. If that fetch fails, a later turn cannot append stale data.
       await handlers.get("before_agent_start")!(
-        { prompt: "queued", systemPrompt: "base" },
+        { messageType: "user", prompt: "queued", systemPrompt: "base" },
         { getSystemPrompt: () => "base" },
       );
       fetch.mockRejectedValueOnce(new Error("bridge down"));
       await handlers.get("before_agent_start")!(
-        { prompt: "replacement", systemPrompt: "base" },
+        { messageType: "user", prompt: "replacement", systemPrompt: "base" },
         { getSystemPrompt: () => "base" },
       );
       await handlers.get("message_start")!({ message: { role: "assistant" } }, {});
       expect(appendEntry).toHaveBeenCalledTimes(1);
+
+      // Pi 1.x custom-message runs carry no prompt: no recall fetch, prompt unchanged.
+      const fetchCalls = fetch.mock.calls.length;
+      expect(
+        await handlers.get("before_agent_start")!(
+          { messageType: "custom", message: {}, systemPrompt: "base" },
+          { getSystemPrompt: () => "base" },
+        ),
+      ).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(fetchCalls);
     } finally {
       vi.unstubAllGlobals();
       rmSync(dirname(file), { recursive: true, force: true });

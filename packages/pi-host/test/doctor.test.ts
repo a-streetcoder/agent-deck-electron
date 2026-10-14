@@ -500,7 +500,7 @@ describe("pi-version repair fix (DOC-03)", () => {
     const cli = path.join(dir, "cli.js");
     writeFileSync(
       cli,
-      'if (process.env.ELECTRON_RUN_AS_NODE !== "1") process.exit(2);\nconsole.log("0.82.0-cli");\n',
+      'if (process.env.ELECTRON_RUN_AS_NODE !== "1") process.exit(2);\nconsole.log("1.2.0-cli");\n',
     );
     writeFileSync(
       runtime,
@@ -518,7 +518,7 @@ describe("pi-version repair fix (DOC-03)", () => {
       const version = report.checks.find((check) => check.id === "pi-version");
       expect(version).toBeDefined();
       expect(version!.status).toBe("ok");
-      expect(version!.detail).toBe("0.82.0-cli");
+      expect(version!.detail).toBe("1.2.0-cli");
     } finally {
       if (previousPath === undefined) delete process.env.AGENT_DECK_PI_PATH;
       else process.env.AGENT_DECK_PI_PATH = previousPath;

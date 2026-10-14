@@ -39,7 +39,7 @@ const retryStart: PiInboundEvent = {
   errorMessage: "500 outage",
 };
 const retrySuccess: PiInboundEvent = { type: "auto_retry_end", success: true, attempt: 1 };
-const settled: PiInboundEvent = { type: "agent_settled" };
+const settled: PiInboundEvent = { type: "agent_settled", aborted: false };
 
 describe("pinned Pi child lifecycle", () => {
   it.each([
