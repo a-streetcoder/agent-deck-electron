@@ -21,6 +21,11 @@ const promptAuditParams = z
     sequence: z.number().int().positive().safe(),
   })
   .strict();
+// The native MCP policy hook's question: the spawn-time Agent Deck id, its Pi
+// name and the full Pi tool name.
+const mcpAuthorizeParams = z
+  .object({ serverId: z.string(), server: z.string(), toolName: z.string() })
+  .strict();
 
 /** How long a blocking supervisor request waits for an answer before giving up. */
 const SUPERVISOR_TIMEOUT_MS = 110_000;
@@ -361,6 +366,14 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     // the user's message (not a model-callable tool — an internal hook channel).
     if (parsed.data.tool === "__recall__") {
       return await handleRecall(parsed.data.sessionId, parsed.data.params);
+    }
+    // The native MCP policy hook (PI-03c) asks before each MCP call and again on
+    // its result; not model-callable. Refusal blocks the call or withholds the result.
+    if (parsed.data.tool === "__mcp_authorize__") {
+      const call = mcpAuthorizeParams.safeParse(parsed.data.params);
+      if (!call.success) return reply.code(400).send({ error: "invalid MCP authorization" });
+      const reason = ctx.nativeMcpRefusal(parsed.data.sessionId, call.data);
+      return reason ? { allow: false, reason } : { allow: true };
     }
     // Latest-per-turn prompt audit. This callback is generated only for a parent
     // session, is not model-callable, and must prove both the per-session token

@@ -1,6 +1,6 @@
 ---
 id: ade-mp3j
-status: open
+status: closed
 deps: [ade-5vm8]
 links: []
 created: 2026-10-14T19:54:18Z
@@ -20,3 +20,9 @@ Depends on PI-03b. GUARDRAILS as every PI ticket. Keep the endpoint as thin as t
 ## Acceptance Criteria
 
 Tests: allow path, refuse on global disable, refuse on unassigned, refuse on approval mode, child grant, result suppression; a real-Pi test exercising one refused call end to end.
+
+## Notes
+
+**2026-10-14T22:02:59Z**
+
+2026-10-14 merged (wt/ade-mp3j: 31ca108 + review fix c318ca5). Contrarian + GPT review7 blocking items fixed: spawn-time server id embedded in the extension list and sent by the hook (no live name rebuild), resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource) gated through the same check, hashed tool names matched with Pi's createMcpToolName formula, server ownership from the tool namespace alias (alpha vs alpha__x), distinct result text when the bridge is unreachable after the call ran, real-Pi fail-closed (dead endpoint) and live result-refusal tests, input dropped from the hook body, abort signal honoured. Tests: mcpNative 14 + mcpAuthorize routes 3 + mcpTools 46, mcp-native.pi 3, pi-host nativeMcp.pi 12, bridge.generated 4; tsc server + pi-host clean; eslint, prettier clean. Known: resource tools unit-tested only (mock server has no resources); bridge file in tmpdir readable by the model's bash as the same OS user (ADR 0003 trust boundary). Not yet deployed; VM refresh after PI-03d/e merge.

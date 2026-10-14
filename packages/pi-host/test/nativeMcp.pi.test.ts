@@ -1,3 +1,4 @@
+import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,6 +44,7 @@ const stdio = (name: string, label: string) => {
   const launch = mockMcpServerLaunch(name);
   return {
     name,
+    id: `id-${name}`,
     config: {
       command: launch.command,
       args: launch.args,
@@ -68,8 +70,17 @@ interface Harness {
 }
 
 let http: MockHttpMcpServer;
+// Stands in for Agent Deck's /bridge: allows every __mcp_authorize__, except
+// that alpha__x is allowed at tool_call and refused at tool_result.
+let bridge: Server;
+let bridgeUrl: string;
+const authorizeCalls: Array<Record<string, unknown>> = [];
 
-async function launch(extraExtensions: string[], hostNativeMcp = true): Promise<Harness> {
+async function launch(
+  extraExtensions: string[],
+  hostNativeMcp = true,
+  endpoint = bridgeUrl,
+): Promise<Harness> {
   const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
   const agentDir = path.join(tmpHome, ".pi", "agent");
   const cwd = mkdtempSync(path.join(tmpdir(), "pi-native-mcp-"));
@@ -85,6 +96,7 @@ async function launch(extraExtensions: string[], hostNativeMcp = true): Promise<
     { name: "mcp__web__echo", arguments: { message: "two" } },
     { name: "mcp__beta__echo", arguments: { message: "three" } },
     { name: "mcp__gamma__echo", arguments: { message: "four" } },
+    { name: "mcp__alpha__x__echo", arguments: { message: "five" } },
   ];
   const mock = await startMockProvider({
     toolCall: (_last, body) => plan[body.messages.filter((m) => m.role === "tool").length] ?? null,
@@ -113,7 +125,7 @@ export default function (pi) {
   );
 
   const bridgeExt = writeBridgeExtension({
-    endpoint: "http://127.0.0.1:9/unused",
+    endpoint,
     sessionId: "native-mcp-spike",
     token: "test-token",
     tools: [],
@@ -123,7 +135,9 @@ export default function (pi) {
             stdio("alpha", "ALPHA-OK"),
             stdio("beta", "BETA-RAN"),
             stdio("gamma", "GAMMA-SECRET"),
-            { name: "web", config: { url: http.url, exposure: "direct" } },
+            // Shares alpha's `mcp__alpha__` prefix: ownership must come from Pi.
+            stdio("alpha__x", "ALPHA-X-SECRET"),
+            { name: "web", id: "id-web", config: { url: http.url, exposure: "direct" } },
           ],
           blockedTools: ["mcp__beta__echo"],
           suppressedTools: ["mcp__gamma__echo"],
@@ -176,10 +190,27 @@ async function close(h: Harness | undefined): Promise<void> {
 
 beforeAll(async () => {
   http = await startMockHttpMcpServer();
+  bridge = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+    req.on("end", () => {
+      const call = JSON.parse(body) as { params: { server: string } };
+      const refuse =
+        call.params.server === "alpha__x" &&
+        authorizeCalls.some((c) => (c.params as { server?: string }).server === "alpha__x");
+      authorizeCalls.push(call);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(refuse ? { allow: false, reason: "revoked" } : { allow: true }));
+    });
+  });
+  await new Promise<void>((resolve) => bridge.listen(0, "127.0.0.1", resolve));
+  const address = bridge.address();
+  bridgeUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/bridge`;
 });
 
 afterAll(async () => {
   await http.close();
+  await new Promise<void>((resolve) => bridge.close(() => resolve()));
 });
 
 describe("spike: Pi native MCP inside the generated bridge extension", () => {
@@ -221,6 +252,37 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
     expect(last).toContain("Result withheld by Agent Deck policy.");
   });
 
+  it("asks the bridge before each unblocked call and on its result (PI-03c)", () => {
+    const alpha = authorizeCalls.filter(
+      (c) => (c.params as { toolName?: string }).toolName === "mcp__alpha__echo",
+    );
+    expect(alpha).toHaveLength(2);
+    expect(alpha[0]).toMatchObject({
+      sessionId: "native-mcp-spike",
+      token: "test-token",
+      tool: "__mcp_authorize__",
+      params: { serverId: "id-alpha", server: "alpha", toolName: "mcp__alpha__echo" },
+    });
+    // The static block is the fast path: no round trip for beta.
+    expect(authorizeCalls.some((c) => (c.params as { server?: string }).server === "beta")).toBe(
+      false,
+    );
+  });
+
+  it("resolves a shared prefix to the right server and withholds a result refused live", () => {
+    const owned = authorizeCalls.filter(
+      (c) => (c.params as { toolName?: string }).toolName === "mcp__alpha__x__echo",
+    );
+    expect(owned.map((c) => (c.params as { serverId?: string }).serverId)).toEqual([
+      "id-alpha__x",
+      "id-alpha__x",
+    ]);
+    // Allowed at tool_call (it ran), refused at tool_result: never shown.
+    expect(JSON.stringify(h.mock.requests)).not.toContain("ALPHA-X-SECRET");
+    const last = toolMessages(h.mock.requests[h.mock.requests.length - 1]!);
+    expect(last.split("Result withheld by Agent Deck policy.").length - 1).toBe(2);
+  });
+
   it("does not read <agentDir>/mcp.json or the project .pi/mcp.json", () => {
     expect(JSON.stringify(h.mock.requests)).not.toContain("decoy");
   });
@@ -230,6 +292,23 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
       imported: "function",
       sameInstance: true,
     });
+  });
+});
+
+describe("fail closed: the bridge cannot be reached", () => {
+  let h: Harness;
+  beforeAll(async () => {
+    h = await launch([], true, "http://127.0.0.1:9/unused");
+    await runTurn(h);
+  }, 70_000);
+  afterAll(() => close(h));
+
+  it("blocks every MCP call before its server runs it", () => {
+    const last = toolMessages(h.mock.requests[h.mock.requests.length - 1]!);
+    expect(last).toContain("Agent Deck policy check failed");
+    for (const ran of ["ALPHA-OK", "mcp http echo", "GAMMA-SECRET", "ALPHA-X-SECRET"]) {
+      expect(last).not.toContain(ran);
+    }
   });
 });
 

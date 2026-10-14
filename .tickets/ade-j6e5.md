@@ -1,6 +1,6 @@
 ---
 id: ade-j6e5
-status: open
+status: in_progress
 deps: [ade-5vm8]
 links: []
 created: 2026-10-14T19:54:19Z

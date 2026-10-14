@@ -59,7 +59,7 @@ beforeAll(async () => {
     token: "test-token",
     tools: [],
     nativeMcp: {
-      servers: [{ name: "secure", config: { url: oauthServer.url, exposure: "direct" } }],
+      servers: [{ name: "secure", id: "secure", config: { url: oauthServer.url, exposure: "direct" } }],
       blockedTools: [],
     },
   });
